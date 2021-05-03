@@ -83,25 +83,25 @@ jobs:
           if [ ! -f 'data/outputs/forecast.parquet' ]; then false; fi
           rm -rf data
 
-    test-cli-and-distributed-extras:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Clone repo
-          uses: actions/checkout@v2
+  test-cli-and-distributed-extras:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v2
 
-        - name: Set up python
-          uses: actions/setup-python@v2
-          with:
-            python-version: 3.7
+      - name: Set up python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
 
-        - name: Install library with extra
-          working-directory: mlforecast
-          run: pip install ".[cli, distributed]" pyarrow
+      - name: Install library with extra
+        working-directory: mlforecast
+        run: pip install ".[cli, distributed]" pyarrow
 
-        - name: Run CLI
-          working-directory: mlforecast
-          run: |
-            python action_files/create_data.py --distributed
-            mlforecast sample_configs/distributed.yaml
-            if [ ! -d 'data/outputs/forecast/' ]; then false; fi
-            rm -rf data
+      - name: Run CLI
+        working-directory: mlforecast
+        run: |
+          python action_files/create_data.py --distributed
+          mlforecast sample_configs/distributed.yaml
+          if [ ! -d 'data/outputs/forecast/' ]; then false; fi
+          rm -rf data
