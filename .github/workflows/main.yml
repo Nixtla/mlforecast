@@ -72,11 +72,9 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        working-directory: mlforecast
         run: pip install ".[cli]" pyarrow
 
       - name: Run CLI
-        working-directory: mlforecast
         run: |
           python action_files/create_data.py
           mlforecast sample_configs/local.yaml
@@ -95,11 +93,9 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        working-directory: mlforecast
         run: pip install ".[cli, distributed]" pyarrow
 
       - name: Run CLI
-        working-directory: mlforecast
         run: |
           python action_files/create_data.py --distributed
           mlforecast sample_configs/distributed.yaml
