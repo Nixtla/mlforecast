@@ -72,7 +72,7 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        run: pip install ".[cli]" pyarrow
+        run: pip install ".[cli]" pyarrow scikit-learn
 
       - name: Run CLI
         run: |
@@ -92,7 +92,7 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        run: pip install ".[cli, distributed]" pyarrow
+        run: pip install ".[cli, distributed]" pyarrow xgboost
 
       - name: Run CLI
         run: |
