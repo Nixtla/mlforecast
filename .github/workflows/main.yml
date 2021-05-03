@@ -79,7 +79,6 @@ jobs:
           python action_files/create_data.py
           mlforecast sample_configs/local.yaml
           if [ ! -f 'data/outputs/forecast.parquet' ]; then false; fi
-          rm -rf data
 
   test-cli-and-distributed-extras:
     runs-on: ubuntu-latest
@@ -100,4 +99,3 @@ jobs:
           python action_files/create_data.py --distributed
           mlforecast sample_configs/distributed.yaml
           if [ ! -d 'data/outputs/forecast/' ]; then false; fi
-          rm -rf data
