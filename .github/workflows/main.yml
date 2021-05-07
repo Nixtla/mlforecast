@@ -40,6 +40,21 @@ jobs:
         run: |
           if [ -n "$(nbdev_diff_nbs)" ]; then echo -e "!!! Detected difference between the notebooks and the library"; false; fi
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v2
+
+      - name: Set up python
+        uses: actions/setup-python@v2
+
+      - name: Install linters
+        run: pip install mypy flake8 isort
+
+      - name: Lint
+        run: flake8 --select=F mlforecast/ && mypy mlforecast/ && isort --check-only mlforecast/
+
   run-tests:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -61,10 +76,7 @@ jobs:
           environment-file: environment.yml
 
       - name: Install action requirements and the library
-        run: pip install nbdev mypy flake8 isort matplotlib tabulate ./
-
-      - name: Lint
-        run: flake8 --select=F mlforecast/ && mypy mlforecast/ && isort --check-only mlforecast/
+        run: pip install nbdev matplotlib tabulate ./
 
       - name: Run all tests
         if: matrix.os == 'ubuntu-latest'
