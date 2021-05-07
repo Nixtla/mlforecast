@@ -12,27 +12,24 @@ defaults:
 
 jobs:
   run-tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: [3.6, 3.7, 3.8]
     steps:
       - name: Clone repo
         uses: actions/checkout@v2
 
-      - name: Cache conda
-        uses: actions/cache@v2
-        env:
-          CACHE_NUMBER: 0
-        with:
-          path: ~/conda_pkgs_dir
-          key: ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{ hashFiles('environment.yml') }}
-
       - name: Set up environment
         uses: conda-incubator/setup-miniconda@v2
         with:
+          python-version: ${{ matrix.python-version }}
           mamba-version: 0.7.14
           channels: conda-forge
           activate-environment: mlforecast
           environment-file: environment.yml
-          use-only-tar-bz2: true
 
       - name: Install action requirements and the library
         run: pip install nbdev mypy flake8 isort matplotlib tabulate ./
