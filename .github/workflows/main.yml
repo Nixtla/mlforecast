@@ -67,12 +67,12 @@ jobs:
         run: flake8 --select=F mlforecast/ && mypy mlforecast/ && isort --check-only mlforecast/
 
       - name: Run all tests
-      if: matrix.os == 'ubuntu-latest'
-        run: nbdev_test_nbs --n_workers 1
+        if: matrix.os == 'ubuntu-latest'
+          run: nbdev_test_nbs --n_workers 1
 
       - name: Run local tests
-      if: matrix.os != 'ubuntu-latest'
-        run: nbdev_test_nbs --fname "nbs/[!da]*"
+        if: matrix.os != 'ubuntu-latest'
+          run: nbdev_test_nbs --fname "nbs/[!da]*"
 
   test-cli-extra:
     runs-on: ubuntu-latest
