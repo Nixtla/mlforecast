@@ -75,6 +75,10 @@ jobs:
           activate-environment: mlforecast
           environment-file: environment.yml
 
+      - name: pywin32
+        if: matrix.os == 'windows-latest' && matrix.python-version == '3.8'
+        run: conda install -y pywin32
+
       - name: Install action requirements and the library
         run: pip install nbdev matplotlib tabulate ./
 
