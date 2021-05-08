@@ -12,7 +12,6 @@ from ..core import predictions_flow, preprocessing_flow
 from ..forecast import Forecast
 from .core import distributed_preprocess
 
-
 # Cell
 class DistributedForecast(Forecast):
     """Full pipeline encapsulation.
