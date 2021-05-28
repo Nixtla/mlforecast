@@ -4,49 +4,44 @@ __all__ = ['DistributedTimeSeries']
 
 # Cell
 import operator
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 import dask.dataframe as dd
 from dask.distributed import Client, default_client, futures_of, wait
 
-from ..core import TimeSeries
+from ..core import TimeSeries, simple_predict
 
 
 # Internal Cell
-def _fit_transform(init_kwargs, data):
-    ts = TimeSeries(**init_kwargs)
-    df = ts.fit_transform(data)
+def _fit_transform(ts, data, **kwargs):
+    df = ts.fit_transform(data, **kwargs)
     return ts, df
 
 
-def _predict(ts, model, horizon, **kwargs):
-    return ts.predict(model, horizon, **kwargs)
+def _predict(ts, model, horizon, predict_fn, **predict_fn_kwargs):
+    return ts.predict(model, horizon, predict_fn, **predict_fn_kwargs)
 
 
 # Cell
 class DistributedTimeSeries:
+    """TimeSeries for distributed forecasting."""
+
     def __init__(
         self,
-        freq: str = 'D',
-        lags: List[int] = [],
-        lag_transforms: Dict[int, List[Tuple]] = {},
-        date_features: List[str] = [],
-        num_threads: Optional[int] = None,
+        ts: TimeSeries,
         client: Optional[Client] = None,
     ):
-        self._init_kwargs = dict(
-            freq=freq,
-            lags=lags,
-            lag_transforms=lag_transforms,
-            date_features=date_features,
-            num_threads=num_threads,
-        )
+        self._base_ts = ts
         self.client = client or default_client()
-        self._ts_for_repr = TimeSeries(
-            freq, lags, lag_transforms, date_features, num_threads
-        )
 
-    def fit_transform(self, data: dd.DataFrame) -> dd.DataFrame:
+    def fit_transform(
+        self,
+        data: dd.DataFrame,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+    ) -> dd.DataFrame:
+        """Applies the transformations to each partition of `data`."""
         self.data_divisions = data.divisions
         data = self.client.persist(data)
         wait(data)
@@ -55,7 +50,13 @@ class DistributedTimeSeries:
         df_futures = []
         for part_future in partition_futures:
             future = self.client.submit(
-                _fit_transform, self._init_kwargs, part_future, pure=False
+                _fit_transform,
+                self._base_ts,
+                part_future,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                pure=False,
             )
             ts_future = self.client.submit(operator.itemgetter(0), future)
             df_future = self.client.submit(operator.itemgetter(1), future)
@@ -64,10 +65,27 @@ class DistributedTimeSeries:
         meta = self.client.submit(lambda x: x.head(0), df_futures[0]).result()
         return dd.from_delayed(df_futures, meta=meta)
 
-    def predict(self, model, horizon: int, **kwargs) -> dd.DataFrame:
+    def predict(
+        self,
+        model,
+        horizon: int,
+        predict_fn: Callable = simple_predict,
+        **predict_fn_kwargs,
+    ) -> dd.DataFrame:
+        """Broadcasts `model` across all workers and computes the next `horizon` timesteps.
+
+        `predict_fn(model, new_x, features_order, **predict_fn_kwargs)` is called on each timestep.
+        """
         model_future = self.client.scatter(model, broadcast=True)
         predictions_futures = [
-            self.client.submit(_predict, ts_future, model_future, horizon, **kwargs)
+            self.client.submit(
+                _predict,
+                ts_future,
+                model_future,
+                horizon,
+                predict_fn=predict_fn,
+                **predict_fn_kwargs,
+            )
             for ts_future in self.ts
         ]
         meta = self.client.submit(lambda x: x.head(), predictions_futures[0]).result()
@@ -76,5 +94,5 @@ class DistributedTimeSeries:
         )
 
     def __repr__(self):
-        ts_repr = self._ts_for_repr.__repr__()
+        ts_repr = self._base_ts.__repr__()
         return f'Distributed{ts_repr}'

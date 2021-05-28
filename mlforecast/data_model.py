@@ -163,8 +163,8 @@ class ClusterConfig(BaseModel):
 class DistributedModelName(str, Enum):
     """Available models for distributed training."""
 
-    XGBoost = 'XGBForecast'
-    LightGBM = 'LGBMForecast'
+    XGBForecast = 'XGBForecast'
+    LGBMForecast = 'LGBMForecast'
 
 
 class DistributedModelConfig(BaseModel):

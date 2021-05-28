@@ -3,11 +3,11 @@
 __all__ = ['Forecast']
 
 # Cell
-from typing import Generator, List, Optional
+from typing import Callable, Generator, List, Optional
 
 import pandas as pd
 
-from .core import TimeSeries
+from .core import TimeSeries, simple_predict
 from .utils import backtest_splits
 
 
@@ -45,20 +45,33 @@ class Forecast:
         """Preprocesses `data` and fits `model` to it."""
         series_df = self.preprocess(data, static_features, dropna, keep_last_n)
         X, y = series_df.drop(columns=['ds', 'y']), series_df.y.values
+        self.train_features_ = X.columns
         del series_df
         self.model.fit(X, y, **fit_kwargs)
         return self
 
-    def predict(self, horizon: int, **kwargs) -> pd.DataFrame:
-        """Compute the predictions for the next `horizon` steps."""
-        return self.ts.predict(self.model, horizon, **kwargs)
+    def predict(
+        self, horizon: int, predict_fn: Callable = simple_predict, **predict_fn_kwargs
+    ) -> pd.DataFrame:
+        """Compute the predictions for the next `horizon` steps.
+
+        `predict_fn(model, new_x, features_order, **predict_fn_kwargs)` is called in every timestep, where:
+        `model` is the trained model.
+        `new_x` is a dataframe with the same format as the input plus the computed features.
+        `features_order` is the list of column names that were used in the training step.
+        """
+        return self.ts.predict(self.model, horizon, predict_fn, **predict_fn_kwargs)
 
     def backtest(
         self,
         data: pd.DataFrame,
         n_windows: int,
         window_size: int,
-        **predict_kwargs,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        predict_fn: Callable = simple_predict,
+        **predict_fn_kwargs,
     ) -> Generator[pd.DataFrame, None, None]:
         """Creates `n_windows` splits of `window_size` from `data`, trains the model
         on the training set, predicts the window and merges the actuals and the predictions
@@ -67,8 +80,8 @@ class Forecast:
         Returns a generator to the dataframes containing the datestamps, actual values
         and predictions."""
         for train, valid in backtest_splits(data, n_windows, window_size):
-            self.fit(train)
-            y_pred = self.predict(window_size, **predict_kwargs)
+            self.fit(train, static_features, dropna, keep_last_n)
+            y_pred = self.predict(window_size, predict_fn, **predict_fn_kwargs)
             y_valid = valid[['ds', 'y']]
             result = y_valid.merge(y_pred, on=['unique_id', 'ds'], how='left')
             yield result

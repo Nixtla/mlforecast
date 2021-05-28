@@ -169,7 +169,7 @@ def _fcst_from_distributed(
     model_config: DistributedModelConfig, flow_config: Dict
 ) -> DistributedForecast:
     model_params = model_config.params or {}
-    if model_config.name is DistributedModelName.LightGBM:
+    if model_config.name is DistributedModelName.LGBMForecast:
         from .distributed.models.lgb import LGBMForecast
 
         model = LGBMForecast(**model_params)
@@ -177,8 +177,8 @@ def _fcst_from_distributed(
         from .distributed.models.xgb import XGBForecast
 
         model = XGBForecast(**model_params)
-    dts = DistributedTimeSeries(**flow_config)
-    return DistributedForecast(model, dts)
+    ts = TimeSeries(**flow_config)
+    return DistributedForecast(model, ts)
 
 
 # Cell
