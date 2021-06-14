@@ -64,8 +64,8 @@ jobs:
         if: matrix.os == 'windows-latest' && matrix.python-version == '3.8'
         run: conda install -y pywin32
 
-      - name: Install action requirements and the library
-        run: pip install nbdev matplotlib tabulate ./
+      - name: Install the library
+        run: pip install ./
 
       - name: Run all tests
         if: matrix.os == 'ubuntu-latest'
@@ -126,8 +126,10 @@ jobs:
         with:
           python-version: 3.7
 
-      - name: Install library with extra
-        run: pip install ".[aws, cli, distributed]" lightgbm matplotlib nbdev pyarrow pytest-cov tabulate xgboost
+      - name: Install requirements and the library
+        run: |
+          pip install lightgbm matplotlib nbdev pyarrow pytest-cov tabulate xgboost
+          pip install -e ".[aws,cli,distributed]"
 
       - name: Run coverage
         run: pytest action_files/test_nbs.py --cov=mlforecast --cov-report xml
