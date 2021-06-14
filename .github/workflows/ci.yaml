@@ -127,7 +127,7 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        run: pip install ".[aws, cli, distributed]" lightgbm matplotlib nbdev pytest-cov tabulate xgboost
+        run: pip install ".[aws, cli, distributed]" lightgbm matplotlib nbdev pyarrow pytest-cov tabulate xgboost
 
       - name: Run coverage
         run: pytest action_files/test_nbs.py --cov=mlforecast --cov-report xml
