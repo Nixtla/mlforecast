@@ -114,3 +114,27 @@ jobs:
           python action_files/create_data.py --distributed
           mlforecast sample_configs/distributed.yaml
           if [ ! -d 'data/outputs/forecast/' ]; then false; fi
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v2
+
+      - name: Set up python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
+
+      - name: Install library with extra
+        run: pip install ".[aws, cli, distributed]" lightgbm matplotlib nbdev pytest-cov tabulate xgboost
+
+      - name: Run coverage
+        run: pytest action_files/test_nbs.py --cov=mlforecast --cov-report xml
+        env:
+          NUMBA_DISABLE_JIT: 1
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v1
+        with:
+          files: ./coverage.xml
