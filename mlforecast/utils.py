@@ -101,10 +101,12 @@ def _split_frame(data, n_windows, window, valid_size):
     full_valid_size = (n_windows - window) * valid_size
     extra_valid_size = full_valid_size - valid_size
     if isinstance(data, pd.DataFrame):
+        data = data.sort_values(['unique_id', 'ds'])
         full_valid_mask = _get_dataframe_mask(data, full_valid_size)
         train_mask = ~full_valid_mask
         extra_valid_mask = _get_dataframe_mask(data, extra_valid_size)
     else:
+        data = data.map_partitions(lambda part: part.sort_values(['unique_id', 'ds']))
         full_valid_mask = data.map_partitions(
             _get_dataframe_mask, full_valid_size, meta=bool
         )
