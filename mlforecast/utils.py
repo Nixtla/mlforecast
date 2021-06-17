@@ -6,13 +6,11 @@ __all__ = ['generate_daily_series', 'data_indptr_from_sorted_df', 'ensure_sorted
 import random
 from itertools import chain
 from math import ceil, log10
-from typing import Generator, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
 from numba import njit
-
-from .compat import Frame
 
 
 # Cell
@@ -126,9 +124,7 @@ def ensure_sorted(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index('ds')
 
 
-def backtest_splits(
-    data: Frame, n_windows: int, window_size: int
-) -> Generator[Frame, None, None]:
+def backtest_splits(data, n_windows: int, window_size: int):
     """Returns a generator of `n_windows` for train, valid splits of
     `data` where each valid has `window_size` samples."""
     if isinstance(data, pd.DataFrame):

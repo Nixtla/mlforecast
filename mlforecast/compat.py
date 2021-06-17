@@ -12,9 +12,8 @@ try:
     from dask.dataframe import DataFrame as dd_Frame
     from dask.distributed import Client, LocalCluster
 
-    DASK_INSTALLED = True
+    from .distributed.forecast import DistributedForecast
 except ImportError:
-    DASK_INSTALLED = False
 
     class dd:  # type: ignore
         pass
@@ -25,6 +24,9 @@ except ImportError:
         pass
 
     class LocalCluster:  # type: ignore
+        pass
+
+    class DistributedForecast:  # type: ignore
         pass
 
 

@@ -13,7 +13,7 @@ import pandas as pd
 import yaml
 from pandas.api.types import is_categorical_dtype, is_datetime64_dtype
 
-from .compat import DASK_INSTALLED, Client, Frame, S3Path, dd, dd_Frame
+from .compat import Client, DistributedForecast, Frame, S3Path, dd, dd_Frame
 from .core import TimeSeries
 from .data_model import (
     ClusterConfig,
@@ -27,14 +27,6 @@ from .data_model import (
     _available_tfms,
 )
 from .forecast import Forecast
-
-if DASK_INSTALLED:
-    from .distributed.forecast import DistributedForecast
-else:
-
-    class DistributedForecast:  # type: ignore
-        pass
-
 
 # Internal Cell
 _available_tfms_kwargs = {
