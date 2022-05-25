@@ -9,7 +9,7 @@ import dask.dataframe as dd
 import pandas as pd
 from dask.distributed import Client, default_client
 
-from ..core import TimeSeries, simple_predict
+from ..core import TimeSeries
 from ..utils import backtest_splits
 from .core import DistributedTimeSeries
 

@@ -15,7 +15,7 @@ import pandas as pd
 from numba import njit
 from window_ops.shift import shift_array
 
-from .utils import data_indptr_from_sorted_df, ensure_sorted
+from .utils import data_indptr_from_sorted_df
 
 # Internal Cell
 date_features_dtypes = {
@@ -362,16 +362,15 @@ class TimeSeries:
         If you want to keep only the last `n` values of each time serie set `keep_last_n=n`.
         """
         if data.index.name != 'unique_id' or 'ds' not in data or 'y' not in data:
-            raise ValueError('data must have an index named unique_id and ds and y columns.')
+            raise ValueError(
+                'data must have an index named unique_id and ds and y columns.'
+            )
         if data['y'].isnull().any():
             raise ValueError('y column contains null values.')
         if static_features is None:
             static_features = data.columns.drop(['ds', 'y'])
         self.static_features = (
-            data[static_features]
-            .reset_index()
-            .drop_duplicates()
-            .set_index('unique_id')
+            data[static_features].reset_index().drop_duplicates().set_index('unique_id')
         )
         sort_idxs = pd.core.sorting.lexsort_indexer([data.index, data['ds']])
         sorted_data = data[['ds', 'y']].set_index('ds', append=True).iloc[sort_idxs]
