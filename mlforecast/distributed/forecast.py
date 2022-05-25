@@ -81,7 +81,7 @@ class DistributedForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Callable = simple_predict,
+        predict_fn: Callable = None,
         **predict_fn_kwargs,
     ) -> Generator[dd.DataFrame, None, None]:
         """Creates `n_windows` splits of `window_size` from `data`, trains the model
