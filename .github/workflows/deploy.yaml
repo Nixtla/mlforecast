@@ -3,7 +3,7 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
-    jobs:
-      deploy:
-        runs-on: ubuntu-latest
-        steps: [uses: fastai/workflows/quarto-ghp@master]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps: [uses: fastai/workflows/quarto-ghp@master]
