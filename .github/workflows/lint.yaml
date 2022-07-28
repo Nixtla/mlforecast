@@ -19,10 +19,7 @@ jobs:
           python-version: 3.8
 
       - name: Install linters
-        run: pip install black "mypy<0.900" flake8 isort
-
-      - name: black
-        run: action_files/black.sh
+        run: pip install "mypy<0.900" flake8 isort
 
       - name: mypy
         run: mypy mlforecast/
