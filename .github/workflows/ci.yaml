@@ -65,13 +65,13 @@ jobs:
 
       - name: Run all tests
         if: matrix.os == 'ubuntu-latest'
-        run: nbdev_test_nbs --n_workers 1 --flags distributed
+        run: nbdev_test --n_workers 1 --flags distributed
 
       - name: Run local tests
         if: matrix.os != 'ubuntu-latest'
-        run: nbdev_test_nbs
+        run: nbdev_test
 
-  test-cli-extra:
+  test-distributed-extra:
     runs-on: ubuntu-latest
     steps:
       - name: Clone repo
@@ -83,56 +83,8 @@ jobs:
           python-version: 3.7
 
       - name: Install library with extra
-        run: pip install ".[cli]" pyarrow scikit-learn
+        run: pip install ".[distributed]" pyarrow scikit-learn xgboost nbdev
 
-      - name: Run CLI
+      - name: Run test
         run: |
-          python action_files/create_data.py
-          mlforecast sample_configs/local.yaml
-          if [ ! -f 'data/outputs/forecast.parquet' ]; then false; fi
-
-  test-cli-and-distributed-extras:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone repo
-        uses: actions/checkout@v2
-
-      - name: Set up python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.7
-
-      - name: Install library with extra
-        run: pip install ".[cli, distributed]" pyarrow scikit-learn xgboost
-
-      - name: Run CLI
-        run: |
-          python action_files/create_data.py --distributed
-          mlforecast sample_configs/distributed.yaml
-          if [ ! -d 'data/outputs/forecast/' ]; then false; fi
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone repo
-        uses: actions/checkout@v2
-
-      - name: Set up python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.7
-
-      - name: Install requirements and the library
-        run: |
-          pip install lightgbm matplotlib nbdev pyarrow pytest-cov tabulate xgboost
-          pip install -e ".[aws,cli,distributed]"
-
-      - name: Run coverage
-        run: pytest action_files/test_nbs.py --cov=mlforecast --cov-report xml
-        env:
-          NUMBA_DISABLE_JIT: 1
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v1
-        with:
-          files: ./coverage.xml
+          nbdev_test --fname nbs/distributed.forecast.ipynb --flags distributed
