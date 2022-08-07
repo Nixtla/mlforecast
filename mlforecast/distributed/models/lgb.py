@@ -10,12 +10,11 @@ import lightgbm as lgb
 
 # %% ../nbs/distributed.models.lgb.ipynb 4
 class LGBMForecast(lgb.dask.DaskLGBMRegressor):
-    if lgb.__version__ <= "3.2.1":
+    if lgb.__version__ < "3.3.0":
         warnings.warn(
-            "It is recommended to build LightGBM from source following the instructions here: "
-            "https://github.com/microsoft/LightGBM/tree/master/python-package#install-from-github, since "
+            "It is recommended to install LightGBM version >= 3.3.0, since "
             "the current LightGBM version might be affected by https://github.com/microsoft/LightGBM/issues/4026, "
-            "which was fixed after 3.2.1."
+            "which was fixed in 3.3.0"
         )
 
     @property

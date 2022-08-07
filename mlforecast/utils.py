@@ -64,7 +64,10 @@ def generate_daily_series(
     return series
 
 # %% ../nbs/utils.ipynb 16
-def generate_prices_for_series(series: pd.DataFrame, horizon: int = 7) -> pd.DataFrame:
+def generate_prices_for_series(
+    series: pd.DataFrame, horizon: int = 7, seed: int = 0
+) -> pd.DataFrame:
+    rng = np.random.RandomState(0)
     unique_last_dates = series.groupby("unique_id")["ds"].max().nunique()
     if unique_last_dates > 1:
         raise ValueError("series must have equal ends.")
@@ -77,7 +80,7 @@ def generate_prices_for_series(series: pd.DataFrame, horizon: int = 7) -> pd.Dat
         product_df = pd.DataFrame(
             {
                 "product_id": idx,
-                "price": np.random.rand((end - start).days + 1 + horizon),
+                "price": rng.rand((end - start).days + 1 + horizon),
             },
             index=pd.date_range(start, end + horizon * day_offset, name="ds"),
         )
@@ -125,12 +128,13 @@ def _split_frame(data, n_windows, window, valid_size):
         train_mask = ~full_valid_mask
         extra_valid_mask = _get_dataframe_mask(data, extra_valid_size)
     else:
+        bool_serie = pd.Series([True])
         full_valid_mask = data.map_partitions(
-            _get_dataframe_mask, full_valid_size, meta=bool
+            _get_dataframe_mask, full_valid_size, meta=bool_serie
         )
         train_mask = ~full_valid_mask
         extra_valid_mask = data.map_partitions(
-            _get_dataframe_mask, extra_valid_size, meta=bool
+            _get_dataframe_mask, extra_valid_size, meta=bool_serie
         )
     valid_mask = full_valid_mask & ~extra_valid_mask
     return data[train_mask], data[valid_mask]
@@ -149,7 +153,7 @@ def backtest_splits(data, n_windows: int, window_size: int):
     if isinstance(data, pd.DataFrame):
         data = ensure_sorted(data)
     else:
-        data = data.map_partitions(ensure_sorted)
+        data = data.map_partitions(ensure_sorted, meta=data.head(1))
     for window in range(n_windows):
         train, valid = _split_frame(data, n_windows, window, window_size)
         yield train, valid

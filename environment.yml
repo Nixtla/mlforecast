@@ -9,7 +9,6 @@ dependencies:
   - pandas
   - pip
   - pyarrow
-  - tabulate
   - window-ops
   - xgboost
   - pip:
