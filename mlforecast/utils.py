@@ -6,6 +6,7 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'data_indptr_f
 
 # %% ../nbs/utils.ipynb 3
 import random
+import reprlib
 from itertools import chain
 from math import ceil, log10
 from typing import Tuple
@@ -93,7 +94,9 @@ def generate_prices_for_series(
 def _get_last_n_mask(x: np.ndarray, n: int) -> np.ndarray:
     n_samples = x.size
     mask = np.full(n_samples, True)
-    n_first = max(0, n_samples - n)
+    if n >= n_samples:
+        raise ValueError("Series too short for window")
+    n_first = n_samples - n
     mask[:n_first] = False
     return mask
 
