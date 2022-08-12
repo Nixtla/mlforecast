@@ -6,7 +6,6 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'data_indptr_f
 
 # %% ../nbs/utils.ipynb 3
 import random
-import reprlib
 from itertools import chain
 from math import ceil, log10
 from typing import Tuple
