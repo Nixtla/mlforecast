@@ -43,10 +43,10 @@ Once you have `conda/mamba` go to the top level directory of the repository and 
 
 Once you have your environment setup, activate it using `conda activate mlforecast`.
 ##### PyPI
-From the top level directory of the repository run: `run pip install .[dev]`
+From the top level directory of the repository run: `pip install .[dev]`
 
 #### 3. Install the library
-From the top level directory of the repository run: `run pip install -e .`
+From the top level directory of the repository run: `pip install -e .`
 
 ### Building the library
 The library is built using the notebooks contained in the `nbs` folder. If you want to make any changes to the library you have to find the relevant notebook, make your changes and then call `nbdev_export`.
