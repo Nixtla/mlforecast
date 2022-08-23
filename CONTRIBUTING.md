@@ -53,7 +53,7 @@ The library is built using the notebooks contained in the `nbs` folder. If you w
 
 ### Running tests
 
-* If you're working on the local interface, use `nbdev_test --skip_file_glob "distributed*"`.
+* If you're working on the local interface, use `nbdev_test --skip_file_glob "distributed*" --n_workers 1`.
 * If you're modifying the distributed interface run the tests using `nbdev_test --n_workers 1`.
 ### Linters
 This project uses a couple of linters to validate different aspects of the code. Before opening a PR, please make sure that it passes all the linting tasks by following the next steps.
