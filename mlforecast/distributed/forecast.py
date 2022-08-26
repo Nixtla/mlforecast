@@ -5,7 +5,8 @@ __all__ = ['DistributedForecast']
 
 # %% ../../nbs/distributed.forecast.ipynb 6
 import reprlib
-from typing import Callable, List, Optional
+import typing
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import dask.dataframe as dd
 import pandas as pd
@@ -16,21 +17,47 @@ from ..forecast import Forecast
 from .core import DistributedTimeSeries
 
 # %% ../../nbs/distributed.forecast.ipynb 7
+_DIST_FCST = Union["LGBMForecast", "XGBForecast"]
+
+# %% ../../nbs/distributed.forecast.ipynb 8
 class DistributedForecast(Forecast):
     """Distributed pipeline encapsulation."""
 
-    def __init__(self, models, ts: TimeSeries, client: Optional[Client] = None):
+    def __init__(
+        self,
+        models: Union[
+            _DIST_FCST, List[_DIST_FCST]
+        ],  # model or list of mlforecast.distributed.models
+        freq: str,  # pandas offset alias, e.g. D, W, M
+        lags: List[int] = [],  # list of lags to use as features
+        lag_transforms: Dict[
+            int, List[Tuple]
+        ] = {},  # list of transformations to apply to each lag
+        date_features: List[
+            str
+        ] = [],  # list of names of pandas date attributes to use as features, e.g. dayofweek
+        num_threads: int = 1,  # number of threads to use when computing lag features
+        client: Optional[Client] = None,  # dask client to use for computations
+    ):
         if not isinstance(models, list):
             models = [models]
         self.models = models
         self.client = client or default_client()
-        self.dts = DistributedTimeSeries(ts, self.client)
+        self.dts = DistributedTimeSeries(
+            TimeSeries(freq, lags, lag_transforms, date_features, num_threads),
+            self.client,
+        )
         for model in self.models:
             model.client = self.client
 
     def __repr__(self) -> str:
         return (
-            f"DistributedForecast(models={reprlib.repr(self.models)}, dts={self.dts})"
+            f"DistributedForecast(models={reprlib.repr(self.models)}, "
+            f"freq={self.freq}, "
+            f"lag_features={reprlib.repr(self.dts._base_ts.transforms)}, "
+            f"date_features={reprlib.repr(self.dts._base_ts.date_features)}, "
+            f"num_threads={self.dts._base_ts.num_threads}, "
+            f"client={self.client})"
         )
 
     @property
