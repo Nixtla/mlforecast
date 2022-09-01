@@ -1,0 +1,1 @@
+from mlforecast.distributed.forecast import DistributedForecast
