@@ -4,9 +4,7 @@
 __all__ = ['DistributedForecast']
 
 # %% ../../nbs/distributed.forecast.ipynb 6
-import reprlib
-import typing
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple
 
 import dask.dataframe as dd
 import pandas as pd
@@ -17,17 +15,12 @@ from ..forecast import Forecast
 from .core import DistributedTimeSeries
 
 # %% ../../nbs/distributed.forecast.ipynb 7
-_DIST_FCST = Union["LGBMForecast", "XGBForecast"]
-
-# %% ../../nbs/distributed.forecast.ipynb 8
 class DistributedForecast(Forecast):
     """Distributed pipeline encapsulation."""
 
     def __init__(
         self,
-        models: Union[
-            _DIST_FCST, List[_DIST_FCST]
-        ],  # model or list of mlforecast.distributed.models
+        models,  # model or list of mlforecast.distributed.models
         freq: str,  # pandas offset alias, e.g. D, W, M
         lags: List[int] = [],  # list of lags to use as features
         lag_transforms: Dict[
