@@ -37,8 +37,8 @@ class DistributedForecast(Forecast):
         client: Optional[Client] = None,  # dask client to use for computations
     ):
         if not isinstance(models, list):
-            models = [models]
-        self.models = models
+            models = [clone(models)]
+        self.models = [clone(m) for m in models]
         self.client = client or default_client()
         self.dts = DistributedTimeSeries(
             TimeSeries(freq, lags, lag_transforms, date_features, num_threads),

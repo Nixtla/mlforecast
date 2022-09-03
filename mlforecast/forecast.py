@@ -32,8 +32,8 @@ class Forecast:
         num_threads: int = 1,  # number of threads to use when computing lag features
     ):
         if not isinstance(models, list):
-            models = [models]
-        self.models = models
+            models = [clone(models)]
+        self.models = [clone(m) for m in models]
         self.ts = TimeSeries(freq, lags, lag_transforms, date_features, num_threads)
 
     def __repr__(self):
