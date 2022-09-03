@@ -74,7 +74,7 @@ class DistributedForecast(Forecast):
         Returns a dask dataframe with the computed features."""
         if id_col in data:
             warnings.warn(
-                f"It is recommended to have id_col as the index, since setting the index is a slow operation."
+                "It is recommended to have id_col as the index, since setting the index is a slow operation."
             )
             data = data.set_index(id_col)
         return self.dts.fit_transform(
