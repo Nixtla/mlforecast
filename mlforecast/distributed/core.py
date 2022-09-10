@@ -41,7 +41,7 @@ class DistributedTimeSeries:
     def fit_transform(
         self,
         data: dd.DataFrame,
-        id_col: str = "unique_id",
+        id_col: str = "index",
         time_col: str = "ds",
         target_col: str = "y",
         static_features: Optional[List[str]] = None,

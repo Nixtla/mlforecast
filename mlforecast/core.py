@@ -386,7 +386,7 @@ class TimeSeries:
     def fit_transform(
         self,
         data: pd.DataFrame,
-        id_col: str = "unique_id",
+        id_col: str = "index",
         time_col: str = "ds",
         target_col: str = "y",
         static_features: Optional[List[str]] = None,
@@ -399,8 +399,8 @@ class TimeSeries:
         If you don't want to drop rows with null values after the transformations set `dropna=False`.
         If you want to keep only the last `n` values of each time serie set `keep_last_n=n`.
         """
-        if id_col not in data and data.index.name != id_col:
-            raise ValueError(f"Couldn't find {id_col} as a column nor as the index.")
+        if id_col not in data and id_col != "index":
+            raise ValueError(f"Couldn't find {id_col} column.")
         for col in (time_col, target_col):
             if col not in data:
                 raise ValueError(f"Data doesn't contain {col} column")
@@ -418,10 +418,13 @@ class TimeSeries:
             raise ValueError(f"{target_col} column contains null values.")
         if id_col in data:
             data = data.set_index(id_col)
+        else:
+            data = data.copy(deep=False)
+            id_col = data.index.name or "unique_id"
+        data.index.name = "unique_id"
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
-        data.index.name = "unique_id"
         data = data.rename(columns={time_col: "ds", target_col: "y"}, copy=False)
         if static_features is None:
             static_features = data.columns.drop(["ds", "y"])
@@ -462,9 +465,9 @@ class TimeSeries:
         if not isinstance(models, list):
             models = [models]
         model_names = _name_models([m.__class__.__name__ for m in models])
+        predict_fn = self._define_predict_fn(predict_fn, dynamic_dfs)
         for i, model in enumerate(models):
             self._predict_setup()
-            predict_fn = self._define_predict_fn(predict_fn, dynamic_dfs)
             for _ in range(horizon):
                 new_x = self._update_features()
                 predictions = predict_fn(

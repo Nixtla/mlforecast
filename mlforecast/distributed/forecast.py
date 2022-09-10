@@ -62,7 +62,7 @@ class DistributedForecast(Forecast):
     def preprocess(
         self,
         data: dd.DataFrame,
-        id_col: str = "unique_id",  # column that identifies each serie, it's recommended to have this as the index.
+        id_col: str = "index",  # column that identifies each serie, it's recommended to have this as the index.
         time_col: str = "ds",  # column with the timestamps
         target_col: str = "y",  # column with the series values
         static_features: Optional[List[str]] = None,
@@ -77,6 +77,7 @@ class DistributedForecast(Forecast):
                 "It is recommended to have id_col as the index, since setting the index is a slow operation."
             )
             data = data.set_index(id_col)
+            id_col = "index"
         return self.dts.fit_transform(
             data, id_col, time_col, target_col, static_features, dropna, keep_last_n
         )
@@ -84,7 +85,7 @@ class DistributedForecast(Forecast):
     def fit(
         self,
         data: dd.DataFrame,
-        id_col: str = "unique_id",  # column that identifies each serie, it's recommended to have this as the index.
+        id_col: str = "index",  # column that identifies each serie, it's recommended to have this as the index.
         time_col: str = "ds",  # column with the timestamps
         target_col: str = "y",  # column with the series values
         static_features: Optional[List[str]] = None,
@@ -96,11 +97,11 @@ class DistributedForecast(Forecast):
             data, id_col, time_col, target_col, static_features, dropna, keep_last_n
         )
         X, y = train_ddf.drop(columns=[time_col, target_col]), train_ddf[target_col]
-        self.fitted_models = []
+        self.models_ = []
         for i, model in enumerate(self.models):
             model = clone(model)
             model.client = self.client
-            self.fitted_models.append(model.fit(X, y))
+            self.models_.append(model.fit(X, y))
         return self
 
     def predict(
@@ -111,7 +112,7 @@ class DistributedForecast(Forecast):
         **predict_fn_kwargs,
     ) -> dd.DataFrame:
         return self.dts.predict(
-            [m.model_ for m in self.fitted_models],
+            [m.model_ for m in self.models_],
             horizon,
             dynamic_dfs,
             predict_fn,
@@ -119,3 +120,39 @@ class DistributedForecast(Forecast):
         )
 
     predict.__doc__ = Forecast.predict.__doc__
+
+    def cross_validation(
+        self,
+        data: dd.DataFrame,  # time series
+        n_windows: int,  # number of windows to evaluate
+        window_size: int,  # test size in each window
+        id_col: str = "index",  # column that identifies each serie, can also be the index.
+        time_col: str = "ds",  # column with the timestamps
+        target_col: str = "y",  # column with the series values
+        static_features: Optional[
+            List[str]
+        ] = None,  # column names of the features that don't change in time
+        dropna: bool = True,  # drop rows with missing values created by lags
+        keep_last_n: Optional[
+            int
+        ] = None,  # keep only this many observations of each serie for computing the updates
+        dynamic_dfs: Optional[
+            List[pd.DataFrame]
+        ] = None,  # future values for dynamic features
+        predict_fn: Optional[Callable] = None,  # custom function to compute predictions
+        **predict_fn_kwargs,  # additional arguments passed to predict_fn
+    ):
+        return super().cross_validation(
+            data=data,
+            n_windows=n_windows,
+            window_size=window_size,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            dynamic_dfs=dynamic_dfs,
+            predict_fn=predict_fn,
+            **predict_fn_kwargs,
+        )
