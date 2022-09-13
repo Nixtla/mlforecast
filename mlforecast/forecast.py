@@ -6,6 +6,7 @@ __all__ = ['Forecast']
 # %% ../nbs/forecast.ipynb 3
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import pandas as pd
 from sklearn.base import RegressorMixin, clone
 
@@ -145,25 +146,51 @@ class Forecast:
         Returns a dataframe containing the datestamps, actual values, train ends and predictions."""
         results = []
         self.cv_models_ = []
+        if id_col != "index":
+            data = data.set_index(id_col)
+
+        def renames(df):
+            mapper = {time_col: "ds", target_col: "y"}
+            df = df.rename(columns=mapper, copy=False)
+            df.index.name = "unique_id"
+            return df
+
+        if isinstance(data, dd_Frame):
+            data = data.map_partitions(renames)
+        else:
+            data = renames(data)
+
+        if np.issubdtype(data["ds"].dtype.type, np.integer):
+            freq = 1
+        else:
+            freq = self.freq
         for train_end, train, valid in backtest_splits(
-            data, n_windows, window_size, self.freq
+            data, n_windows, window_size, freq
         ):
-            self.fit(
-                train,
-                id_col,
-                time_col,
-                target_col,
-                static_features,
-                dropna,
-                keep_last_n,
-            )
+            self.fit(train, "index", "ds", "y", static_features, dropna, keep_last_n)
             self.cv_models_.append(self.models_)
             y_pred = self.predict(
                 window_size, dynamic_dfs, predict_fn, **predict_fn_kwargs
             )
             result = valid[["ds", "y"]].copy()
             result["cutoff"] = train_end
-            result = result.merge(y_pred, on=["unique_id", "ds"], how="left")
+
+            def merge_fn(res, pred):
+                return res.merge(pred, on=["unique_id", "ds"], how="left")
+
+            if isinstance(result, dd_Frame):
+                meta = {**result.dtypes.to_dict(), **y_pred.dtypes.to_dict()}
+                result = result.map_partitions(
+                    merge_fn, y_pred, align_dataframes=False, meta=meta
+                )
+            else:
+                result = merge_fn(result, y_pred)
+
+            if id_col != "index":
+                result = result.reset_index()
+            result = result.rename(
+                columns={"ds": time_col, "y": target_col, "unique_id": id_col}
+            )
             results.append(result)
 
         if isinstance(data, dd_Frame):
