@@ -149,21 +149,14 @@ class Forecast:
         if id_col != "index":
             data = data.set_index(id_col)
 
-        def renames(df):
-            mapper = {time_col: "ds", target_col: "y"}
-            df = df.rename(columns=mapper, copy=False)
-            df.index.name = "unique_id"
-            return df
-
-        if isinstance(data, dd_Frame):
-            data = data.map_partitions(renames)
-        else:
-            data = renames(data)
+        data = data.rename(columns={time_col: "ds", target_col: "y"}, copy=False)
+        data.index.name = "unique_id"
 
         if np.issubdtype(data["ds"].dtype.type, np.integer):
             freq = 1
         else:
             freq = self.freq
+
         for train_end, train, valid in backtest_splits(
             data, n_windows, window_size, freq
         ):
@@ -175,17 +168,7 @@ class Forecast:
             result = valid[["ds", "y"]].copy()
             result["cutoff"] = train_end
 
-            def merge_fn(res, pred):
-                return res.merge(pred, on=["unique_id", "ds"], how="left")
-
-            if isinstance(result, dd_Frame):
-                meta = {**result.dtypes.to_dict(), **y_pred.dtypes.to_dict()}
-                result = result.map_partitions(
-                    merge_fn, y_pred, align_dataframes=False, meta=meta
-                )
-            else:
-                result = merge_fn(result, y_pred)
-
+            result = result.merge(y_pred, on=["unique_id", "ds"], how="left")
             if id_col != "index":
                 result = result.reset_index()
             result = result.rename(
@@ -193,8 +176,4 @@ class Forecast:
             )
             results.append(result)
 
-        if isinstance(data, dd_Frame):
-            import dask.dataframe as dd
-
-            return dd.concat(results)
         return pd.concat(results)
