@@ -8,12 +8,14 @@ import warnings
 from typing import Callable, Dict, List, Optional, Tuple
 
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
 from dask.distributed import Client, default_client
 from sklearn.base import clone
 
 from .. import Forecast, TimeSeries
 from .core import DistributedTimeSeries
+from ..utils import backtest_splits
 
 # %% ../../nbs/distributed.forecast.ipynb 7
 class DistributedForecast:

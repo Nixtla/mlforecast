@@ -11,7 +11,6 @@ import pandas as pd
 from sklearn.base import RegressorMixin, clone
 
 from .core import TimeSeries
-from .compat import dd_Frame
 from .utils import backtest_splits
 
 # %% ../nbs/forecast.ipynb 6
