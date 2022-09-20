@@ -6,6 +6,7 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'data_indptr_f
 
 # %% ../nbs/utils.ipynb 3
 import random
+import reprlib
 from itertools import chain
 from math import ceil, log10
 from typing import Tuple, Union
@@ -113,6 +114,11 @@ def _split_info(
     last_dates = data.groupby("unique_id")["ds"].transform("max")
     train_ends = last_dates - offset * freq
     valid_ends = train_ends + window_size * freq
+    train_mask = data["ds"].le(train_ends)
+    train_sizes = train_mask.groupby(data.index, observed=True).sum()
+    if train_sizes.eq(0).any():
+        ids = reprlib.repr(train_sizes[train_sizes.eq(0)].index.tolist())
+        raise ValueError(f"The following series are too short for the window: {ids}")
     valid_mask = data["ds"].gt(train_ends) & data["ds"].le(valid_ends)
     return pd.DataFrame({"train_end": train_ends, "is_valid": valid_mask})
 
@@ -125,13 +131,13 @@ def backtest_splits(
         if isinstance(data, pd.DataFrame):
             splits = _split_info(data, offset, window_size, freq)
         else:
-            meta = _split_info(data.head(), offset, window_size, freq)
+            end_dtype = int if isinstance(freq, int) else "datetime64[ns]"
             splits = data.map_partitions(
                 _split_info,
                 offset=offset,
                 window_size=window_size,
                 freq=freq,
-                meta=meta,
+                meta={"train_end": end_dtype, "is_valid": bool},
             )
         train_mask = data["ds"].le(splits["train_end"])
         train, valid = data[train_mask], data[splits["is_valid"]]
