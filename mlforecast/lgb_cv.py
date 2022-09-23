@@ -28,17 +28,50 @@ def _update(bst, n):
         bst.update()
 
 
-def _predict(ts, bst, valid, h):
-    preds = ts.predict(bst, h)
-    preds = preds.merge(valid, on=["unique_id", "ds"])
-    preds["sq_err"] = (preds["Booster"] - preds["y"]) ** 2
-    rmse = preds.groupby("unique_id")["sq_err"].mean().pow(0.5).mean()
+def _predict(
+    ts,
+    bst,
+    valid,
+    h,
+    time_col,
+    target_col,
+    dynamic_dfs,
+    predict_fn,
+    **predict_fn_kwargs
+):
+    preds = ts.predict(bst, h, dynamic_dfs, predict_fn, **predict_fn_kwargs).set_index(
+        time_col, append=True
+    )
+    preds = preds.join(valid)
+    preds["sq_err"] = (preds["Booster"] - preds[target_col]) ** 2
+    rmse = preds.groupby(level=0, observed=True)["sq_err"].mean().pow(0.5).mean()
     return rmse
 
 
-def _update_and_predict(ts, bst, valid, n, h):
+def _update_and_predict(
+    ts,
+    bst,
+    valid,
+    n,
+    h,
+    time_col,
+    target_col,
+    dynamic_dfs,
+    predict_fn,
+    **predict_fn_kwargs
+):
     _update(bst, n)
-    return _predict(ts, bst, valid, h)
+    return _predict(
+        ts,
+        bst,
+        valid,
+        h,
+        time_col,
+        target_col,
+        dynamic_dfs,
+        predict_fn,
+        **predict_fn_kwargs
+    )
 
 # %% ../nbs/lgb_cv.ipynb 5
 class LightGBMCV:
@@ -103,11 +136,8 @@ class LightGBMCV:
         else:
             weights = np.asarray(weights)
 
-        orig = data.copy(deep=False)
         if id_col != "index":
             data = data.set_index(id_col)
-        data = data.rename(columns={time_col: "ds", target_col: "y"}, copy=False)
-        data.index.name = "unique_id"
 
         if np.issubdtype(data["ds"].dtype.type, np.integer):
             freq = 1
@@ -117,10 +147,21 @@ class LightGBMCV:
         bst_threads = os.cpu_count() // self.num_threads
         for _, train, valid in backtest_splits(data, n_windows, window_size, freq):
             ts = copy.deepcopy(self.ts)
-            prep = ts.fit_transform(train, static_features=static_features)
-            ds = lgb.Dataset(prep.drop(columns=["ds", "y"]), prep["y"]).construct()
+            prep = ts.fit_transform(
+                train,
+                id_col,
+                time_col,
+                target_col,
+                static_features,
+                dropna,
+                keep_last_n,
+            )
+            ds = lgb.Dataset(
+                prep.drop(columns=[time_col, target_col]), prep[target_col]
+            ).construct()
             bst = lgb.Booster({**params, "num_threads": bst_threads}, ds)
             bst.predict = partial(bst.predict, num_threads=bst_threads)
+            valid = valid.set_index(time_col, append=True)
             items.append((ts, bst, valid))
 
         hist = []
@@ -134,7 +175,16 @@ class LightGBMCV:
                 for i in range(0, n_iter, eval_every):
                     for j, (ts, bst, valid) in enumerate(items):
                         rmses[j] = _update_and_predict(
-                            ts, bst, valid, eval_every, window_size
+                            ts,
+                            bst,
+                            valid,
+                            eval_every,
+                            window_size,
+                            time_col,
+                            target_col,
+                            dynamic_dfs,
+                            predict_fn,
+                            **predict_fn_kwargs,
                         )
                     rmse = rmses @ weights
                     rounds = eval_every + i
@@ -155,7 +205,16 @@ class LightGBMCV:
                         for ts, bst, valid in items:
                             _update(bst, eval_every)
                             future = executor.submit(
-                                _predict, ts, bst, valid, window_size
+                                _predict,
+                                ts,
+                                bst,
+                                valid,
+                                window_size,
+                                time_col,
+                                target_col,
+                                dynamic_dfs,
+                                predict_fn,
+                                **predict_fn_kwargs,
                             )
                             futures.append(future)
                         rmses[:] = [f.result() for f in futures]
@@ -174,11 +233,11 @@ class LightGBMCV:
         self.cv_models_ = [item[1] for item in items]
 
         if fit_on_all:
-            self.fcst = Forecast([])
+            self.fcst = Forecast([], lags=[1])
             self.fcst.ts = self.ts
             self.fcst.models = [lgb.LGBMRegressor(**params)]
             self.fcst.fit(
-                orig,
+                data,
                 id_col,
                 time_col,
                 target_col,
