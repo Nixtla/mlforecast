@@ -68,7 +68,6 @@ class DistributedForecast:
         target_col: str = "y",  # column with the series values
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
-        keep_last_n: Optional[int] = None,
     ) -> dd.DataFrame:
         """Computes the transformations on each partition of `data` and
         saves the required information for the forecasting step.
@@ -80,7 +79,7 @@ class DistributedForecast:
             data = data.set_index(id_col)
             id_col = "index"
         return self.dts.fit_transform(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data, id_col, time_col, target_col, static_features, dropna
         )
 
     def fit(
@@ -91,11 +90,10 @@ class DistributedForecast:
         target_col: str = "y",  # column with the series values
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
-        keep_last_n: Optional[int] = None,
     ) -> "DistributedForecast":
         """Perform the preprocessing and fit the model."""
         train_ddf = self.preprocess(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data, id_col, time_col, target_col, static_features, dropna
         )
         X, y = train_ddf.drop(columns=[time_col, target_col]), train_ddf[target_col]
         self.models_ = []
@@ -134,9 +132,6 @@ class DistributedForecast:
             List[str]
         ] = None,  # column names of the features that don't change in time
         dropna: bool = True,  # drop rows with missing values created by lags
-        keep_last_n: Optional[
-            int
-        ] = None,  # keep only this many observations of each serie for computing the updates
         dynamic_dfs: Optional[
             List[pd.DataFrame]
         ] = None,  # future values for dynamic features
@@ -168,7 +163,7 @@ class DistributedForecast:
         for train_end, train, valid in backtest_splits(
             data, n_windows, window_size, freq
         ):
-            self.fit(train, "index", "ds", "y", static_features, dropna, keep_last_n)
+            self.fit(train, "index", "ds", "y", static_features, dropna)
             self.cv_models_.append(self.models_)
             y_pred = self.predict(
                 window_size, dynamic_dfs, predict_fn, **predict_fn_kwargs

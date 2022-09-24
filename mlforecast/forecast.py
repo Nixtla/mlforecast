@@ -60,12 +60,9 @@ class Forecast:
             List[str]
         ] = None,  # column names of the features that don't change in time
         dropna: bool = True,  # drop rows with missing values created by lags
-        keep_last_n: Optional[
-            int
-        ] = None,  # keep only this many observations of each serie for computing the updates
     ) -> pd.DataFrame:
         return self.ts.fit_transform(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data, id_col, time_col, target_col, static_features, dropna
         )
 
     def fit(
@@ -78,13 +75,10 @@ class Forecast:
             List[str]
         ] = None,  # column names of the features that don't change in time
         dropna: bool = True,  # drop rows with missing values created by lags
-        keep_last_n: Optional[
-            int
-        ] = None,  # keep only this many observations of each serie for computing the updates
     ) -> "Forecast":
         """Preprocesses `data` and fits `models` using it."""
         series_df = self.preprocess(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data, id_col, time_col, target_col, static_features, dropna
         )
         X, y = (
             series_df.drop(columns=[time_col, target_col]),
@@ -129,9 +123,6 @@ class Forecast:
             List[str]
         ] = None,  # column names of the features that don't change in time
         dropna: bool = True,  # drop rows with missing values created by lags
-        keep_last_n: Optional[
-            int
-        ] = None,  # keep only this many observations of each serie for computing the updates
         dynamic_dfs: Optional[
             List[pd.DataFrame]
         ] = None,  # future values for dynamic features
@@ -156,15 +147,7 @@ class Forecast:
         for train_end, train, valid in backtest_splits(
             data, n_windows, window_size, freq, time_col, target_col
         ):
-            self.fit(
-                train,
-                "index",
-                time_col,
-                target_col,
-                static_features,
-                dropna,
-                keep_last_n,
-            )
+            self.fit(train, "index", time_col, target_col, static_features, dropna)
             self.cv_models_.append(self.models_)
             y_pred = self.predict(
                 window_size, dynamic_dfs, predict_fn, **predict_fn_kwargs
@@ -175,8 +158,8 @@ class Forecast:
             result["cutoff"] = train_end
             results.append(result)
 
-        results = pd.concat(results)
-        results = results[[time_col, "cutoff", target_col, *y_pred.columns]]
+        out = pd.concat(results)
+        out = out[[time_col, "cutoff", target_col, *y_pred.columns]]
         if id_col != "index":
-            results = results.reset_index()
-        return results
+            out = out.reset_index()
+        return out

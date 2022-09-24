@@ -8,7 +8,7 @@ import random
 import reprlib
 from itertools import chain
 from math import ceil, log10
-from typing import Tuple, Union
+from typing import Union
 
 import numpy as np
 import pandas as pd

@@ -14,12 +14,8 @@ from dask.distributed import Client, default_client, futures_of, wait
 from ..core import TimeSeries
 
 # %% ../../nbs/distributed.core.ipynb 6
-def _fit_transform(
-    ts, data, id_col, time_col, target_col, static_features, dropna, keep_last_n
-):
-    df = ts.fit_transform(
-        data, id_col, time_col, target_col, static_features, dropna, keep_last_n
-    )
+def _fit_transform(ts, data, id_col, time_col, target_col, static_features, dropna):
+    df = ts.fit_transform(data, id_col, time_col, target_col, static_features, dropna)
     return ts, df
 
 
@@ -46,7 +42,6 @@ class DistributedTimeSeries:
         target_col: str = "y",
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
-        keep_last_n: Optional[int] = None,
     ) -> dd.DataFrame:
         """Applies the transformations to each partition of `data`."""
         self.data_divisions = data.divisions
@@ -65,7 +60,6 @@ class DistributedTimeSeries:
                 target_col,
                 static_features=static_features,
                 dropna=dropna,
-                keep_last_n=keep_last_n,
                 pure=False,
             )
             ts_future = self.client.submit(operator.itemgetter(0), future)
