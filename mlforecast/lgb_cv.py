@@ -106,6 +106,9 @@ class LightGBMCV:
             List[str]
         ] = None,  # column names of the features that don't change in time
         dropna: bool = True,  # drop rows with missing values created by lags
+        keep_last_n: Optional[
+            int
+        ] = None,  # keep only this many observations of each serie for computing the updates
         dynamic_dfs: Optional[
             List[pd.DataFrame]
         ] = None,  # future values for dynamic features
@@ -154,7 +157,13 @@ class LightGBMCV:
         for _, train, valid in backtest_splits(data, n_windows, window_size, freq):
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(
-                train, id_col, time_col, target_col, static_features, dropna
+                train,
+                id_col,
+                time_col,
+                target_col,
+                static_features,
+                dropna,
+                keep_last_n,
             )
             ds = lgb.Dataset(
                 prep.drop(columns=[time_col, target_col]), prep[target_col]
@@ -265,9 +274,12 @@ class LightGBMCV:
                 target_col,
                 static_features,
                 dropna,
+                keep_last_n,
             )
         else:
-            self.ts._fit(data, id_col, time_col, target_col, static_features)
+            self.ts._fit(
+                data, id_col, time_col, target_col, static_features, keep_last_n
+            )
         return hist
 
     def predict(

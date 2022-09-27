@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 from numba import njit
 from window_ops.shift import shift_array
-from window_ops.utils import first_not_na
 
 # %% ../nbs/core.ipynb 10
 date_features_dtypes = {
@@ -245,20 +244,6 @@ class TimeSeries:
         data = df[self.target_col].values
         return data, indptr
 
-    def _min_samples_needed_for_tfms(self, data, indptr):
-        series_lengths = np.diff(indptr)
-        longest_serie = np.argmax(series_lengths)
-        serie = data[indptr[longest_serie] : indptr[longest_serie + 1]]
-        samples_needed = 1
-        for lag, tfm, *args in self.transforms.values():
-            lagged = shift_array(serie, lag - 1)
-            res = tfm(lagged, *args)
-            first_idx = first_not_na(res)
-            if first_idx == 0:  # probably expanding stat, return whole serie
-                return serie.size
-            samples_needed = max(samples_needed, first_idx + 1)
-        return samples_needed
-
     def _fit(
         self,
         df: pd.DataFrame,
@@ -266,6 +251,7 @@ class TimeSeries:
         time_col: str = "ds",
         target_col: str = "y",
         static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
         if pd.api.types.is_datetime64_dtype(df[time_col]):
@@ -297,9 +283,11 @@ class TimeSeries:
         if data.dtype not in (np.float32, np.float64):
             # since all transformations generate nulls, we need a float dtype
             data = data.astype(np.float32)
-        self._keep_last_n = self._min_samples_needed_for_tfms(data, indptr)
         self.ga = GroupedArray(data, indptr)
-        self._ga = GroupedArray(data, indptr)
+        self.features_ = self._compute_transforms()
+        if keep_last_n is not None:
+            self.ga = self.ga.take_from_groups(slice(-keep_last_n, None))
+        self._ga = GroupedArray(self.ga.data, self.ga.indptr)
         self.uids = sorted_df.index.unique(level=0)
         self.last_dates = sorted_df.index.get_level_values(self.time_col)[
             indptr[1:] - 1
@@ -368,9 +356,8 @@ class TimeSeries:
         if not self.transforms:
             raise ValueError("Must specify at least one type of transformation.")
         df = df.copy(deep=False)
-        features = self._compute_transforms()
         for feat in self.transforms.keys():
-            df[feat] = features[feat][self.restore_idxs]
+            df[feat] = self.features_[feat][self.restore_idxs]
 
         if dropna:
             df.dropna(inplace=True)
@@ -389,11 +376,14 @@ class TimeSeries:
         target_col: str = "y",
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
+        keep_last_n: Optional[int] = None,
     ) -> pd.DataFrame:
         """Add the features to `data` and save the required information for the predictions step.
 
         If not all features are static, specify which ones are in `static_features`.
-        If you don't want to drop rows with null values after the transformations set `dropna=False`."""
+        If you don't want to drop rows with null values after the transformations set `dropna=False`
+        If `keep_last_n` is not None then that number of observations is kept across all series for updates.
+        """
         if id_col not in data and id_col != "index":
             raise ValueError(f"Couldn't find {id_col} column.")
         for col in (time_col, target_col):
@@ -403,9 +393,8 @@ class TimeSeries:
             raise ValueError(f"{target_col} column contains null values.")
         if id_col != "index":
             data = data.set_index(id_col)
-        return self._fit(
-            data, id_col, time_col, target_col, static_features
-        )._transform(data, dropna)
+        self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
+        return self._transform(data, dropna)
 
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
@@ -469,9 +458,7 @@ class TimeSeries:
         self.curr_dates = self.last_dates.copy()
         self.test_dates = []
         self.y_pred = []
-        self.ga = GroupedArray(self._ga.data, self._ga.indptr).take_from_groups(
-            slice(-self._keep_last_n, None)
-        )
+        self.ga = GroupedArray(self._ga.data, self._ga.indptr)
 
     def _define_predict_fn(self, predict_fn, dynamic_dfs) -> Callable:
         if predict_fn is not None:
