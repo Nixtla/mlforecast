@@ -114,7 +114,7 @@ def _as_tuple(x):
     return (x,)
 
 
-# @njit(nogil=True)
+@njit(nogil=True)
 def _transform_series(data, indptr, updates_only, lag, func, *args) -> np.ndarray:
     """Shifts every group in `data` by `lag` and computes `func(shifted, *args)`.
 
@@ -222,7 +222,7 @@ def _restore_difference(preds, data, indptr, d):
     for i in range(n_series):
         s = data[indptr[i] : indptr[i + 1]]
         for j in range(d):
-            preds[i * h + j] += s[j % d]
+            preds[i * h + j] += s[j]
         for j in range(d, h):
             preds[i * h + j] += preds[i * h + j - d]
 
@@ -339,9 +339,7 @@ class TimeSeries:
             n_series = len(indptr) - 1
             for d in self.differences:
                 new_data = np.empty_like(data, shape=n_series * d)
-                new_indptr = np.array(
-                    [i * d for i in range(n_series + 1)], dtype=np.int32
-                )
+                new_indptr = d * np.arange(n_series + 1, dtype=np.int32)
                 _apply_difference(self.ga.data, self.ga.indptr, new_data, new_indptr, d)
                 self.original_values_.append(GroupedArray(new_data, new_indptr))
         self.features_ = self._compute_transforms()
@@ -497,10 +495,9 @@ class TimeSeries:
 
     def _get_raw_predictions(self) -> np.ndarray:
         preds = np.array(self.y_pred).ravel("F")
-        n_diffs = len(self.differences) - 1
-        for i, d in enumerate(reversed(self.differences)):
-            n = n_diffs - i
-            ga = self.original_values_[n]
+        if not self.differences:
+            return preds
+        for d, ga in zip(reversed(self.differences), reversed(self.original_values_)):
             _restore_difference(preds, ga.data, ga.indptr, d)
         return preds
 

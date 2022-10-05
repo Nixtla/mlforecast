@@ -45,7 +45,13 @@ each row represents an observation for a specific serie and timestamp.
 ``` python
 from mlforecast.utils import generate_daily_series
 
-series = generate_daily_series(20, max_length=100, n_static_features=1, static_as_categorical=False, with_trend=True)
+series = generate_daily_series(
+    n_series=20,
+    max_length=100,
+    n_static_features=1,
+    static_as_categorical=False,
+    with_trend=True
+)
 series.head()
 ```
 
@@ -134,9 +140,9 @@ fcst = Forecast(
     lags=[7, 14],
     lag_transforms={
         1: [expanding_mean],
-        7: [(rolling_mean, 7), (rolling_mean, 14)]
+        7: [(rolling_mean, 7)]
     },
-    date_features=['dayofweek', 'month'],
+    date_features=['dayofweek'],
     differences=[1],
 )
 ```
@@ -154,7 +160,7 @@ To compute the features and train the models call `fit` on your
 fcst.fit(series, id_col='index', time_col='ds', target_col='y', static_features=['static_0'])
 ```
 
-    Forecast(models=[LGBMRegressor, XGBRegressor, RandomForestRegressor], freq=<Day>, lag_features=['lag-7', 'lag-14', 'expanding_mean_lag-1', 'rolling_mean_lag-7_window_size-7', 'rolling_mean_lag-7_window_size-14'], date_features=['dayofweek', 'month'], num_threads=1)
+    Forecast(models=[LGBMRegressor, XGBRegressor, RandomForestRegressor], freq=<Day>, lag_features=['lag-7', 'lag-14', 'expanding_mean_lag-1', 'rolling_mean_lag-7_window_size-7'], date_features=['dayofweek'], num_threads=1)
 
 To get the forecasts for the next 14 days call `predict(14)` on the
 forecast object. This will automatically handle the updates required by
