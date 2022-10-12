@@ -143,7 +143,9 @@ class LightGBMCV:
         self.window_size = window_size
         self.time_col = time_col
         self.target_col = target_col
-        for _, train, valid in backtest_splits(data, n_windows, window_size, freq):
+        for _, train, valid in backtest_splits(
+            data, n_windows, window_size, freq, time_col, target_col
+        ):
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(
                 train,
@@ -313,8 +315,11 @@ class LightGBMCV:
                 print(f"[{rounds:,d}] {self.metric_name}: {metric_value:,f}")
             if self._should_stop(hist, early_stopping_evals, early_stopping_pct):
                 print(f"Early stopping at round {rounds:,}")
-                rounds = self._best_iter(hist, early_stopping_evals)
                 break
+        rounds = self._best_iter(hist, early_stopping_evals)
+        print(f"Using best iteration: {rounds:,}")
+        for _, bst, _ in self.items:
+            bst.best_iteration = rounds
 
         self.cv_models_ = [item[1] for item in self.items]
         if compute_cv_preds:
