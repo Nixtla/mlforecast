@@ -313,8 +313,6 @@ class TimeSeries:
             if self.freq != 1:
                 warnings.warn("Setting `freq=1` since time col is int.")
                 self.freq = 1
-            if self.date_features:
-                warnings.warn("Ignoring date_features since time column is integer.")
         else:
             raise ValueError(f"{time_col} must be either timestamp or integer.")
         self.id_col = id_col
@@ -412,8 +410,9 @@ class TimeSeries:
         return self._apply_multithreaded_transforms()
 
     def _compute_date_feature(self, dates, feature):
+        dates = getattr(dates, "dt", dates)
         if feature in ("week", "weekofyear"):
-            feat_vals = dates.isocalendar().week
+            feat_vals = dates.dt.isocalendar().week
         else:
             if callable(feature):
                 feat_name = feature.__name__
@@ -447,7 +446,7 @@ class TimeSeries:
 
         for feature in self.date_features:
             feat_name, feat_vals = self._compute_date_feature(
-                df[self.time_col].dt, feature
+                df[self.time_col], feature
             )
             df[feat_name] = feat_vals
         return df
