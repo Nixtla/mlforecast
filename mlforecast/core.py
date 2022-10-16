@@ -412,7 +412,8 @@ class TimeSeries:
     def _compute_date_feature(self, dates, feature):
         dates = getattr(dates, "dt", dates)
         if feature in ("week", "weekofyear"):
-            feat_vals = dates.dt.isocalendar().week
+            feat_name = feature
+            feat_vals = dates.isocalendar().week
         else:
             if callable(feature):
                 feat_name = feature.__name__
