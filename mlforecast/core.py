@@ -235,8 +235,8 @@ class TimeSeries:
         freq: Optional[Union[int, str]] = None,
         lags: List[int] = [],
         lag_transforms: Dict[int, List[Tuple]] = {},
-        date_features: List[str] = [],
-        differences: Optional[List[Union[int, Callable]]] = None,
+        date_features: List[Union[str, Callable]] = [],
+        differences: Optional[List[int]] = None,
         num_threads: int = 1,
     ):
         if isinstance(freq, str):
@@ -253,7 +253,7 @@ class TimeSeries:
         for feature in date_features:
             if callable(feature) and feature.__name__ == "<lambda>":
                 raise ValueError(
-                    "Can't use a lambda for date feature since the function name gets used as the feature name."
+                    "Can't use a lambda as a date feature because the function name gets used as the feature name."
                 )
         self.date_features = list(date_features)
 
