@@ -5,7 +5,7 @@ __all__ = ['DistributedForecast']
 
 # %% ../../nbs/distributed.forecast.ipynb 5
 import warnings
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional
 
 import dask.dataframe as dd
 import numpy as np
@@ -13,7 +13,16 @@ import pandas as pd
 from dask.distributed import Client, default_client
 from sklearn.base import clone
 
-from .. import Forecast, TimeSeries
+from mlforecast.core import (
+    DateFeature,
+    Differences,
+    Freq,
+    LagTransforms,
+    Lags,
+    Models,
+    TimeSeries,
+)
+from ..forecast import Forecast
 from .core import DistributedTimeSeries
 from ..utils import backtest_splits
 
@@ -23,19 +32,19 @@ class DistributedForecast:
 
     def __init__(
         self,
-        models,  # model or list of mlforecast.distributed.models
+        models: Models,  # model or list of models that follow the scikit-learn API
         freq: Optional[
-            str
-        ] = None,  # pandas offset alias, e.g. D, W, M. Don't set if you're using integer times.
-        lags: List[int] = [],  # list of lags to use as features
-        lag_transforms: Dict[
-            int, List[Tuple]
-        ] = {},  # list of transformations to apply to each lag
-        date_features: List[
-            Union[str, Callable]
-        ] = [],  # list of names of pandas date attributes or functions to use as features, e.g. dayofweek
+            Freq
+        ] = None,  # pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series
+        lags: Optional[Lags] = None,  # list of lags to use as features
+        lag_transforms: Optional[
+            LagTransforms
+        ] = None,  # list of transformations to apply to each lag
+        date_features: Optional[
+            Iterable[DateFeature]
+        ] = None,  # list of names of pandas date attributes or functions to use as features, e.g. dayofweek
         differences: Optional[
-            List[int]
+            Differences
         ] = None,  # differences to apply to the series before fitting
         num_threads: int = 1,  # number of threads to use when computing lag features
         client: Optional[Client] = None,  # dask client to use for computations

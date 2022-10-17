@@ -8,13 +8,21 @@ import copy
 import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from . import Forecast, TimeSeries
+from mlforecast.core import (
+    DateFeature,
+    Differences,
+    Freq,
+    LagTransforms,
+    Lags,
+    TimeSeries,
+)
+from .forecast import Forecast
 from .utils import backtest_splits
 
 # %% ../nbs/lgb_cv.ipynb 4
@@ -64,18 +72,20 @@ def _update_and_predict(
 class LightGBMCV:
     def __init__(
         self,
-        freq: Optional[str] = None,  # pandas offset alias, e.g. D, W, M
-        lags: List[int] = [],  # list of lags to use as features
-        lag_transforms: Dict[
-            int, List[Tuple]
-        ] = {},  # list of transformations to apply to each lag
-        date_features: List[
-            Union[str, Callable]
-        ] = [],  # list of names of pandas date attributes or functions to use as features, e.g. dayofweek
+        freq: Optional[
+            Freq
+        ] = None,  # pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series
+        lags: Optional[Lags] = None,  # list of lags to use as features
+        lag_transforms: Optional[
+            LagTransforms
+        ] = None,  # list of transformations to apply to each lag
+        date_features: Optional[
+            Iterable[DateFeature]
+        ] = None,  # list of names of pandas date attributes or functions to use as features, e.g. dayofweek
         differences: Optional[
-            List[int]
+            Differences
         ] = None,  # differences to apply to the series before fitting
-        num_threads: int = 1,  # number of threads to use when computing the predictions of each window.
+        num_threads: int = 1,  # number of threads to use when computing lag features
     ):
         self.num_threads = num_threads
         cpu_count = os.cpu_count()
@@ -149,7 +159,7 @@ class LightGBMCV:
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(
                 train,
-                id_col,
+                "index",
                 time_col,
                 target_col,
                 static_features,
