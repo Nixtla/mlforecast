@@ -432,6 +432,9 @@ class TimeSeries:
                 dates = dates.isocalendar()
             feat_vals = getattr(dates, feature)
         vals = np.asarray(feat_vals)
+        feat_dtype = date_features_dtypes.get(feature)
+        if feat_dtype is not None:
+            vals = vals.astype(feat_dtype)
         return feat_name, vals
 
     def _transform(
