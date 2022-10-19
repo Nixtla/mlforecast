@@ -223,7 +223,7 @@ def _restore_difference(preds, data, indptr, d):
     h = len(preds) // n_series
     for i in range(n_series):
         s = data[indptr[i] : indptr[i + 1]]
-        for j in range(d):
+        for j in range(min(h, d)):
             preds[i * h + j] += s[j]
         for j in range(d, h):
             preds[i * h + j] += preds[i * h + j - d]

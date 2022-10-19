@@ -485,6 +485,7 @@ class LightGBMCV:
                 break
         rounds = self._best_iter(hist, early_stopping_evals)
         print(f"Using best iteration: {rounds:,}")
+        hist = hist[: rounds // eval_every]
         for _, bst, _ in self.items:
             bst.best_iteration = rounds
 
@@ -508,10 +509,9 @@ class LightGBMCV:
                 self.cv_preds_ = [f.result() for f in futures]
 
         if fit_on_all:
-            params["n_estimators"] = rounds
             self.fcst = Forecast([])
             self.fcst.ts = self.ts
-            self.fcst.models = [lgb.LGBMRegressor(**params)]
+            self.fcst.models = [lgb.LGBMRegressor(**{**params, "n_estimators": rounds})]
             self.fcst.fit(
                 data,
                 id_col,
