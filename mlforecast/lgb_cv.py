@@ -501,13 +501,10 @@ class LightGBMCV:
                 keep_last_n,
             )
         else:
+            if id_col != "index":
+                data = data.set_index(id_col)
             self.ts._fit(
-                data.set_index(id_col),
-                "index",
-                time_col,
-                target_col,
-                static_features,
-                keep_last_n,
+                data, "index", time_col, target_col, static_features, keep_last_n
             )
         return hist
 
