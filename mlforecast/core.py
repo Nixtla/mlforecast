@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from numba import njit
-from sklearn.base import RegressorMixin
+from sklearn.base import BaseEstimator
 from window_ops.shift import shift_array
 
 # %% ../nbs/core.ipynb 10
@@ -235,7 +235,7 @@ LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
 Differences = Iterable[int]
-Models = Union[RegressorMixin, List[RegressorMixin]]
+Models = Union[BaseEstimator, List[BaseEstimator]]
 
 
 class TimeSeries:

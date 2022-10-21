@@ -27,21 +27,13 @@ class Forecast:
 
     def __init__(
         self,
-        models: Models,  # Models that will be trained and used to compute the forecasts.
-        freq: Optional[
-            Freq
-        ] = None,  # Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
-        lags: Optional[Lags] = None,  # Lags of the target to use as features.
-        lag_transforms: Optional[
-            LagTransforms
-        ] = None,  # Mapping of target lags to their transformations.
-        date_features: Optional[
-            Iterable[DateFeature]
-        ] = None,  # Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
-        differences: Optional[
-            Differences
-        ] = None,  # Differences to take of the target before computing the features. These are restored at the forecasting step.
-        num_threads: int = 1,  # Number of threads to use when computing the features.
+        models: Models,
+        freq: Optional[Freq] = None,
+        lags: Optional[Lags] = None,
+        lag_transforms: Optional[LagTransforms] = None,
+        date_features: Optional[Iterable[DateFeature]] = None,
+        differences: Optional[Differences] = None,
+        num_threads: int = 1,
     ):
         """Create forecast object
 
@@ -84,17 +76,13 @@ class Forecast:
 
     def preprocess(
         self,
-        data: pd.DataFrame,  # Series data in long format.
-        id_col: str,  # Column that identifies each serie. If 'index' then the index is used.
-        time_col: str,  # Column that identifies each timestep, its values can be timestamps or integers.
-        target_col: str,  # Column that contains the target.
-        static_features: Optional[
-            List[str]
-        ] = None,  # Names of the features that are static and will be repeated when forecasting.
-        dropna: bool = True,  # Drop rows with missing values produced by the transformations.
-        keep_last_n: Optional[
-            int
-        ] = None,  # Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        data: pd.DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
     ) -> pd.DataFrame:
         """Add the features to `data`.
 
@@ -126,8 +114,8 @@ class Forecast:
 
     def fit_models(
         self,
-        X: pd.DataFrame,  # Features.
-        y: Union[np.ndarray, pd.Series],  # Target.
+        X: pd.DataFrame,
+        y: Union[np.ndarray, pd.Series],
     ) -> "Forecast":
         """Manually train models. Use this if you called `Forecast.preprocess` beforehand.
 
@@ -150,17 +138,13 @@ class Forecast:
 
     def fit(
         self,
-        data: pd.DataFrame,  # Series data in long format.
-        id_col: str,  # Column that identifies each serie. If 'index' then the index is used.
-        time_col: str,  # Column that identifies each timestep, its values can be timestamps or integers.
-        target_col: str,  # Column that contains the target.
-        static_features: Optional[
-            List[str]
-        ] = None,  # Names of the features that are static and will be repeated when forecasting.
-        dropna: bool = True,  # Drop rows with missing values produced by the transformations.
-        keep_last_n: Optional[
-            int
-        ] = None,  # Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        data: pd.DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
     ) -> "Forecast":
         """Apply the feature engineering and train the models.
 
@@ -198,14 +182,10 @@ class Forecast:
 
     def predict(
         self,
-        horizon: int,  # Number of periods to predict
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        horizon: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ) -> pd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
@@ -247,26 +227,18 @@ class Forecast:
 
     def cross_validation(
         self,
-        data: pd.DataFrame,  # Series data in long format.
-        n_windows: int,  # Number of windows to evaluate.
-        window_size: int,  # Number of test periods in each window.
-        id_col: str,  # Column that identifies each serie. If 'index' then the index is used.
-        time_col: str,  # Column that identifies each timestep, its values can be timestamps or integers.
-        target_col: str,  # Column that contains the target.
-        static_features: Optional[
-            List[str]
-        ] = None,  # Names of the features that are static and will be repeated when forecasting.
-        dropna: bool = True,  # Drop rows with missing values produced by the transformations.
-        keep_last_n: Optional[
-            int
-        ] = None,  # Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        data: pd.DataFrame,
+        n_windows: int,
+        window_size: int,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ):
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,

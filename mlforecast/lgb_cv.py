@@ -75,20 +75,12 @@ CVResult = Tuple[int, float]
 class LightGBMCV:
     def __init__(
         self,
-        freq: Optional[
-            Freq
-        ] = None,  # Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
-        lags: Optional[Lags] = None,  # Lags of the target to use as features.
-        lag_transforms: Optional[
-            LagTransforms
-        ] = None,  # Mapping of target lags to their transformations.
-        date_features: Optional[
-            Iterable[DateFeature]
-        ] = None,  # Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
-        differences: Optional[
-            Differences
-        ] = None,  # Differences to take of the target before computing the features. These are restored at the forecasting step.
-        num_threads: int = 1,  # Number of threads to use when computing the features.
+        freq: Optional[Freq] = None,
+        lags: Optional[Lags] = None,
+        lag_transforms: Optional[LagTransforms] = None,
+        date_features: Optional[Iterable[DateFeature]] = None,
+        differences: Optional[Differences] = None,
+        num_threads: int = 1,
     ):
         """Create LightGBM CV object.
 
@@ -130,22 +122,18 @@ class LightGBMCV:
 
     def setup(
         self,
-        data: pd.DataFrame,  # time series
-        n_windows: int,  # Number of windows to evaluate.
-        window_size: int,  # Number of test periods in each window.
-        id_col: str,  # Column that identifies each serie. If 'index' then the index is used.
-        time_col: str,  # Column that identifies each timestep, its values can be timestamps or integers.
-        target_col: str,  # Column that contains the target.
-        params: Optional[Dict[str, Any]] = None,  # LightGBM Booster parameters
-        static_features: Optional[
-            List[str]
-        ] = None,  # Names of the features that are static and will be repeated when forecasting.
-        dropna: bool = True,  # Drop rows with missing values produced by the transformations.
-        keep_last_n: Optional[
-            int
-        ] = None,  # Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-        weights: Sequence[float] = None,  # Weight of each window
-        metric: Union[str, Callable] = "mape",  # Evaluation metric
+        data: pd.DataFrame,
+        n_windows: int,
+        window_size: int,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        params: Optional[Dict[str, Any]] = None,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        weights: Sequence[float] = None,
+        metric: Union[str, Callable] = "mape",
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -286,14 +274,10 @@ class LightGBMCV:
 
     def partial_fit(
         self,
-        num_iterations: int,  # Number of boosting iterations to run
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        num_iterations: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ) -> float:
         """Train the boosters for some iterations.
 
@@ -360,36 +344,28 @@ class LightGBMCV:
 
     def fit(
         self,
-        data: pd.DataFrame,  # Series data in long format.
-        n_windows: int,  # Number of windows to evaluate.
-        window_size: int,  # Number of test periods in each window.
-        id_col: str,  # Column that identifies each serie. If 'index' then the index is used.
-        time_col: str,  # Column that identifies each timestep, its values can be timestamps or integers.
-        target_col: str,  # Column that contains the target.
-        num_iterations: int = 100,  # Number of boosting iterations to run
-        params: Dict[str, Any] = None,  # LightGBM Booster parameters
-        static_features: Optional[
-            List[str]
-        ] = None,  # Names of the features that are static and will be repeated when forecasting.
-        dropna: bool = True,  # Drop rows with missing values produced by the transformations.
-        keep_last_n: Optional[
-            int
-        ] = None,  # Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        eval_every: int = 10,  # Number of boosting iterations to train before evaluating on the whole forecast window.
-        weights: Sequence[float] = None,  # Weight of each window
-        metric: Union[str, Callable] = "mape",  # Evaluation metric
-        verbose_eval: bool = True,  # Print the metrics of each evaluation.
-        early_stopping_evals: int = 2,  # Maximum number of evaluations to run without improvement.
-        early_stopping_pct: float = 0.01,  # Minimum percentage improvement in metric value in `early_stopping_evals` evaluations.
-        compute_cv_preds: bool = False,  # Compute predictions for each window after finding the best iteration.
-        fit_on_all: bool = False,  # Return model fitted on full dataset.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        data: pd.DataFrame,
+        n_windows: int,
+        window_size: int,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        num_iterations: int = 100,
+        params: Dict[str, Any] = None,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        eval_every: int = 10,
+        weights: Sequence[float] = None,
+        metric: Union[str, Callable] = "mape",
+        verbose_eval: bool = True,
+        early_stopping_evals: int = 2,
+        early_stopping_pct: float = 0.01,
+        compute_cv_preds: bool = False,
+        fit_on_all: bool = False,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -506,7 +482,9 @@ class LightGBMCV:
                         **predict_fn_kwargs,
                     )
                     futures.append(future)
-                self.cv_preds_ = [f.result() for f in futures]
+                self.cv_preds_ = pd.concat(
+                    [f.result().assign(window=i) for i, f in enumerate(futures)]
+                )
 
         if fit_on_all:
             self.fcst = Forecast([])
@@ -523,20 +501,21 @@ class LightGBMCV:
             )
         else:
             self.ts._fit(
-                data, id_col, time_col, target_col, static_features, keep_last_n
+                data.set_index(id_col),
+                "index",
+                time_col,
+                target_col,
+                static_features,
+                keep_last_n,
             )
         return hist
 
     def predict(
         self,
-        horizon: int,  # Number of periods to predict
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        horizon: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ) -> pd.DataFrame:
         """Compute predictions using the model trained on all data.
 
@@ -576,14 +555,10 @@ class LightGBMCV:
 
     def cv_predict(
         self,
-        horizon: int,  # Number of periods to predict
-        dynamic_dfs: Optional[
-            List[pd.DataFrame]
-        ] = None,  # Future values of the dynamic features, e.g. prices.
-        predict_fn: Optional[
-            Callable
-        ] = None,  # Custom function to compute predictions.
-        **predict_fn_kwargs,  # Additional arguments passed to predict_fn
+        horizon: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        predict_fn: Optional[Callable] = None,
+        **predict_fn_kwargs,
     ) -> pd.DataFrame:
         """Compute predictions with each of the trained boosters.
 
