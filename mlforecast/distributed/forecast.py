@@ -22,7 +22,6 @@ from mlforecast.core import (
     Models,
     TimeSeries,
 )
-from ..forecast import Forecast
 from .core import DistributedTimeSeries
 from ..utils import backtest_splits
 
@@ -135,7 +134,7 @@ class DistributedForecast:
         self,
         X: dd.DataFrame,
         y: dd.Series,
-    ) -> "Forecast":
+    ) -> "DistributedForecast":
         """Manually train models. Use this if you called `Forecast.preprocess` beforehand.
 
         Parameters

@@ -25,7 +25,7 @@ from mlforecast.core import (
 from .forecast import Forecast
 from .utils import backtest_splits
 
-# %% ../nbs/lgb_cv.ipynb 4
+# %% ../nbs/lgb_cv.ipynb 5
 def _mape(y_true, y_pred):
     abs_pct_err = abs(y_true - y_pred) / y_true
     return (
@@ -68,10 +68,10 @@ def _update_and_predict(
         ts, bst, valid, h, time_col, dynamic_dfs, predict_fn, **predict_fn_kwargs
     )
 
-# %% ../nbs/lgb_cv.ipynb 5
+# %% ../nbs/lgb_cv.ipynb 6
 CVResult = Tuple[int, float]
 
-# %% ../nbs/lgb_cv.ipynb 6
+# %% ../nbs/lgb_cv.ipynb 7
 class LightGBMCV:
     def __init__(
         self,
@@ -489,6 +489,7 @@ class LightGBMCV:
         if fit_on_all:
             self.fcst = Forecast([])
             self.fcst.ts = self.ts
+            params = params if params is not None else {}
             self.fcst.models = [lgb.LGBMRegressor(**{**params, "n_estimators": rounds})]
             self.fcst.fit(
                 data,
