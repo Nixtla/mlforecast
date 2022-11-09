@@ -586,8 +586,8 @@ class TimeSeries:
                 predictions = predict_fn(
                     model,
                     new_x,
-                    dynamic_dfs=dynamic_dfs,
-                    features_order=self.features_order_,
+                    dynamic_dfs,
+                    self.features_order_,
                     **predict_fn_kwargs,
                 )
                 self._update_y(predictions)

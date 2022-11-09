@@ -136,7 +136,6 @@ def backtest_splits(
                 window_size=window_size,
                 freq=freq,
                 time_col=time_col,
-                target_col=target_col,
                 meta={"train_end": end_dtype, "is_valid": bool},
             )
         train_mask = data[time_col].le(splits["train_end"])
