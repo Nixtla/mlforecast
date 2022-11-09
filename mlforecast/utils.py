@@ -122,7 +122,6 @@ def backtest_splits(
     window_size: int,
     freq: Union[pd.offsets.BaseOffset, int],
     time_col: str = "ds",
-    target_col: str = "y",
 ):
     for i in range(n_windows):
         offset = (n_windows - i) * window_size

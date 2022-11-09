@@ -199,7 +199,7 @@ class LightGBMCV:
         self.target_col = target_col
         params = {} if params is None else params
         for _, train, valid in backtest_splits(
-            data, n_windows, window_size, freq, time_col, target_col
+            data, n_windows, window_size, freq, time_col
         ):
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(

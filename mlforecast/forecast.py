@@ -297,7 +297,7 @@ class Forecast:
             freq = self.freq
 
         for train_end, train, valid in backtest_splits(
-            data, n_windows, window_size, freq, time_col, target_col
+            data, n_windows, window_size, freq, time_col
         ):
             self.fit(
                 train,
