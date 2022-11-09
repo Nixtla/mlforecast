@@ -74,7 +74,7 @@ def generate_daily_series(
 def generate_prices_for_series(
     series: pd.DataFrame, horizon: int = 7, seed: int = 0
 ) -> pd.DataFrame:
-    rng = np.random.RandomState(0)
+    rng = np.random.RandomState(seed)
     unique_last_dates = series.groupby("unique_id")["ds"].max().nunique()
     if unique_last_dates > 1:
         raise ValueError("series must have equal ends.")
@@ -102,7 +102,6 @@ def _split_info(
     window_size: int,
     freq: Union[pd.offsets.BaseOffset, int],
     time_col: str,
-    target_col: str,
 ):
     # TODO: try computing this once and passing it to this fn
     last_dates = data.groupby(level=0, observed=True)[time_col].transform("max")
@@ -128,7 +127,7 @@ def backtest_splits(
     for i in range(n_windows):
         offset = (n_windows - i) * window_size
         if isinstance(data, pd.DataFrame):
-            splits = _split_info(data, offset, window_size, freq, time_col, target_col)
+            splits = _split_info(data, offset, window_size, freq, time_col)
         else:
             end_dtype = int if isinstance(freq, int) else "datetime64[ns]"
             splits = data.map_partitions(

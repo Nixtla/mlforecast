@@ -130,7 +130,7 @@ class Forecast:
             Forecast object with trained models.
         """
         self.models_ = []
-        for i, model in enumerate(self.models):
+        for model in self.models:
             self.models_.append(clone(model).fit(X, y))
         return self
 

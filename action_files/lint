@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 mypy mlforecast
 flake8 --select=F mlforecast
+pylint mlforecast

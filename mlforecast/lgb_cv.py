@@ -588,4 +588,6 @@ class LightGBMCV:
         result : pandas DataFrame
             Predictions for each serie and timestep, with one column per window.
         """
-        return self.ts.predict(self.cv_models_, horizon)
+        return self.ts.predict(
+            self.cv_models_, horizon, dynamic_dfs, predict_fn, **predict_fn_kwargs
+        )
