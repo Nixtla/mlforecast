@@ -115,7 +115,7 @@ class MLForecast:
         self,
         X: pd.DataFrame,
         y: Union[np.ndarray, pd.Series],
-    ) -> "Forecast":
+    ) -> "MLForecast":
         """Manually train models. Use this if you called `Forecast.preprocess` beforehand.
 
         Parameters
@@ -144,7 +144,7 @@ class MLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-    ) -> "Forecast":
+    ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
         Parameters
