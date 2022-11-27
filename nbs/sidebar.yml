@@ -1,15 +1,24 @@
 website:
   sidebar:
     contents:
-      - forecast.ipynb
-      - lgb_cv.ipynb
-      - utils.ipynb
+      - index.ipynb
+      - section: Getting started
+        contents:
+          - docs/install.ipynb
+          - docs/quick_start_local.ipynb
+          - docs/quick_start_distributed.ipynb
+          - docs/end_to_end_walkthrough.ipynb
+      - section: Forecast
+        contents:
+          - forecast.ipynb
+          - lgb_cv.ipynb
       - section: Distributed
         contents:
         - distributed.forecast.ipynb
         - distributed.models.lgb.ipynb
         - distributed.models.xgb.ipynb
-      - section: API details
+      - section: API reference
         contents:
         - core.ipynb
         - distributed.core.ipynb
+        - utils.ipynb
