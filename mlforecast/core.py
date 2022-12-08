@@ -147,9 +147,7 @@ class GroupedArray:
         self[idx][:] = vals
 
     @classmethod
-    def from_sorted_df(
-        cls, df: pd.DataFrame, target_col: str
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def from_sorted_df(cls, df: pd.DataFrame, target_col: str) -> "GroupedArray":
         grouped = df.groupby(level=0, observed=True)
         sizes = grouped.size().values
         indptr = np.append(0, sizes.cumsum())
