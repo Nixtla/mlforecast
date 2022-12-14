@@ -487,11 +487,11 @@ class LightGBMCV:
                 )
 
         if fit_on_all:
+            params = params if params is not None else {}
             self.fcst = MLForecast(
                 [lgb.LGBMRegressor(**{**params, "n_estimators": rounds})]
             )
             self.fcst.ts = self.ts
-            params = params if params is not None else {}
             self.fcst.fit(
                 data,
                 id_col,
