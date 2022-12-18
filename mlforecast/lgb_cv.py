@@ -478,9 +478,14 @@ class LightGBMCV:
                         **predict_fn_kwargs,
                     )
                     futures.append(future)
-                self.cv_preds_ = pd.concat(
+                cv_preds = pd.concat(
                     [f.result().assign(window=i) for i, f in enumerate(futures)]
                 )
+                if id_col != "index":
+                    idxs = [id_col, time_col]
+                else:
+                    idxs = [time_col]
+                self.cv_preds_ = cv_preds.reset_index(idxs)
         self.ts._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
         return hist
 
