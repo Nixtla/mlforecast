@@ -204,37 +204,10 @@ def _build_transform_name(lag, tfm, *args) -> str:
     return tfm_name
 
 # %% ../nbs/core.ipynb 21
-def simple_predict(
-    model,
-    new_x: pd.DataFrame,
-    _dynamic_dfs: List[pd.DataFrame],
-    features_order: List[str],
-    **_kwargs,
-) -> np.ndarray:
-    """Drop the ds column from `new_x` and call `model.predict` on it."""
-    new_x = new_x[features_order]
-    return model.predict(new_x)
-
-
-def merge_predict(
-    model,
-    new_x: pd.DataFrame,
-    dynamic_dfs: List[pd.DataFrame],
-    features_order: List[str],
-    **_kwargs,
-) -> np.ndarray:
-    """Perform left join on each of `dynamic_dfs` and call model.predict."""
-    idx = new_x.index.name
-    new_x = new_x.reset_index()
-    for df in dynamic_dfs:
-        new_x = new_x.merge(df, how="left")
-    new_x = new_x.sort_values(idx)
-    new_x = new_x[features_order]
-    return model.predict(new_x)
-
-# %% ../nbs/core.ipynb 22
 def _name_models(current_names):
     ctr = Counter(current_names)
+    if not ctr:
+        return []
     if max(ctr.values()) < 2:
         return current_names
     names = current_names.copy()
@@ -248,16 +221,16 @@ def _name_models(current_names):
         names[-i] = name
     return names
 
-# %% ../nbs/core.ipynb 24
+# %% ../nbs/core.ipynb 23
 Freq = Union[int, str]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
 Differences = Iterable[int]
-Models = Union[BaseEstimator, List[BaseEstimator]]
+Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 
-# %% ../nbs/core.ipynb 25
+# %% ../nbs/core.ipynb 24
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
@@ -526,11 +499,6 @@ class TimeSeries:
             features[feat_name] = feat_vals
 
         features_df = pd.DataFrame(features, columns=self.features, index=self.uids)
-        nulls_in_cols = features_df.isnull().any()
-        if any(nulls_in_cols):
-            warnings.warn(
-                f'Found null values in {", ".join(nulls_in_cols[nulls_in_cols].index)}.'
-            )
         results_df = self.static_features.join(features_df)
         results_df[self.time_col] = self.curr_dates
         return results_df
@@ -566,43 +534,48 @@ class TimeSeries:
         self.y_pred = []
         self.ga = GroupedArray(self._ga.data, self._ga.indptr)
 
-    def _define_predict_fn(self, predict_fn, dynamic_dfs) -> Callable:
-        if predict_fn is not None:
-            return predict_fn
-        if dynamic_dfs is None:
-            return simple_predict
-        return merge_predict
+    def _get_features_for_next_step(self, dynamic_dfs):
+        new_x = self._update_features()
+        if dynamic_dfs:
+            idx_name = new_x.index.name
+            new_x = new_x.reset_index()
+            for df in dynamic_dfs:
+                new_x = new_x.merge(df, how="left")
+            new_x = new_x.sort_values(idx_name)
+        nulls = new_x.isnull().any()
+        if any(nulls):
+            warnings.warn(f'Found null values in {", ".join(nulls[nulls].index)}.')
+        return new_x[self.features_order_]
 
     def predict(
         self,
-        models: Models,
+        models: Dict[str, BaseEstimator],
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
         """Use `model` to predict the next `horizon` timesteps."""
-        if not isinstance(models, list):
-            models = [models]
-        model_names = _name_models([m.__class__.__name__ for m in models])
-        predict_fn = self._define_predict_fn(predict_fn, dynamic_dfs)
-        for i, model in enumerate(models):
+        if dynamic_dfs is None:
+            dynamic_dfs = []
+        for i, (name, model) in enumerate(models.items()):
             self._predict_setup()
             for _ in range(horizon):
-                new_x = self._update_features()
-                predictions = predict_fn(
-                    model,
-                    new_x,
-                    dynamic_dfs,
-                    self.features_order_,
-                    **predict_fn_kwargs,
-                )
+                new_x = self._get_features_for_next_step(dynamic_dfs)
+                if before_predict_callback is not None:
+                    new_x = before_predict_callback(new_x)
+                predictions = model.predict(new_x)
+                if after_predict_callback is not None:
+                    predictions_serie = pd.Series(predictions, index=new_x.index)
+                    predictions = after_predict_callback(predictions_serie).values
                 self._update_y(predictions)
             if i == 0:
                 preds = self._get_predictions()
                 preds = preds.rename(
-                    columns={f"{self.target_col}_pred": model_names[i]}, copy=False
+                    columns={f"{self.target_col}_pred": name}, copy=False
                 )
             else:
-                preds[model_names[i]] = self._get_raw_predictions()
+                preds[name] = self._get_raw_predictions()
+        if self.id_col != "index":
+            preds = preds.reset_index()
         return preds

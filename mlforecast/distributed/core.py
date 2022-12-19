@@ -23,8 +23,12 @@ def _fit_transform(
     return ts, df
 
 
-def _predict(ts, model, horizon, dynamic_dfs, predict_fn, **predict_fn_kwargs):
-    return ts.predict(model, horizon, dynamic_dfs, predict_fn, **predict_fn_kwargs)
+def _predict(
+    ts, model, horizon, dynamic_dfs, before_predict_callback, after_predict_callback
+):
+    return ts.predict(
+        model[0], horizon, dynamic_dfs, before_predict_callback, after_predict_callback
+    )
 
 # %% ../../nbs/distributed.core.ipynb 7
 class DistributedTimeSeries:
@@ -82,16 +86,14 @@ class DistributedTimeSeries:
         models,
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> dd.DataFrame:
         """Broadcasts `models` across all workers and computes the next `horizon` timesteps.
 
         `predict_fn(model, new_x, features_order, **predict_fn_kwargs)` is called on each timestep.
         """
-        if not isinstance(models, list):
-            models = [models]
-        models_future = self.client.scatter(models, broadcast=True)
+        models_future = self.client.scatter([models], broadcast=True)
         if dynamic_dfs is not None:
             dynamic_dfs_futures = self.client.scatter(dynamic_dfs, broadcast=True)
         else:
@@ -103,8 +105,8 @@ class DistributedTimeSeries:
                 models_future,
                 horizon,
                 dynamic_dfs=dynamic_dfs_futures,
-                predict_fn=predict_fn,
-                **predict_fn_kwargs,
+                before_predict_callback=before_predict_callback,
+                after_predict_callback=after_predict_callback,
             )
             for ts_future in self.ts
         ]

@@ -21,6 +21,7 @@ from mlforecast.core import (
     Lags,
     Models,
     TimeSeries,
+    _name_models,
 )
 from .core import DistributedTimeSeries
 from ..utils import backtest_splits
@@ -61,9 +62,14 @@ class DistributedMLForecast:
         client : dask distributed client
             Client to use for computing data and training the models.
         """
-        if not isinstance(models, list):
-            models = [clone(models)]
-        self.models = [clone(m) for m in models]
+        if not isinstance(models, dict) and not isinstance(models, list):
+            models = [models]
+        if isinstance(models, list):
+            model_names = _name_models([m.__class__.__name__ for m in models])
+            models_with_names = dict(zip(model_names, models))
+        else:
+            models_with_names = models
+        self.models = models_with_names
         self.client = client or default_client()
         self.dts = DistributedTimeSeries(
             TimeSeries(
@@ -74,7 +80,7 @@ class DistributedMLForecast:
 
     def __repr__(self) -> str:
         return (
-            f'{self.__class__.__name__}(models=[{", ".join(m.__class__.__name__ for m in self.models)}], '
+            f'{self.__class__.__name__}(models=[{", ".join(self.models.keys())}], '
             f"freq={self.freq}, "
             f"lag_features={list(self.dts._base_ts.transforms.keys())}, "
             f"date_features={self.dts._base_ts.date_features}, "
@@ -149,9 +155,9 @@ class DistributedMLForecast:
         self : DistributedForecast
             Forecast object with trained models.
         """
-        self.models_ = []
-        for model in self.models:
-            self.models_.append(clone(model).fit(X, y))
+        self.models_ = {}
+        for name, model in self.models.items():
+            self.models_[name] = clone(model).fit(X, y).model_
         return self
 
     def fit(
@@ -199,8 +205,8 @@ class DistributedMLForecast:
         self,
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> dd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
@@ -210,22 +216,14 @@ class DistributedMLForecast:
             Number of periods to predict.
         dynamic_dfs : list of pandas DataFrame, optional (default=None)
             Future values of the dynamic features, e.g. prices.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `Forecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
 
         Returns
         -------
@@ -233,11 +231,11 @@ class DistributedMLForecast:
             Predictions for each serie and timestep, with one column per model.
         """
         return self.dts.predict(
-            [m.model_ for m in self.models_],
+            self.models_,
             horizon,
             dynamic_dfs,
-            predict_fn,
-            **predict_fn_kwargs,
+            before_predict_callback,
+            after_predict_callback,
         )
 
     def cross_validation(
@@ -252,8 +250,8 @@ class DistributedMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ):
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,
@@ -281,22 +279,14 @@ class DistributedMLForecast:
             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
         dynamic_dfs : list of pandas DataFrame, optional (default=None)
             Future values of the dynamic features, e.g. prices.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `Forecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
 
         Returns
         -------
@@ -326,7 +316,10 @@ class DistributedMLForecast:
             self.fit(train, "index", "ds", "y", static_features, dropna, keep_last_n)
             self.cv_models_.append(self.models_)
             y_pred = self.predict(
-                window_size, dynamic_dfs, predict_fn, **predict_fn_kwargs
+                window_size,
+                dynamic_dfs,
+                before_predict_callback,
+                after_predict_callback,
             )
             result = valid[["ds", "y"]].copy()
             result["cutoff"] = train_end

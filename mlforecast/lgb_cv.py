@@ -22,7 +22,6 @@ from mlforecast.core import (
     Lags,
     TimeSeries,
 )
-from .forecast import MLForecast
 from .utils import backtest_splits
 
 # %% ../nbs/lgb_cv.ipynb 5
@@ -53,19 +52,47 @@ def _update(bst, n):
         bst.update()
 
 
-def _predict(ts, bst, valid, h, time_col, dynamic_dfs, predict_fn, **predict_fn_kwargs):
-    preds = ts.predict(bst, h, dynamic_dfs, predict_fn, **predict_fn_kwargs).set_index(
-        time_col, append=True
-    )
+def _predict(
+    ts,
+    bst,
+    valid,
+    h,
+    time_col,
+    dynamic_dfs,
+    before_predict_callback,
+    after_predict_callback,
+):
+    preds = ts.predict(
+        {"Booster": bst},
+        h,
+        dynamic_dfs,
+        before_predict_callback,
+        after_predict_callback,
+    ).set_index(time_col, append=True)
     return valid.join(preds)
 
 
 def _update_and_predict(
-    ts, bst, valid, n, h, time_col, dynamic_dfs, predict_fn, **predict_fn_kwargs
+    ts,
+    bst,
+    valid,
+    n,
+    h,
+    time_col,
+    dynamic_dfs,
+    before_predict_callback,
+    after_predict_callback,
 ):
     _update(bst, n)
     return _predict(
-        ts, bst, valid, h, time_col, dynamic_dfs, predict_fn, **predict_fn_kwargs
+        ts,
+        bst,
+        valid,
+        h,
+        time_col,
+        dynamic_dfs,
+        before_predict_callback,
+        after_predict_callback,
     )
 
 # %% ../nbs/lgb_cv.ipynb 6
@@ -197,7 +224,7 @@ class LightGBMCV:
         self.window_size = window_size
         self.time_col = time_col
         self.target_col = target_col
-        params = {} if params is None else params
+        self.params = {} if params is None else params
         for _, train, valid in backtest_splits(
             data, n_windows, window_size, freq, time_col
         ):
@@ -214,7 +241,7 @@ class LightGBMCV:
             ds = lgb.Dataset(
                 prep.drop(columns=[time_col, target_col]), prep[target_col]
             ).construct()
-            bst = lgb.Booster({**params, "num_threads": self.bst_threads}, ds)
+            bst = lgb.Booster({**self.params, "num_threads": self.bst_threads}, ds)
             bst.predict = partial(bst.predict, num_threads=self.bst_threads)
             valid = valid.set_index(time_col, append=True)
             self.items.append((ts, bst, valid))
@@ -225,8 +252,8 @@ class LightGBMCV:
         metric_values,
         num_iterations,
         dynamic_dfs,
-        predict_fn,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ):
         for j, (ts, bst, valid) in enumerate(self.items):
             preds = _update_and_predict(
@@ -237,8 +264,8 @@ class LightGBMCV:
                 self.window_size,
                 self.time_col,
                 dynamic_dfs,
-                predict_fn,
-                **predict_fn_kwargs,
+                before_predict_callback,
+                after_predict_callback,
             )
             metric_values[j] = self.metric_fn(preds[self.target_col], preds["Booster"])
 
@@ -247,8 +274,8 @@ class LightGBMCV:
         metric_values,
         num_iterations,
         dynamic_dfs,
-        predict_fn,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ):
         with ThreadPoolExecutor(self.num_threads) as executor:
             futures = []
@@ -262,8 +289,8 @@ class LightGBMCV:
                     self.window_size,
                     self.time_col,
                     dynamic_dfs,
-                    predict_fn,
-                    **predict_fn_kwargs,
+                    before_predict_callback,
+                    after_predict_callback,
                 )
                 futures.append(future)
             cv_preds = [f.result() for f in futures]
@@ -276,8 +303,8 @@ class LightGBMCV:
         self,
         num_iterations: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> float:
         """Train the boosters for some iterations.
 
@@ -287,22 +314,14 @@ class LightGBMCV:
             Number of boosting iterations to run
         dynamic_dfs : list of pandas DataFrame, optional (default=None)
             Future values of the dynamic features, e.g. prices.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `MLForecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
 
         Returns
         -------
@@ -315,26 +334,26 @@ class LightGBMCV:
                 metric_values,
                 num_iterations,
                 dynamic_dfs,
-                predict_fn,
-                **predict_fn_kwargs,
+                before_predict_callback,
+                after_predict_callback,
             )
         else:
             self._multithreaded_partial_fit(
                 metric_values,
                 num_iterations,
                 dynamic_dfs,
-                predict_fn,
-                **predict_fn_kwargs,
+                before_predict_callback,
+                after_predict_callback,
             )
         return metric_values @ self.weights
 
-    def _should_stop(self, hist, early_stopping_evals, early_stopping_pct) -> bool:
+    def should_stop(self, hist, early_stopping_evals, early_stopping_pct) -> bool:
         if len(hist) < early_stopping_evals + 1:
             return False
         improvement_pct = 1 - hist[-1][1] / hist[-(early_stopping_evals + 1)][1]
         return improvement_pct < early_stopping_pct
 
-    def _best_iter(self, hist, early_stopping_evals) -> int:
+    def find_best_iter(self, hist, early_stopping_evals) -> int:
         best_iter, best_score = hist[-1]
         for r, m in hist[-(early_stopping_evals + 1) : -1]:
             if m < best_score:
@@ -363,9 +382,8 @@ class LightGBMCV:
         early_stopping_evals: int = 2,
         early_stopping_pct: float = 0.01,
         compute_cv_preds: bool = False,
-        fit_on_all: bool = False,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -409,24 +427,14 @@ class LightGBMCV:
             Minimum percentage improvement in metric value in `early_stopping_evals` evaluations.
         compute_cv_preds : bool (default=True)
             Compute predictions for each window after finding the best iteration.
-        fit_on_all : bool (default=True)
-            Return model fitted on full dataset.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `MLForecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
 
         Returns
         -------
@@ -450,22 +458,22 @@ class LightGBMCV:
         hist = []
         for i in range(0, num_iterations, eval_every):
             metric_value = self.partial_fit(
-                eval_every, dynamic_dfs, predict_fn, **predict_fn_kwargs
+                eval_every, dynamic_dfs, before_predict_callback, after_predict_callback
             )
             rounds = eval_every + i
             hist.append((rounds, metric_value))
             if verbose_eval:
                 print(f"[{rounds:,d}] {self.metric_name}: {metric_value:,f}")
-            if self._should_stop(hist, early_stopping_evals, early_stopping_pct):
+            if self.should_stop(hist, early_stopping_evals, early_stopping_pct):
                 print(f"Early stopping at round {rounds:,}")
                 break
-        rounds = self._best_iter(hist, early_stopping_evals)
-        print(f"Using best iteration: {rounds:,}")
-        hist = hist[: rounds // eval_every]
+        self.best_iteration_ = self.find_best_iter(hist, early_stopping_evals)
+        print(f"Using best iteration: {self.best_iteration_:,}")
+        hist = hist[: self.best_iteration_ // eval_every]
         for _, bst, _ in self.items:
-            bst.best_iteration = rounds
+            bst.best_iteration = self.best_iteration_
 
-        self.cv_models_ = [item[1] for item in self.items]
+        self.cv_models_ = {f"Booster{i}": item[1] for i, item in enumerate(self.items)}
         if compute_cv_preds:
             with ThreadPoolExecutor(self.num_threads) as executor:
                 futures = []
@@ -478,84 +486,27 @@ class LightGBMCV:
                         window_size,
                         time_col,
                         dynamic_dfs,
-                        predict_fn,
-                        **predict_fn_kwargs,
+                        before_predict_callback,
+                        after_predict_callback,
                     )
                     futures.append(future)
-                self.cv_preds_ = pd.concat(
+                cv_preds = pd.concat(
                     [f.result().assign(window=i) for i, f in enumerate(futures)]
                 )
-
-        if fit_on_all:
-            params = params if params is not None else {}
-            self.fcst = MLForecast(
-                [lgb.LGBMRegressor(**{**params, "n_estimators": rounds})]
-            )
-            self.fcst.ts = self.ts
-            self.fcst.fit(
-                data,
-                id_col,
-                time_col,
-                target_col,
-                static_features,
-                dropna,
-                keep_last_n,
-            )
-        else:
-            self.ts._fit(
-                data, id_col, time_col, target_col, static_features, keep_last_n
-            )
+                if id_col != "index":
+                    idxs = [id_col, time_col]
+                else:
+                    idxs = [time_col]
+                self.cv_preds_ = cv_preds.reset_index(idxs)
+        self.ts._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
         return hist
 
     def predict(
         self,
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
-    ) -> pd.DataFrame:
-        """Compute predictions using the model trained on all data.
-
-        Parameters
-        ----------
-        horizon : int
-            Number of periods to predict.
-        dynamic_dfs : list of pandas DataFrame, optional (default=None)
-            Future values of the dynamic features, e.g. prices.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `MLForecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
-
-        Returns
-        -------
-        result : pandas DataFrame
-            Predictions for each serie and timestep.
-        """
-        if not hasattr(self, "fcst"):
-            raise ValueError(
-                "Must call fit with fit_on_all=True before. You can also call cv_predict instead."
-            )
-        return self.fcst.predict(horizon, dynamic_dfs, predict_fn, **predict_fn_kwargs)
-
-    def cv_predict(
-        self,
-        horizon: int,
-        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
-        predict_fn: Optional[Callable] = None,
-        **predict_fn_kwargs,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
         """Compute predictions with each of the trained boosters.
 
@@ -565,22 +516,14 @@ class LightGBMCV:
             Number of periods to predict.
         dynamic_dfs : list of pandas DataFrame, optional (default=None)
             Future values of the dynamic features, e.g. prices.
-        predict_fn : callable, optional (default=None)
-            Custom function to compute predictions.
-            This function will recieve: model, new_x, dynamic_dfs, features_order and kwargs,
-            and should return an array with the predictions, where:
-                model : regressor
-                    Fitted model.
-                new_x : pandas DataFrame
-                    Current values of the features.
-                dynamic_dfs : list of pandas DataFrame
-                    Future values of the dynamic features
-                features_order : list of str
-                    Column names in the order in which they were used to train the model.
-                **kwargs
-                    Other keyword arguments passed to `MLForecast.predict`.
-        **predict_fn_kwargs
-            Additional arguments passed to predict_fn
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
 
         Returns
         -------
@@ -588,5 +531,9 @@ class LightGBMCV:
             Predictions for each serie and timestep, with one column per window.
         """
         return self.ts.predict(
-            self.cv_models_, horizon, dynamic_dfs, predict_fn, **predict_fn_kwargs
+            self.cv_models_,
+            horizon,
+            dynamic_dfs,
+            before_predict_callback,
+            after_predict_callback,
         )
