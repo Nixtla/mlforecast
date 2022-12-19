@@ -155,6 +155,7 @@ class LightGBMCV:
         id_col: str,
         time_col: str,
         target_col: str,
+        step_size: int = 1,
         params: Optional[Dict[str, Any]] = None,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
@@ -178,6 +179,8 @@ class LightGBMCV:
             Column that identifies each timestep, its values can be timestamps or integers.
         target_col : str
             Column that contains the target.
+        step_size : int (default=1)
+            Step size between each cross validation window.
         params : dict, optional(default=None)
             Parameters to be passed to the LightGBM Boosters.
         static_features : list of str, optional (default=None)
@@ -226,7 +229,7 @@ class LightGBMCV:
         self.target_col = target_col
         self.params = {} if params is None else params
         for _, train, valid in backtest_splits(
-            data, n_windows, window_size, freq, time_col
+            data, n_windows, window_size, freq, step_size, time_col
         ):
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(
@@ -369,6 +372,7 @@ class LightGBMCV:
         id_col: str,
         time_col: str,
         target_col: str,
+        step_size: int = 1,
         num_iterations: int = 100,
         params: Optional[Dict[str, Any]] = None,
         static_features: Optional[List[str]] = None,
@@ -401,6 +405,8 @@ class LightGBMCV:
             Column that identifies each timestep, its values can be timestamps or integers.
         target_col : str
             Column that contains the target.
+        step_size : int (default=1)
+            Step size between each cross validation window.
         num_iterations : int (default=100)
             Maximum number of boosting iterations to run.
         params : dict, optional(default=None)
@@ -449,6 +455,7 @@ class LightGBMCV:
             id_col=id_col,
             time_col=time_col,
             target_col=target_col,
+            step_size=step_size,
             static_features=static_features,
             dropna=dropna,
             keep_last_n=keep_last_n,
