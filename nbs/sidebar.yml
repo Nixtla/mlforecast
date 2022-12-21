@@ -12,7 +12,8 @@ website:
           - docs/end_to_end_walkthrough.ipynb
       - section: Tutorials
         contents:
-          - docs/electricity_peak_forecasting.ipynb        
+          - docs/cross_validation.ipynb
+          - docs/electricity_peak_forecasting.ipynb
       - section: API reference
         contents:
           - section: Local
