@@ -275,7 +275,7 @@ class MLForecast:
             Column that identifies each timestep, its values can be timestamps or integers.
         target_col : str
             Column that contains the target.
-        step_size : int (default=1)
+        step_size : int, optional (default=None)
             Step size between each cross validation window.
         static_features : list of str, optional (default=None)
             Names of the features that are static and will be repeated when forecasting.
@@ -299,6 +299,15 @@ class MLForecast:
         result : pandas DataFrame
             Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
+        if window_size != step_size:
+            warning_msg = (
+                "The gap between each cross validation window (controled by `step_size`) "
+                "changed from being equal to the `window_size` to being equal to 1. "
+                "Please set `step_size` equal to the value of `window_size` to mantain "
+                "the old behavior."
+            )
+            warnings.warn(warning_msg, RuntimeWarning)
+
         results = []
         self.cv_models_ = []
         if id_col != "index":
