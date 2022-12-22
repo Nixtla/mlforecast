@@ -468,6 +468,8 @@ class TimeSeries:
                 raise ValueError(f"Data doesn't contain {col} column")
         if data[target_col].isnull().any():
             raise ValueError(f"{target_col} column contains null values.")
+        self.dropna = dropna
+        self.keep_last_n = keep_last_n
         self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
         return self._transform(data, dropna)
 
