@@ -245,10 +245,17 @@ class TimeSeries:
     ):
         if isinstance(freq, str):
             self.freq = pd.tseries.frequencies.to_offset(freq)
+        elif isinstance(freq, pd._libs.tslibs.offsets.BaseOffset):
+            self.freq = freq
         elif isinstance(freq, int):
             self.freq = freq
         elif freq is None:
             self.freq = 1
+        else:
+            raise Exception(
+                "Unknown frequency type "
+                "Please use a str, int or offset frequency type."
+            )
         if not isinstance(num_threads, int) or num_threads < 1:
             warnings.warn("Setting num_threads to 1.")
             num_threads = 1
