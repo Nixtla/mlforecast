@@ -253,7 +253,7 @@ class MLForecast:
                 self.ts.id_col,
                 self.ts.time_col,
                 self.ts.target_col,
-                self.ts.static_features,
+                self.ts.static_features.columns,
                 self.ts.dropna,
                 self.ts.keep_last_n,
             )
