@@ -301,10 +301,11 @@ class MLForecast:
         """
         if window_size != step_size:
             warning_msg = (
-                "The gap between each cross validation window (controled by `step_size`) "
-                "changed from being equal to the `window_size` to being equal to 1. "
-                "Please set `step_size` equal to the value of `window_size` to mantain "
-                "the old behavior."
+                "The new `step_size` parameter determines the gap between each cross-validation window. "
+                "The behavior of this parameter has changed the way cross-validation is performed "
+                "from using a gap equal to `window_size` to now using a default value of 1. "
+                "To maintain the previous behavior, please set `step_size` equal to "
+                "the value of `window_size`."
             )
             warnings.warn(warning_msg, RuntimeWarning)
 
