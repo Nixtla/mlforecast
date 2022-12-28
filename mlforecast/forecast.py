@@ -43,8 +43,8 @@ class MLForecast:
         ----------
         models : regressor or list of regressors
             Models that will be trained and used to compute the forecasts.
-        freq : str or int, optional (default=None)
-            Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
+        freq : str or int or pd.offsets.BaseOffset, optional (default=None)
+            Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
         lags : list of int, optional (default=None)
             Lags of the target to use as features.
         lag_transforms : dict of int to list of functions, optional (default=None)
