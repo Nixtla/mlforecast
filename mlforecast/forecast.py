@@ -248,13 +248,12 @@ class MLForecast:
                 self.ts.differences,
                 self.ts.num_threads,
             )
-            new_ts.fit_transform(
+            new_ts._fit(
                 new_data,
                 self.ts.id_col,
                 self.ts.time_col,
                 self.ts.target_col,
                 self.ts.static_features.columns,
-                self.ts.dropna,
                 self.ts.keep_last_n,
             )
             ts = new_ts
