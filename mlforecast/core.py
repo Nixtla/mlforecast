@@ -222,7 +222,7 @@ def _name_models(current_names):
     return names
 
 # %% ../nbs/core.ipynb 23
-Freq = Union[int, str]
+Freq = Union[int, str, pd.offsets.BaseOffset]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
@@ -245,7 +245,7 @@ class TimeSeries:
     ):
         if isinstance(freq, str):
             self.freq = pd.tseries.frequencies.to_offset(freq)
-        elif isinstance(freq, pd._libs.tslibs.offsets.BaseOffset):
+        elif isinstance(freq, pd.offsets.BaseOffset):
             self.freq = freq
         elif isinstance(freq, int):
             self.freq = freq
