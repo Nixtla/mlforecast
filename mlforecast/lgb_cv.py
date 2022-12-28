@@ -155,7 +155,7 @@ class LightGBMCV:
         id_col: str,
         time_col: str,
         target_col: str,
-        step_size: int = 1,
+        step_size: Optional[int] = None,
         params: Optional[Dict[str, Any]] = None,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
@@ -179,8 +179,8 @@ class LightGBMCV:
             Column that identifies each timestep, its values can be timestamps or integers.
         target_col : str
             Column that contains the target.
-        step_size : int (default=1)
-            Step size between each cross validation window.
+        step_size : int, optional (default=None)
+            Step size between each cross validation window. If None it will be equal to `window_size`.
         params : dict, optional(default=None)
             Parameters to be passed to the LightGBM Boosters.
         static_features : list of str, optional (default=None)
@@ -372,7 +372,7 @@ class LightGBMCV:
         id_col: str,
         time_col: str,
         target_col: str,
-        step_size: int = 1,
+        step_size: Optional[int] = None,
         num_iterations: int = 100,
         params: Optional[Dict[str, Any]] = None,
         static_features: Optional[List[str]] = None,
@@ -405,8 +405,8 @@ class LightGBMCV:
             Column that identifies each timestep, its values can be timestamps or integers.
         target_col : str
             Column that contains the target.
-        step_size : int (default=1)
-            Step size between each cross validation window.
+        step_size : int, optional (default=None)
+            Step size between each cross validation window. If None it will be equal to `window_size`.
         num_iterations : int (default=100)
             Maximum number of boosting iterations to run.
         params : dict, optional(default=None)
