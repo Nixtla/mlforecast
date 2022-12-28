@@ -252,7 +252,7 @@ class TimeSeries:
         elif freq is None:
             self.freq = 1
         else:
-            raise Exception(
+            raise ValueError(
                 "Unknown frequency type "
                 "Please use a str, int or offset frequency type."
             )
