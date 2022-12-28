@@ -207,7 +207,7 @@ class DistributedMLForecast:
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        new_data: Optional[pd.DataFrame] = None,
+        new_data: Optional[dd.DataFrame] = None,
     ) -> dd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
