@@ -96,12 +96,14 @@ class MLForecast:
     def preprocess(
         self,
         data: pd.DataFrame,
+        *,
         id_col: str,
         time_col: str,
         target_col: str,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
+        max_horizon: Optional[int] = None,
     ) -> pd.DataFrame:
         """Add the features to `data`.
 
@@ -121,6 +123,8 @@ class MLForecast:
             Drop rows with missing values produced by the transformations.
         keep_last_n : int, optional (default=None)
             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        max_horizon: int, optional (default=None)
+            Train this many models, where each model will predict a specific horizon.
 
         Returns
         -------
@@ -128,7 +132,14 @@ class MLForecast:
             `data` plus added features.
         """
         return self.ts.fit_transform(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            max_horizon=max_horizon,
         )
 
     def fit_models(
@@ -164,6 +175,7 @@ class MLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
+        max_horizon: Optional[int] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -183,6 +195,8 @@ class MLForecast:
             Drop rows with missing values produced by the transformations.
         keep_last_n : int, optional (default=None)
             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        max_horizon: int, optional (default=None)
+            Train this many models, where each model will predict a specific horizon.
 
         Returns
         -------
@@ -190,12 +204,24 @@ class MLForecast:
             Forecast object with series values and trained models.
         """
         series_df = self.preprocess(
-            data, id_col, time_col, target_col, static_features, dropna, keep_last_n
+            data,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            max_horizon=max_horizon,
         )
-        cols_to_drop = [time_col, target_col]
+        cols_to_drop = [time_col]
+        if max_horizon is None:
+            targets = [target_col]
+        else:
+            targets = [f"{target_col}{i}" for i in range(max_horizon)]
+        cols_to_drop.extend(targets)
         if id_col != "index" and id_col not in self.ts.static_features:
             cols_to_drop.append(id_col)
-        X, y = series_df.drop(columns=cols_to_drop), series_df[target_col].values
+        X, y = series_df.drop(columns=cols_to_drop), series_df[targets].values
         del series_df
         return self.fit_models(X, y)
 
@@ -256,6 +282,7 @@ class MLForecast:
                 self.ts.static_features.columns,
                 self.ts.keep_last_n,
             )
+            new_ts.max_horizon = self.ts.max_horizon
             ts = new_ts
         else:
             ts = self.ts

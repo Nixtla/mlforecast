@@ -123,6 +123,22 @@ def _restore_difference(preds, data, indptr, d):
         for j in range(d, h):
             preds[i * h + j] += preds[i * h + j - d]
 
+
+@njit
+def _expand_target(data, indptr, max_horizon):
+    out = np.empty((data.size, max_horizon), dtype=data.dtype)
+    n_series = len(indptr) - 1
+    k = 0
+    for i in range(n_series):
+        serie = data[indptr[i] : indptr[i + 1]]
+        for j in range(serie.size):
+            if max_horizon > serie.size - j:
+                out[k] = np.nan
+            else:
+                out[k] = serie[j : j + max_horizon]
+            k += 1
+    return out
+
 # %% ../nbs/core.ipynb 12
 class GroupedArray:
     """Array made up of different groups. Can be thought of (and iterated) as a list of arrays.
@@ -165,6 +181,9 @@ class GroupedArray:
     def restore_difference(self, preds: np.ndarray, d: int):
         _restore_difference(preds, self.data, self.indptr, d)
 
+    def expand_target(self, max_horizon: int) -> np.ndarray:
+        return _expand_target(self.data, self.indptr, max_horizon)
+
     def take_from_groups(self, idx: Union[int, slice]) -> "GroupedArray":
         """Takes `idx` from each group in the array."""
         ranges = [
@@ -188,7 +207,7 @@ class GroupedArray:
             f"{self.__class__.__name__}(ndata={self.data.size}, ngroups={self.ngroups})"
         )
 
-# %% ../nbs/core.ipynb 19
+# %% ../nbs/core.ipynb 20
 def _build_transform_name(lag, tfm, *args) -> str:
     """Creates a name for a transformation based on `lag`, the name of the function and its arguments."""
     tfm_name = f"{tfm.__name__}_lag{lag}"
@@ -203,7 +222,7 @@ def _build_transform_name(lag, tfm, *args) -> str:
         tfm_name += "_" + "_".join(changed_params)
     return tfm_name
 
-# %% ../nbs/core.ipynb 21
+# %% ../nbs/core.ipynb 22
 def _name_models(current_names):
     ctr = Counter(current_names)
     if not ctr:
@@ -221,7 +240,7 @@ def _name_models(current_names):
         names[-i] = name
     return names
 
-# %% ../nbs/core.ipynb 23
+# %% ../nbs/core.ipynb 24
 Freq = Union[int, str, pd.offsets.BaseOffset]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
@@ -230,7 +249,7 @@ DateFeature = Union[str, Callable]
 Differences = Iterable[int]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 
-# %% ../nbs/core.ipynb 24
+# %% ../nbs/core.ipynb 25
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
@@ -437,6 +456,7 @@ class TimeSeries:
         self,
         df: pd.DataFrame,
         dropna: bool = True,
+        max_horizon: Optional[int] = None,
     ) -> pd.DataFrame:
         """Add the features to `df`.
 
@@ -448,15 +468,25 @@ class TimeSeries:
         if self.differences:
             df[self.target_col] = self.ga.data[self.restore_idxs]
 
-        if dropna:
-            df.dropna(inplace=True)
-
         dates = df[self.time_col]
         if not np.issubdtype(dates.dtype.type, np.integer):
             dates = pd.DatetimeIndex(dates)
         for feature in self.date_features:
             feat_name, feat_vals = self._compute_date_feature(dates, feature)
             df[feat_name] = feat_vals
+
+        self.max_horizon = max_horizon
+        if max_horizon is not None:
+            ys = pd.DataFrame(
+                self.ga.expand_target(max_horizon)[self.restore_idxs],
+                index=df.index,
+                columns=[f"{self.target_col}{i}" for i in range(max_horizon)],
+            )
+            df = pd.concat([df.drop(columns=self.target_col), ys], axis=1)
+
+        if dropna:
+            df.dropna(inplace=True)
+
         return df
 
     def fit_transform(
@@ -468,6 +498,7 @@ class TimeSeries:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
+        max_horizon: Optional[int] = None,
     ) -> pd.DataFrame:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -478,7 +509,7 @@ class TimeSeries:
         self.dropna = dropna
         self.keep_last_n = keep_last_n
         self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
-        return self._transform(data, dropna)
+        return self._transform(data, dropna=dropna, max_horizon=max_horizon)
 
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
@@ -556,7 +587,7 @@ class TimeSeries:
             warnings.warn(f'Found null values in {", ".join(nulls[nulls].index)}.')
         return new_x[self.features_order_]
 
-    def predict(
+    def predict_recursive(
         self,
         models: Dict[str, BaseEstimator],
         horizon: int,
@@ -588,3 +619,65 @@ class TimeSeries:
         if self.id_col != "index":
             preds = preds.reset_index()
         return preds
+
+    def predict_multi(
+        self,
+        models: Dict[str, BaseEstimator],
+        horizon: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        before_predict_callback: Optional[Callable] = None,
+    ) -> pd.DataFrame:
+        if horizon > self.max_horizon:
+            raise ValueError(
+                f"horizon must be at most max_horizon ({self.max_horizon})"
+            )
+        if dynamic_dfs is None:
+            dynamic_dfs = []
+        uids = np.repeat(self.uids, horizon)
+        dates = np.hstack(
+            [
+                date + (i + 1) * self.freq
+                for date in self.last_dates
+                for i in range(horizon)
+            ]
+        )
+        if self.id_col == "index":
+            result = pd.DataFrame({self.time_col: dates}, index=pd.Index(uids))
+        else:
+            result = pd.DataFrame(
+                {
+                    self.id_col: uids,
+                    self.time_col: dates,
+                }
+            )
+        for i, (name, model) in enumerate(models.items()):
+            self._predict_setup()
+            new_x = self._get_features_for_next_step(dynamic_dfs)
+            if before_predict_callback is not None:
+                new_x = before_predict_callback(new_x)
+            predictions = model.predict(new_x)[:, :horizon]
+            result[name] = predictions.ravel()
+        return result
+
+    def predict(
+        self,
+        models: Dict[str, BaseEstimator],
+        horizon: int,
+        dynamic_dfs: Optional[List[pd.DataFrame]] = None,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
+    ) -> pd.DataFrame:
+        if self.max_horizon is None:
+            return self.predict_recursive(
+                models,
+                horizon,
+                dynamic_dfs,
+                before_predict_callback,
+                after_predict_callback,
+            )
+        return self.predict_multi(
+            models,
+            horizon,
+            dynamic_dfs,
+            before_predict_callback,
+        )

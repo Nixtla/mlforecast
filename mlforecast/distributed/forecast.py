@@ -225,7 +225,7 @@ class DistributedMLForecast:
             Function to call on the predictions before updating the targets.
                 This function will take a pandas Series with the predictions and should return another one with the same structure.
                 The series identifier is on the index.
-        new_data : dask DataFrame, optional (default=None)
+        new_data : pandas DataFrame, optional (default=None)
             Series data of new observations for which forecasts are to be generated.
                 This dataframe should have the same structure as the one used to fit the model, including any features and time series data.
                 If `new_data` is not None, the method will generate forecasts for the new observations.
