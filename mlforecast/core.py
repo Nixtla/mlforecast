@@ -128,15 +128,16 @@ def _restore_difference(preds, data, indptr, d):
 def _expand_target(data, indptr, max_horizon):
     out = np.empty((data.size, max_horizon), dtype=data.dtype)
     n_series = len(indptr) - 1
-    k = 0
+    n = 0
     for i in range(n_series):
         serie = data[indptr[i] : indptr[i + 1]]
         for j in range(serie.size):
-            if max_horizon > serie.size - j:
-                out[k] = np.nan
-            else:
-                out[k] = serie[j : j + max_horizon]
-            k += 1
+            upper = min(serie.size - j, max_horizon)
+            for k in range(upper):
+                out[n, k] = serie[j + k]
+            for k in range(upper, max_horizon):
+                out[n, k] = np.nan
+            n += 1
     return out
 
 # %% ../nbs/core.ipynb 12
@@ -457,17 +458,18 @@ class TimeSeries:
         df: pd.DataFrame,
         dropna: bool = True,
         max_horizon: Optional[int] = None,
+        return_X_y: bool = False,
     ) -> pd.DataFrame:
         """Add the features to `df`.
 
         if `dropna=True` then all the null rows are dropped."""
-        df = df.copy(deep=bool(self.differences))
+        df = df.copy(deep=bool(self.differences) and not return_X_y)
+
+        # lag transforms
         for feat in self.transforms.keys():
             df[feat] = self.features_[feat][self.restore_idxs]
 
-        if self.differences:
-            df[self.target_col] = self.ga.data[self.restore_idxs]
-
+        # date features
         dates = df[self.time_col]
         if not np.issubdtype(dates.dtype.type, np.integer):
             dates = pd.DatetimeIndex(dates)
@@ -475,19 +477,36 @@ class TimeSeries:
             feat_name, feat_vals = self._compute_date_feature(dates, feature)
             df[feat_name] = feat_vals
 
+        # target
         self.max_horizon = max_horizon
-        if max_horizon is not None:
-            ys = pd.DataFrame(
+        if max_horizon is None:
+            if self.differences:
+                target = pd.Series(self.ga.data[self.restore_idxs], index=df.index)
+            else:
+                target = df[self.target_col]
+        else:
+            target = pd.DataFrame(
                 self.ga.expand_target(max_horizon)[self.restore_idxs],
                 index=df.index,
                 columns=[f"{self.target_col}{i}" for i in range(max_horizon)],
             )
-            df = pd.concat([df.drop(columns=self.target_col), ys], axis=1)
 
+        # determine rows to keep
+        features = df.columns.drop(self.target_col)
         if dropna:
-            df.dropna(inplace=True)
+            keep_rows = df[features].notnull().all(1).values
+        else:
+            keep_rows = np.full(df.shape[0], True)
 
-        return df
+        # assemble return
+        if return_X_y:
+            return df.loc[keep_rows, features], target.loc[keep_rows]
+        if max_horizon is None:
+            if self.differences:
+                df[self.target_col] = target
+        else:
+            df = pd.concat([df[features], target], axis=1)
+        return df.loc[keep_rows]
 
     def fit_transform(
         self,
@@ -499,6 +518,7 @@ class TimeSeries:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
+        return_X_y: bool = False,
     ) -> pd.DataFrame:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -509,7 +529,9 @@ class TimeSeries:
         self.dropna = dropna
         self.keep_last_n = keep_last_n
         self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
-        return self._transform(data, dropna=dropna, max_horizon=max_horizon)
+        return self._transform(
+            data, dropna=dropna, max_horizon=max_horizon, return_X_y=return_X_y
+        )
 
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
@@ -543,12 +565,15 @@ class TimeSeries:
         results_df[self.time_col] = self.curr_dates
         return results_df
 
-    def _get_raw_predictions(self) -> np.ndarray:
-        preds = np.array(self.y_pred).ravel("F")
+    def _restore_differences(self, preds) -> None:
         if not self.differences:
-            return preds
+            return
         for d, ga in zip(reversed(self.differences), reversed(self.original_values_)):
             ga.restore_difference(preds, d)
+
+    def _get_raw_predictions(self) -> np.ndarray:
+        preds = np.array(self.y_pred).ravel("F")
+        self._restore_differences(preds)
         return preds
 
     def _get_predictions(self) -> pd.DataFrame:
@@ -627,6 +652,7 @@ class TimeSeries:
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
+        assert self.max_horizon is not None
         if horizon > self.max_horizon:
             raise ValueError(
                 f"horizon must be at most max_horizon ({self.max_horizon})"
@@ -655,19 +681,23 @@ class TimeSeries:
             new_x = self._get_features_for_next_step(dynamic_dfs)
             if before_predict_callback is not None:
                 new_x = before_predict_callback(new_x)
-            predictions = model.predict(new_x)[:, :horizon]
-            result[name] = predictions.ravel()
+            predictions = np.empty((new_x.shape[0], horizon))
+            for i in range(horizon):
+                predictions[:, i] = model[i].predict(new_x)
+            raw_preds = predictions.ravel()
+            self._restore_differences(raw_preds)
+            result[name] = raw_preds
         return result
 
     def predict(
         self,
-        models: Dict[str, BaseEstimator],
+        models: Dict[str, Union[BaseEstimator, List[BaseEstimator]]],
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
-        if self.max_horizon is None:
+        if getattr(self, "max_horizon", None) is None:
             return self.predict_recursive(
                 models,
                 horizon,

@@ -6,11 +6,11 @@ __all__ = ['MLForecast', 'Forecast']
 # %% ../nbs/forecast.ipynb 3
 import copy
 import warnings
-from typing import Callable, Iterable, List, Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from sklearn.base import clone
+from sklearn.base import BaseEstimator, clone
 
 from mlforecast.core import (
     DateFeature,
@@ -96,7 +96,6 @@ class MLForecast:
     def preprocess(
         self,
         data: pd.DataFrame,
-        *,
         id_col: str,
         time_col: str,
         target_col: str,
@@ -104,7 +103,8 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
-    ) -> pd.DataFrame:
+        return_X_y: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Union[pd.Series, pd.DataFrame]]]:
         """Add the features to `data`.
 
         Parameters
@@ -125,11 +125,13 @@ class MLForecast:
             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
         max_horizon: int, optional (default=None)
             Train this many models, where each model will predict a specific horizon.
+        return_X_y: bool (default=False)
+            Return a tuple with the features and the target. If False will return a single dataframe.
 
         Returns
         -------
-        result : pandas DataFrame.
-            `data` plus added features.
+        result : pandas DataFrame or tuple of pandas Dataframe and either a pandas Series or a pandas Dataframe (for multi-output regression).
+            `data` plus added features and target(s).
         """
         return self.ts.fit_transform(
             data,
@@ -140,12 +142,13 @@ class MLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
+            return_X_y=return_X_y,
         )
 
     def fit_models(
         self,
         X: pd.DataFrame,
-        y: Union[np.ndarray, pd.Series],
+        y: Union[pd.Series, pd.DataFrame],
     ) -> "MLForecast":
         """Manually train models. Use this if you called `Forecast.preprocess` beforehand.
 
@@ -153,7 +156,7 @@ class MLForecast:
         ----------
         X : pandas DataFrame
             Features.
-        y : numpy array or pandas Series.
+        y : pandas Series or pandas DataFrame (multi-output).
             Target.
 
         Returns
@@ -161,9 +164,17 @@ class MLForecast:
         self : Forecast
             Forecast object with trained models.
         """
-        self.models_ = {}
+        self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator]]] = {}
         for name, model in self.models.items():
-            self.models_[name] = clone(model).fit(X, y)
+            if y.ndim == 2 and y.shape[1] > 1:
+                self.models_[name] = []
+                for col in y:
+                    keep = y[col].notnull()
+                    self.models_[name].append(
+                        clone(model).fit(X.loc[keep], y.loc[keep, col])
+                    )
+            else:
+                self.models_[name] = clone(model).fit(X, y)
         return self
 
     def fit(
@@ -203,7 +214,7 @@ class MLForecast:
         self : Forecast
             Forecast object with series values and trained models.
         """
-        series_df = self.preprocess(
+        X, y = self.preprocess(
             data,
             id_col=id_col,
             time_col=time_col,
@@ -212,17 +223,12 @@ class MLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
+            return_X_y=True,
         )
-        cols_to_drop = [time_col]
-        if max_horizon is None:
-            targets = [target_col]
-        else:
-            targets = [f"{target_col}{i}" for i in range(max_horizon)]
-        cols_to_drop.extend(targets)
+        features = X.columns.drop(time_col)
         if id_col != "index" and id_col not in self.ts.static_features:
-            cols_to_drop.append(id_col)
-        X, y = series_df.drop(columns=cols_to_drop), series_df[targets].values
-        del series_df
+            features = features.drop(id_col)
+        X = X[features]
         return self.fit_models(X, y)
 
     def predict(
