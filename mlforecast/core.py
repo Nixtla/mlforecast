@@ -612,7 +612,7 @@ class TimeSeries:
             warnings.warn(f'Found null values in {", ".join(nulls[nulls].index)}.')
         return new_x[self.features_order_]
 
-    def predict_recursive(
+    def _predict_recursive(
         self,
         models: Dict[str, BaseEstimator],
         horizon: int,
@@ -645,7 +645,7 @@ class TimeSeries:
             preds = preds.reset_index()
         return preds
 
-    def predict_multi(
+    def _predict_multi(
         self,
         models: Dict[str, BaseEstimator],
         horizon: int,
@@ -698,14 +698,14 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
         if getattr(self, "max_horizon", None) is None:
-            return self.predict_recursive(
+            return self._predict_recursive(
                 models,
                 horizon,
                 dynamic_dfs,
                 before_predict_callback,
                 after_predict_callback,
             )
-        return self.predict_multi(
+        return self._predict_multi(
             models,
             horizon,
             dynamic_dfs,
