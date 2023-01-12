@@ -379,7 +379,7 @@ class MLForecast:
         )
         ex_cols_to_drop = [target_col]
         if static_features is not None:
-            ex_cols_to_drop += static_features
+            ex_cols_to_drop.extend(static_features)
         has_ex = data.shape[1] > len(ex_cols_to_drop) + 1  # +1 due to time_col
         for i_window, (train_end, train, valid) in enumerate(splits):
             if refit or i_window == 0:

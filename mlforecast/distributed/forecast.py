@@ -358,7 +358,7 @@ class DistributedMLForecast:
         splits = backtest_splits(data, n_windows, window_size, freq, step_size)
         ex_cols_to_drop = ["y"]
         if static_features is not None:
-            ex_cols_to_drop += static_features
+            ex_cols_to_drop.extend(static_features)
         has_ex = data.shape[1] > len(ex_cols_to_drop) + 1  # +1 due to time_col
         for i_window, (train_end, train, valid) in enumerate(splits):
             if refit or i_window == 0:
@@ -367,7 +367,11 @@ class DistributedMLForecast:
                 )
             self.cv_models_.append(self.models_)
             dynamic_dfs = (
-                [valid.drop(columns=ex_cols_to_drop).reset_index().compute()]
+                [
+                    self.client.compute(
+                        valid.drop(columns=ex_cols_to_drop).reset_index()
+                    ).result()
+                ]
                 if has_ex
                 else None
             )
