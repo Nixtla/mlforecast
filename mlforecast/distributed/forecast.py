@@ -367,11 +367,7 @@ class DistributedMLForecast:
                 )
             self.cv_models_.append(self.models_)
             dynamic_dfs = (
-                [
-                    self.client.compute(
-                        valid.drop(columns=ex_cols_to_drop).reset_index()
-                    ).result()
-                ]
+                [valid.drop(columns=ex_cols_to_drop).reset_index().compute()]
                 if has_ex
                 else None
             )
