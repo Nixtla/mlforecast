@@ -23,9 +23,9 @@ from mlforecast.core import (
     _name_models,
 )
 from .lgb_cv import LightGBMCV
-from .utils import backtest_splits
+from .utils import backtest_splits, _cotransform, PredictionIntervals
 
-# %% ../nbs/forecast.ipynb 6
+# %% ../nbs/forecast.ipynb 7
 class MLForecast:
     def __init__(
         self,
@@ -177,6 +177,50 @@ class MLForecast:
                 self.models_[name] = clone(model).fit(X, y)
         return self
 
+    def _conformity_scores(
+        self,
+        data: pd.DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        n_windows: int = 2,
+        window_size: int = 1,
+    ):
+        """Compute conformity scores.
+
+        We need at least two cross validation errors to compute
+        quantiles for prediction intervals (`n_windows=2`).
+
+        The exception is raised by the PredictionIntervals data class.
+
+        In this simplest case, we assume the width of the interval
+        is the same for all the forecasting horizon (`window_size=1`).
+        """
+        cv_results = self.cross_validation(
+            data=data,
+            n_windows=n_windows,
+            window_size=window_size,
+            refit=False,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            prediction_intervals=None,
+        )
+        # store conformity scores for each model
+        conformity_scores = {}
+        for model in self.models.keys():
+            # compute absolute error for each model
+            cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
+        if id_col == "index":
+            cv_results = cv_results.reset_index()
+        self.conformity_scores = cv_results.drop("y", axis=1)
+
     def fit(
         self,
         data: pd.DataFrame,
@@ -187,33 +231,49 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
+        prediction_intervals: PredictionIntervals = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
-        Parameters
-        ----------
-        data : pandas DataFrame
-            Series data in long format.
-        id_col : str
-            Column that identifies each serie. If 'index' then the index is used.
-        time_col : str
-            Column that identifies each timestep, its values can be timestamps or integers.
-        target_col : str
-            Column that contains the target.
-        static_features : list of str, optional (default=None)
-            Names of the features that are static and will be repeated when forecasting.
-        dropna : bool (default=True)
-            Drop rows with missing values produced by the transformations.
-        keep_last_n : int, optional (default=None)
-            Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-        max_horizon: int, optional (default=None)
-            Train this many models, where each model will predict a specific horizon.
+         Parameters
+         ----------
+         data : pandas DataFrame
+             Series data in long format.
+         id_col : str
+             Column that identifies each serie. If 'index' then the index is used.
+         time_col : str
+             Column that identifies each timestep, its values can be timestamps or integers.
+         target_col : str
+             Column that contains the target.
+         static_features : list of str, optional (default=None)
+             Names of the features that are static and will be repeated when forecasting.
+         dropna : bool (default=True)
+             Drop rows with missing values produced by the transformations.
+         keep_last_n : int, optional (default=None)
+             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+         max_horizon: int, optional (default=None)
+             Train this many models, where each model will predict a specific horizon.
+        prediction_intervals : PredictionIntervals (default=None)
+             Store conformity score for prediction intervals (Conformal Prediction).
 
-        Returns
-        -------
-        self : Forecast
-            Forecast object with series values and trained models.
+         Returns
+         -------
+         self : Forecast
+             Forecast object with series values and trained models.
         """
+        if prediction_intervals is not None:
+            self.prediction_intervals = prediction_intervals
+            self._conformity_scores(
+                data=data,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                n_windows=prediction_intervals.n_windows,
+                window_size=prediction_intervals.window_size,
+            )
         X, y = self.preprocess(
             data,
             id_col=id_col,
@@ -238,6 +298,7 @@ class MLForecast:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         new_data: Optional[pd.DataFrame] = None,
+        level: Optional[List[Union[int, float]]] = None,
     ) -> pd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
@@ -259,7 +320,8 @@ class MLForecast:
             Series data of new observations for which forecasts are to be generated.
                 This dataframe should have the same structure as the one used to fit the model, including any features and time series data.
                 If `new_data` is not None, the method will generate forecasts for the new observations.
-
+        level : list of ints or floats, optional (default=None)
+            Confidence levels between 0 and 100 for prediction intervals.
 
         Returns
         -------
@@ -293,13 +355,63 @@ class MLForecast:
         else:
             ts = self.ts
 
-        return ts.predict(
+        forecasts = ts.predict(
             self.models_,
             horizon,
             dynamic_dfs,
             before_predict_callback,
             after_predict_callback,
         )
+        if level is not None:
+            if self.prediction_intervals.window_size != horizon:
+                warn_msg = (
+                    "Prediction intervals are calculated using 1-step ahead cross-validation, "
+                    "with a constant width for all horizons. To vary the error by horizon, "
+                    "pass PredictionIntervals(window_size=horizon) to the `prediction_intervals` "
+                    "argument when refitting the model."
+                )
+                warnings.warn(warn_msg, UserWarning)
+            level_ = sorted(level)
+            model_names = self.models.keys()
+            models_schema = ",".join(
+                f"{model_name}:double" for model_name in model_names
+            )
+            level_schema = ""
+            for model in model_names:
+                level_schema += ","
+                lo_cols = [f"{model}-lo-{lv}:double" for lv in reversed(level_)]
+                hi_cols = [f"{model}-hi-{lv}:double" for lv in level_]
+                level_schema += ",".join(lo_cols) + "," + ",".join(hi_cols)
+            id_col = ts.id_col if ts.id_col != "index" else forecasts.index.name
+            dtypes = forecasts.dtypes
+            id_col_type = (
+                dtypes.loc[ts.id_col] if ts.id_col != "index" else forecasts.index.dtype
+            )
+            id_col_type = "string" if id_col_type == "object" else id_col_type
+            ts_col_type = f"{dtypes.loc[ts.time_col]}".replace("64[ns]", "")
+            schema = (
+                f"{id_col}:{id_col_type},{ts.time_col}:{ts_col_type},"
+                + models_schema
+                + level_schema
+            )
+            if ts.id_col == "index":
+                forecasts = forecasts.reset_index()
+            forecasts = _cotransform(
+                forecasts,
+                self.conformity_scores,
+                using=_add_conformal_intervals,
+                params=dict(
+                    model_names=list(model_names),
+                    level=level_,
+                    cs_window_size=self.prediction_intervals.window_size,
+                    cs_n_windows=self.prediction_intervals.n_windows,
+                ),
+                schema=schema,
+                partition=id_col,
+            )
+            if ts.id_col == "index":
+                forecasts = forecasts.set_index(forecasts.columns[0])
+        return forecasts
 
     def cross_validation(
         self,
@@ -317,6 +429,8 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        prediction_intervals: PredictionIntervals = None,
+        level: Optional[List[Union[int, float]]] = None,
     ):
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,
@@ -357,6 +471,10 @@ class MLForecast:
             Function to call on the predictions before updating the targets.
                 This function will take a pandas Series with the predictions and should return another one with the same structure.
                 The series identifier is on the index.
+        prediction_intervals : PredictionIntervals (default=None)
+            Store conformity score for prediction intervals (Conformal Prediction).
+        level : list of ints or floats, optional (default=None)
+            Confidence levels between 0 and 100 for prediction intervals.
 
         Returns
         -------
@@ -395,6 +513,7 @@ class MLForecast:
                     dropna=dropna,
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
+                    prediction_intervals=prediction_intervals,
                 )
             self.cv_models_.append(self.models_)
             # reset index of valid to be compatible
@@ -408,6 +527,7 @@ class MLForecast:
                 before_predict_callback,
                 after_predict_callback,
                 new_data=train if not refit else None,
+                level=level,
             )
             y_pred = y_pred.set_index(time_col, append=True)
             result = valid.set_index(time_col, append=True)[[target_col]].copy()
@@ -421,7 +541,7 @@ class MLForecast:
             out = out.reset_index()
         return out
 
-# %% ../nbs/forecast.ipynb 9
+# %% ../nbs/forecast.ipynb 10
 class Forecast(MLForecast):
     def __init__(
         self,
