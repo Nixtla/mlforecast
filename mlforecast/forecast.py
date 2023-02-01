@@ -25,6 +25,35 @@ from mlforecast.core import (
 from .lgb_cv import LightGBMCV
 from .utils import backtest_splits, _cotransform, PredictionIntervals
 
+# %% ../nbs/forecast.ipynb 6
+def _add_conformal_intervals(
+    fcst_df: pd.DataFrame,
+    cs_df: pd.DataFrame,
+    model_names: List[str],
+    level: List[Union[int, float]],
+    cs_n_windows: int,
+    cs_window_size: int,
+) -> pd.DataFrame:
+    """
+    Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
+    `level` should be already sorted.
+    """
+    cuts = [lv / 100 for lv in level]
+    n_level = len(level)
+    for model in model_names:
+        quantiles = np.quantile(
+            cs_df[model].values.reshape(cs_n_windows, cs_window_size),
+            cuts,
+            axis=0,
+        )
+        quantiles = quantiles.reshape(n_level, -1).T
+        lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
+        hi_cols = [f"{model}-hi-{lv}" for lv in level]
+        mean = fcst_df[model].values.reshape(-1, 1)
+        fcst_df[lo_cols] = mean - quantiles[:, ::-1]
+        fcst_df[hi_cols] = mean + quantiles
+    return fcst_df
+
 # %% ../nbs/forecast.ipynb 7
 class MLForecast:
     def __init__(
@@ -212,8 +241,7 @@ class MLForecast:
             keep_last_n=keep_last_n,
             prediction_intervals=None,
         )
-        # store conformity scores for each model
-        conformity_scores = {}
+        # conformity score for each model
         for model in self.models.keys():
             # compute absolute error for each model
             cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
@@ -231,35 +259,35 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
-        prediction_intervals: PredictionIntervals = None,
+        prediction_intervals: Optional[PredictionIntervals] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
-         Parameters
-         ----------
-         data : pandas DataFrame
-             Series data in long format.
-         id_col : str
-             Column that identifies each serie. If 'index' then the index is used.
-         time_col : str
-             Column that identifies each timestep, its values can be timestamps or integers.
-         target_col : str
-             Column that contains the target.
-         static_features : list of str, optional (default=None)
-             Names of the features that are static and will be repeated when forecasting.
-         dropna : bool (default=True)
-             Drop rows with missing values produced by the transformations.
-         keep_last_n : int, optional (default=None)
-             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-         max_horizon: int, optional (default=None)
-             Train this many models, where each model will predict a specific horizon.
-        prediction_intervals : PredictionIntervals (default=None)
-             Store conformity score for prediction intervals (Conformal Prediction).
+        Parameters
+        ----------
+        data : pandas DataFrame
+            Series data in long format.
+        id_col : str
+            Column that identifies each serie. If 'index' then the index is used.
+        time_col : str
+            Column that identifies each timestep, its values can be timestamps or integers.
+        target_col : str
+            Column that contains the target.
+        static_features : list of str, optional (default=None)
+            Names of the features that are static and will be repeated when forecasting.
+        dropna : bool (default=True)
+            Drop rows with missing values produced by the transformations.
+        keep_last_n : int, optional (default=None)
+            Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        max_horizon: int, optional (default=None)
+            Train this many models, where each model will predict a specific horizon.
+        prediction_intervals : PredictionIntervals, optional (default=None)
+            Configuration to calibrate prediction intervals (Conformal Prediction).
 
-         Returns
-         -------
-         self : Forecast
-             Forecast object with series values and trained models.
+        Returns
+        -------
+        self : Forecast
+            Forecast object with series values and trained models.
         """
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
@@ -429,7 +457,7 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        prediction_intervals: PredictionIntervals = None,
+        prediction_intervals: Optional[PredictionIntervals] = None,
         level: Optional[List[Union[int, float]]] = None,
     ):
         """Perform time series cross validation.
@@ -471,8 +499,8 @@ class MLForecast:
             Function to call on the predictions before updating the targets.
                 This function will take a pandas Series with the predictions and should return another one with the same structure.
                 The series identifier is on the index.
-        prediction_intervals : PredictionIntervals (default=None)
-            Store conformity score for prediction intervals (Conformal Prediction).
+        prediction_intervals : PredictionIntervals, optional (default=None)
+            Configuration to calibrate prediction intervals (Conformal Prediction).
         level : list of ints or floats, optional (default=None)
             Confidence levels between 0 and 100 for prediction intervals.
 
