@@ -33,12 +33,14 @@ def _add_conformal_intervals(
     level: List[Union[int, float]],
     cs_n_windows: int,
     cs_window_size: int,
+    horizon: int,
 ) -> pd.DataFrame:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
     `level` should be already sorted.
     """
-    cuts = [lv / 100 for lv in level]
+    # bonferroni correction
+    cuts = [1 - (1 - lv / 100) / horizon for lv in level]
     n_level = len(level)
     for model in model_names:
         quantiles = np.quantile(
@@ -55,6 +57,36 @@ def _add_conformal_intervals(
     return fcst_df
 
 # %% ../nbs/forecast.ipynb 7
+def _schema_conformal_intervals(
+    model_names, level, id_col, time_col, dtypes, fcst_df_columns
+):
+    """Returns schema for conformal intervals."""
+    models_schema = ",".join(f"{model_name}:double" for model_name in model_names)
+    level_schema = ""
+    for model in model_names:
+        level_schema += ","
+        lo_cols = [f"{model}-lo-{lv}:double" for lv in reversed(level)]
+        hi_cols = [f"{model}-hi-{lv}:double" for lv in level]
+        level_schema += ",".join(lo_cols) + "," + ",".join(hi_cols)
+    id_col = id_col if id_col != "index" else fcst_df_columns[0]
+    id_col_type = (
+        dtypes.loc[id_col] if id_col != "index" else dtypes.loc[fcst_df_columns[0]]
+    )
+    if id_col_type == "category":
+        raise NotImplementedError(
+            "Use of `category` type to identify each time series is not yet implemented. "
+            f"Please transform your {id_col} to string to continue."
+        )
+    id_col_type = "string" if id_col_type == "object" else id_col_type
+    ts_col_type = f"{dtypes.loc[time_col]}".replace("64[ns]", "")
+    schema = (
+        f"{id_col}:{id_col_type},{time_col}:{ts_col_type},"
+        + models_schema
+        + level_schema
+    )
+    return schema, id_col
+
+# %% ../nbs/forecast.ipynb 12
 class MLForecast:
     def __init__(
         self,
@@ -249,7 +281,7 @@ class MLForecast:
             cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
         if id_col == "index":
             cv_results = cv_results.reset_index()
-        self.conformity_scores = cv_results.drop("y", axis=1)
+        return cv_results.drop("y", axis=1)
 
     def fit(
         self,
@@ -291,9 +323,10 @@ class MLForecast:
         self : Forecast
             Forecast object with series values and trained models.
         """
+        self._cs_df: Optional[pd.DataFrame] = None
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
-            self._conformity_scores(
+            self._cs_df = self._conformity_scores(
                 data=data,
                 id_col=id_col,
                 time_col=time_col,
@@ -393,6 +426,13 @@ class MLForecast:
             after_predict_callback,
         )
         if level is not None:
+            if self.prediction_intervals.window_size not in [1, horizon]:
+                raise ValueError(
+                    "The `window_size` argument of PredictionIntervals "
+                    "should be equal to one or `horizon`. "
+                    "Please rerun the `fit` method passing a proper value "
+                    "to prediction intervals."
+                )
             if self.prediction_intervals.window_size != horizon:
                 warn_msg = (
                     "Prediction intervals are calculated using 1-step ahead cross-validation, "
@@ -403,38 +443,27 @@ class MLForecast:
                 warnings.warn(warn_msg, UserWarning)
             level_ = sorted(level)
             model_names = self.models.keys()
-            models_schema = ",".join(
-                f"{model_name}:double" for model_name in model_names
-            )
-            level_schema = ""
-            for model in model_names:
-                level_schema += ","
-                lo_cols = [f"{model}-lo-{lv}:double" for lv in reversed(level_)]
-                hi_cols = [f"{model}-hi-{lv}:double" for lv in level_]
-                level_schema += ",".join(lo_cols) + "," + ",".join(hi_cols)
-            id_col = ts.id_col if ts.id_col != "index" else forecasts.index.name
-            dtypes = forecasts.dtypes
-            id_col_type = (
-                dtypes.loc[ts.id_col] if ts.id_col != "index" else forecasts.index.dtype
-            )
-            id_col_type = "string" if id_col_type == "object" else id_col_type
-            ts_col_type = f"{dtypes.loc[ts.time_col]}".replace("64[ns]", "")
-            schema = (
-                f"{id_col}:{id_col_type},{ts.time_col}:{ts_col_type},"
-                + models_schema
-                + level_schema
-            )
             if ts.id_col == "index":
                 forecasts = forecasts.reset_index()
+            dtypes = forecasts.dtypes
+            schema, id_col = _schema_conformal_intervals(
+                model_names=model_names,
+                level=level_,
+                id_col=ts.id_col,
+                time_col=ts.time_col,
+                dtypes=dtypes,
+                fcst_df_columns=forecasts.columns,
+            )
             forecasts = _cotransform(
                 forecasts,
-                self.conformity_scores,
+                self._cs_df,
                 using=_add_conformal_intervals,
                 params=dict(
                     model_names=list(model_names),
                     level=level_,
                     cs_window_size=self.prediction_intervals.window_size,
                     cs_n_windows=self.prediction_intervals.n_windows,
+                    horizon=horizon,
                 ),
                 schema=schema,
                 partition=id_col,
@@ -571,7 +600,7 @@ class MLForecast:
             out = out.reset_index()
         return out
 
-# %% ../nbs/forecast.ipynb 10
+# %% ../nbs/forecast.ipynb 15
 class Forecast(MLForecast):
     def __init__(
         self,
