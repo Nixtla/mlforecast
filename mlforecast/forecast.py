@@ -40,7 +40,6 @@ def _add_conformal_intervals(
     `level` should be already sorted.
     """
     cuts = [lv / 100 for lv in level]
-    n_level = len(level)
     for model in model_names:
         quantiles = np.quantile(
             cs_df[model].values.reshape(cs_n_windows, cs_window_size),
