@@ -33,7 +33,6 @@ def _add_conformal_intervals(
     level: List[Union[int, float]],
     cs_n_windows: int,
     cs_window_size: int,
-    horizon: int,
 ) -> pd.DataFrame:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -467,7 +466,6 @@ class MLForecast:
                         level=level_,
                         cs_window_size=self.prediction_intervals.window_size,
                         cs_n_windows=self.prediction_intervals.n_windows,
-                        horizon=horizon,
                     ),
                     schema=schema,
                     partition=id_col,
