@@ -39,16 +39,14 @@ def _add_conformal_intervals(
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
     `level` should be already sorted.
     """
-    # bonferroni correction
-    cuts = [1 - (1 - lv / 100) / horizon for lv in level]
+    cuts = [lv / 100 for lv in level]
     n_level = len(level)
     for model in model_names:
         quantiles = np.quantile(
             cs_df[model].values.reshape(cs_n_windows, cs_window_size),
             cuts,
             axis=0,
-        )
-        quantiles = quantiles.reshape(n_level, -1).T
+        ).T
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         mean = fcst_df[model].values.reshape(-1, 1)
@@ -426,50 +424,57 @@ class MLForecast:
             after_predict_callback,
         )
         if level is not None:
-            if self.prediction_intervals.window_size not in [1, horizon]:
-                raise ValueError(
-                    "The `window_size` argument of PredictionIntervals "
-                    "should be equal to one or `horizon`. "
-                    "Please rerun the `fit` method passing a proper value "
-                    "to prediction intervals."
-                )
-            if self.prediction_intervals.window_size != horizon:
+            if self._cs_df is None:
                 warn_msg = (
-                    "Prediction intervals are calculated using 1-step ahead cross-validation, "
-                    "with a constant width for all horizons. To vary the error by horizon, "
-                    "pass PredictionIntervals(window_size=horizon) to the `prediction_intervals` "
-                    "argument when refitting the model."
+                    "Please rerun the `fit` method passing a proper value "
+                    "to prediction intervals to compute them."
                 )
                 warnings.warn(warn_msg, UserWarning)
-            level_ = sorted(level)
-            model_names = self.models.keys()
-            if ts.id_col == "index":
-                forecasts = forecasts.reset_index()
-            dtypes = forecasts.dtypes
-            schema, id_col = _schema_conformal_intervals(
-                model_names=model_names,
-                level=level_,
-                id_col=ts.id_col,
-                time_col=ts.time_col,
-                dtypes=dtypes,
-                fcst_df_columns=forecasts.columns,
-            )
-            forecasts = _cotransform(
-                forecasts,
-                self._cs_df,
-                using=_add_conformal_intervals,
-                params=dict(
-                    model_names=list(model_names),
+            else:
+                if self.prediction_intervals.window_size not in [1, horizon]:
+                    raise ValueError(
+                        "The `window_size` argument of PredictionIntervals "
+                        "should be equal to one or `horizon`. "
+                        "Please rerun the `fit` method passing a proper value "
+                        "to prediction intervals."
+                    )
+                if self.prediction_intervals.window_size != horizon:
+                    warn_msg = (
+                        "Prediction intervals are calculated using 1-step ahead cross-validation, "
+                        "with a constant width for all horizons. To vary the error by horizon, "
+                        "pass PredictionIntervals(window_size=horizon) to the `prediction_intervals` "
+                        "argument when refitting the model."
+                    )
+                    warnings.warn(warn_msg, UserWarning)
+                level_ = sorted(level)
+                model_names = self.models.keys()
+                if ts.id_col == "index":
+                    forecasts = forecasts.reset_index()
+                dtypes = forecasts.dtypes
+                schema, id_col = _schema_conformal_intervals(
+                    model_names=model_names,
                     level=level_,
-                    cs_window_size=self.prediction_intervals.window_size,
-                    cs_n_windows=self.prediction_intervals.n_windows,
-                    horizon=horizon,
-                ),
-                schema=schema,
-                partition=id_col,
-            )
-            if ts.id_col == "index":
-                forecasts = forecasts.set_index(forecasts.columns[0])
+                    id_col=ts.id_col,
+                    time_col=ts.time_col,
+                    dtypes=dtypes,
+                    fcst_df_columns=forecasts.columns,
+                )
+                forecasts = _cotransform(
+                    forecasts,
+                    self._cs_df,
+                    using=_add_conformal_intervals,
+                    params=dict(
+                        model_names=list(model_names),
+                        level=level_,
+                        cs_window_size=self.prediction_intervals.window_size,
+                        cs_n_windows=self.prediction_intervals.n_windows,
+                        horizon=horizon,
+                    ),
+                    schema=schema,
+                    partition=id_col,
+                )
+                if ts.id_col == "index":
+                    forecasts = forecasts.set_index(forecasts.columns[0])
         return forecasts
 
     def cross_validation(
