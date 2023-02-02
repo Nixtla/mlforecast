@@ -215,6 +215,7 @@ class MLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
+        max_horizon: Optional[int] = None,
         n_windows: int = 2,
         window_size: int = 1,
     ):
@@ -239,6 +240,7 @@ class MLForecast:
             static_features=static_features,
             dropna=dropna,
             keep_last_n=keep_last_n,
+            max_horizon=max_horizon,
             prediction_intervals=None,
         )
         # conformity score for each model
