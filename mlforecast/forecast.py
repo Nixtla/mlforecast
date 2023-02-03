@@ -6,7 +6,7 @@ __all__ = ['MLForecast', 'Forecast']
 # %% ../nbs/forecast.ipynb 3
 import copy
 import warnings
-from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -22,6 +22,9 @@ from mlforecast.core import (
     TimeSeries,
     _name_models,
 )
+
+if TYPE_CHECKING:
+    from mlforecast.lgb_cv import LightGBMCV
 from .utils import backtest_splits, _cotransform, PredictionIntervals
 
 # %% ../nbs/forecast.ipynb 6
