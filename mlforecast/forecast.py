@@ -22,7 +22,6 @@ from mlforecast.core import (
     TimeSeries,
     _name_models,
 )
-from .lgb_cv import LightGBMCV
 from .utils import backtest_splits
 
 # %% ../nbs/forecast.ipynb 6
@@ -82,7 +81,7 @@ class MLForecast:
         return self.ts.freq
 
     @classmethod
-    def from_cv(cls, cv: LightGBMCV) -> "MLForecast":
+    def from_cv(cls, cv: "LightGBMCV") -> "MLForecast":
         if not hasattr(cv, "best_iteration_"):
             raise ValueError("LightGBMCV object must be fitted first.")
         import lightgbm as lgb
