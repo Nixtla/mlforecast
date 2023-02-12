@@ -5,7 +5,6 @@ __all__ = ['FugueMLForecast']
 
 # %% ../../nbs/distributed.fugue.ipynb 2
 import copy
-from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional
 
 import cloudpickle
@@ -172,16 +171,14 @@ class FugueMLForecast:
 
                 LGBM_INSTALLED = True
             except ModuleNotFoundError:
-                SynapseLGBMRegressor = object
                 LGBM_INSTALLED = False
             try:
                 import xgboost as xgb
-                from xgboost.spark import SparkXGBRegressor
+                from xgboost.spark import SparkXGBRegressor  # type: ignore
 
-                XGBOOST_INSTALLED = True
+                XGB_INSTALLED = True
             except ModuleNotFoundError:
-                SparkXGBRegressor = object
-                XGBOOST_INSTALLED = False
+                XGB_INSTALLED = False
 
             featurizer = VectorAssembler(inputCols=features, outputCol="features")
             train_data = featurizer.transform(prep)[target_col, "features"]
@@ -190,7 +187,7 @@ class FugueMLForecast:
                     trained_model = model.setLabelCol(target_col).fit(train_data)
                     model_str = trained_model.getNativeModel()
                     local_model = lgb.Booster(model_str=model_str)
-                elif XGBOOST_INSTALLED and isinstance(model, SparkXGBRegressor):
+                elif XGB_INSTALLED and isinstance(model, SparkXGBRegressor):
                     model.setParams(label_col=target_col)
                     trained_model = model.fit(train_data)
                     model_str = trained_model.get_booster().save_raw("ubj")
@@ -204,15 +201,21 @@ class FugueMLForecast:
         elif DASK_INSTALLED and isinstance(data, dd.DataFrame):
             try:
                 from mlforecast.distributed.models.lgb import LGBMForecast
+
+                LGBM_INSTALLED = True
             except ModuleNotFoundError:
-                LGBMForecast = object
+                LGBM_INSTALLED = False
             try:
                 from mlforecast.distributed.models.xgb import XGBForecast
+
+                XGB_INSTALLED = True
             except ModuleNotFoundError:
-                XGBForecast = object
+                XGB_INSTALLED = False
             X, y = prep[features], prep[target_col]
             for name, model in self.models.items():
-                if not isinstance(model, (LGBMForecast, XGBForecast)):
+                if not (LGBM_INSTALLED and isinstance(model, LGBMForecast)) or (
+                    XGB_INSTALLED and isinstance(model, XGBForecast)
+                ):
                     raise ValueError(
                         "Models must be either LGBMForecast or XGBForecast with dask backend."
                     )
