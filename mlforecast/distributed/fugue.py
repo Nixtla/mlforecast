@@ -5,15 +5,28 @@ __all__ = ['FugueMLForecast']
 
 # %% ../../nbs/distributed.fugue.ipynb 2
 import copy
-import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional
 
 import cloudpickle
-import lightgbm as lgb
+
+try:
+    import dask.dataframe as dd
+
+    DASK_INSTALLED = True
+except ModuleNotFoundError:
+    DASK_INSTALLED = False
+import fugue.api as fa
 import pandas as pd
-from fugue import transform
-from pyspark.ml.feature import VectorAssembler
+
+try:
+    from pyspark.ml.feature import VectorAssembler
+    from pyspark.sql import DataFrame as SparkDataFrame
+
+    SPARK_INSTALLED = True
+except ModuleNotFoundError:
+    SPARK_INSTALLED = False
+from sklearn.base import clone
 
 from mlforecast.core import (
     DateFeature,
@@ -102,7 +115,7 @@ class FugueMLForecast:
         self.id_col = id_col
         self.time_col = time_col
         self.target_col = target_col
-        self.partition_results = transform(
+        self.partition_results = fa.transform(
             data,
             FugueMLForecast._preprocess_partition,
             params={
@@ -116,16 +129,18 @@ class FugueMLForecast:
             },
             schema="ts:binary,df:binary",
             engine=self.engine,
+            as_fugue=True,
         )
-        base_schema = f"{id_col}:string,{time_col}:datetime,{target_col}:double"
+        base_schema = fa.get_schema(data[[id_col, time_col, target_col]])
         features_dtypes = [f"{feat}:double" for feat in self._base_ts.features]
-        schema = base_schema + "," + ",".join(features_dtypes)
-        return transform(
+        schema = str(base_schema) + "," + ",".join(features_dtypes)
+        res = fa.transform(
             self.partition_results,
             FugueMLForecast._retrieve_df,
             schema=schema,
             engine=self.engine,
         )
+        return fa.get_native_as_df(res)
 
     def fit(
         self,
@@ -137,7 +152,7 @@ class FugueMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
     ):
-        preprocessed = self.preprocess(
+        prep = self.preprocess(
             data,
             id_col=id_col,
             time_col=time_col,
@@ -146,20 +161,64 @@ class FugueMLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
         )
-        feature_cols = [
-            x for x in preprocessed.columns if x not in (id_col, time_col, target_col)
-        ]
-        featurizer = VectorAssembler(inputCols=feature_cols, outputCol="features")
-        train_data = featurizer.transform(preprocessed)[target_col, "features"]
-        for name, model in self.models.items():
-            trained_model = model.setLabelCol(target_col).fit(train_data)
-            # horrible way to get a lightgbm booster, please look away
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                trained_model.saveNativeModel(tmp_dir)
-                tmp_path = Path(tmp_dir)
-                txt_file = next(tmp_path.glob("*.txt"))
-                bst = lgb.Booster(model_file=txt_file)
-            self.models[name] = bst
+        features = [x for x in prep.columns if x not in {id_col, time_col, target_col}]
+        self.models_ = {}
+        if SPARK_INSTALLED and isinstance(data, SparkDataFrame):
+            try:
+                import lightgbm as lgb
+                from synapse.ml.lightgbm import (
+                    LightGBMRegressor as SynapseLGBMRegressor,
+                )
+
+                LGBM_INSTALLED = True
+            except ModuleNotFoundError:
+                SynapseLGBMRegressor = object
+                LGBM_INSTALLED = False
+            try:
+                import xgboost as xgb
+                from xgboost.spark import SparkXGBRegressor
+
+                XGBOOST_INSTALLED = True
+            except ModuleNotFoundError:
+                SparkXGBRegressor = object
+                XGBOOST_INSTALLED = False
+
+            featurizer = VectorAssembler(inputCols=features, outputCol="features")
+            train_data = featurizer.transform(prep)[target_col, "features"]
+            for name, model in self.models.items():
+                if LGBM_INSTALLED and isinstance(model, SynapseLGBMRegressor):
+                    trained_model = model.setLabelCol(target_col).fit(train_data)
+                    model_str = trained_model.getNativeModel()
+                    local_model = lgb.Booster(model_str=model_str)
+                elif XGBOOST_INSTALLED and isinstance(model, SparkXGBRegressor):
+                    model.setParams(label_col=target_col)
+                    trained_model = model.fit(train_data)
+                    model_str = trained_model.get_booster().save_raw("ubj")
+                    local_model = xgb.XGBRegressor()
+                    local_model.load_model(model_str)
+                else:
+                    raise ValueError(
+                        "Only LightGBMRegressor from SynapseML and SparkXGBRegressor are supported in spark."
+                    )
+                self.models_[name] = local_model
+        elif DASK_INSTALLED and isinstance(data, dd.DataFrame):
+            try:
+                from mlforecast.distributed.models.lgb import LGBMForecast
+            except ModuleNotFoundError:
+                LGBMForecast = object
+            try:
+                from mlforecast.distributed.models.xgb import XGBForecast
+            except ModuleNotFoundError:
+                XGBForecast = object
+            X, y = prep[features], prep[target_col]
+            for name, model in self.models.items():
+                if not isinstance(model, (LGBMForecast, XGBForecast)):
+                    raise ValueError(
+                        "Models must be either LGBMForecast or XGBForecast with dask backend."
+                    )
+                self.models_[name] = clone(model).fit(X, y).model_
+        else:
+            raise NotImplementedError("Only spark and dask engines are supported.")
         return self
 
     @staticmethod
@@ -192,11 +251,11 @@ class FugueMLForecast:
         model_names = self.models.keys()
         models_schema = ",".join(f"{model_name}:double" for model_name in model_names)
         schema = f"{self.id_col}:string,{self.time_col}:datetime," + models_schema
-        return transform(
+        return fa.transform(
             self.partition_results,
             FugueMLForecast._predict,
             params={
-                "models": self.models,
+                "models": self.models_,
                 "horizon": horizon,
                 "dynamic_dfs": dynamic_dfs,
                 "before_predict_callback": before_predict_callback,
