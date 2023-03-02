@@ -83,10 +83,27 @@ class FugueMLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
+        i_window: Optional[int] = None,
+        n_windows: Optional[int] = None,
+        window_size: Optional[int] = None,
     ) -> List[List[Any]]:
         ts = copy.deepcopy(base_ts)
+        if i_window is None:
+            train = part
+            valid = None
+        else:
+            max_dates = part.groupby(id_col)[time_col].transform("max")
+            train_ends = max_dates - (n_windows - i_window) * window_size * base_ts.freq
+            valid_ends = train_ends + window_size * base_ts.freq
+            train_mask = part[time_col].le(train_ends)
+            valid_mask = part[time_col].gt(train_ends) & part[time_col].le(valid_ends)
+            train = part[train_mask]
+            valid_keep_cols = part.columns
+            if static_features is not None:
+                valid_keep_cols.drop(static_features)
+            valid = part.loc[valid_mask, valid_keep_cols]
         transformed = ts.fit_transform(
-            part,
+            train,
             id_col=id_col,
             time_col=time_col,
             target_col=target_col,
@@ -94,12 +111,18 @@ class FugueMLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
         )
-        return [[cloudpickle.dumps(ts), cloudpickle.dumps(transformed)]]
+        return [
+            [
+                cloudpickle.dumps(ts),
+                cloudpickle.dumps(transformed),
+                cloudpickle.dumps(valid),
+            ]
+        ]
 
     @staticmethod
     def _retrieve_df(items: List[List[Any]]) -> Iterable[pd.DataFrame]:
-        for _, serialized_df in items:
-            yield cloudpickle.loads(serialized_df)
+        for _, serialized_train, _ in items:
+            yield cloudpickle.loads(serialized_train)
 
     def preprocess(
         self,
@@ -125,18 +148,20 @@ class FugueMLForecast:
                 "static_features": static_features,
                 "dropna": dropna,
                 "keep_last_n": keep_last_n,
+                "i_window": getattr(self, "_i_window", None),
+                "n_windows": getattr(self, "_n_windows", None),
+                "window_size": getattr(self, "_window_size", None),
             },
-            schema="ts:binary,df:binary",
+            schema="ts:binary,train:binary,valid:binary",
             engine=self.engine,
             as_fugue=True,
         )
-        base_schema = fa.get_schema(data[[id_col, time_col, target_col]])
-        features_dtypes = [f"{feat}:double" for feat in self._base_ts.features]
-        schema = str(base_schema) + "," + ",".join(features_dtypes)
+        base_schema = str(fa.get_schema(data))
+        features_schema = ",".join(f"{feat}:double" for feat in self._base_ts.features)
         res = fa.transform(
             self.partition_results,
             FugueMLForecast._retrieve_df,
-            schema=schema,
+            schema=f"{base_schema},{features_schema}",
             engine=self.engine,
         )
         return fa.get_native_as_df(res)
@@ -213,8 +238,9 @@ class FugueMLForecast:
                 XGB_INSTALLED = False
             X, y = prep[features], prep[target_col]
             for name, model in self.models.items():
-                if not (LGBM_INSTALLED and isinstance(model, LGBMForecast)) or (
-                    XGB_INSTALLED and isinstance(model, XGBForecast)
+                if not (
+                    (LGBM_INSTALLED and isinstance(model, LGBMForecast))
+                    or (XGB_INSTALLED and isinstance(model, XGBForecast))
                 ):
                     raise ValueError(
                         "Models must be either LGBMForecast or XGBForecast with dask backend."
@@ -233,16 +259,25 @@ class FugueMLForecast:
         before_predict_callback,
         after_predict_callback,
     ) -> Iterable[pd.DataFrame]:
-        for serialized_ts, _ in items:
+        for serialized_ts, _, serialized_valid in items:
+            valid = cloudpickle.loads(serialized_valid)
             ts = cloudpickle.loads(serialized_ts)
+            if valid is not None:
+                dynamic_features = valid.columns.drop(
+                    [ts.id_col, ts.time_col, ts.target_col]
+                )
+                if not dynamic_features.empty:
+                    dynamic_dfs = [valid.drop(columns=ts.target_col)]
             res = ts.predict(
                 models=models,
                 horizon=horizon,
                 dynamic_dfs=dynamic_dfs,
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
-            )
-            yield res.reset_index()
+            ).reset_index()
+            if valid is not None:
+                res = res.merge(valid, how="left")
+            yield res
 
     def predict(
         self,
@@ -254,6 +289,8 @@ class FugueMLForecast:
         model_names = self.models.keys()
         models_schema = ",".join(f"{model_name}:double" for model_name in model_names)
         schema = f"{self.id_col}:string,{self.time_col}:datetime," + models_schema
+        if getattr(self, "_n_windows", None) is not None:
+            schema += f",{self.target_col}:double"
         return fa.transform(
             self.partition_results,
             FugueMLForecast._predict,
@@ -267,3 +304,41 @@ class FugueMLForecast:
             schema=schema,
             engine=self.engine,
         )
+
+    def cross_validation(
+        self,
+        data,
+        n_windows: int,
+        window_size: int,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        step_size: Optional[int] = None,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        refit: bool = True,
+        before_predict_callback: Optional[Callable] = None,
+        after_predict_callback: Optional[Callable] = None,
+    ):
+        self.cv_models_ = []
+        self._n_windows = n_windows
+        self._window_size = window_size
+        for i in range(n_windows):
+            self._i_window = i
+            self.fit(
+                data,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+            )
+            self.cv_models_.append(self.models_)
+            preds = self.predict(
+                window_size,
+                before_predict_callback=before_predict_callback,
+                after_predict_callback=after_predict_callback,
+            )
+            yield preds
