@@ -5,7 +5,8 @@ __all__ = ['FugueMLForecast']
 
 # %% ../../nbs/distributed.fugue.ipynb 2
 import copy
-from typing import Any, Callable, Iterable, List, Optional
+from collections import namedtuple
+from typing import Any, Callable, Iterable, Iterator, List, Optional
 
 import cloudpickle
 
@@ -15,6 +16,7 @@ try:
     DASK_INSTALLED = True
 except ModuleNotFoundError:
     DASK_INSTALLED = False
+import fugue
 import fugue.api as fa
 import pandas as pd
 
@@ -38,7 +40,14 @@ from mlforecast.core import (
 )
 
 # %% ../../nbs/distributed.fugue.ipynb 3
+WindowInfo = namedtuple(
+    "WindowInfo", ["n_windows", "window_size", "step_size", "i_window"]
+)
+
+# %% ../../nbs/distributed.fugue.ipynb 4
 class FugueMLForecast:
+    """Multi backend distributed pipeline"""
+
     def __init__(
         self,
         models,
@@ -50,6 +59,28 @@ class FugueMLForecast:
         num_threads: int = 1,
         engine=None,
     ):
+        """Create distributed forecast object
+
+        Parameters
+        ----------
+        models : regressor or list of regressors
+            Models that will be trained and used to compute the forecasts.
+        freq : str or int, optional (default=None)
+            Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
+        lags : list of int, optional (default=None)
+            Lags of the target to use as features.
+        lag_transforms : dict of int to list of functions, optional (default=None)
+            Mapping of target lags to their transformations.
+        date_features : list of str or callable, optional (default=None)
+            Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
+        differences : list of int, optional (default=None)
+            Differences to take of the target before computing the features. These are restored at the forecasting step.
+        num_threads : int (default=1)
+            Number of threads to use when computing the features.
+        engine : fugue execution engine, optional (default=None)
+            Dask Client, Spark Session, etc to use for the distributed computation.
+            If None will use default depending on input type.
+        """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
         if isinstance(models, list):
@@ -83,17 +114,20 @@ class FugueMLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-        i_window: Optional[int] = None,
-        n_windows: Optional[int] = None,
-        window_size: Optional[int] = None,
+        window_info: Optional[WindowInfo] = None,
     ) -> List[List[Any]]:
         ts = copy.deepcopy(base_ts)
-        if i_window is None:
+        if window_info is None:
             train = part
             valid = None
         else:
+            n_windows, window_size, step_size, i_window = window_info
+            if step_size is None:
+                step_size = window_size
+            test_size = window_size + step_size * (n_windows - 1)
+            offset = test_size - i_window * step_size
             max_dates = part.groupby(id_col)[time_col].transform("max")
-            train_ends = max_dates - (n_windows - i_window) * window_size * base_ts.freq
+            train_ends = max_dates - offset * base_ts.freq
             valid_ends = train_ends + window_size * base_ts.freq
             train_mask = part[time_col].le(train_ends)
             valid_mask = part[time_col].gt(train_ends) & part[time_col].le(valid_ends)
@@ -124,16 +158,17 @@ class FugueMLForecast:
         for _, serialized_train, _ in items:
             yield cloudpickle.loads(serialized_train)
 
-    def preprocess(
+    def _preprocess(
         self,
-        data,
+        data: fugue.AnyDataFrame,
         id_col: str,
         time_col: str,
         target_col: str,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-    ):
+        window_info: Optional[WindowInfo] = None,
+    ) -> fugue.AnyDataFrame:
         self.id_col = id_col
         self.time_col = time_col
         self.target_col = target_col
@@ -148,9 +183,7 @@ class FugueMLForecast:
                 "static_features": static_features,
                 "dropna": dropna,
                 "keep_last_n": keep_last_n,
-                "i_window": getattr(self, "_i_window", None),
-                "n_windows": getattr(self, "_n_windows", None),
-                "window_size": getattr(self, "_window_size", None),
+                "window_info": window_info,
             },
             schema="ts:binary,train:binary,valid:binary",
             engine=self.engine,
@@ -166,17 +199,41 @@ class FugueMLForecast:
         )
         return fa.get_native_as_df(res)
 
-    def fit(
+    def preprocess(
         self,
-        data,
+        data: fugue.AnyDataFrame,
         id_col: str,
         time_col: str,
         target_col: str,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-    ):
-        prep = self.preprocess(
+    ) -> fugue.AnyDataFrame:
+        """Add the features to `data`.
+
+        Parameters
+        ----------
+        data : dask or spark DataFrame.
+            Series data in long format.
+        id_col : str
+            Column that identifies each serie. If 'index' then the index is used.
+        time_col : str
+            Column that identifies each timestep, its values can be timestamps or integers.
+        target_col : str
+            Column that contains the target.
+        static_features : list of str, optional (default=None)
+            Names of the features that are static and will be repeated when forecasting.
+        dropna : bool (default=True)
+            Drop rows with missing values produced by the transformations.
+        keep_last_n : int, optional (default=None)
+            Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+
+        Returns
+        -------
+        result : same type as input
+            data with added features.
+        """
+        return self._preprocess(
             data,
             id_col=id_col,
             time_col=time_col,
@@ -184,6 +241,28 @@ class FugueMLForecast:
             static_features=static_features,
             dropna=dropna,
             keep_last_n=keep_last_n,
+        )
+
+    def _fit(
+        self,
+        data: fugue.AnyDataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+        window_info: Optional[WindowInfo] = None,
+    ) -> "FugueMLForecast":
+        prep = self._preprocess(
+            data,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            window_info=window_info,
         )
         features = [x for x in prep.columns if x not in {id_col, time_col, target_col}]
         self.models_ = {}
@@ -250,6 +329,50 @@ class FugueMLForecast:
             raise NotImplementedError("Only spark and dask engines are supported.")
         return self
 
+    def fit(
+        self,
+        data: fugue.AnyDataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        dropna: bool = True,
+        keep_last_n: Optional[int] = None,
+    ) -> "FugueMLForecast":
+        """Apply the feature engineering and train the models.
+
+        Parameters
+        ----------
+        data : dask or spark DataFrame
+            Series data in long format.
+        id_col : str
+            Column that identifies each serie. If 'index' then the index is used.
+        time_col : str
+            Column that identifies each timestep, its values can be timestamps or integers.
+        target_col : str
+            Column that contains the target.
+        static_features : list of str, optional (default=None)
+            Names of the features that are static and will be repeated when forecasting.
+        dropna : bool (default=True)
+            Drop rows with missing values produced by the transformations.
+        keep_last_n : int, optional (default=None)
+            Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+
+        Returns
+        -------
+        self : FugueMLForecast
+            Forecast object with series values and trained models.
+        """
+        return self._fit(
+            data,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+        )
+
     @staticmethod
     def _predict(
         items: List[List[Any]],
@@ -285,13 +408,35 @@ class FugueMLForecast:
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-    ):
+    ) -> fugue.AnyDataFrame:
+        """Compute the predictions for the next `horizon` steps.
+
+        Parameters
+        ----------
+        horizon : int
+            Number of periods to predict.
+        dynamic_dfs : list of pandas DataFrame, optional (default=None)
+            Future values of the dynamic features, e.g. prices.
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
+
+        Returns
+        -------
+        result : dask or spark DataFrame
+            Predictions for each serie and timestep, with one column per model.
+        """
         model_names = self.models.keys()
         models_schema = ",".join(f"{model_name}:double" for model_name in model_names)
         schema = f"{self.id_col}:string,{self.time_col}:datetime," + models_schema
         if getattr(self, "_n_windows", None) is not None:
             schema += f",{self.target_col}:double"
-        return fa.transform(
+        res = fa.transform(
             self.partition_results,
             FugueMLForecast._predict,
             params={
@@ -304,10 +449,11 @@ class FugueMLForecast:
             schema=schema,
             engine=self.engine,
         )
+        return fa.get_native_as_df(res)
 
     def cross_validation(
         self,
-        data,
+        data: fugue.AnyDataFrame,
         n_windows: int,
         window_size: int,
         id_col: str,
@@ -317,16 +463,53 @@ class FugueMLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-        refit: bool = True,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-    ):
+    ) -> Iterator[fugue.AnyDataFrame]:
+        """Perform time series cross validation.
+        Creates `n_windows` splits where each window has `window_size` test periods,
+        trains the models, computes the predictions and merges the actuals.
+
+        Parameters
+        ----------
+        data : dask DataFrame
+            Series data in long format.
+        n_windows : int
+            Number of windows to evaluate.
+        window_size : int
+            Number of test periods in each window.
+        id_col : str
+            Column that identifies each serie. If 'index' then the index is used.
+        time_col : str
+            Column that identifies each timestep, its values can be timestamps or integers.
+        target_col : str
+            Column that contains the target.
+        step_size : int, optional (default=None)
+            Step size between each cross validation window. If None it will be equal to `window_size`.
+        static_features : list of str, optional (default=None)
+            Names of the features that are static and will be repeated when forecasting.
+        dropna : bool (default=True)
+            Drop rows with missing values produced by the transformations.
+        keep_last_n : int, optional (default=None)
+            Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
+        before_predict_callback : callable, optional (default=None)
+            Function to call on the features before computing the predictions.
+                This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.
+                The series identifier is on the index.
+        after_predict_callback : callable, optional (default=None)
+            Function to call on the predictions before updating the targets.
+                This function will take a pandas Series with the predictions and should return another one with the same structure.
+                The series identifier is on the index.
+
+        Returns
+        -------
+        result : dask or spark DataFrame
+            Predictions for each window with the series id, timestamp, target value and predictions from each model.
+        """
         self.cv_models_ = []
-        self._n_windows = n_windows
-        self._window_size = window_size
         for i in range(n_windows):
-            self._i_window = i
-            self.fit(
+            window_info = WindowInfo(n_windows, window_size, step_size, i)
+            self._fit(
                 data,
                 id_col=id_col,
                 time_col=time_col,
@@ -334,6 +517,7 @@ class FugueMLForecast:
                 static_features=static_features,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
+                window_info=window_info,
             )
             self.cv_models_.append(self.models_)
             preds = self.predict(
