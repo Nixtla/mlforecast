@@ -74,7 +74,7 @@ jobs:
       - name: Set up environment
         uses: mamba-org/provision-with-micromamba@main
         with:
-          environment-file: local_environment.yaml
+          environment-file: local_environment.yml
           extra-specs: python=${{ matrix.python-version }}
           cache-env: true
 
