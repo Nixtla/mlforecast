@@ -71,6 +71,7 @@ def _add_conformal_error_intervals(
     level: List[Union[int, float]],
     cs_n_windows: int,
     cs_window_size: int,
+    n_series: int,
 ) -> pd.DataFrame:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
