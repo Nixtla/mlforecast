@@ -9,7 +9,7 @@ import reprlib
 from dataclasses import dataclass
 from itertools import chain
 from math import ceil, log10
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
