@@ -6,7 +6,7 @@ __all__ = ['DistributedMLForecast']
 # %% ../../nbs/distributed.forecast.ipynb 4
 import copy
 from collections import namedtuple
-from typing import Any, Callable, Dict, Iterable, List, Optional, Union
+from typing import Any, Callable, Iterable, List, Optional
 
 import cloudpickle
 
@@ -27,7 +27,7 @@ try:
     SPARK_INSTALLED = True
 except ModuleNotFoundError:
     SPARK_INSTALLED = False
-from sklearn.base import BaseEstimator, clone
+from sklearn.base import clone
 
 from mlforecast.core import (
     DateFeature,
@@ -351,27 +351,8 @@ class DistributedMLForecast:
                     )
                 self.models_[name] = local_model
         elif DASK_INSTALLED and isinstance(data, dd.DataFrame):
-            try:
-                from mlforecast.distributed.models.lgb import LGBMForecast
-
-                LGBM_INSTALLED = True
-            except ModuleNotFoundError:
-                LGBM_INSTALLED = False
-            try:
-                from mlforecast.distributed.models.xgb import XGBForecast
-
-                XGB_INSTALLED = True
-            except ModuleNotFoundError:
-                XGB_INSTALLED = False
             X, y = prep[features], prep[target_col]
             for name, model in self.models.items():
-                if not (
-                    (LGBM_INSTALLED and isinstance(model, LGBMForecast))
-                    or (XGB_INSTALLED and isinstance(model, XGBForecast))
-                ):
-                    raise ValueError(
-                        "Models must be either LGBMForecast or XGBForecast with dask backend."
-                    )
                 self.models_[name] = clone(model).fit(X, y).model_
         else:
             raise NotImplementedError("Only spark and dask engines are supported.")
