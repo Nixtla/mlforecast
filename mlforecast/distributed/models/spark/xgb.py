@@ -5,7 +5,16 @@ __all__ = ['SparkXGBForecast']
 
 # %% ../../../../nbs/distributed.models.spark.xgb.ipynb 3
 import xgboost as xgb
-from xgboost.spark import SparkXGBRegressor  # type: ignore
+
+try:
+    from xgboost.spark import SparkXGBRegressor  # type: ignore
+except ModuleNotFoundError:
+    import os
+
+    if os.getenv("IN_TEST", "0") == "1":
+        pass
+    else:
+        raise
 
 # %% ../../../../nbs/distributed.models.spark.xgb.ipynb 4
 class SparkXGBForecast(SparkXGBRegressor):

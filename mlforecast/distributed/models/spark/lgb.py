@@ -8,13 +8,13 @@ import lightgbm as lgb
 
 try:
     from synapse.ml.lightgbm import LightGBMRegressor
-except ModuleNotFoundError as e:
+except ModuleNotFoundError:
     import os
 
-    if os.getenv("QUARTO_PREVIEW", "0") == "1":
+    if os.getenv("QUARTO_PREVIEW", "0") == "1" or os.getenv("IN_TEST", "0") == "1":
         LightGBMRegressor = object
     else:
-        raise e
+        raise
 
 # %% ../../../../nbs/distributed.models.spark.lgb.ipynb 4
 class SparkLGBMForecast(LightGBMRegressor):
