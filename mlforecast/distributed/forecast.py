@@ -27,6 +27,14 @@ try:
     SPARK_INSTALLED = True
 except ModuleNotFoundError:
     SPARK_INSTALLED = False
+try:
+    from ray.air.checkpoint import Checkpoint as RayCheckpoint
+    from ray.data import Dataset as RayDataset
+    from ray.train.sklearn import SklearnTrainer, SklearnPredictor
+
+    RAY_INSTALLED = True
+except ModuleNotFoundError:
+    RAY_INSTALLED = False
 from sklearn.base import clone
 
 from mlforecast.core import (
@@ -208,6 +216,7 @@ class DistributedMLForecast:
             schema="ts:binary,train:binary,valid:binary",
             engine=self.engine,
             as_fugue=True,
+            partition=id_col,
         )
 
     def _preprocess(
@@ -312,7 +321,11 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             window_info=window_info,
         )
-        features = [x for x in prep.columns if x not in {id_col, time_col, target_col}]
+        features = [
+            x
+            for x in fa.get_column_names(prep)
+            if x not in {id_col, time_col, target_col}
+        ]
         self.models_ = {}
         if SPARK_INSTALLED and isinstance(data, SparkDataFrame):
             featurizer = VectorAssembler(inputCols=features, outputCol="features")
@@ -325,8 +338,21 @@ class DistributedMLForecast:
             for name, model in self.models.items():
                 trained_model = clone(model).fit(X, y)
                 self.models_[name] = trained_model.model_
+        elif RAY_INSTALLED and isinstance(data, RayDataset):
+            for name, model in self.models.items():
+                trainer = SklearnTrainer(
+                    estimator=clone(model),
+                    label_column="y",
+                    datasets={
+                        "train": prep.select_columns(cols=features + [target_col])
+                    },
+                )
+                trained_model = trainer.fit()
+                self.models_[name] = trained_model.checkpoint
         else:
-            raise NotImplementedError("Only spark and dask engines are supported.")
+            raise NotImplementedError(
+                "Only spark, dask, and ray engines are supported."
+            )
         return self
 
     def fit(
@@ -392,7 +418,12 @@ class DistributedMLForecast:
                 if not dynamic_features.empty:
                     dynamic_dfs = [valid.drop(columns=ts.target_col)]
             res = ts.predict(
-                models=models,
+                models={
+                    name: SklearnPredictor.from_checkpoint(model)
+                    if isinstance(model, RayCheckpoint)
+                    else model
+                    for name, model in models.items()
+                },
                 horizon=horizon,
                 dynamic_dfs=dynamic_dfs,
                 before_predict_callback=before_predict_callback,
