@@ -470,7 +470,7 @@ class DistributedMLForecast:
 
         Returns
         -------
-        result : dask or spark DataFrame
+        result : dask, spark or ray DataFrame
             Predictions for each serie and timestep, with one column per model.
         """
         if new_data is not None:
@@ -524,7 +524,7 @@ class DistributedMLForecast:
 
         Parameters
         ----------
-        data : dask DataFrame
+        data : dask, spark or ray DataFrame
             Series data in long format.
         n_windows : int
             Number of windows to evaluate.
@@ -558,7 +558,7 @@ class DistributedMLForecast:
 
         Returns
         -------
-        result : dask or spark DataFrame
+        result : dask, spark or ray DataFrame
             Predictions for each window with the series id, timestamp, target value and predictions from each model.
         """
         self.cv_models_ = []
