@@ -342,7 +342,7 @@ class DistributedMLForecast:
             for name, model in self.models.items():
                 trainer = SklearnTrainer(
                     estimator=clone(model),
-                    label_column="y",
+                    label_column=target_col,
                     datasets={
                         "train": prep.select_columns(cols=features + [target_col])
                     },
