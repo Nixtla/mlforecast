@@ -24,4 +24,6 @@ dependencies:
   - xgboost
   - pip:
     - datasetsforecast
+    - lightgbm_ray
     - nbdev
+    - xgboot_ray
