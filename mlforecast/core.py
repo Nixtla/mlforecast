@@ -262,6 +262,7 @@ class TimeSeries:
         date_features: Optional[Iterable[DateFeature]] = None,
         differences: Optional[Differences] = None,
         num_threads: int = 1,
+        target_transforms: Optional[List[Any]] = None,
     ):
         if isinstance(freq, str):
             self.freq = pd.tseries.frequencies.to_offset(freq)
@@ -284,6 +285,7 @@ class TimeSeries:
         self.date_features = [] if date_features is None else list(date_features)
         self.differences = [] if differences is None else list(differences)
         self.num_threads = num_threads
+        self.target_transforms = target_transforms
         for feature in self.date_features:
             if callable(feature) and feature.__name__ == "<lambda>":
                 raise ValueError(
@@ -349,6 +351,9 @@ class TimeSeries:
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
+        if self.target_transforms is not None:
+            for tfm in self.target_transforms:
+                df = tfm.fit_transform(df)
         if id_col != "index":
             df = df.set_index(id_col)
         if static_features is None:
@@ -463,7 +468,8 @@ class TimeSeries:
         """Add the features to `df`.
 
         if `dropna=True` then all the null rows are dropped."""
-        df = df.copy(deep=bool(self.differences) and not return_X_y)
+        modifies_target = bool(self.differences) or bool(self.target_transforms)
+        df = df.copy(deep=modifies_target and not return_X_y)
 
         # lag transforms
         for feat in self.transforms.keys():
@@ -480,7 +486,7 @@ class TimeSeries:
         # target
         self.max_horizon = max_horizon
         if max_horizon is None:
-            if self.differences:
+            if modifies_target:
                 target = pd.Series(self.ga.data[self.restore_idxs], index=df.index)
             else:
                 target = df[self.target_col]
@@ -492,20 +498,22 @@ class TimeSeries:
             )
 
         # determine rows to keep
-        features = df.columns.drop(self.target_col)
         if dropna:
-            keep_rows = df[features].notnull().all(1).values
+            feature_nulls = df[self.features].isnull().any(axis=1)
+            target_nulls = target.isnull()
+            keep_rows = ~(feature_nulls | target_nulls).values
         else:
             keep_rows = np.full(df.shape[0], True)
 
         # assemble return
+        xs = df.columns.drop(self.target_col)
         if return_X_y:
-            return df.loc[keep_rows, features], target.loc[keep_rows]
+            return df.loc[keep_rows, xs], target.loc[keep_rows]
         if max_horizon is None:
-            if self.differences:
+            if modifies_target:
                 df[self.target_col] = target
         else:
-            df = pd.concat([df[features], target], axis=1)
+            df = pd.concat([df[xs], target], axis=1)
         return df.loc[keep_rows]
 
     def fit_transform(
@@ -698,16 +706,21 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
     ) -> pd.DataFrame:
         if getattr(self, "max_horizon", None) is None:
-            return self._predict_recursive(
+            preds = self._predict_recursive(
                 models,
                 horizon,
                 dynamic_dfs,
                 before_predict_callback,
                 after_predict_callback,
             )
-        return self._predict_multi(
-            models,
-            horizon,
-            dynamic_dfs,
-            before_predict_callback,
-        )
+        else:
+            preds = self._predict_multi(
+                models,
+                horizon,
+                dynamic_dfs,
+                before_predict_callback,
+            )
+        if self.target_transforms is not None:
+            for tfm in self.target_transforms[::-1]:
+                preds = tfm.inverse_transform(preds)
+        return preds

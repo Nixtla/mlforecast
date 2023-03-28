@@ -6,7 +6,17 @@ __all__ = ['MLForecast', 'Forecast']
 # %% ../nbs/forecast.ipynb 3
 import copy
 import warnings
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import numpy as np
 import pandas as pd
@@ -109,7 +119,7 @@ def _get_conformal_method(method: str):
         )
     return available_methods[method]
 
-# %% ../nbs/forecast.ipynb 11
+# %% ../nbs/forecast.ipynb 10
 class MLForecast:
     def __init__(
         self,
@@ -120,6 +130,7 @@ class MLForecast:
         date_features: Optional[Iterable[DateFeature]] = None,
         differences: Optional[Differences] = None,
         num_threads: int = 1,
+        target_transforms: Optional[List[Any]] = None,
     ):
         """Create forecast object
 
@@ -139,6 +150,8 @@ class MLForecast:
             Differences to take of the target before computing the features. These are restored at the forecasting step.
         num_threads : int (default=1)
             Number of threads to use when computing the features.
+        target_transforms : list of transformers, optional(default=None)
+            Transformations that will be applied to the target before computing the features and restored after the forecasting step.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -149,7 +162,13 @@ class MLForecast:
             models_with_names = models
         self.models = models_with_names
         self.ts = TimeSeries(
-            freq, lags, lag_transforms, date_features, differences, num_threads
+            freq,
+            lags,
+            lag_transforms,
+            date_features,
+            differences,
+            num_threads,
+            target_transforms,
         )
 
     def __repr__(self):
@@ -619,7 +638,7 @@ class MLForecast:
             out = out.reset_index()
         return out
 
-# %% ../nbs/forecast.ipynb 14
+# %% ../nbs/forecast.ipynb 13
 class Forecast(MLForecast):
     def __init__(
         self,
