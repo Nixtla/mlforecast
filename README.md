@@ -7,7 +7,9 @@ Nixtla  
 
 <div align="center">
 
+<center>
 <img src="https://raw.githubusercontent.com/Nixtla/neuralforecast/main/nbs/imgs_indx/logo_mid.png">
+</center>
 <h1 align="center">
 Machine Learning 🤖 Forecast
 </h1>
@@ -154,6 +156,19 @@ series.head()
 ```
 
 <div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
 <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -289,6 +304,19 @@ predictions
 ```
 
 <div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
 <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -415,7 +443,7 @@ plt.close()
 - [m4](https://www.kaggle.com/code/lemuz90/m4-competition)
 - [m4-cv](https://www.kaggle.com/code/lemuz90/m4-competition-cv)
 
-## 🔨 How to contribute
+## How to contribute
 
 See
 [CONTRIBUTING.md](https://github.com/Nixtla/mlforecast/blob/main/CONTRIBUTING.md).
