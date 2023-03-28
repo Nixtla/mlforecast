@@ -115,10 +115,6 @@ use Conformal Prediction to produce prediciton intervals.
 Validation](https://nixtla.github.io/mlforecast/docs/cross_validation.html):
 robust model’s performance evaluation.
 
-❄️ [Multiple
-Seasonalities](https://nixtla.github.io/statsforecast/examples/multipleseasonalities.html):
-how to forecast data with multiple seasonalities using an MSTL.
-
 🔌 [Predict Demand
 Peaks](https://nixtla.github.io/mlforecast/docs/electricity_peak_forecasting.html):
 electricity load forecasting for detecting daily peaks and reducing
