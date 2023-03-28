@@ -22,7 +22,6 @@ Scalable machine learning for time series forecasting
 [![PyPi](https://img.shields.io/pypi/v/mlforecast?color=blue.png)](https://pypi.org/project/mlforecast/)
 [![conda-forge](https://img.shields.io/conda/vn/conda-forge/mlforecast?color=blue.png)](https://anaconda.org/conda-forge/mlforecast)
 [![License](https://img.shields.io/github/license/Nixtla/mlforecast.png)](https://github.com/Nixtla/mlforecast/blob/main/LICENSE)
-[![Downloads](https://pepy.tech/badge/mlforecast.png)](https://pepy.tech/project/mlforecast)
 
 **mlforecast** is a framework to perform time series forecasting using
 machine learning models, with the option to scale to massive amounts of
