@@ -3,7 +3,7 @@
 # %% auto 0
 __all__ = ['generate_daily_series', 'generate_prices_for_series', 'backtest_splits']
 
-# %% ../nbs/utils.ipynb 3
+# %% ../nbs/utils.ipynb 2
 import random
 import reprlib
 from itertools import chain
@@ -13,7 +13,7 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-# %% ../nbs/utils.ipynb 5
+# %% ../nbs/utils.ipynb 4
 def generate_daily_series(
     n_series: int,
     min_length: int = 50,
@@ -65,11 +65,11 @@ def generate_daily_series(
             rng.rand(n_series), index=[f"id_{i:0{n_digits}}" for i in range(n_series)]
         )
         trends = series.groupby("unique_id").cumcount()
-        trends.index = series.index
-        series["y"] += coefs * trends
+        trends.index = series["unique_id"]
+        series["y"] += (coefs * trends).values
     return series
 
-# %% ../nbs/utils.ipynb 16
+# %% ../nbs/utils.ipynb 15
 def generate_prices_for_series(
     series: pd.DataFrame, horizon: int = 7, seed: int = 0
 ) -> pd.DataFrame:
@@ -94,7 +94,7 @@ def generate_prices_for_series(
     prices_catalog = pd.concat(dfs).reset_index()
     return prices_catalog
 
-# %% ../nbs/utils.ipynb 19
+# %% ../nbs/utils.ipynb 18
 def single_split(
     data: pd.DataFrame,
     i_window: int,
@@ -121,10 +121,15 @@ def single_split(
         ids = reprlib.repr(train_sizes[train_sizes.eq(0)].index.tolist())
         raise ValueError(f"The following series are too short for the window: {ids}")
     valid_mask = data[time_col].gt(train_ends) & data[time_col].le(valid_ends)
-    cutoffs = train_ends.groupby(data[id_col], observed=True).head(1).rename("cutoff")
+    cutoffs = (
+        train_ends.set_axis(data[id_col])
+        .groupby(id_col, observed=True)
+        .head(1)
+        .rename("cutoff")
+    )
     return cutoffs, train_mask, valid_mask
 
-# %% ../nbs/utils.ipynb 20
+# %% ../nbs/utils.ipynb 19
 def backtest_splits(
     data: pd.DataFrame,
     n_windows: int,
@@ -152,7 +157,7 @@ def backtest_splits(
         train, valid = data[train_mask], data[valid_mask]
         yield cutoffs, train, valid
 
-# %% ../nbs/utils.ipynb 24
+# %% ../nbs/utils.ipynb 22
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
 

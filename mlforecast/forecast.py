@@ -490,9 +490,9 @@ class MLForecast:
         data: pd.DataFrame,
         n_windows: int,
         window_size: int,
-        id_col: str,
-        time_col: str,
-        target_col: str,
+        id_col: str = "unique_id",
+        time_col: str = "ds",
+        target_col: str = "y",
         step_size: Optional[int] = None,
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
@@ -581,7 +581,7 @@ class MLForecast:
         if static_features is not None:
             ex_cols_to_drop.extend(static_features)
         has_ex = not data.columns.drop(ex_cols_to_drop).empty
-        for i_window, (train_end, train, valid) in enumerate(splits):
+        for i_window, (cutoffs, train, valid) in enumerate(splits):
             if refit or i_window == 0:
                 self.fit(
                     train,
@@ -595,9 +595,7 @@ class MLForecast:
                     prediction_intervals=prediction_intervals,
                 )
             self.cv_models_.append(self.models_)
-            # reset index of valid to be compatible
-            # with _get_features_for_next_step
-            dynamic_dfs = [valid.drop(columns=ex_cols_to_drop)] if has_ex else None
+            dynamic_dfs = [valid.drop(columns=[target_col])] if has_ex else None
             y_pred = self.predict(
                 window_size,
                 dynamic_dfs,
@@ -606,11 +604,11 @@ class MLForecast:
                 new_data=train if not refit else None,
                 level=level,
             )
+            y_pred = y_pred.merge(cutoffs, on=id_col, how="left")
             result = valid[[id_col, time_col, target_col]].merge(
                 y_pred, on=[id_col, time_col]
             )
-            result["cutoff"] = train_end
             results.append(result)
         out = pd.concat(results)
-        out = out[[id_col, time_col, "cutoff", target_col, *y_pred.columns]]
-        return out
+        cols_order = [id_col, time_col, "cutoff", target_col]
+        return out[cols_order + out.columns.drop(cols_order).tolist()]
