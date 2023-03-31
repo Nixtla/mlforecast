@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     import pandas as pd
 import numpy as np
 from numba import njit
+from window_ops.shift import shift_array
 
 # %% ../nbs/grouped_array.ipynb 2
 @njit(nogil=True)

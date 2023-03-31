@@ -114,7 +114,6 @@ Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
-Differences = Iterable[int]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 
 # %% ../nbs/core.ipynb 17
@@ -127,7 +126,7 @@ class TimeSeries:
         lags: Optional[Lags] = None,
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
-        differences: Optional[Differences] = None,
+        differences: Optional[Iterable[int]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
@@ -207,9 +206,7 @@ class TimeSeries:
         keep_last_n: Optional[int] = None,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
-        if id_col not in df and id_col != "index":
-            raise ValueError(f"Couldn't find {id_col} column.")
-        for col in (time_col, target_col):
+        for col in (id_col, time_col, target_col):
             if col not in df:
                 raise ValueError(f"Data doesn't contain {col} column")
         if df[target_col].isnull().any():
@@ -228,10 +225,13 @@ class TimeSeries:
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
-        if id_col != "index":
-            df = df.set_index(id_col)
+        df = df.set_index(id_col)
         if static_features is None:
             static_features = df.columns.drop([time_col, target_col])
+        elif id_col in static_features:
+            raise ValueError(
+                "Cannot use the id_col as a static feature. Please create a separate column."
+            )
         self.static_features = (
             df[static_features].groupby(level=0, observed=True).head(1)
         )
@@ -430,10 +430,10 @@ class TimeSeries:
             feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
             features[feat_name] = feat_vals
 
-        features_df = pd.DataFrame(features, columns=self.features, index=self.uids)
-        results_df = self.static_features.join(features_df)
-        results_df[self.time_col] = self.curr_dates
-        return results_df
+        features_df = pd.DataFrame(features, columns=self.features)
+        features_df[self.id_col] = self.uids
+        features_df[self.time_col] = self.curr_dates
+        return self.static_features.merge(features_df, on=self.id_col)
 
     def _get_raw_predictions(self) -> np.ndarray:
         return np.array(self.y_pred).ravel("F")
@@ -441,17 +441,15 @@ class TimeSeries:
     def _get_predictions(self) -> pd.DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
         n_preds = len(self.y_pred)
-        idx = pd.Index(
-            np.repeat(self.uids, n_preds),
-            name=self.id_col if self.id_col != "index" else None,
-            dtype=self.uids.dtype,
+        uids = pd.Series(
+            np.repeat(self.uids, n_preds), name=self.id_col, dtype=self.uids.dtype
         )
         df = pd.DataFrame(
             {
+                self.id_col: uids,
                 self.time_col: np.array(self.test_dates).ravel("F"),
                 f"{self.target_col}_pred": self._get_raw_predictions(),
             },
-            index=idx,
         )
         return df
 
@@ -464,11 +462,9 @@ class TimeSeries:
     def _get_features_for_next_step(self, dynamic_dfs):
         new_x = self._update_features()
         if dynamic_dfs:
-            idx_name = new_x.index.name
-            new_x = new_x.reset_index()
             for df in dynamic_dfs:
                 new_x = new_x.merge(df, how="left")
-            new_x = new_x.sort_values(idx_name)
+            new_x = new_x.sort_values(self.id_col)
         nulls = new_x.isnull().any()
         if any(nulls):
             warnings.warn(f'Found null values in {", ".join(nulls[nulls].index)}.')
@@ -493,7 +489,7 @@ class TimeSeries:
                     new_x = before_predict_callback(new_x)
                 predictions = model.predict(new_x)
                 if after_predict_callback is not None:
-                    predictions_serie = pd.Series(predictions, index=new_x.index)
+                    predictions_serie = pd.Series(predictions, index=self.uids)
                     predictions = after_predict_callback(predictions_serie).values
                 self._update_y(predictions)
             if i == 0:
@@ -503,8 +499,6 @@ class TimeSeries:
                 )
             else:
                 preds[name] = self._get_raw_predictions()
-        if self.id_col != "index":
-            preds = preds.reset_index()
         return preds
 
     def _predict_multi(
@@ -529,15 +523,7 @@ class TimeSeries:
                 for i in range(horizon)
             ]
         )
-        if self.id_col == "index":
-            result = pd.DataFrame({self.time_col: dates}, index=pd.Index(uids))
-        else:
-            result = pd.DataFrame(
-                {
-                    self.id_col: uids,
-                    self.time_col: dates,
-                }
-            )
+        result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
         for i, (name, model) in enumerate(models.items()):
             self._predict_setup()
             new_x = self._get_features_for_next_step(dynamic_dfs)
