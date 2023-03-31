@@ -369,9 +369,7 @@ class MLForecast:
             max_horizon=max_horizon,
             return_X_y=True,
         )
-        features = X.columns.drop(time_col)
-        if id_col not in self.ts.static_features:
-            features = features.drop(id_col)
+        features = X.columns.drop([id_col, time_col])
         X = X[features]
         return self.fit_models(X, y)
 
