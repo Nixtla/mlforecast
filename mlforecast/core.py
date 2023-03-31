@@ -350,6 +350,10 @@ class TimeSeries:
         df = df.set_index(id_col)
         if static_features is None:
             static_features = df.columns.drop([time_col, target_col])
+        elif id_col in static_features:
+            raise ValueError(
+                "Cannot use the id_col as a static feature. Please create a separate column."
+            )
         self.static_features = (
             df[static_features].groupby(level=0, observed=True).head(1)
         )
