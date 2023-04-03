@@ -200,9 +200,6 @@ class GroupedArray:
         """Appends each element of `new` to each existing group. Returns a copy."""
         if new.size != self.ngroups:
             raise ValueError(f"new must be of size {self.ngroups}")
-        if new.ndim == 2:
-            # predict behavior of SklearnPredictor
-            new = new[0]
         new_data, new_indptr = _append_new(self.data, self.indptr, new)
         return GroupedArray(new_data, new_indptr)
 
@@ -540,8 +537,7 @@ class TimeSeries:
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
 
-        These values are used to update the transformations and are stored as predictions.
-        """
+        These values are used to update the transformations and are stored as predictions."""
         if not hasattr(self, "y_pred"):
             self.y_pred = []
         self.y_pred.append(new)
