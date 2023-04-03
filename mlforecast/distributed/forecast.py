@@ -28,12 +28,8 @@ try:
 except ModuleNotFoundError:
     SPARK_INSTALLED = False
 try:
-    from ray.air.checkpoint import Checkpoint as RayCheckpoint
-    from ray.data import Dataset as RayDataset
-    from ray.train.sklearn import SklearnTrainer, SklearnPredictor
     from lightgbm_ray import RayDMatrix
-    from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
-    from mlforecast.distributed.models.ray.xgb import RayXGBForecast
+    from ray.data import Dataset as RayDataset
 
     RAY_INSTALLED = True
 except ModuleNotFoundError:
@@ -220,9 +216,9 @@ class DistributedMLForecast:
             },
             schema="ts:binary,train:binary,valid:binary",
             engine=self.engine,
-            engine_conf=self.engine_conf,
             as_fugue=True,
             partition=id_col,
+            engine_conf=self.engine_conf,
         )
 
     def _preprocess(
@@ -259,7 +255,6 @@ class DistributedMLForecast:
             DistributedMLForecast._retrieve_df,
             schema=f"{base_schema},{features_schema}",
             engine=self.engine,
-            engine_conf=self.engine_conf,
         )
         return fa.get_native_as_df(res)
 
@@ -347,25 +342,12 @@ class DistributedMLForecast:
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
             for name, model in self.models.items():
-                if isinstance(model, RayLGBMForecast) or isinstance(
-                    model, RayXGBForecast
-                ):
-                    X = RayDMatrix(
-                        prep.select_columns(cols=features + [target_col]),
-                        label=target_col,
-                    )
-                    trained_model = clone(model).fit(X, y=None)
-                    self.models_[name] = trained_model.model_
-                else:
-                    trainer = SklearnTrainer(
-                        estimator=clone(model),
-                        label_column=target_col,
-                        datasets={
-                            "train": prep.select_columns(cols=features + [target_col])
-                        },
-                    )
-                    trained_model = trainer.fit()
-                    self.models_[name] = trained_model.checkpoint
+                X = RayDMatrix(
+                    prep.select_columns(cols=features + [target_col]),
+                    label=target_col,
+                )
+                trained_model = clone(model).fit(X, y=None)
+                self.models_[name] = trained_model.model_
         else:
             raise NotImplementedError(
                 "Only spark, dask, and ray engines are supported."
@@ -435,12 +417,7 @@ class DistributedMLForecast:
                 if not dynamic_features.empty:
                     dynamic_dfs = [valid.drop(columns=ts.target_col)]
             res = ts.predict(
-                models={
-                    name: SklearnPredictor.from_checkpoint(model)
-                    if isinstance(model, RayCheckpoint)
-                    else model
-                    for name, model in models.items()
-                },
+                models=models,
                 horizon=horizon,
                 dynamic_dfs=dynamic_dfs,
                 before_predict_callback=before_predict_callback,
@@ -516,7 +493,6 @@ class DistributedMLForecast:
             },
             schema=schema,
             engine=self.engine,
-            engine_conf=self.engine_conf,
         )
         return fa.get_native_as_df(res)
 
@@ -625,7 +601,6 @@ class DistributedMLForecast:
                 },
                 schema=schema,
                 engine=self.engine,
-                engine_conf=self.engine_conf,
             )
             results.append(fa.get_native_as_df(preds))
         if len(results) == 1:
