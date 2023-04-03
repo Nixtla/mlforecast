@@ -26,4 +26,4 @@ dependencies:
     - datasetsforecast
     - lightgbm_ray
     - nbdev
-    - xgboot_ray
+    - xgboost_ray
