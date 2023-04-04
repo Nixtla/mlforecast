@@ -26,8 +26,8 @@ class Differences(BaseTargetTransform):
         self.differences = differences
 
     def fit_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
-        ga = GroupedArray.from_sorted_df(df, self.target_col)
-        uids = df.index.unique(level=0)
+        ga = GroupedArray.from_sorted_df(df, self.id_col, self.target_col)
+        uids = df[self.id_col].unique()
         original_sizes = ga.indptr[1:].cumsum()
         total_diffs = sum(self.differences)
         small_series = uids[original_sizes < total_diffs]

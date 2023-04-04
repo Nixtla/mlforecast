@@ -388,8 +388,7 @@ class MLForecast:
             max_horizon=max_horizon,
             return_X_y=True,
         )
-        features = X.columns.drop([id_col, time_col])
-        X = X[features]
+        X = X[self.ts.features_order_]
         return self.fit_models(X, y)
 
     def predict(
@@ -436,20 +435,25 @@ class MLForecast:
 
         if new_data is not None:
             new_ts = TimeSeries(
-                self.ts.freq,
-                self.ts.lags,
-                self.ts.lag_transforms,
-                self.ts.date_features,
-                self.ts.differences,
-                self.ts.num_threads,
+                freq=self.ts.freq,
+                lags=self.ts.lags,
+                lag_transforms=self.ts.lag_transforms,
+                date_features=self.ts.date_features,
+                num_threads=self.ts.num_threads,
+                target_transforms=self.ts.target_transforms,
             )
+            static_features = self.ts.static_features.columns.drop(
+                self.ts.id_col
+            ).tolist()
+            if not static_features:
+                static_features = None
             new_ts._fit(
                 new_data,
-                self.ts.id_col,
-                self.ts.time_col,
-                self.ts.target_col,
-                self.ts.static_features.columns,
-                self.ts.keep_last_n,
+                id_col=self.ts.id_col,
+                time_col=self.ts.time_col,
+                target_col=self.ts.target_col,
+                static_features=static_features,
+                keep_last_n=self.ts.keep_last_n,
             )
             new_ts.max_horizon = self.ts.max_horizon
             ts = new_ts

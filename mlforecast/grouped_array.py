@@ -123,8 +123,10 @@ class GroupedArray:
         self[idx][:] = vals
 
     @classmethod
-    def from_sorted_df(cls, df: "pd.DataFrame", target_col: str) -> "GroupedArray":
-        grouped = df.groupby(level=0, observed=True)
+    def from_sorted_df(
+        cls, df: "pd.DataFrame", id_col: str, target_col: str
+    ) -> "GroupedArray":
+        grouped = df.groupby(id_col, observed=True)
         sizes = grouped.size().values
         indptr = np.append(0, sizes.cumsum())
         data = df[target_col].values

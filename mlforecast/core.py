@@ -159,7 +159,6 @@ class TimeSeries:
                 target_transforms = [Differences(differences)]
             else:
                 target_transforms = target_transforms + [Differences(differences)]
-        self.differences = [] if differences is None else list(differences)
         self.num_threads = num_threads
         self.target_transforms = target_transforms
         for feature in self.date_features:
@@ -225,28 +224,31 @@ class TimeSeries:
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
-        df = df.set_index(id_col)
         if static_features is None:
             static_features = df.columns.drop([time_col, target_col])
         elif id_col in static_features:
             raise ValueError(
                 "Cannot use the id_col as a static feature. Please create a separate column."
             )
+        else:
+            static_features = [id_col] + static_features
         self.static_features = (
-            df[static_features].groupby(level=0, observed=True).head(1)
+            df[static_features]
+            .groupby(id_col, observed=True)
+            .head(1)
+            .reset_index(drop=True)
         )
-        sort_idxs = pd.core.sorting.lexsort_indexer([df.index, df[time_col]])
+        sort_idxs = pd.core.sorting.lexsort_indexer([df[id_col], df[time_col]])
         self.restore_idxs = np.empty(df.shape[0], dtype=np.int32)
         self.restore_idxs[sort_idxs] = np.arange(df.shape[0])
-        sorted_df = (
-            df[[time_col, target_col]].set_index(time_col, append=True).iloc[sort_idxs]
-        )
+        sorted_df = df[[id_col, time_col, target_col]].iloc[sort_idxs]
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
                 tfm.set_column_names(id_col, time_col, target_col)
                 sorted_df = tfm.fit_transform(sorted_df)
+        sorted_df = sorted_df.set_index([id_col, time_col])
         self.uids = sorted_df.index.unique(level=0)
-        self.ga = GroupedArray.from_sorted_df(sorted_df, target_col)
+        self.ga = GroupedArray.from_sorted_df(sorted_df, id_col, target_col)
         self.features_ = self._compute_transforms()
         if keep_last_n is not None:
             self.ga = self.ga.take_from_groups(slice(-keep_last_n, None))
@@ -255,7 +257,9 @@ class TimeSeries:
             self.ga.indptr[1:] - 1
         ]
         self.features_order_ = (
-            df.columns.drop([self.time_col, self.target_col]).tolist() + self.features
+            df.columns.drop([id_col, time_col, target_col])
+            .union(self.features)
+            .tolist()
         )
         return self
 
@@ -363,6 +367,10 @@ class TimeSeries:
         if dropna:
             feature_nulls = df[self.features].isnull().any(axis=1)
             target_nulls = target.isnull()
+            if target_nulls.ndim == 2:
+                # target nulls for each horizon are dropped in MLForecast.fit_models
+                # we just drop rows here for which all the target values are null
+                target_nulls = target_nulls.all(axis=1)
             keep_rows = ~(feature_nulls | target_nulls).values
         else:
             keep_rows = np.full(df.shape[0], True)
@@ -524,7 +532,7 @@ class TimeSeries:
             ]
         )
         result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
-        for i, (name, model) in enumerate(models.items()):
+        for name, model in models.items():
             self._predict_setup()
             new_x = self._get_features_for_next_step(dynamic_dfs)
             if before_predict_callback is not None:
