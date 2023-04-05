@@ -66,7 +66,7 @@ class DistributedMLForecast:
         differences: Optional[Differences] = None,
         num_threads: int = 1,
         engine=None,
-        engine_conf=None,
+        num_partitions: Optional[int] = None,
     ):
         """Create distributed forecast object
 
@@ -89,6 +89,11 @@ class DistributedMLForecast:
         engine : fugue execution engine, optional (default=None)
             Dask Client, Spark Session, etc to use for the distributed computation.
             If None will infer depending on the input type.
+        num_partitions: number of data partitions to use, optional (default=None)
+            If None, the default partitions provided by the AnyDataFrame used
+            by the `fit` and `cross_validation` methods will be used. If a Ray
+            Dataset is provided and `num_partitions` is None, the partitioning
+            will be done by the `id_col`.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -102,7 +107,7 @@ class DistributedMLForecast:
             freq, lags, lag_transforms, date_features, differences, num_threads
         )
         self.engine = engine
-        self.engine_conf = engine_conf
+        self.num_partitions = num_partitions
 
     def __repr__(self) -> str:
         return (
@@ -200,6 +205,19 @@ class DistributedMLForecast:
         window_info: Optional[WindowInfo] = None,
         fit_ts_only: bool = False,
     ) -> List[Any]:
+        if self.num_partitions:
+            partition = dict(by=id_col, num=self.num_partitions, algo="coarse")
+        elif isinstance(
+            data, RayDataset
+        ):  # num partitions is None but data is a RayDataset
+            # We need to add this because
+            # currently ray doesnt support partitioning a Dataset
+            # based on a column.
+            # If a Dataset is partitioned using `.repartition(num_partitions)`
+            # we will have akward results.
+            partition = dict(by=id_col)
+        else:
+            partition = None
         return fa.transform(
             data,
             DistributedMLForecast._preprocess_partition,
@@ -217,8 +235,7 @@ class DistributedMLForecast:
             schema="ts:binary,train:binary,valid:binary",
             engine=self.engine,
             as_fugue=True,
-            partition=id_col,
-            engine_conf=self.engine_conf,
+            partition=partition,
         )
 
     def _preprocess(
@@ -341,11 +358,11 @@ class DistributedMLForecast:
                 trained_model = clone(model).fit(X, y)
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
+            X = RayDMatrix(
+                prep.select_columns(cols=features + [target_col]),
+                label=target_col,
+            )
             for name, model in self.models.items():
-                X = RayDMatrix(
-                    prep.select_columns(cols=features + [target_col]),
-                    label=target_col,
-                )
                 trained_model = clone(model).fit(X, y=None)
                 self.models_[name] = trained_model.model_
         else:
