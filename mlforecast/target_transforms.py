@@ -6,7 +6,7 @@ __all__ = ['BaseTargetTransform', 'Differences']
 # %% ../nbs/target_transforms.ipynb 2
 import abc
 import reprlib
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Iterable
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -31,8 +31,8 @@ class BaseTargetTransform(abc.ABC):
 
 # %% ../nbs/target_transforms.ipynb 4
 class Differences(BaseTargetTransform):
-    def __init__(self, differences: List[int]):
-        self.differences = differences
+    def __init__(self, differences: Iterable[int]):
+        self.differences = list(differences)
 
     def fit_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
         ga = GroupedArray.from_sorted_df(df, self.id_col, self.target_col)

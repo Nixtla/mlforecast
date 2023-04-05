@@ -24,7 +24,6 @@ from sklearn.base import BaseEstimator, clone
 
 from mlforecast.core import (
     DateFeature,
-    Differences,
     Freq,
     LagTransforms,
     Lags,
@@ -35,7 +34,7 @@ from mlforecast.core import (
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .target_transforms import BaseTargetTransform
+from .target_transforms import BaseTargetTransform, Differences
 from .utils import backtest_splits, PredictionIntervals
 
 # %% ../nbs/forecast.ipynb 6
@@ -129,7 +128,7 @@ class MLForecast:
         lags: Optional[Lags] = None,
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
-        differences: Optional[Differences] = None,
+        differences: Optional[Iterable[int]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
