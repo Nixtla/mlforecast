@@ -6,7 +6,6 @@ __all__ = ['TimeSeries']
 # %% ../nbs/core.ipynb 3
 import concurrent.futures
 import inspect
-import reprlib
 import warnings
 from collections import Counter, OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -15,7 +14,6 @@ import numpy as np
 import pandas as pd
 from numba import njit
 from sklearn.base import BaseEstimator
-from window_ops.shift import shift_array
 
 from .grouped_array import GroupedArray
 from .target_transforms import BaseTargetTransform, Differences

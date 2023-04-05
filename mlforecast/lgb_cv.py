@@ -22,7 +22,7 @@ from mlforecast.core import (
     TimeSeries,
 )
 from .utils import backtest_splits
-from .target_transforms import BaseTargetTransform, Differences
+from .target_transforms import BaseTargetTransform
 
 # %% ../nbs/lgb_cv.ipynb 5
 def _mape(y_true, y_pred):

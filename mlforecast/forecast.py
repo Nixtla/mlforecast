@@ -6,17 +6,7 @@ __all__ = ['MLForecast']
 # %% ../nbs/forecast.ipynb 3
 import copy
 import warnings
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -34,7 +24,7 @@ from mlforecast.core import (
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .target_transforms import BaseTargetTransform, Differences
+from .target_transforms import BaseTargetTransform
 from .utils import backtest_splits, PredictionIntervals
 
 # %% ../nbs/forecast.ipynb 6
