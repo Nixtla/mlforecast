@@ -252,9 +252,7 @@ class TimeSeries:
             self.ga.indptr[1:] - 1
         ]
         self.features_order_ = (
-            df.columns.drop([id_col, time_col, target_col])
-            .union(self.features)
-            .tolist()
+            df.columns.drop([id_col, time_col, target_col]).tolist() + self.features
         )
         return self
 
@@ -409,8 +407,7 @@ class TimeSeries:
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
 
-        These values are used to update the transformations and are stored as predictions.
-        """
+        These values are used to update the transformations and are stored as predictions."""
         if not hasattr(self, "y_pred"):
             self.y_pred = []
         self.y_pred.append(new)
