@@ -35,6 +35,7 @@ from mlforecast.core import (
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
+from .target_transforms import BaseTargetTransform
 from .utils import backtest_splits, PredictionIntervals
 
 # %% ../nbs/forecast.ipynb 6
@@ -130,7 +131,7 @@ class MLForecast:
         date_features: Optional[Iterable[DateFeature]] = None,
         differences: Optional[Differences] = None,
         num_threads: int = 1,
-        target_transforms: Optional[List[Any]] = None,
+        target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
         """Create forecast object
 
@@ -442,17 +443,12 @@ class MLForecast:
                 num_threads=self.ts.num_threads,
                 target_transforms=self.ts.target_transforms,
             )
-            static_features = self.ts.static_features.columns.drop(
-                self.ts.id_col
-            ).tolist()
-            if not static_features:
-                static_features = None
             new_ts._fit(
                 new_data,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
                 target_col=self.ts.target_col,
-                static_features=static_features,
+                static_features=self.ts.static_features.columns,
                 keep_last_n=self.ts.keep_last_n,
             )
             new_ts.max_horizon = self.ts.max_horizon

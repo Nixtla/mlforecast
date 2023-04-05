@@ -4,6 +4,7 @@
 __all__ = ['BaseTargetTransform', 'Differences']
 
 # %% ../nbs/target_transforms.ipynb 2
+import abc
 import reprlib
 from typing import TYPE_CHECKING, List
 
@@ -14,11 +15,19 @@ import numpy as np
 from .grouped_array import GroupedArray, _apply_difference
 
 # %% ../nbs/target_transforms.ipynb 3
-class BaseTargetTransform:
+class BaseTargetTransform(abc.ABC):
     def set_column_names(self, id_col: str, time_col: str, target_col: str):
         self.id_col = id_col
         self.time_col = time_col
         self.target_col = target_col
+
+    @abc.abstractmethod
+    def fit_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def inverse_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+        raise NotImplementedError
 
 # %% ../nbs/target_transforms.ipynb 4
 class Differences(BaseTargetTransform):

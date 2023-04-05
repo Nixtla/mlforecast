@@ -225,18 +225,13 @@ class TimeSeries:
         self.target_col = target_col
         self.time_col = time_col
         if static_features is None:
-            static_features = df.columns.drop([time_col, target_col])
+            static_features = df.columns.drop([id_col, time_col, target_col])
         elif id_col in static_features:
             raise ValueError(
                 "Cannot use the id_col as a static feature. Please create a separate column."
             )
-        else:
-            static_features = [id_col] + static_features
         self.static_features = (
-            df[static_features]
-            .groupby(id_col, observed=True)
-            .head(1)
-            .reset_index(drop=True)
+            df.set_index(id_col)[static_features].groupby(id_col, observed=True).head(1)
         )
         sort_idxs = pd.core.sorting.lexsort_indexer([df[id_col], df[time_col]])
         self.restore_idxs = np.empty(df.shape[0], dtype=np.int32)
