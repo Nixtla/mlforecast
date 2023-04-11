@@ -152,13 +152,13 @@ class MLForecast:
             models_with_names = models
         self.models = models_with_names
         self.ts = TimeSeries(
-            freq,
-            lags,
-            lag_transforms,
-            date_features,
-            differences,
-            num_threads,
-            target_transforms,
+            freq=freq,
+            lags=lags,
+            lag_transforms=lag_transforms,
+            date_features=date_features,
+            differences=differences,
+            num_threads=num_threads,
+            target_transforms=target_transforms,
         )
 
     def __repr__(self):

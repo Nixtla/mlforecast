@@ -150,13 +150,13 @@ class TimeSeries:
         if differences is not None:
             warnings.warn(
                 "The differences argument is deprecated and will be removed in a future version.\n"
-                "Please use pass an `mlforecast.target_transforms.Differences` instance to the `target_transforms` argument instead."
+                "Please pass an `mlforecast.target_transforms.Differences` instance to the `target_transforms` argument instead."
                 ""
             )
             if target_transforms is None:
                 target_transforms = [Differences(differences)]
             else:
-                target_transforms = target_transforms + [Differences(differences)]
+                target_transforms = [Differences(differences)] + target_transforms
         self.num_threads = num_threads
         self.target_transforms = target_transforms
         for feature in self.date_features:
