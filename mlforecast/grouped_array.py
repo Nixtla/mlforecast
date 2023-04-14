@@ -109,7 +109,7 @@ def _append_several(
     new_groups: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
     new_data = np.empty(data.size + new_values.size, dtype=data.dtype)
-    new_indptr = np.empty(new_sizes.size + 1, dtype=data.dtype)
+    new_indptr = np.empty(new_sizes.size + 1, dtype=indptr.dtype)
     new_indptr[0] = 0
     old_indptr_idx = 0
     new_vals_idx = 0
