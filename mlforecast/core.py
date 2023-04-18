@@ -571,12 +571,12 @@ class TimeSeries:
         sizes = new_sizes.add(prev_sizes, fill_value=0)
         values = df[self.target_col].values
         new_groups = ~sizes.index.isin(self.uids)
-        self.last_dates = pd.DatetimeIndex(
+        self.last_dates = pd.Index(
             df.groupby(self.id_col, observed=True)[self.time_col]
             .max()
             .reindex(sizes.index)
             .fillna(dict(zip(self.uids, self.last_dates)))
-        )
+        ).astype(self.last_dates.dtype)
         self.uids = sizes.index
         new_statics = df.iloc[new_sizes.cumsum() - 1].set_index(self.id_col)
         orig_dtypes = self.static_features.dtypes
