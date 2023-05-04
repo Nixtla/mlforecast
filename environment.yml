@@ -18,6 +18,7 @@ dependencies:
   - window-ops
   - xgboost
   - pip:
+    - cyclicbm
     - datasetsforecast
     - fugue[ray]
     - lightgbm_ray

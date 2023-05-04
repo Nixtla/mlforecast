@@ -405,10 +405,11 @@ class TimeSeries:
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
 
-        These values are used to update the transformations and are stored as predictions.
-        """
+        These values are used to update the transformations and are stored as predictions."""
         if not hasattr(self, "y_pred"):
             self.y_pred = []
+        if new.ndim > 1:
+            new = new.flatten()
         self.y_pred.append(new)
         new_arr = np.asarray(new)
         self.ga = self.ga.append(new_arr)
