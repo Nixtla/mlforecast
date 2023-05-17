@@ -163,11 +163,11 @@ class PredictionIntervals:
 
     def __init__(
         self,
-        n_windows: int = 2,
+        n_windows: int = 3,
         window_size: int = 1,
         method: str = "conformal_distribution",
     ):
-        if n_windows < 2:
+        if n_windows < 3:
             raise ValueError(
                 "You need at least two windows to compute conformal intervals"
             )
