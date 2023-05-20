@@ -10,7 +10,7 @@ dependencies:
   - matplotlib
   - mypy
   - numba
-  - pandas
+  - pandas<2
   - pip
   - pylint
   - pyspark>=3.3
