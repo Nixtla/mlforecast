@@ -4,7 +4,6 @@ channels:
 dependencies:
   - black
   - dask<2023.1.1
-  - duckdb<0.8
   - flake8
   - jupyterlab
   - lightgbm
@@ -20,6 +19,7 @@ dependencies:
   - xgboost
   - pip:
     - datasetsforecast
+    - duckdb<0.8
     - fugue[ray]
     - lightgbm_ray
     - nbdev
