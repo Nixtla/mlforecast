@@ -3,7 +3,6 @@ channels:
   - conda-forge
 dependencies:
   - black
-  - flake8
   - jupyterlab
   - lightgbm
   - matplotlib
@@ -11,7 +10,7 @@ dependencies:
   - numba
   - pandas
   - pip
-  - pylint
+  - ruff
   - scikit-learn
   - window-ops
   - xgboost
