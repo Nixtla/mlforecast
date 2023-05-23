@@ -4,13 +4,14 @@ channels:
 dependencies:
   - black
   - dask<2023.1.1
+  - duckdb<0.8
   - flake8
   - jupyterlab
   - lightgbm
   - matplotlib
   - mypy
   - numba
-  - pandas<2
+  - pandas
   - pip
   - pylint
   - pyspark>=3.3
