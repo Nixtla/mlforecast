@@ -4,6 +4,7 @@ channels:
 dependencies:
   - lightgbm
   - matplotlib
+  - nbformat
   - numba
   - pandas
   - pip
