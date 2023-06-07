@@ -447,7 +447,9 @@ class TimeSeries:
         df = pd.DataFrame(
             {
                 self.id_col: uids,
-                self.time_col: np.array(self.test_dates).ravel("F"),
+                self.time_col: np.array(
+                    self.test_dates, dtype=self.last_dates.dtype
+                ).ravel("F"),
                 f"{self.target_col}_pred": self._get_raw_predictions(),
             },
         )
