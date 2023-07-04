@@ -626,8 +626,9 @@ class MLForecast:
             )
             if result.shape[0] < valid.shape[0]:
                 raise ValueError(
-                    "Cross validation result produced empty dataframe. "
-                    "Please verify that the frequency set on the MLForecast constructor matches your series."
+                    "Cross validation result produced less results than expected. "
+                    "Please verify that the frequency set on the MLForecast constructor matches your series' "
+                    "and that there aren't any missing periods."
                 )
             results.append(result)
         out = pd.concat(results)
