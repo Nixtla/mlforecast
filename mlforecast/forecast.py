@@ -630,7 +630,7 @@ class MLForecast:
                 )
                 trainX = trainX[self.ts.features_order_]
                 for name, model in self.models_.items():
-                    insample_results[name] = model.predict(trainX)
+                    insample_results[name] = model.predict(trainX)  # type: ignore[union-attr]
                 if self.ts.target_transforms is not None:
                     for tfm in self.ts.target_transforms[::-1]:
                         insample_results = tfm.inverse_transform(insample_results)
