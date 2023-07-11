@@ -25,7 +25,7 @@ from mlforecast.core import (
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
 from .target_transforms import BaseTargetTransform
-from .utils import backtest_splits, PredictionIntervals
+from .utils import PredictionIntervals, backtest_splits, old_kw_to_pos
 
 # %% ../nbs/forecast.ipynb 6
 def _add_conformal_distribution_intervals(
@@ -193,9 +193,10 @@ class MLForecast:
         fcst.ts = copy.deepcopy(cv.ts)
         return fcst
 
+    @old_kw_to_pos(["data"], [1])
     def preprocess(
         self,
-        data: pd.DataFrame,
+        df: pd.DataFrame,
         id_col: str = "unique_id",
         time_col: str = "ds",
         target_col: str = "y",
@@ -204,12 +205,14 @@ class MLForecast:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
+        *,
+        data: Optional[pd.DataFrame] = None,
     ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Union[pd.Series, pd.DataFrame]]]:
         """Add the features to `data`.
 
         Parameters
         ----------
-        data : pandas DataFrame
+        df : pandas DataFrame
             Series data in long format.
         id_col : str (default='unique_id')
             Column that identifies each serie.
@@ -227,14 +230,16 @@ class MLForecast:
             Train this many models, where each model will predict a specific horizon.
         return_X_y: bool (default=False)
             Return a tuple with the features and the target. If False will return a single dataframe.
+        data : pandas DataFrame
+            Series data in long format. This argument has been replaced by df and will be removed in a later release.
 
         Returns
         -------
         result : pandas DataFrame or tuple of pandas Dataframe and either a pandas Series or a pandas Dataframe (for multi-output regression).
-            `data` plus added features and target(s).
+            `df` plus added features and target(s).
         """
         return self.ts.fit_transform(
-            data,
+            df,
             id_col=id_col,
             time_col=time_col,
             target_col=target_col,
@@ -279,7 +284,7 @@ class MLForecast:
 
     def _conformity_scores(
         self,
-        data: pd.DataFrame,
+        df: pd.DataFrame,
         id_col: str,
         time_col: str,
         target_col: str,
@@ -301,7 +306,7 @@ class MLForecast:
         is the same for all the forecasting horizon (`window_size=1`).
         """
         cv_results = self.cross_validation(
-            data=data,
+            df=df,
             n_windows=n_windows,
             window_size=window_size,
             refit=False,
@@ -320,9 +325,10 @@ class MLForecast:
             cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
         return cv_results.drop(columns=target_col)
 
+    @old_kw_to_pos(["data"], [1])
     def fit(
         self,
-        data: pd.DataFrame,
+        df: pd.DataFrame,
         id_col: str = "unique_id",
         time_col: str = "ds",
         target_col: str = "y",
@@ -331,12 +337,14 @@ class MLForecast:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
+        *,
+        data: Optional[pd.DataFrame] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
         Parameters
         ----------
-        data : pandas DataFrame
+        df : pandas DataFrame
             Series data in long format.
         id_col : str (default='unique_id')
             Column that identifies each serie.
@@ -354,6 +362,8 @@ class MLForecast:
             Train this many models, where each model will predict a specific horizon.
         prediction_intervals : PredictionIntervals, optional (default=None)
             Configuration to calibrate prediction intervals (Conformal Prediction).
+        data : pandas DataFrame
+            Series data in long format. This argument has been replaced by df and will be removed in a later release.
 
         Returns
         -------
@@ -364,7 +374,7 @@ class MLForecast:
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
             self._cs_df = self._conformity_scores(
-                data=data,
+                df=df,
                 id_col=id_col,
                 time_col=time_col,
                 target_col=target_col,
@@ -375,7 +385,7 @@ class MLForecast:
                 window_size=prediction_intervals.window_size,
             )
         X, y = self.preprocess(
-            data,
+            df=df,
             id_col=id_col,
             time_col=time_col,
             target_col=target_col,
@@ -388,20 +398,24 @@ class MLForecast:
         X = X[self.ts.features_order_]
         return self.fit_models(X, y)
 
+    @old_kw_to_pos(["horizon"], [1])
     def predict(
         self,
-        horizon: int,
+        h: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        new_data: Optional[pd.DataFrame] = None,
+        new_df: Optional[pd.DataFrame] = None,
         level: Optional[List[Union[int, float]]] = None,
+        *,
+        horizon: Optional[int] = None,
+        new_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
         Parameters
         ----------
-        horizon : int
+        h : int
             Number of periods to predict.
         dynamic_dfs : list of pandas DataFrame, optional (default=None)
             Future values of the dynamic features, e.g. prices.
@@ -413,12 +427,18 @@ class MLForecast:
             Function to call on the predictions before updating the targets.
                 This function will take a pandas Series with the predictions and should return another one with the same structure.
                 The series identifier is on the index.
+        new_df : pandas DataFrame, optional (default=None)
+            Series data of new observations for which forecasts are to be generated.
+                This dataframe should have the same structure as the one used to fit the model, including any features and time series data.
+                If `new_df` is not None, the method will generate forecasts for the new observations.
+        level : list of ints or floats, optional (default=None)
+            Confidence levels between 0 and 100 for prediction intervals.
+        horizon : int
+            Number of periods to predict. This argument has been replaced by h and will be removed in a later release.
         new_data : pandas DataFrame, optional (default=None)
             Series data of new observations for which forecasts are to be generated.
                 This dataframe should have the same structure as the one used to fit the model, including any features and time series data.
                 If `new_data` is not None, the method will generate forecasts for the new observations.
-        level : list of ints or floats, optional (default=None)
-            Confidence levels between 0 and 100 for prediction intervals.
 
         Returns
         -------
@@ -429,8 +449,14 @@ class MLForecast:
             raise ValueError(
                 "No fitted models found. You have to call fit or preprocess + fit_models."
             )
-
         if new_data is not None:
+            warnings.warn(
+                "`new_data` has been deprecated, please use `new_df` instead.",
+                DeprecationWarning,
+            )
+            new_df = new_data
+
+        if new_df is not None:
             new_ts = TimeSeries(
                 freq=self.ts.freq,
                 lags=self.ts.lags,
@@ -440,7 +466,7 @@ class MLForecast:
                 target_transforms=self.ts.target_transforms,
             )
             new_ts._fit(
-                new_data,
+                new_df,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
                 target_col=self.ts.target_col,
@@ -454,7 +480,7 @@ class MLForecast:
 
         forecasts = ts.predict(
             self.models_,
-            horizon,
+            h,
             dynamic_dfs,
             before_predict_callback,
             after_predict_callback,
@@ -468,19 +494,19 @@ class MLForecast:
                 warnings.warn(warn_msg, UserWarning)
             else:
                 if (self.prediction_intervals.window_size != 1) and (
-                    self.prediction_intervals.window_size < horizon
+                    self.prediction_intervals.window_size < h
                 ):
                     raise ValueError(
                         "The `window_size` argument of PredictionIntervals "
-                        "should be equal to one or greater or equal to `horizon`. "
+                        "should be equal to one or greater or equal to `h`. "
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
-                if self.prediction_intervals.window_size == 1 and horizon > 1:
+                if self.prediction_intervals.window_size == 1 and h > 1:
                     warn_msg = (
                         "Prediction intervals are calculated using 1-step ahead cross-validation, "
                         "with a constant width for all horizons. To vary the error by horizon, "
-                        "pass PredictionIntervals(window_size=horizon) to the `prediction_intervals` "
+                        "pass PredictionIntervals(window_size=h) to the `prediction_intervals` "
                         "argument when refitting the model."
                     )
                     warnings.warn(warn_msg, UserWarning)
@@ -497,15 +523,16 @@ class MLForecast:
                     cs_window_size=self.prediction_intervals.window_size,
                     cs_n_windows=self.prediction_intervals.n_windows,
                     n_series=self.ts.ga.ngroups,
-                    horizon=horizon,
+                    horizon=h,
                 )
         return forecasts
 
+    @old_kw_to_pos(["data", "window_size"], [1, 3])
     def cross_validation(
         self,
-        data: pd.DataFrame,
+        df: pd.DataFrame,
         n_windows: int,
-        window_size: int,
+        h: int,
         id_col: str = "unique_id",
         time_col: str = "ds",
         target_col: str = "y",
@@ -521,6 +548,9 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         input_size: Optional[int] = None,
         fitted: bool = False,
+        *,
+        data: Optional[pd.DataFrame] = None,
+        window_size: Optional[int] = None,
     ):
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,
@@ -528,12 +558,12 @@ class MLForecast:
 
         Parameters
         ----------
-        data : pandas DataFrame
+        df : pandas DataFrame
             Series data in long format.
         n_windows : int
             Number of windows to evaluate.
-        window_size : int
-            Number of test periods in each window.
+        h : int
+            Forecast horizon.
         id_col : str (default='unique_id')
             Column that identifies each serie.
         time_col : str (default='ds')
@@ -541,7 +571,7 @@ class MLForecast:
         target_col : str (default='y')
             Column that contains the target.
         step_size : int, optional (default=None)
-            Step size between each cross validation window. If None it will be equal to `window_size`.
+            Step size between each cross validation window. If None it will be equal to `h`.
         static_features : list of str, optional (default=None)
             Names of the features that are static and will be repeated when forecasting.
         dropna : bool (default=True)
@@ -569,6 +599,10 @@ class MLForecast:
             Maximum training samples per serie in each window. If None, will use an expanding window.
         fitted : bool (default=False)
             Store the in-sample predictions.
+        data : pandas DataFrame
+            Series data in long format. This argument has been replaced by df and will be removed in a later release.
+        window_size : int
+            Forecast horizon. This argument has been replaced by h and will be removed in a later release.
 
         Returns
         -------
@@ -581,15 +615,15 @@ class MLForecast:
             )
         results = []
         self.cv_models_ = []
-        if np.issubdtype(data[time_col].dtype.type, np.integer):
+        if np.issubdtype(df[time_col].dtype.type, np.integer):
             freq = 1
         else:
             freq = self.freq
 
         splits = backtest_splits(
-            data,
+            df,
             n_windows=n_windows,
-            window_size=window_size,
+            h=h,
             id_col=id_col,
             time_col=time_col,
             freq=freq,
@@ -599,7 +633,7 @@ class MLForecast:
         ex_cols_to_drop = [id_col, time_col, target_col]
         if static_features is not None:
             ex_cols_to_drop.extend(static_features)
-        has_ex = not data.columns.drop(ex_cols_to_drop).empty
+        has_ex = not df.columns.drop(ex_cols_to_drop).empty
         self.cv_fitted_values_ = []
         for i_window, (cutoffs, train, valid) in enumerate(splits):
             if refit or i_window == 0:
@@ -639,11 +673,11 @@ class MLForecast:
                 self.cv_fitted_values_.append(insample_results)
             dynamic_dfs = [valid.drop(columns=[target_col])] if has_ex else None
             y_pred = self.predict(
-                window_size,
+                h,
                 dynamic_dfs,
                 before_predict_callback,
                 after_predict_callback,
-                new_data=train if not refit else None,
+                new_df=train if not refit else None,
                 level=level,
             )
             y_pred = y_pred.merge(cutoffs, on=id_col, how="left")
