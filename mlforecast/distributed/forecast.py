@@ -561,7 +561,7 @@ class DistributedMLForecast:
         window_size: Optional[int] = None,  # noqa: ARG002
     ) -> fugue.AnyDataFrame:
         """Perform time series cross validation.
-        Creates `n_windows` splits where each window has `window_size` test periods,
+        Creates `n_windows` splits where each window has `h` test periods,
         trains the models, computes the predictions and merges the actuals.
 
         Parameters
@@ -579,7 +579,7 @@ class DistributedMLForecast:
         target_col : str (default='y')
             Column that contains the target.
         step_size : int, optional (default=None)
-            Step size between each cross validation window. If None it will be equal to `window_size`.
+            Step size between each cross validation window. If None it will be equal to `h`.
         static_features : list of str, optional (default=None)
             Names of the features that are static and will be repeated when forecasting.
         dropna : bool (default=True)

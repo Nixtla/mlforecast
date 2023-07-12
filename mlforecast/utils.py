@@ -201,7 +201,7 @@ class PredictionIntervals:
         n_windows: int = 2,
         h: int = 1,
         method: str = "conformal_distribution",
-        window_size: Optional[int] = None,
+        window_size: Optional[int] = None,  # noqa: ARG002
     ):
         if n_windows < 2:
             raise ValueError(

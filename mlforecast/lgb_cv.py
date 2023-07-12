@@ -405,7 +405,7 @@ class LightGBMCV:
         target_col : str (default='y')
             Column that contains the target.
         step_size : int, optional (default=None)
-            Step size between each cross validation window. If None it will be equal to `window_size`.
+            Step size between each cross validation window. If None it will be equal to `h`.
         num_iterations : int (default=100)
             Maximum number of boosting iterations to run.
         params : dict, optional(default=None)
