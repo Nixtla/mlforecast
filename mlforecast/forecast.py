@@ -34,7 +34,7 @@ def _add_conformal_distribution_intervals(
     model_names: List[str],
     level: List[Union[int, float]],
     cs_n_windows: int,
-    cs_window_size: int,
+    cs_h: int,
     n_series: int,
     horizon: int,
 ) -> pd.DataFrame:
@@ -48,7 +48,7 @@ def _add_conformal_distribution_intervals(
     cuts = [alpha / 200 for alpha in reversed(alphas)]
     cuts.extend(1 - alpha / 200 for alpha in alphas)
     for model in model_names:
-        scores = cs_df[model].values.reshape(cs_n_windows, n_series, cs_window_size)
+        scores = cs_df[model].values.reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
         mean = fcst_df[model].values.reshape(1, n_series, -1)
@@ -73,7 +73,7 @@ def _add_conformal_error_intervals(
     model_names: List[str],
     level: List[Union[int, float]],
     cs_n_windows: int,
-    cs_window_size: int,
+    cs_h: int,
     n_series: int,
     horizon: int,
 ) -> pd.DataFrame:
@@ -86,7 +86,7 @@ def _add_conformal_error_intervals(
     cuts = [lv / 100 for lv in level]
     for model in model_names:
         mean = fcst_df[model].values.ravel()
-        scores = cs_df[model].values.reshape(cs_n_windows, n_series, cs_window_size)
+        scores = cs_df[model].values.reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
         quantiles = np.quantile(
@@ -293,7 +293,7 @@ class MLForecast:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         n_windows: int = 2,
-        window_size: int = 1,
+        h: int = 1,
     ):
         """Compute conformity scores.
 
@@ -303,12 +303,12 @@ class MLForecast:
         The exception is raised by the PredictionIntervals data class.
 
         In this simplest case, we assume the width of the interval
-        is the same for all the forecasting horizon (`window_size=1`).
+        is the same for all the forecasting horizon (`h=1`).
         """
         cv_results = self.cross_validation(
             df=df,
             n_windows=n_windows,
-            window_size=window_size,
+            h=h,
             refit=False,
             id_col=id_col,
             time_col=time_col,
@@ -382,7 +382,7 @@ class MLForecast:
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 n_windows=prediction_intervals.n_windows,
-                window_size=prediction_intervals.window_size,
+                h=prediction_intervals.h,
             )
         X, y = self.preprocess(
             df=df,
@@ -493,20 +493,20 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                if (self.prediction_intervals.window_size != 1) and (
-                    self.prediction_intervals.window_size < h
+                if (self.prediction_intervals.h != 1) and (
+                    self.prediction_intervals.h < h
                 ):
                     raise ValueError(
-                        "The `window_size` argument of PredictionIntervals "
+                        "The `h` argument of PredictionIntervals "
                         "should be equal to one or greater or equal to `h`. "
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
-                if self.prediction_intervals.window_size == 1 and h > 1:
+                if self.prediction_intervals.h == 1 and h > 1:
                     warn_msg = (
                         "Prediction intervals are calculated using 1-step ahead cross-validation, "
                         "with a constant width for all horizons. To vary the error by horizon, "
-                        "pass PredictionIntervals(window_size=h) to the `prediction_intervals` "
+                        "pass PredictionIntervals(h=h) to the `prediction_intervals` "
                         "argument when refitting the model."
                     )
                     warnings.warn(warn_msg, UserWarning)
@@ -520,7 +520,7 @@ class MLForecast:
                     self._cs_df,
                     model_names=list(model_names),
                     level=level_,
-                    cs_window_size=self.prediction_intervals.window_size,
+                    cs_h=self.prediction_intervals.h,
                     cs_n_windows=self.prediction_intervals.n_windows,
                     n_series=self.ts.ga.ngroups,
                     horizon=h,
@@ -553,7 +553,7 @@ class MLForecast:
         window_size: Optional[int] = None,  # noqa: ARG002
     ):
         """Perform time series cross validation.
-        Creates `n_windows` splits where each window has `window_size` test periods,
+        Creates `n_windows` splits where each window has `h` test periods,
         trains the models, computes the predictions and merges the actuals.
 
         Parameters

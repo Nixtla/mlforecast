@@ -161,27 +161,6 @@ def backtest_splits(
         yield cutoffs, train, valid
 
 # %% ../nbs/utils.ipynb 22
-class PredictionIntervals:
-    """Class for storing prediction intervals metadata information."""
-
-    def __init__(
-        self,
-        n_windows: int = 2,
-        window_size: int = 1,
-        method: str = "conformal_distribution",
-    ):
-        if n_windows < 2:
-            raise ValueError(
-                "You need at least two windows to compute conformal intervals"
-            )
-        allowed_methods = ["conformal_error", "conformal_distribution"]
-        if method not in allowed_methods:
-            raise ValueError(f"method must be one of {allowed_methods}")
-        self.n_windows = n_windows
-        self.window_size = window_size
-        self.method = method
-
-# %% ../nbs/utils.ipynb 23
 def old_kw_to_pos(old_names, new_positions):
     def decorator(f):
         @wraps(f)
@@ -211,3 +190,29 @@ def old_kw_to_pos(old_names, new_positions):
         return inner
 
     return decorator
+
+# %% ../nbs/utils.ipynb 24
+class PredictionIntervals:
+    """Class for storing prediction intervals metadata information."""
+
+    @old_kw_to_pos(["window_size"], [2])
+    def __init__(
+        self,
+        n_windows: int = 2,
+        h: int = 1,
+        method: str = "conformal_distribution",
+        window_size: Optional[int] = None,
+    ):
+        if n_windows < 2:
+            raise ValueError(
+                "You need at least two windows to compute conformal intervals"
+            )
+        allowed_methods = ["conformal_error", "conformal_distribution"]
+        if method not in allowed_methods:
+            raise ValueError(f"method must be one of {allowed_methods}")
+        self.n_windows = n_windows
+        self.h = h
+        self.method = method
+
+    def __repr__(self):
+        return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
