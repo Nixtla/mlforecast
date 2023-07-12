@@ -206,7 +206,7 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
         *,
-        data: Optional[pd.DataFrame] = None,
+        data: Optional[pd.DataFrame] = None,  # noqa: ARG002
     ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Union[pd.Series, pd.DataFrame]]]:
         """Add the features to `data`.
 
@@ -338,7 +338,7 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         *,
-        data: Optional[pd.DataFrame] = None,
+        data: Optional[pd.DataFrame] = None,  # noqa: ARG002
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -408,8 +408,8 @@ class MLForecast:
         new_df: Optional[pd.DataFrame] = None,
         level: Optional[List[Union[int, float]]] = None,
         *,
-        horizon: Optional[int] = None,
-        new_data: Optional[pd.DataFrame] = None,
+        horizon: Optional[int] = None,  # noqa: ARG002
+        new_data: Optional[pd.DataFrame] = None,  # noqa: ARG002
     ) -> pd.DataFrame:
         """Compute the predictions for the next `horizon` steps.
 
@@ -549,8 +549,8 @@ class MLForecast:
         input_size: Optional[int] = None,
         fitted: bool = False,
         *,
-        data: Optional[pd.DataFrame] = None,
-        window_size: Optional[int] = None,
+        data: Optional[pd.DataFrame] = None,  # noqa: ARG002
+        window_size: Optional[int] = None,  # noqa: ARG002
     ):
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,

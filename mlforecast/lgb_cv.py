@@ -146,8 +146,8 @@ class LightGBMCV:
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
         *,
-        data: Optional[pd.DataFrame] = None,
-        window_size: Optional[int] = None,
+        data: Optional[pd.DataFrame] = None,  # noqa: ARG002
+        window_size: Optional[int] = None,  # noqa: ARG002
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -385,8 +385,8 @@ class LightGBMCV:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         *,
-        data: Optional[pd.DataFrame] = None,
-        window_size: Optional[int] = None,
+        data: Optional[pd.DataFrame] = None,  # noqa: ARG002
+        window_size: Optional[int] = None,  # noqa: ARG002
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -513,7 +513,7 @@ class LightGBMCV:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         *,
-        horizon: Optional[int] = None,
+        horizon: Optional[int] = None,  # noqa: ARG002
     ) -> pd.DataFrame:
         """Compute predictions with each of the trained boosters.
 

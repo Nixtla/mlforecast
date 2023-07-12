@@ -296,7 +296,7 @@ class DistributedMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         *,
-        data: Optional[fugue.AnyDataFrame] = None,
+        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
     ) -> fugue.AnyDataFrame:
         """Add the features to `data`.
 
@@ -395,7 +395,7 @@ class DistributedMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         *,
-        data: Optional[fugue.AnyDataFrame] = None,
+        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
     ) -> "DistributedMLForecast":
         """Apply the feature engineering and train the models.
 
@@ -475,7 +475,7 @@ class DistributedMLForecast:
         after_predict_callback: Optional[Callable] = None,
         new_df: Optional[fugue.AnyDataFrame] = None,
         *,
-        horizon: Optional[int] = None,
+        horizon: Optional[int] = None,  # noqa: ARG002
         new_data: Optional[fugue.AnyDataFrame] = None,
     ) -> fugue.AnyDataFrame:
         """Compute the predictions for the next `horizon` steps.
@@ -557,8 +557,8 @@ class DistributedMLForecast:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         *,
-        data: Optional[fugue.AnyDataFrame] = None,
-        window_size: Optional[int] = None,
+        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
+        window_size: Optional[int] = None,  # noqa: ARG002
     ) -> fugue.AnyDataFrame:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `window_size` test periods,
