@@ -5,6 +5,7 @@ __all__ = ['DistributedMLForecast']
 
 # %% ../../nbs/distributed.forecast.ipynb 5
 import copy
+import warnings
 from collections import namedtuple
 from typing import Any, Callable, Iterable, List, Optional
 
