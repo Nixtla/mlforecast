@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Iterable
 if TYPE_CHECKING:
     import pandas as pd
 import numpy as np
+from numba import njit
 
 from .grouped_array import GroupedArray, _apply_difference
 
@@ -69,19 +70,47 @@ class Differences(BaseTargetTransform):
         return df
 
 # %% ../nbs/target_transforms.ipynb 5
+@njit
+def _standard_scaler_transform(data, indptr, stats, out):
+    n_series = len(indptr) - 1
+    for i in range(n_series):
+        sl = slice(indptr[i], indptr[i + 1])
+        subs = data[sl]
+        mean_ = subs.mean()
+        std_ = subs.std()
+        stats[i] = mean_, std_
+        out[sl] = (data[sl] - mean_) / std_
+
+
+@njit
+def _standard_scaler_inverse_transform(preds, stats):
+    n_series = stats.shape[0]
+    h = preds.size // n_series
+    k = 0
+    for i in range(n_series):
+        mean_, std_ = stats[i]
+        for _ in range(h):
+            preds[k] = preds[k] * std_ + mean_
+            k += 1
+
+# %% ../nbs/target_transforms.ipynb 6
 class LocalStandardScaler(BaseTargetTransform):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
 
     def fit_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
-        self.norm_ = df.groupby(self.id_col)[self.target_col].agg(["mean", "std"])
-        df = df.merge(self.norm_, on=self.id_col)
-        df[self.target_col] = (df[self.target_col] - df["mean"]) / df["std"]
-        df = df.drop(columns=["mean", "std"])
+        ga = GroupedArray.from_sorted_df(df, self.id_col, self.target_col)
+        self.stats_ = np.empty((len(ga.indptr) - 1, 2))
+        out = np.empty_like(ga.data)
+        _standard_scaler_transform(ga.data, ga.indptr, self.stats_, out)
+        df = df.copy()
+        df[self.target_col] = out
         return df
 
     def inverse_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
-        df = df.merge(self.norm_, on=self.id_col)
-        for col in df.columns.drop([self.id_col, self.time_col, "mean", "std"]):
-            df[col] = df[col] * df["std"] + df["mean"]
-        df = df.drop(columns=["std", "mean"])
+        df = df.copy()
+        model_cols = df.columns.drop([self.id_col, self.time_col])
+        for model in model_cols:
+            model_preds = df[model].values
+            _standard_scaler_inverse_transform(model_preds, self.stats_)
+            df[model] = model_preds
         return df
