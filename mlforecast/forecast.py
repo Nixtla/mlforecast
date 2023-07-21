@@ -407,6 +407,7 @@ class MLForecast:
         after_predict_callback: Optional[Callable] = None,
         new_df: Optional[pd.DataFrame] = None,
         level: Optional[List[Union[int, float]]] = None,
+        X_df: Optional[pd.DataFrame] = None,
         *,
         horizon: Optional[int] = None,  # noqa: ARG002
         new_data: Optional[pd.DataFrame] = None,  # noqa: ARG002
@@ -484,6 +485,7 @@ class MLForecast:
             dynamic_dfs,
             before_predict_callback,
             after_predict_callback,
+            X_df,
         )
         if level is not None:
             if self._cs_df is None:
