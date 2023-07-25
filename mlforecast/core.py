@@ -461,7 +461,7 @@ class TimeSeries:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
         self._h = 0
 
-    def _get_features_for_next_step(self, dynamic_dfs, X_df):
+    def _get_features_for_next_step(self, dynamic_dfs, X_df=None):
         new_x = self._update_features()
         if dynamic_dfs:
             for df in dynamic_dfs:
