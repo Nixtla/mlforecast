@@ -328,7 +328,7 @@ class TimeSeries:
         # target
         self.max_horizon = max_horizon
         if max_horizon is None:
-            target = df[self.target_col]
+            target = self.ga.data[self.restore_idxs]
         else:
             target = self.ga.expand_target(max_horizon)[self.restore_idxs]
 
@@ -344,6 +344,7 @@ class TimeSeries:
                 target_nulls = target_nulls.all(axis=1)
             keep_rows = ~(feature_nulls | target_nulls)
             df = df[keep_rows].copy(deep=False)
+            target = target[keep_rows]
         else:
             keep_rows = np.full(df.shape[0], True)
             df = df.copy(deep=False)
@@ -367,6 +368,8 @@ class TimeSeries:
         if max_horizon is not None:
             for i in range(max_horizon):
                 df[f"{self.target_col}{i}"] = target[:, i]
+        else:
+            df[self.target_col] = target
         return df
 
     def fit_transform(
