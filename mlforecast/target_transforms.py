@@ -106,11 +106,11 @@ class LocalStandardScaler(BaseTargetTransform):
         df[self.target_col] = out
         return df
 
-    def inverse_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+    def inverse_transform(self, df: "pd.DataFrame", idxs: np.ndarray) -> "pd.DataFrame":
         df = df.copy()
         model_cols = df.columns.drop([self.id_col, self.time_col])
         for model in model_cols:
             model_preds = df[model].values
-            _standard_scaler_inverse_transform(model_preds, self.stats_)
+            _standard_scaler_inverse_transform(model_preds, self.stats_[idxs])
             df[model] = model_preds
         return df
