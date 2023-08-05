@@ -453,13 +453,7 @@ class TimeSeries:
         self.test_dates = []
         self.y_pred = []
         if len(series_idxs) < len(self.uids):
-            series_data = []
-            sizes = [0]
-            for idx in series_idxs:
-                data = self._ga[idx]
-                series_data.append(data)
-                sizes.append(data.size)
-            self.ga = GroupedArray(np.hstack(series_data), np.cumsum(sizes))
+            self.ga = self._ga[series_idxs]
         else:
             self.ga = GroupedArray(self._ga.data, self._ga.indptr)
         if self.keep_last_n is not None:
@@ -601,10 +595,15 @@ class TimeSeries:
                 X_df,
             )
         if self.target_transforms is not None:
+            if ids is not None:
+                series_idxs = np.where(self.uids.isin(self._uids))[0]
+            else:
+                series_idxs = None
             for tfm in self.target_transforms[::-1]:
-                preds = tfm.inverse_transform(
-                    preds, np.where(self.uids.isin(self._uids))[0]
-                )
+                tfm.idxs = series_idxs
+                preds = tfm.inverse_transform(preds)
+                tfm.idxs = None
+        del self._uids
         return preds
 
     def update(self, df: pd.DataFrame) -> None:

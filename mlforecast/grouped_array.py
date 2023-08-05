@@ -145,8 +145,15 @@ class GroupedArray:
     def __len__(self) -> int:
         return self.ngroups
 
-    def __getitem__(self, idx: int) -> np.ndarray:
-        return self.data[self.indptr[idx] : self.indptr[idx + 1]]
+    def __getitem__(self, idx: Union[int, slice]) -> np.ndarray:
+        if isinstance(idx, int):
+            return self.data[self.indptr[idx] : self.indptr[idx + 1]]
+        ranges = [range(self.indptr[i], self.indptr[i + 1]) for i in idx]
+        items = [self.data[rng] for rng in ranges]
+        sizes = np.array([item.size for item in items])
+        data = np.hstack(items)
+        indptr = np.append(0, sizes.cumsum())
+        return GroupedArray(data, indptr)
 
     def __setitem__(self, idx: int, vals: np.ndarray):
         if self[idx].size != vals.size:
