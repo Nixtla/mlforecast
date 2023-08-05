@@ -68,7 +68,7 @@ class Differences(BaseTargetTransform):
                 reversed(self.differences), reversed(self.original_values_)
             ):
                 if self.idxs is not None:
-                    ga = ga[self.idxs]
+                    ga = ga.take(self.idxs)
                 ga.restore_difference(model_preds, d)
             df[model] = model_preds
         return df
@@ -80,8 +80,8 @@ def _standard_scaler_transform(data, indptr, stats, out):
     for i in range(n_series):
         sl = slice(indptr[i], indptr[i + 1])
         subs = data[sl]
-        mean_ = subs.mean()
-        std_ = subs.std()
+        mean_ = np.nanmean(subs)
+        std_ = np.nanstd(subs)
         stats[i] = mean_, std_
         out[sl] = (data[sl] - mean_) / std_
 

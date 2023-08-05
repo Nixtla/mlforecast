@@ -453,7 +453,7 @@ class TimeSeries:
         self.test_dates = []
         self.y_pred = []
         if len(series_idxs) < len(self.uids):
-            self.ga = self._ga[series_idxs]
+            self.ga = self._ga.take(series_idxs)
         else:
             self.ga = GroupedArray(self._ga.data, self._ga.indptr)
         if self.keep_last_n is not None:
@@ -554,7 +554,18 @@ class TimeSeries:
         X_df: Optional[pd.DataFrame] = None,
         ids: Optional[List[str]] = None,
     ) -> pd.DataFrame:
-        self._uids = self.uids[self.uids.isin(ids)] if ids is not None else self.uids
+        if ids is not None:
+            unseen = set(ids) - set(self.uids)
+            if unseen:
+                raise ValueError(
+                    f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
+                )
+            self._uids = self.uids[self.uids.isin(ids)]
+            idxs = np.where(self.uids.isin(self._uids))[0]
+            last_dates = self.last_dates[idxs]
+        else:
+            self._uids = self.uids
+            last_dates = self.last_dates
         if X_df is not None:
             if self.id_col not in X_df or self.time_col not in X_df:
                 raise ValueError(
@@ -574,8 +585,8 @@ class TimeSeries:
             dates_validation = pd.DataFrame(
                 {
                     self.id_col: self._uids,
-                    "_start": self.last_dates + self.freq,
-                    "_end": self.last_dates + horizon * self.freq,
+                    "_start": last_dates + self.freq,
+                    "_end": last_dates + horizon * self.freq,
                 }
             )
             X_df = X_df.merge(dates_validation, on=[self.id_col])
