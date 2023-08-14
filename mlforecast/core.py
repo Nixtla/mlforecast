@@ -448,14 +448,13 @@ class TimeSeries:
         return df
 
     def _predict_setup(self) -> None:
-        series_idxs = np.where(self.uids.isin(self._uids))[0]
-        self.curr_dates = self.last_dates[series_idxs].copy()
+        self.ga = GroupedArray(self._ga.data, self._ga.indptr)
+        self.curr_dates = self.last_dates.copy()
+        if self._idxs is not None:
+            self.ga = self.ga.take(self._idxs)
+            self.curr_dates = self.curr_dates[self._idxs]
         self.test_dates = []
         self.y_pred = []
-        if len(series_idxs) < len(self.uids):
-            self.ga = self._ga.take(series_idxs)
-        else:
-            self.ga = GroupedArray(self._ga.data, self._ga.indptr)
         if self.keep_last_n is not None:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
         self._h = 0
@@ -561,10 +560,11 @@ class TimeSeries:
                     f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
                 )
             self._uids = self.uids[self.uids.isin(ids)]
-            idxs = np.where(self.uids.isin(self._uids))[0]
-            last_dates = self.last_dates[idxs]
+            self._idxs: Optional[np.ndarray] = np.where(self.uids.isin(self._uids))[0]
+            last_dates = self.last_dates[self._idxs]
         else:
             self._uids = self.uids
+            self._idxs = None
             last_dates = self.last_dates
         if X_df is not None:
             if self.id_col not in X_df or self.time_col not in X_df:
@@ -617,15 +617,11 @@ class TimeSeries:
                 X_df,
             )
         if self.target_transforms is not None:
-            if ids is not None:
-                series_idxs = np.where(self.uids.isin(self._uids))[0]
-            else:
-                series_idxs = None
             for tfm in self.target_transforms[::-1]:
-                tfm.idxs = series_idxs
+                tfm.idxs = self._idxs
                 preds = tfm.inverse_transform(preds)
                 tfm.idxs = None
-        del self._uids
+        del self._uids, self._idxs
         return preds
 
     def update(self, df: pd.DataFrame) -> None:
