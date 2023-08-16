@@ -3,7 +3,7 @@
 # %% auto 0
 __all__ = ['BaseTargetTransform', 'Differences', 'LocalStandardScaler', 'GlobalSklearnTransformer']
 
-# %% ../nbs/target_transforms.ipynb 2
+# %% ../nbs/target_transforms.ipynb 3
 import abc
 import reprlib
 from typing import Iterable, Optional
@@ -15,8 +15,10 @@ from numba import njit
 
 from .grouped_array import GroupedArray, _apply_difference
 
-# %% ../nbs/target_transforms.ipynb 3
+# %% ../nbs/target_transforms.ipynb 5
 class BaseTargetTransform(abc.ABC):
+    """Base class used for target transformations."""
+
     idxs: Optional[np.ndarray] = None
 
     def set_column_names(self, id_col: str, time_col: str, target_col: str):
@@ -32,8 +34,10 @@ class BaseTargetTransform(abc.ABC):
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         raise NotImplementedError
 
-# %% ../nbs/target_transforms.ipynb 4
+# %% ../nbs/target_transforms.ipynb 6
 class Differences(BaseTargetTransform):
+    """Subtracts previous values of the serie. Can be used to remove trend or seasonalities."""
+
     def __init__(self, differences: Iterable[int]):
         self.differences = list(differences)
 
@@ -73,7 +77,7 @@ class Differences(BaseTargetTransform):
             df[model] = model_preds
         return df
 
-# %% ../nbs/target_transforms.ipynb 5
+# %% ../nbs/target_transforms.ipynb 7
 @njit
 def _standard_scaler_transform(data, indptr, stats, out):
     n_series = len(indptr) - 1
@@ -97,7 +101,7 @@ def _standard_scaler_inverse_transform(preds, stats):
             preds[k] = preds[k] * std_ + mean_
             k += 1
 
-# %% ../nbs/target_transforms.ipynb 6
+# %% ../nbs/target_transforms.ipynb 8
 class LocalStandardScaler(BaseTargetTransform):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
 
@@ -120,7 +124,7 @@ class LocalStandardScaler(BaseTargetTransform):
             df[model] = model_preds
         return df
 
-# %% ../nbs/target_transforms.ipynb 9
+# %% ../nbs/target_transforms.ipynb 10
 class GlobalSklearnTransformer(BaseTargetTransform):
     """Applies the same scikit-learn transformer to all series."""
 
