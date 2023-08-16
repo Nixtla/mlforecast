@@ -129,7 +129,7 @@ class MLForecast:
         num_threads: int = 1,
         target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
-        """Create forecast object
+        """Forecasting pipeline
 
         Parameters
         ----------
@@ -273,10 +273,10 @@ class MLForecast:
         for name, model in self.models.items():
             if y.ndim == 2 and y.shape[1] > 1:
                 self.models_[name] = []
-                for col in y:
-                    keep = y[col].notnull()
+                for col in range(y.shape[1]):
+                    keep = ~np.isnan(y[:, col])
                     self.models_[name].append(
-                        clone(model).fit(X.loc[keep], y.loc[keep, col])
+                        clone(model).fit(X.loc[keep], y[keep, col])
                     )
             else:
                 self.models_[name] = clone(model).fit(X, y)
@@ -354,6 +354,7 @@ class MLForecast:
             Column that contains the target.
         static_features : list of str, optional (default=None)
             Names of the features that are static and will be repeated when forecasting.
+                If `None`, will consider all columns (except id_col and time_col) as static.
         dropna : bool (default=True)
             Drop rows with missing values produced by the transformations.
         keep_last_n : int, optional (default=None)
@@ -407,11 +408,13 @@ class MLForecast:
         after_predict_callback: Optional[Callable] = None,
         new_df: Optional[pd.DataFrame] = None,
         level: Optional[List[Union[int, float]]] = None,
+        X_df: Optional[pd.DataFrame] = None,
+        ids: Optional[List[str]] = None,
         *,
         horizon: Optional[int] = None,  # noqa: ARG002
         new_data: Optional[pd.DataFrame] = None,  # noqa: ARG002
     ) -> pd.DataFrame:
-        """Compute the predictions for the next `horizon` steps.
+        """Compute the predictions for the next `h` steps.
 
         Parameters
         ----------
@@ -433,6 +436,10 @@ class MLForecast:
                 If `new_df` is not None, the method will generate forecasts for the new observations.
         level : list of ints or floats, optional (default=None)
             Confidence levels between 0 and 100 for prediction intervals.
+        X_df : pandas DataFrame, optional (default=None)
+            Dataframe with the future exogenous features. Should have the id column and the time column.
+        ids : list of str, optional (default=None)
+            List with subset of ids seen during training for which the forecasts should be computed.
         horizon : int
             Number of periods to predict. This argument has been replaced by h and will be removed in a later release.
         new_data : pandas DataFrame, optional (default=None)
@@ -455,6 +462,11 @@ class MLForecast:
                 DeprecationWarning,
             )
             new_df = new_data
+        if dynamic_dfs is not None:
+            warnings.warn(
+                "`dynamic_dfs` has been deprecated, please use `X_df` instead",
+                DeprecationWarning,
+            )
 
         if new_df is not None:
             new_ts = TimeSeries(
@@ -479,11 +491,13 @@ class MLForecast:
             ts = self.ts
 
         forecasts = ts.predict(
-            self.models_,
-            h,
-            dynamic_dfs,
-            before_predict_callback,
-            after_predict_callback,
+            models=self.models_,
+            horizon=h,
+            dynamic_dfs=dynamic_dfs,
+            before_predict_callback=before_predict_callback,
+            after_predict_callback=after_predict_callback,
+            X_df=X_df,
+            ids=ids,
         )
         if level is not None:
             if self._cs_df is None:
@@ -630,10 +644,6 @@ class MLForecast:
             step_size=step_size,
             input_size=input_size,
         )
-        ex_cols_to_drop = [id_col, time_col, target_col]
-        if static_features is not None:
-            ex_cols_to_drop.extend(static_features)
-        has_ex = not df.columns.drop(ex_cols_to_drop).empty
         self.cv_fitted_values_ = []
         for i_window, (cutoffs, train, valid) in enumerate(splits):
             if refit or i_window == 0:
@@ -671,14 +681,19 @@ class MLForecast:
                 insample_results["fold"] = i_window
                 insample_results[target_col] = train[target_col].values
                 self.cv_fitted_values_.append(insample_results)
-            dynamic_dfs = [valid.drop(columns=[target_col])] if has_ex else None
+            static = self.ts.static_features_.columns.drop(id_col).tolist()
+            dynamic = valid.columns.drop(static + [id_col, time_col, target_col])
+            if not dynamic.empty:
+                X_df = valid.drop(columns=static + [target_col])
+            else:
+                X_df = None
             y_pred = self.predict(
                 h,
-                dynamic_dfs,
-                before_predict_callback,
-                after_predict_callback,
+                before_predict_callback=before_predict_callback,
+                after_predict_callback=after_predict_callback,
                 new_df=train if not refit else None,
                 level=level,
+                X_df=X_df,
             )
             y_pred = y_pred.merge(cutoffs, on=id_col, how="left")
             result = valid[[id_col, time_col, target_col]].merge(

@@ -222,20 +222,8 @@ class TimeSeries:
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
-        to_drop = [id_col, time_col, target_col]
+        self.keep_last_n = keep_last_n
         self.static_features = static_features
-        if static_features is None:
-            static_features = df.columns.drop([time_col, target_col]).tolist()
-        elif id_col not in static_features:
-            static_features = [id_col] + static_features
-        else:  # static_features defined and contain id_col
-            to_drop = [time_col, target_col]
-        self.static_features_ = (
-            df[static_features]
-            .groupby(id_col, observed=True)
-            .head(1)
-            .reset_index(drop=True)
-        )
         sort_idxs = pd.core.sorting.lexsort_indexer([df[id_col], df[time_col]])
         self.restore_idxs = np.empty(df.shape[0], dtype=np.int32)
         self.restore_idxs[sort_idxs] = np.arange(df.shape[0])
@@ -244,16 +232,21 @@ class TimeSeries:
             for tfm in self.target_transforms:
                 tfm.set_column_names(id_col, time_col, target_col)
                 sorted_df = tfm.fit_transform(sorted_df)
-        sorted_df = sorted_df.set_index([id_col, time_col])
-        self.uids = sorted_df.index.unique(level=0)
         self.ga = GroupedArray.from_sorted_df(sorted_df, id_col, target_col)
-        self.features_ = self._compute_transforms()
-        if keep_last_n is not None:
-            self.ga = self.ga.take_from_groups(slice(-keep_last_n, None))
         self._ga = GroupedArray(self.ga.data, self.ga.indptr)
-        self.last_dates = sorted_df.index.get_level_values(self.time_col)[
-            self.ga.indptr[1:] - 1
-        ]
+        last_idxs_per_serie = self.ga.indptr[1:] - 1
+        self.uids = pd.Index(sorted_df[id_col].iloc[last_idxs_per_serie])
+        self.last_dates = pd.Index(sorted_df[time_col].iloc[last_idxs_per_serie])
+        to_drop = [id_col, time_col, target_col]
+        if static_features is None:
+            static_features = df.columns.drop([time_col, target_col]).tolist()
+        elif id_col not in static_features:
+            static_features = [id_col] + static_features
+        else:  # static_features defined and contain id_col
+            to_drop = [time_col, target_col]
+        self.static_features_ = df.iloc[sort_idxs[last_idxs_per_serie]][
+            static_features
+        ].reset_index(drop=True)
         self.features_order_ = df.columns.drop(to_drop).tolist() + self.features
         return self
 
@@ -328,57 +321,56 @@ class TimeSeries:
         """Add the features to `df`.
 
         if `dropna=True` then all the null rows are dropped."""
-        modifies_target = bool(self.target_transforms)
-        df = df.copy(deep=modifies_target and not return_X_y)
-
-        # lag transforms
-        for feat in self.transforms.keys():
-            df[feat] = self.features_[feat][self.restore_idxs]
-
-        # date features
-        dates = df[self.time_col]
-        if not np.issubdtype(dates.dtype.type, np.integer):
-            dates = pd.DatetimeIndex(dates)
-        for feature in self.date_features:
-            feat_name, feat_vals = self._compute_date_feature(dates, feature)
-            df[feat_name] = feat_vals
+        features = {
+            k: v[self.restore_idxs] for k, v in self._compute_transforms().items()
+        }
 
         # target
         self.max_horizon = max_horizon
         if max_horizon is None:
-            if modifies_target:
-                target = pd.Series(self.ga.data[self.restore_idxs], index=df.index)
-            else:
-                target = df[self.target_col]
+            target = self.ga.data[self.restore_idxs]
         else:
-            target = pd.DataFrame(
-                self.ga.expand_target(max_horizon)[self.restore_idxs],
-                index=df.index,
-                columns=[f"{self.target_col}{i}" for i in range(max_horizon)],
-            )
+            target = self.ga.expand_target(max_horizon)[self.restore_idxs]
 
         # determine rows to keep
         if dropna:
-            feature_nulls = df[self.features].isnull().any(axis=1)
-            target_nulls = target.isnull()
+            feature_nulls = np.full(df.shape[0], False)
+            for feature_vals in features.values():
+                feature_nulls |= np.isnan(feature_vals)
+            target_nulls = np.isnan(target)
             if target_nulls.ndim == 2:
                 # target nulls for each horizon are dropped in MLForecast.fit_models
                 # we just drop rows here for which all the target values are null
                 target_nulls = target_nulls.all(axis=1)
-            keep_rows = ~(feature_nulls | target_nulls).values
+            keep_rows = ~(feature_nulls | target_nulls)
+            df = df[keep_rows].copy(deep=False)
+            target = target[keep_rows]
         else:
             keep_rows = np.full(df.shape[0], True)
+            df = df.copy(deep=False)
+
+        # lag transforms
+        for feat in self.transforms.keys():
+            df[feat] = features[feat][keep_rows]
+
+        # date features
+        if self.date_features:
+            dates = df[self.time_col]
+            if not np.issubdtype(dates.dtype.type, np.integer):
+                dates = pd.DatetimeIndex(dates)
+            for feature in self.date_features:
+                feat_name, feat_vals = self._compute_date_feature(dates, feature)
+                df[feat_name] = feat_vals
 
         # assemble return
-        xs = df.columns.drop(self.target_col)
         if return_X_y:
-            return df.loc[keep_rows, xs], target.loc[keep_rows]
-        if max_horizon is None:
-            if modifies_target:
-                df[self.target_col] = target
+            return df, target
+        if max_horizon is not None:
+            for i in range(max_horizon):
+                df[f"{self.target_col}{i}"] = target[:, i]
         else:
-            df = pd.concat([df[xs], target], axis=1)
-        return df.loc[keep_rows]
+            df[self.target_col] = target
+        return df
 
     def fit_transform(
         self,
@@ -399,7 +391,6 @@ class TimeSeries:
         If `keep_last_n` is not None then that number of observations is kept across all series for updates.
         """
         self.dropna = dropna
-        self.keep_last_n = keep_last_n
         self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
         return self._transform(
             data, dropna=dropna, max_horizon=max_horizon, return_X_y=return_X_y
@@ -434,7 +425,7 @@ class TimeSeries:
             features[feat_name] = feat_vals
 
         features_df = pd.DataFrame(features, columns=self.features)
-        features_df[self.id_col] = self.uids
+        features_df[self.id_col] = self._uids
         features_df[self.time_col] = self.curr_dates
         return self.static_features_.merge(features_df, on=self.id_col)
 
@@ -445,7 +436,7 @@ class TimeSeries:
         """Get all the predicted values with their corresponding ids and datestamps."""
         n_preds = len(self.y_pred)
         uids = pd.Series(
-            np.repeat(self.uids, n_preds), name=self.id_col, dtype=self.uids.dtype
+            np.repeat(self._uids, n_preds), name=self.id_col, dtype=self.uids.dtype
         )
         df = pd.DataFrame(
             {
@@ -457,20 +448,31 @@ class TimeSeries:
         return df
 
     def _predict_setup(self) -> None:
+        self.ga = GroupedArray(self._ga.data, self._ga.indptr)
         self.curr_dates = self.last_dates.copy()
+        if self._idxs is not None:
+            self.ga = self.ga.take(self._idxs)
+            self.curr_dates = self.curr_dates[self._idxs]
         self.test_dates = []
         self.y_pred = []
-        self.ga = GroupedArray(self._ga.data, self._ga.indptr)
+        if self.keep_last_n is not None:
+            self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
+        self._h = 0
 
-    def _get_features_for_next_step(self, dynamic_dfs):
+    def _get_features_for_next_step(self, dynamic_dfs, X_df=None):
         new_x = self._update_features()
         if dynamic_dfs:
             for df in dynamic_dfs:
                 new_x = new_x.merge(df, how="left")
             new_x = new_x.sort_values(self.id_col)
+        if X_df is not None:
+            n_series = len(self._uids)
+            X = X_df.iloc[self._h * n_series : (self._h + 1) * n_series]
+            new_x = pd.concat([new_x, X.reset_index(drop=True)], axis=1)
         nulls = new_x.isnull().any()
         if any(nulls):
             warnings.warn(f'Found null values in {", ".join(nulls[nulls].index)}.')
+        self._h += 1
         return new_x[self.features_order_]
 
     def _predict_recursive(
@@ -480,6 +482,7 @@ class TimeSeries:
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        X_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Use `model` to predict the next `horizon` timesteps."""
         if dynamic_dfs is None:
@@ -487,12 +490,12 @@ class TimeSeries:
         for i, (name, model) in enumerate(models.items()):
             self._predict_setup()
             for _ in range(horizon):
-                new_x = self._get_features_for_next_step(dynamic_dfs)
+                new_x = self._get_features_for_next_step(dynamic_dfs, X_df)
                 if before_predict_callback is not None:
                     new_x = before_predict_callback(new_x)
                 predictions = model.predict(new_x)
                 if after_predict_callback is not None:
-                    predictions_serie = pd.Series(predictions, index=self.uids)
+                    predictions_serie = pd.Series(predictions, index=self._uids)
                     predictions = after_predict_callback(predictions_serie).values
                 self._update_y(predictions)
             if i == 0:
@@ -510,6 +513,7 @@ class TimeSeries:
         horizon: int,
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
+        X_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         assert self.max_horizon is not None
         if horizon > self.max_horizon:
@@ -518,7 +522,7 @@ class TimeSeries:
             )
         if dynamic_dfs is None:
             dynamic_dfs = []
-        uids = np.repeat(self.uids, horizon)
+        uids = np.repeat(self._uids, horizon)
         dates = np.hstack(
             [
                 date + (i + 1) * self.freq
@@ -529,7 +533,7 @@ class TimeSeries:
         result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
         for name, model in models.items():
             self._predict_setup()
-            new_x = self._get_features_for_next_step(dynamic_dfs)
+            new_x = self._get_features_for_next_step(dynamic_dfs, X_df)
             if before_predict_callback is not None:
                 new_x = before_predict_callback(new_x)
             predictions = np.empty((new_x.shape[0], horizon))
@@ -546,7 +550,55 @@ class TimeSeries:
         dynamic_dfs: Optional[List[pd.DataFrame]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        X_df: Optional[pd.DataFrame] = None,
+        ids: Optional[List[str]] = None,
     ) -> pd.DataFrame:
+        if ids is not None:
+            unseen = set(ids) - set(self.uids)
+            if unseen:
+                raise ValueError(
+                    f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
+                )
+            self._uids = self.uids[self.uids.isin(ids)]
+            self._idxs: Optional[np.ndarray] = np.where(self.uids.isin(self._uids))[0]
+            last_dates = self.last_dates[self._idxs]
+        else:
+            self._uids = self.uids
+            self._idxs = None
+            last_dates = self.last_dates
+        if X_df is not None:
+            if self.id_col not in X_df or self.time_col not in X_df:
+                raise ValueError(
+                    f"X_df must have '{self.id_col}' and '{self.time_col}' columns."
+                )
+            if X_df.shape[1] < 3:
+                raise ValueError("Found no exogenous features in `X_df`.")
+            statics = self.static_features_.columns.drop(self.id_col)
+            dynamics = X_df.columns.drop([self.id_col, self.time_col])
+            common = statics.intersection(dynamics).tolist()
+            if common:
+                raise ValueError(
+                    f"The following features were provided through `X_df` but were considered as static during fit: {common}.\n"
+                    "Please re-run the fit step using the `static_features` argument to indicate which features are static. "
+                    "If all your features are dynamic please pass an empty list (static_features=[])."
+                )
+            dates_validation = pd.DataFrame(
+                {
+                    self.id_col: self._uids,
+                    "_start": last_dates + self.freq,
+                    "_end": last_dates + horizon * self.freq,
+                }
+            )
+            X_df = X_df.merge(dates_validation, on=[self.id_col])
+            X_df = X_df[X_df[self.time_col].between(X_df["_start"], X_df["_end"])]
+            if X_df.shape[0] != len(self._uids) * horizon:
+                raise ValueError(
+                    "Found missing inputs in X_df. "
+                    "It should have one row per id and date for the complete forecasting horizon"
+                )
+            X_df = X_df.sort_values([self.id_col, self.time_col]).drop(
+                columns=[self.id_col, self.time_col, "_start", "_end"]
+            )
         if getattr(self, "max_horizon", None) is None:
             preds = self._predict_recursive(
                 models,
@@ -554,6 +606,7 @@ class TimeSeries:
                 dynamic_dfs,
                 before_predict_callback,
                 after_predict_callback,
+                X_df,
             )
         else:
             preds = self._predict_multi(
@@ -561,10 +614,14 @@ class TimeSeries:
                 horizon,
                 dynamic_dfs,
                 before_predict_callback,
+                X_df,
             )
         if self.target_transforms is not None:
             for tfm in self.target_transforms[::-1]:
+                tfm.idxs = self._idxs
                 preds = tfm.inverse_transform(preds)
+                tfm.idxs = None
+        del self._uids, self._idxs
         return preds
 
     def update(self, df: pd.DataFrame) -> None:
@@ -596,9 +653,8 @@ class TimeSeries:
         )
         self.static_features_.update(new_statics)
         self.static_features_ = self.static_features_.reset_index().astype(orig_dtypes)
-        self.ga = self.ga.append_several(
+        self._ga = self._ga.append_several(
             new_sizes=sizes.values.astype(np.int32),
             new_values=values,
             new_groups=new_groups,
         )
-        self._ga = GroupedArray(self.ga.data, self.ga.indptr)
