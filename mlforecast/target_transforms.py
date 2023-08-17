@@ -142,7 +142,6 @@ class GlobalSklearnTransformer(BaseTargetTransform):
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy(deep=False)
         cols_to_transform = df.columns.drop([self.id_col, self.time_col])
-        df[cols_to_transform] = self.transformer_.inverse_transform(
-            df[cols_to_transform].values
-        )
+        for col in cols_to_transform:
+            df[col] = self.transformer_.inverse_transform(df[[col]].values)
         return df
