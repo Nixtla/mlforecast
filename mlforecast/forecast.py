@@ -646,7 +646,8 @@ class MLForecast:
         )
         self.cv_fitted_values_ = []
         for i_window, (cutoffs, train, valid) in enumerate(splits):
-            if refit or i_window == 0:
+            should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
+            if should_fit:
                 self.fit(
                     train,
                     id_col=id_col,
@@ -691,7 +692,7 @@ class MLForecast:
                 h,
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
-                new_df=train if not refit else None,
+                new_df=train if not should_fit else None,
                 level=level,
                 X_df=X_df,
             )
