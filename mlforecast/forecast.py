@@ -403,10 +403,10 @@ class MLForecast:
         self.fit_models(X, y)
         if fitted:
             base = X_with_info[[id_col, time_col, target_col]].copy(deep=False)
-            self.fcst_fitted_values_: Union[pd.DataFrame, List[pd.DataFrame]]
             if max_horizon is None:
                 self.fcst_fitted_values_ = base
                 for name, model in self.models_.items():
+                    assert not isinstance(model, list)  # mypy
                     self.fcst_fitted_values_[name] = model.predict(X)
             else:
                 fitted_values = []
