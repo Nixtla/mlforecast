@@ -402,8 +402,9 @@ class MLForecast:
         X = X_with_info[self.ts.features_order_]
         self.fit_models(X, y)
         if fitted:
-            base = X_with_info[[id_col, time_col, target_col]].copy(deep=False)
+            base = X_with_info[[id_col, time_col]].copy(deep=False)
             if max_horizon is None:
+                base[target_col] = y
                 self.fcst_fitted_values_ = base
                 for name, model in self.models_.items():
                     assert not isinstance(model, list)  # mypy
@@ -411,16 +412,18 @@ class MLForecast:
             else:
                 fitted_values = []
                 for h in range(max_horizon):
-                    horizon_base = base[[id_col, time_col]].copy()
-                    horizon_base["h"] = h
+                    horizon_base = base.copy()
+                    horizon_base["h"] = h + 1
                     horizon_base[target_col] = y[:, h]
                     fitted_values.append(horizon_base)
                 for name, horizon_models in self.models_.items():
                     for h, model in enumerate(horizon_models):
                         fitted_values[h][name] = model.predict(X)
-                self.fcst_fitted_values_ = pd.concat(fitted_values).reset_index(
-                    drop=True
-                )
+                for h, horizon_df in enumerate(fitted_values):
+                    keep_mask = horizon_df[target_col].notnull()
+                    fitted_values[h] = horizon_df[keep_mask]
+                self.fcst_fitted_values_ = pd.concat(fitted_values)
+            self.fcst_fitted_values_ = self.fcst_fitted_values_.reset_index(drop=True)
         return self
 
     def forecast_fitted_values(self):
@@ -689,30 +692,49 @@ class MLForecast:
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
                     prediction_intervals=prediction_intervals,
+                    fitted=fitted,
                 )
                 self.cv_models_.append(self.models_)
-            if fitted:
-                insample_results = train[[id_col, time_col]].copy()
-                trainX, _ = self.preprocess(
+                if fitted:
+                    self.cv_fitted_values_.append(
+                        self.fcst_fitted_values_.assign(fold=i_window)
+                    )
+            if fitted and not should_fit:
+                train_X, train_y = self.preprocess(
                     train,
                     id_col=id_col,
                     time_col=time_col,
                     target_col=target_col,
                     static_features=static_features,
-                    dropna=False,
+                    dropna=dropna,
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
                     return_X_y=True,
                 )
-                trainX = trainX[self.ts.features_order_]
-                for name, model in self.models_.items():
-                    insample_results[name] = model.predict(trainX)  # type: ignore[union-attr]
-                if self.ts.target_transforms is not None:
-                    for tfm in self.ts.target_transforms[::-1]:
-                        insample_results = tfm.inverse_transform(insample_results)
-                insample_results["fold"] = i_window
-                insample_results[target_col] = train[target_col].values
-                self.cv_fitted_values_.append(insample_results)
+                base = train_X[[id_col, time_col]].copy(deep=False)
+                base[target_col] = train_y
+                base["fold"] = i_window
+                train_X = train_X[self.ts.features_order_]
+                if max_horizon is None:
+                    fitted_values = base
+                    for name, model in self.models_.items():
+                        assert not isinstance(model, list)
+                        fitted_values[name] = model.predict(train_X)
+                    self.cv_fitted_values_.append(fitted_values)
+                else:
+                    cv_fitted_values = []
+                    for h in range(max_horizon):
+                        horizon_base = base[[id_col, time_col, "fold"]].copy()
+                        horizon_base["h"] = h + 1
+                        horizon_base[target_col] = train_y[:, h]
+                        fitted_values.append(horizon_base)
+                    for name, horizon_models in self.models_.items():
+                        for h, model in enumerate(horizon_models):
+                            fitted_values[h][name] = model.predict(train_X)
+                    for h, horizon_df in enumerate(fitted_values):
+                        keep_mask = horizon_df[target_col].notnull()
+                        fitted_values[h] = horizon_df[keep_mask]
+                    self.cv_fitted_values_ = pd.concat(fitted_values)
             static = self.ts.static_features_.columns.drop(id_col).tolist()
             dynamic = valid.columns.drop(static + [id_col, time_col, target_col])
             if not dynamic.empty:
