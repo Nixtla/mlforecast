@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import TransformerMixin, clone
 from numba import njit
+from packaging.version import Version
 
 from .grouped_array import GroupedArray, _apply_difference
 
@@ -66,13 +67,21 @@ class Differences(BaseTargetTransform):
             new_indptr = d * np.arange(n_series + 1, dtype=np.int32)
             _apply_difference(ga.data, ga.indptr, new_data, new_indptr, d)
             self.original_values_.append(GroupedArray(new_data, new_indptr))
-        df = df.copy(deep=False)
+        if Version(pd.__version__) < Version("1.4"):
+            # https://github.com/pandas-dev/pandas/pull/43406
+            df = df.copy()
+        else:
+            df = df.copy(deep=False)
         df[self.target_col] = ga.data
         return df
 
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         model_cols = df.columns.drop([self.id_col, self.time_col])
-        df = df.copy(deep=False)
+        if Version(pd.__version__) < Version("1.4"):
+            # https://github.com/pandas-dev/pandas/pull/43406
+            df = df.copy()
+        else:
+            df = df.copy(deep=False)
         for model in model_cols:
             model_preds = df[model].values.copy()
             if self.fitted_:
