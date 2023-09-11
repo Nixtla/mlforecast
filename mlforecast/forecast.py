@@ -325,6 +325,62 @@ class MLForecast:
             cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
         return cv_results.drop(columns=target_col)
 
+    def _invert_transforms(self, df: pd.DataFrame):
+        if self.ts.target_transforms is None:
+            return df
+        for tfm in self.ts.target_transforms[::-1]:
+            df = tfm.inverse_transform(df)
+            if hasattr(tfm, "store_fitted"):
+                tfm.store_fitted = False
+            if hasattr(tfm, "fitted_"):
+                tfm.fitted_ = []
+        return df
+
+    def _compute_fitted_values(
+        self,
+        X_with_info: pd.DataFrame,
+        y: np.ndarray,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        max_horizon: Optional[int],
+    ):
+        base = X_with_info[[id_col, time_col]].copy(deep=False)
+        X = X_with_info[self.ts.features_order_]
+        idx = pd.MultiIndex.from_frame(base)
+        if not idx.is_monotonic_increasing:
+            sort_idxs: Optional[np.ndarray] = idx.argsort()
+        else:
+            sort_idxs = None
+        if max_horizon is None:
+            fitted_values = base
+            fitted_values[target_col] = y
+            if sort_idxs is not None:
+                fitted_values = fitted_values.iloc[sort_idxs]
+            for name, model in self.models_.items():
+                assert not isinstance(model, list)  # mypy
+                fitted_values[name] = model.predict(X)
+            fitted_values = self._invert_transforms(fitted_values)
+        else:
+            horizon_fitted_values = []
+            for horizon in range(max_horizon):
+                horizon_base = base.copy()
+                horizon_base[target_col] = y[:, horizon]
+                if sort_idxs is not None:
+                    horizon_base = horizon_base.iloc[sort_idxs]
+                horizon_fitted_values.append(horizon_base)
+            for name, horizon_models in self.models_.items():
+                for horizon, model in enumerate(horizon_models):
+                    horizon_fitted_values[horizon][name] = model.predict(X)
+            for horizon, horizon_df in enumerate(horizon_fitted_values):
+                keep_mask = horizon_df[target_col].notnull()
+                horizon_fitted_values[horizon] = self._invert_transforms(
+                    horizon_df[keep_mask]
+                ).copy()
+                horizon_fitted_values[horizon]["h"] = horizon + 1
+            fitted_values = pd.concat(horizon_fitted_values)
+        return fitted_values
+
     @old_kw_to_pos(["data"], [1])
     def fit(
         self,
@@ -374,6 +430,10 @@ class MLForecast:
         self : MLForecast
             Forecast object with series values and trained models.
         """
+        if fitted and self.ts.target_transforms is not None:
+            for tfm in self.ts.target_transforms:
+                if hasattr(tfm, "store_fitted"):
+                    tfm.store_fitted = True
         self._cs_df: Optional[pd.DataFrame] = None
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
@@ -402,28 +462,15 @@ class MLForecast:
         X = X_with_info[self.ts.features_order_]
         self.fit_models(X, y)
         if fitted:
-            base = X_with_info[[id_col, time_col]].copy(deep=False)
-            if max_horizon is None:
-                base[target_col] = y
-                self.fcst_fitted_values_ = base
-                for name, model in self.models_.items():
-                    assert not isinstance(model, list)  # mypy
-                    self.fcst_fitted_values_[name] = model.predict(X)
-            else:
-                fitted_values = []
-                for horizon in range(max_horizon):
-                    horizon_base = base.copy()
-                    horizon_base["h"] = horizon + 1
-                    horizon_base[target_col] = y[:, horizon]
-                    fitted_values.append(horizon_base)
-                for name, horizon_models in self.models_.items():
-                    for horizon, model in enumerate(horizon_models):
-                        fitted_values[horizon][name] = model.predict(X)
-                for horizon, horizon_df in enumerate(fitted_values):
-                    keep_mask = horizon_df[target_col].notnull()
-                    fitted_values[horizon] = horizon_df[keep_mask]
-                self.fcst_fitted_values_ = pd.concat(fitted_values)
-            self.fcst_fitted_values_ = self.fcst_fitted_values_.reset_index(drop=True)
+            fitted_values = self._compute_fitted_values(
+                X_with_info=X_with_info,
+                y=y,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                max_horizon=max_horizon,
+            )
+            self.fcst_fitted_values_ = fitted_values.reset_index(drop=True)
         return self
 
     def forecast_fitted_values(self):
@@ -700,6 +747,10 @@ class MLForecast:
                         self.fcst_fitted_values_.assign(fold=i_window)
                     )
             if fitted and not should_fit:
+                if self.ts.target_transforms is not None:
+                    for tfm in self.ts.target_transforms:
+                        if hasattr(tfm, "store_fitted"):
+                            tfm.store_fitted = True
                 train_X, train_y = self.preprocess(
                     train,
                     id_col=id_col,
@@ -711,29 +762,16 @@ class MLForecast:
                     max_horizon=max_horizon,
                     return_X_y=True,
                 )
-                base = train_X[[id_col, time_col]].copy(deep=False)
-                base["fold"] = i_window
-                train_X = train_X[self.ts.features_order_]
-                if max_horizon is None:
-                    base[target_col] = train_y
-                    fitted_values = base
-                    for name, model in self.models_.items():
-                        assert not isinstance(model, list)
-                        fitted_values[name] = model.predict(train_X)
-                    self.cv_fitted_values_.append(fitted_values)
-                else:
-                    fitted_values = []
-                    for horizon in range(max_horizon):
-                        horizon_base = base[[id_col, time_col, "fold"]].copy()
-                        horizon_base["h"] = horizon + 1
-                        horizon_base[target_col] = train_y[:, horizon]
-                        fitted_values.append(horizon_base)
-                    for name, horizon_models in self.models_.items():
-                        for horizon, model in enumerate(horizon_models):
-                            fitted_values[horizon][name] = model.predict(train_X)
-                    for horizon, horizon_df in enumerate(fitted_values):
-                        keep_mask = horizon_df[target_col].notnull()
-                        fitted_values[horizon] = horizon_df[keep_mask]
+                fitted_values = self._compute_fitted_values(
+                    X_with_info=train_X,
+                    y=train_y,
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    max_horizon=max_horizon,
+                )
+                fitted_values["fold"] = i_window
+                self.cv_fitted_values_.append(fitted_values)
             static = self.ts.static_features_.columns.drop(id_col).tolist()
             dynamic = valid.columns.drop(static + [id_col, time_col, target_col])
             if not dynamic.empty:
