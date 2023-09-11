@@ -325,7 +325,7 @@ class MLForecast:
             cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
         return cv_results.drop(columns=target_col)
 
-    def _invert_transforms(self, df: pd.DataFrame):
+    def _invert_transforms(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.ts.target_transforms is None:
             return df
         for tfm in self.ts.target_transforms[::-1]:
@@ -344,7 +344,7 @@ class MLForecast:
         time_col: str,
         target_col: str,
         max_horizon: Optional[int],
-    ):
+    ) -> pd.DataFrame:
         base = X_with_info[[id_col, time_col]].copy(deep=False)
         X = X_with_info[self.ts.features_order_]
         idx = pd.MultiIndex.from_frame(base)
@@ -374,10 +374,9 @@ class MLForecast:
                     horizon_fitted_values[horizon][name] = model.predict(X)
             for horizon, horizon_df in enumerate(horizon_fitted_values):
                 keep_mask = horizon_df[target_col].notnull()
-                horizon_fitted_values[horizon] = self._invert_transforms(
-                    horizon_df[keep_mask]
-                ).copy()
-                horizon_fitted_values[horizon]["h"] = horizon + 1
+                horizon_df = self._invert_transforms(horizon_df)
+                horizon_df["h"] = horizon + 1
+                horizon_fitted_values[horizon] = horizon_df[keep_mask].copy()
             fitted_values = pd.concat(horizon_fitted_values)
         return fitted_values
 
