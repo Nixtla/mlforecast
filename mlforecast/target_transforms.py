@@ -35,6 +35,11 @@ class BaseTargetTransform(abc.ABC):
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         raise NotImplementedError
 
+    def inverse_transform_fitted(
+        self, df: pd.DataFrame, sizes: np.ndarray
+    ) -> pd.DataFrame:
+        return self.inverse_transform(df)
+
 # %% ../nbs/target_transforms.ipynb 6
 class Differences(BaseTargetTransform):
     """Subtracts previous values of the serie. Can be used to remove trend or seasonalities."""
@@ -47,12 +52,12 @@ class Differences(BaseTargetTransform):
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         self.fitted_: List[GroupedArray] = []
         ga = GroupedArray.from_sorted_df(df, self.id_col, self.target_col)
-        uids = df[self.id_col].unique()
         original_sizes = np.diff(ga.indptr)
         total_diffs = sum(self.differences)
-        small_series = uids[original_sizes < total_diffs]
-        if small_series.size:
-            msg = reprlib.repr(small_series.tolist())
+        small_series = original_sizes < total_diffs
+        if small_series.any():
+            uids = df[self.id_col].unique()
+            msg = reprlib.repr(uids[small_series].tolist())
             raise ValueError(
                 f"The following series are too short for the differences: {msg}"
             )
@@ -78,18 +83,26 @@ class Differences(BaseTargetTransform):
         df = _ensure_shallow_copy(df)
         for model in model_cols:
             model_preds = df[model].values.copy()
-            if self.fitted_:
-                sizes = df[self.id_col].value_counts().sort_index().values
-                indptr = np.append(0, sizes.cumsum())
-                for d, ga in zip(reversed(self.differences), reversed(self.fitted_)):
-                    ga.restore_fitted_difference(model_preds, indptr, d)
-            else:
-                for d, ga in zip(
-                    reversed(self.differences), reversed(self.original_values_)
-                ):
-                    if self.idxs is not None:
-                        ga = ga.take(self.idxs)
-                    ga.restore_difference(model_preds, d)
+            for d, ga in zip(
+                reversed(self.differences), reversed(self.original_values_)
+            ):
+                if self.idxs is not None:
+                    ga = ga.take(self.idxs)
+                ga.restore_difference(model_preds, d)
+            df[model] = model_preds
+        return df
+
+    def inverse_transform_fitted(
+        self, df: pd.DataFrame, sizes: np.ndarray
+    ) -> pd.DataFrame:
+        model_cols = df.columns.drop([self.id_col, self.time_col])
+        df = df.copy(deep=False)
+        df = _ensure_shallow_copy(df)
+        indptr = np.append(0, sizes.cumsum())
+        for model in model_cols:
+            model_preds = df[model].values.copy()
+            for d, ga in zip(reversed(self.differences), reversed(self.fitted_)):
+                ga.restore_fitted_difference(model_preds, indptr, d)
             df[model] = model_preds
         return df
 
@@ -120,14 +133,24 @@ class LocalStandardScaler(BaseTargetTransform):
 
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy(deep=False)
-        model_cols = df.columns.drop([self.id_col, self.time_col])
-        sizes = df[self.id_col].value_counts().sort_index().values
         stats = self.stats_
         if self.idxs is not None:
-            sizes = sizes[self.idxs]
             stats = stats[self.idxs]
-        means = np.repeat(stats[:, 0], sizes)
-        stds = np.repeat(stats[:, 1], sizes)
+        h = df.shape[0] // stats.shape[0]
+        means = np.repeat(stats[:, 0], h)
+        stds = np.repeat(stats[:, 1], h)
+        model_cols = df.columns.drop([self.id_col, self.time_col])
+        for model in model_cols:
+            df[model] = df[model].values * stds + means
+        return df
+
+    def inverse_transform_fitted(
+        self, df: pd.DataFrame, sizes: np.ndarray
+    ) -> pd.DataFrame:
+        df = df.copy(deep=False)
+        means = np.repeat(self.stats_[:, 0], sizes)
+        stds = np.repeat(self.stats_[:, 1], sizes)
+        model_cols = df.columns.drop([self.id_col, self.time_col])
         for model in model_cols:
             df[model] = df[model].values * stds + means
         return df
