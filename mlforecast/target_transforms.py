@@ -105,23 +105,11 @@ def _standard_scaler_transform(data, indptr, stats, out):
         stats[i] = mean_, std_
         out[sl] = (data[sl] - mean_) / std_
 
-
-@njit
-def _standard_scaler_inverse_transform(preds, stats):
-    n_series = stats.shape[0]
-    h = preds.size // n_series
-    k = 0
-    for i in range(n_series):
-        mean_, std_ = stats[i]
-        for _ in range(h):
-            preds[k] = preds[k] * std_ + mean_
-            k += 1
-
 # %% ../nbs/target_transforms.ipynb 10
 class LocalStandardScaler(BaseTargetTransform):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
 
-    def fit_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         ga = GroupedArray.from_sorted_df(df, self.id_col, self.target_col)
         self.stats_ = np.empty((len(ga.indptr) - 1, 2))
         out = np.empty_like(ga.data)
@@ -130,14 +118,18 @@ class LocalStandardScaler(BaseTargetTransform):
         df[self.target_col] = out
         return df
 
-    def inverse_transform(self, df: "pd.DataFrame") -> "pd.DataFrame":
+    def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy(deep=False)
         model_cols = df.columns.drop([self.id_col, self.time_col])
-        stats = self.stats_ if self.idxs is None else self.stats_[self.idxs]
+        sizes = df[self.id_col].value_counts().sort_index().values
+        stats = self.stats_
+        if self.idxs is not None:
+            sizes = sizes[self.idxs]
+            stats = stats[self.idxs]
+        means = np.repeat(stats[:, 0], sizes)
+        stds = np.repeat(stats[:, 1], sizes)
         for model in model_cols:
-            model_preds = df[model].values
-            _standard_scaler_inverse_transform(model_preds, stats)
-            df[model] = model_preds
+            df[model] = df[model].values * stds + means
         return df
 
 # %% ../nbs/target_transforms.ipynb 12
