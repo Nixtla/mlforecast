@@ -128,11 +128,13 @@ class LocalStandardScaler(BaseTargetTransform):
         out = np.empty_like(ga.data)
         _standard_scaler_transform(ga.data, ga.indptr, self.stats_, out)
         df = df.copy(deep=False)
+        df = _ensure_shallow_copy(df)
         df[self.target_col] = out
         return df
 
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy(deep=False)
+        df = _ensure_shallow_copy(df)
         stats = self.stats_
         if self.idxs is not None:
             stats = stats[self.idxs]
@@ -148,6 +150,7 @@ class LocalStandardScaler(BaseTargetTransform):
         self, df: pd.DataFrame, sizes: np.ndarray
     ) -> pd.DataFrame:
         df = df.copy(deep=False)
+        df = _ensure_shallow_copy(df)
         means = np.repeat(self.stats_[:, 0], sizes)
         stds = np.repeat(self.stats_[:, 1], sizes)
         model_cols = df.columns.drop([self.id_col, self.time_col])
