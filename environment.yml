@@ -11,10 +11,10 @@ dependencies:
   - pip
   - pyspark>=3.3
   - scikit-learn
+  - statsmodels
   - utilsforecast
   - window-ops
   - xgboost
-  - statsmodels
   - pip:
     - datasetsforecast
     - duckdb<0.8
