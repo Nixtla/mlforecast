@@ -36,7 +36,7 @@ class BaseTargetTransform(abc.ABC):
         raise NotImplementedError
 
     def inverse_transform_fitted(
-        self, df: pd.DataFrame, sizes: np.ndarray
+        self, df: pd.DataFrame, _sizes: np.ndarray
     ) -> pd.DataFrame:
         return self.inverse_transform(df)
 
