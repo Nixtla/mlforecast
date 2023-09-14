@@ -22,3 +22,4 @@ dependencies:
     - nbdev
     - ray<2.4
     - xgboost_ray
+    - prophet
