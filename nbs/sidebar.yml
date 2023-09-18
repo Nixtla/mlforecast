@@ -18,6 +18,9 @@ website:
           - docs/transfer_learning.ipynb
           - docs/target_transforms_guide.ipynb
           - docs/electricity_load_forecasting.ipynb
+      - section: Guides
+        contents:
+          - docs/prediction_intervals_in_forecasting_models.ipynb
       - section: API reference
         contents:
           - section: Local

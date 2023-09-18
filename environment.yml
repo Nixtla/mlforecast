@@ -9,12 +9,13 @@ dependencies:
   - numba
   - pandas
   - pip
+  - prophet
   - pyspark>=3.3
   - scikit-learn
-  - statsforecast
+  - statsmodels
+  - utilsforecast
   - window-ops
   - xgboost
-  - prophet
   - pip:
     - datasetsforecast
     - duckdb<0.8

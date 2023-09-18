@@ -8,11 +8,12 @@ dependencies:
   - numba
   - pandas
   - pip
+  - prophet
   - scikit-learn
-  - statsforecast
+  - statsmodels
+  - utilsforecast
   - window-ops
   - xgboost
-  - prophet
   - pip:
     - datasetsforecast
     - nbdev
