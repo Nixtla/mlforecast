@@ -12,7 +12,7 @@ dependencies:
   - statsforecast
   - window-ops
   - xgboost
+  - prophet
   - pip:
     - datasetsforecast
     - nbdev
-    - prophet
