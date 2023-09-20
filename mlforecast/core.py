@@ -16,7 +16,7 @@ from numba import njit
 from sklearn.base import BaseEstimator
 
 from .grouped_array import GroupedArray
-from .target_transforms import BaseTargetTransform, Differences
+from .target_transforms import BaseTargetTransform
 from .utils import _ensure_shallow_copy
 
 # %% ../nbs/core.ipynb 10
@@ -125,7 +125,6 @@ class TimeSeries:
         lags: Optional[Lags] = None,
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
-        differences: Optional[Iterable[int]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
