@@ -5,11 +5,9 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'backtest_spli
 
 # %% ../nbs/utils.ipynb 2
 import inspect
-import random
 import reprlib
 import warnings
 from functools import wraps
-from itertools import chain
 from math import ceil, log10
 from typing import Optional, Union
 
