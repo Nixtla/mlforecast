@@ -149,7 +149,7 @@ Gemfile*
 .jekyll-cache
 
 # series files
-*/data/
+/**/data/
 
 # nbdev
 nbs/_docs
