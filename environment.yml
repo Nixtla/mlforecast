@@ -3,15 +3,17 @@ channels:
   - conda-forge
 dependencies:
   - dask<2023.1.1
+  - holidays<0.21
   - lightgbm
   - matplotlib
   - nbformat
   - numba
   - pandas
   - pip
+  - prophet
   - pyspark>=3.3
   - scikit-learn
-  - statsforecast
+  - statsmodels
   - window-ops
   - xgboost
   - pip:
@@ -21,4 +23,5 @@ dependencies:
     - lightgbm_ray
     - nbdev
     - ray<2.4
+    - utilsforecast>=0.0.6
     - xgboost_ray

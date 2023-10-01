@@ -16,7 +16,11 @@ from numba import njit
 from sklearn.base import BaseEstimator
 
 from .grouped_array import GroupedArray
-from .target_transforms import BaseTargetTransform, Differences
+from .target_transforms import BaseTargetTransform
+from .utils import _ensure_shallow_copy
+
+from utilsforecast.processing import DataFrameProcessor
+from utilsforecast.validation import validate_format
 
 # %% ../nbs/core.ipynb 10
 date_features_dtypes = {
@@ -124,7 +128,6 @@ class TimeSeries:
         lags: Optional[Lags] = None,
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
-        differences: Optional[Iterable[int]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[BaseTargetTransform]] = None,
     ):
@@ -147,16 +150,6 @@ class TimeSeries:
         self.lags = [] if lags is None else list(lags)
         self.lag_transforms = {} if lag_transforms is None else lag_transforms
         self.date_features = [] if date_features is None else list(date_features)
-        if differences is not None:
-            warnings.warn(
-                "The differences argument is deprecated and will be removed in a future version.\n"
-                "Please pass an `mlforecast.target_transforms.Differences` instance to the `target_transforms` argument instead."
-                ""
-            )
-            if target_transforms is None:
-                target_transforms = [Differences(differences)]
-            else:
-                target_transforms = [Differences(differences)] + target_transforms
         self.num_threads = num_threads
         self.target_transforms = target_transforms
         for feature in self.date_features:
@@ -203,9 +196,7 @@ class TimeSeries:
         keep_last_n: Optional[int] = None,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
-        for col in (id_col, time_col, target_col):
-            if col not in df:
-                raise ValueError(f"Data doesn't contain {col} column")
+        validate_format(df, id_col, time_col, target_col)
         if df[target_col].isnull().any():
             raise ValueError(f"{target_col} column contains null values.")
         if pd.api.types.is_datetime64_dtype(df[time_col]):
@@ -213,30 +204,36 @@ class TimeSeries:
                 raise ValueError(
                     "Must set frequency when using a timestamp type column."
                 )
-        elif np.issubdtype(df[time_col].dtype.type, np.integer):
+        else:
             if self.freq != 1:
                 warnings.warn("Setting `freq=1` since time col is int.")
                 self.freq = 1
-        else:
-            raise ValueError(f"{time_col} must be either timestamp or integer.")
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
         self.keep_last_n = keep_last_n
         self.static_features = static_features
-        sort_idxs = pd.core.sorting.lexsort_indexer([df[id_col], df[time_col]])
-        self.restore_idxs = np.empty(df.shape[0], dtype=np.int32)
-        self.restore_idxs[sort_idxs] = np.arange(df.shape[0])
-        sorted_df = df[[id_col, time_col, target_col]].iloc[sort_idxs]
+        proc = DataFrameProcessor(id_col, time_col, target_col)
+        sorted_df = df[[id_col, time_col, target_col]]
+        uids, times, _, indptr, sort_idxs = proc.process(sorted_df)
+        self.uids = pd.Index(uids)
+        self.last_dates = pd.Index(times)
+        if sort_idxs is not None:
+            self.restore_idxs = np.empty(df.shape[0], dtype=np.int32)
+            self.restore_idxs[sort_idxs] = np.arange(df.shape[0])
+            sorted_df = sorted_df.iloc[sort_idxs]
+        else:
+            self.restore_idxs = np.arange(df.shape[0])
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
                 tfm.set_column_names(id_col, time_col, target_col)
                 sorted_df = tfm.fit_transform(sorted_df)
-        self.ga = GroupedArray.from_sorted_df(sorted_df, id_col, target_col)
+        data = sorted_df[target_col].values
+        if data.dtype not in (np.float32, np.float64):
+            data = data.astype(np.float32)
+        self.ga = GroupedArray(data, indptr)
         self._ga = GroupedArray(self.ga.data, self.ga.indptr)
         last_idxs_per_serie = self.ga.indptr[1:] - 1
-        self.uids = pd.Index(sorted_df[id_col].iloc[last_idxs_per_serie])
-        self.last_dates = pd.Index(sorted_df[time_col].iloc[last_idxs_per_serie])
         to_drop = [id_col, time_col, target_col]
         if static_features is None:
             static_features = df.columns.drop([time_col, target_col]).tolist()
@@ -244,7 +241,9 @@ class TimeSeries:
             static_features = [id_col] + static_features
         else:  # static_features defined and contain id_col
             to_drop = [time_col, target_col]
-        self.static_features_ = df.iloc[sort_idxs[last_idxs_per_serie]][
+        if sort_idxs is not None:
+            last_idxs_per_serie = sort_idxs[last_idxs_per_serie]
+        self.static_features_ = df.iloc[last_idxs_per_serie][
             static_features
         ].reset_index(drop=True)
         self.features_order_ = df.columns.drop(to_drop).tolist() + self.features
@@ -369,11 +368,7 @@ class TimeSeries:
             for i in range(max_horizon):
                 df[f"{self.target_col}{i}"] = target[:, i]
         else:
-            from packaging.version import Version
-
-            if Version(pd.__version__) < Version("1.4"):
-                # https://github.com/pandas-dev/pandas/pull/43406
-                df = df.copy()
+            df = _ensure_shallow_copy(df)
             df[self.target_col] = target
         return df
 
