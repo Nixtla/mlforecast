@@ -5,7 +5,6 @@ __all__ = ['DistributedMLForecast']
 
 # %% ../../nbs/distributed.forecast.ipynb 5
 import copy
-import warnings
 from collections import namedtuple
 from typing import Any, Callable, Iterable, List, Optional
 
@@ -479,12 +478,6 @@ class DistributedMLForecast:
         result : dask, spark or ray DataFrame
             Predictions for each serie and timestep, with one column per model.
         """
-        if new_data is not None:
-            warnings.warn(
-                "`new_data` has been deprecated, please use `new_df` instead.",
-                DeprecationWarning,
-            )
-            new_df = new_data
         if new_df is not None:
             partition_results = self._preprocess_partitions(
                 new_df,
