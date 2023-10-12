@@ -438,10 +438,6 @@ class DistributedMLForecast:
         for serialized_ts, _, serialized_valid in items:
             valid = cloudpickle.loads(serialized_valid)
             ts = cloudpickle.loads(serialized_ts)
-            if valid is not None:
-                dynamic_features = valid.columns.drop(
-                    [ts.id_col, ts.time_col, ts.target_col]
-                )
             res = ts.predict(
                 models=models,
                 horizon=horizon,
