@@ -45,7 +45,7 @@ from mlforecast.core import (
     TimeSeries,
     _name_models,
 )
-from ..utils import single_split, old_kw_to_pos
+from ..utils import single_split
 from ..target_transforms import BaseTargetTransform
 
 # %% ../../nbs/distributed.forecast.ipynb 6
@@ -281,7 +281,6 @@ class DistributedMLForecast:
         )
         return fa.get_native_as_df(res)
 
-    @old_kw_to_pos(["data"], [1])
     def preprocess(
         self,
         df: fugue.AnyDataFrame,
@@ -291,8 +290,6 @@ class DistributedMLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-        *,
-        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
     ) -> fugue.AnyDataFrame:
         """Add the features to `data`.
 
@@ -380,7 +377,6 @@ class DistributedMLForecast:
             )
         return self
 
-    @old_kw_to_pos(["data"], [1])
     def fit(
         self,
         df: fugue.AnyDataFrame,
@@ -390,8 +386,6 @@ class DistributedMLForecast:
         static_features: Optional[List[str]] = None,
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
-        *,
-        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
     ) -> "DistributedMLForecast":
         """Apply the feature engineering and train the models.
 
@@ -454,16 +448,12 @@ class DistributedMLForecast:
         schema = f"{self.id_col}:string,{self.time_col}:datetime," + models_schema
         return schema
 
-    @old_kw_to_pos(["horizon"], [1])
     def predict(
         self,
         h: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         new_df: Optional[fugue.AnyDataFrame] = None,
-        *,
-        horizon: Optional[int] = None,  # noqa: ARG002
-        new_data: Optional[fugue.AnyDataFrame] = None,
     ) -> fugue.AnyDataFrame:
         """Compute the predictions for the next `horizon` steps.
 
@@ -523,7 +513,6 @@ class DistributedMLForecast:
         )
         return fa.get_native_as_df(res)
 
-    @old_kw_to_pos(["data", "window_size"], [1, 3])
     def cross_validation(
         self,
         df: fugue.AnyDataFrame,
@@ -540,9 +529,6 @@ class DistributedMLForecast:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
-        *,
-        data: Optional[fugue.AnyDataFrame] = None,  # noqa: ARG002
-        window_size: Optional[int] = None,  # noqa: ARG002
     ) -> fugue.AnyDataFrame:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
