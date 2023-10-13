@@ -10,6 +10,8 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
+
+from utilsforecast.compat import DataFrame
 from utilsforecast.data import generate_series
 
 # %% ../nbs/utils.ipynb 4
@@ -23,7 +25,7 @@ def generate_daily_series(
     with_trend: bool = False,
     seed: int = 0,
     engine: str = "pandas",
-) -> pd.DataFrame:
+) -> DataFrame:
     """Generate Synthetic Panel Series.
 
     Parameters
@@ -165,7 +167,7 @@ def backtest_splits(
         train, valid = df[train_mask], df[valid_mask]
         yield cutoffs, train, valid
 
-# %% ../nbs/utils.ipynb 21
+# %% ../nbs/utils.ipynb 22
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
 
@@ -189,7 +191,7 @@ class PredictionIntervals:
     def __repr__(self):
         return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
 
-# %% ../nbs/utils.ipynb 22
+# %% ../nbs/utils.ipynb 23
 def _ensure_shallow_copy(df: pd.DataFrame) -> pd.DataFrame:
     from packaging.version import Version
 
@@ -198,7 +200,7 @@ def _ensure_shallow_copy(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
     return df
 
-# %% ../nbs/utils.ipynb 26
+# %% ../nbs/utils.ipynb 24
 class _ShortSeriesException(Exception):
     def __init__(self, idxs):
         self.idxs = idxs

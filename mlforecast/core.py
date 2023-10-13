@@ -14,8 +14,25 @@ import numpy as np
 import pandas as pd
 from numba import njit
 from sklearn.base import BaseEstimator
-from utilsforecast.compat import DataFrame, pl_DataFrame, pl_Series, pl_concat
-from utilsforecast.processing import DataFrameProcessor
+from utilsforecast.compat import (
+    DataFrame,
+    pl_DataFrame,
+    pl_Datetime,
+    pl_Series,
+    pl_concat,
+)
+from utilsforecast.processing import (
+    DataFrameProcessor,
+    assign_columns,
+    copy_if_pandas,
+    drop_index_if_pandas,
+    is_nan_or_none,
+    is_none,
+    join,
+    rename,
+    sort,
+    take_rows,
+)
 from utilsforecast.validation import validate_format
 
 from .grouped_array import GroupedArray
@@ -183,34 +200,24 @@ class TimeSeries:
             f"num_threads={self.num_threads})"
         )
 
-    def _fit(
-        self,
-        df: DataFrame,
-        id_col: str,
-        time_col: str,
-        target_col: str,
-        static_features: Optional[List[str]] = None,
-        keep_last_n: Optional[int] = None,
-    ) -> "TimeSeries":
-        """Save the series values, ids and last dates."""
-        validate_format(df, id_col, time_col, target_col)
-        if isinstance(df, pd.DataFrame):
-            any_nulls = df[target_col].isnull().any()
-        else:
-            any_nulls = df[target_col].is_nan().any() or df[target_col].is_null().any()
-        if any_nulls:
-            raise ValueError(f"{target_col} column contains null values.")
+    def _validate_freq(self, df: DataFrame, time_col) -> None:
         if isinstance(df, pd.DataFrame):
             time_col_is_datetime = pd.api.types.is_datetime64_dtype(df[time_col])
         else:
-            import polars as pl
-
-            time_col_is_datetime = isinstance(df[time_col].dtype, pl.datatypes.Datetime)
+            time_col_is_datetime = isinstance(df[time_col].dtype, pl_Datetime)
         if isinstance(self.freq, str):
             if isinstance(df, pd.DataFrame):
                 self.freq = pd.tseries.frequencies.to_offset(self.freq)
-        elif isinstance(self.freq, pd.offsets.BaseOffset):
-            ...
+                if not time_col_is_datetime:
+                    raise ValueError(
+                        f"Time col ({time_col}) has integers "
+                        "but specified frequency implies datetime."
+                    )
+        elif isinstance(self.freq, pd.tseries.offsets.BaseOffset):
+            if not isinstance(df, pd.DataFrame):
+                raise ValueError(
+                    f"Inferred frequency for pandas dataframe, but got {type(df)}."
+                )
         elif isinstance(self.freq, int):
             if time_col_is_datetime:
                 raise ValueError(
@@ -227,6 +234,21 @@ class TimeSeries:
                 "Unknown frequency type "
                 "Please use a str, int or offset frequency type."
             )
+
+    def _fit(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
+    ) -> "TimeSeries":
+        """Save the series values, ids and last dates."""
+        validate_format(df, id_col, time_col, target_col)
+        if is_nan_or_none(df[target_col]).any():
+            raise ValueError(f"{target_col} column contains null values.")
+        self._validate_freq(df, time_col)
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
@@ -234,16 +256,12 @@ class TimeSeries:
         self.static_features = static_features
         proc = DataFrameProcessor(id_col, time_col, target_col)
         sorted_df = df[[id_col, time_col, target_col]]
-        if isinstance(sorted_df, pd.DataFrame):
-            sorted_df = sorted_df.copy(deep=False)
+        sorted_df = copy_if_pandas(sorted_df, deep=False)
         uids, times, data, indptr, sort_idxs = proc.process(sorted_df)
-        # utils returns 2d arr
-        data = data[:, 0]
-        # in case we changed the type to float
-        if isinstance(sorted_df, pd.DataFrame):
-            sorted_df[target_col] = data
-        else:
-            sorted_df = sorted_df.with_columns(pl_Series(target_col, data))
+        if data.ndim == 2:
+            data = data[:, 0]
+        # in case we data's type to float
+        sorted_df = assign_columns(sorted_df, target_col, data)
         ga = GroupedArray(data, indptr)
         if isinstance(df, pd.DataFrame):
             self.uids = pd.Index(uids)
@@ -256,22 +274,14 @@ class TimeSeries:
                 df.shape[0], dtype=np.int32
             )
             self.restore_idxs[sort_idxs] = np.arange(df.shape[0])
-            if isinstance(sorted_df, pd.DataFrame):
-                sorted_df = sorted_df.iloc[sort_idxs]
-            else:
-                sorted_df = sorted_df[sort_idxs]
+            sorted_df = take_rows(sorted_df, sort_idxs)
         else:
             self.restore_idxs = None
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
                 if isinstance(tfm, BaseGroupedArrayTargetTransform):
                     ga = tfm.fit_transform(ga)
-                    if isinstance(sorted_df, pd.DataFrame):
-                        sorted_df[target_col] = ga.data
-                    else:
-                        sorted_df = sorted_df.with_columns(
-                            pl_Series(target_col, ga.data)
-                        )
+                    sorted_df = assign_columns(sorted_df, target_col, ga.data)
                 else:
                     tfm.set_column_names(id_col, time_col, target_col)
                     sorted_df = tfm.fit_transform(sorted_df)
@@ -288,12 +298,8 @@ class TimeSeries:
             to_drop = [time_col, target_col]
         if sort_idxs is not None:
             last_idxs_per_serie = sort_idxs[last_idxs_per_serie]
-        if isinstance(df, pd.DataFrame):
-            self.static_features_ = df.iloc[last_idxs_per_serie][
-                static_features
-            ].reset_index(drop=True)
-        else:
-            self.static_features_ = df[last_idxs_per_serie].select(static_features)
+        self.static_features_ = take_rows(df, last_idxs_per_serie)[static_features]
+        self.static_features_ = drop_index_if_pandas(self.static_features_)
         self.features_order_ = [
             c for c in df.columns if c not in to_drop
         ] + self.features
@@ -425,10 +431,7 @@ class TimeSeries:
                 dates = pd.DatetimeIndex(dates)
             for feature in self.date_features:
                 feat_name, feat_vals = self._compute_date_feature(dates, feature)
-                if isinstance(df, pd.DataFrame):
-                    df[feat_name] = feat_vals
-                else:
-                    df = df.with_columns(pl_Series(feat_name, feat_vals))
+                df = assign_columns(df, feat_name, feat_vals)
 
         # assemble return
         if return_X_y:
@@ -436,18 +439,11 @@ class TimeSeries:
             return df[x_cols], target
         if max_horizon is not None:
             target_names = [f"{self.target_col}{i}" for i in range(max_horizon)]
-            if isinstance(df, pd.DataFrame):
-                df[target_names] = target
-            else:
-                targets_df = pl_DataFrame(target, schema=target_names)
-                df = pl_concat([df, targets_df], how="horizontal")
-                del targets_df
+            df = assign_columns(df, target_names, target)
         else:
             if isinstance(df, pd.DataFrame):
                 df = _ensure_shallow_copy(df)
-                df[self.target_col] = target
-            else:
-                df = df.with_columns(pl_Series(self.target_col, target))
+            df = assign_columns(df, self.target_col, target)
         return df
 
     def fit_transform(
@@ -461,7 +457,7 @@ class TimeSeries:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
-    ) -> pd.DataFrame:
+    ) -> Union[DataFrame, Tuple[DataFrame, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
         If not all features are static, specify which ones are in `static_features`.
@@ -507,10 +503,9 @@ class TimeSeries:
         columns = self.features + [self.id_col, self.time_col]
         if isinstance(self.last_dates, pl_Series):
             features_df = pl_DataFrame(features, schema=columns)
-            res = self.static_features_.join(features_df, on=self.id_col)
         else:
             features_df = pd.DataFrame(features, columns=columns)
-            res = self.static_features_.merge(features_df, on=self.id_col)
+        res = join(self.static_features_, features_df, on=self.id_col)
         return res
 
     def _get_raw_predictions(self) -> np.ndarray:
@@ -518,8 +513,6 @@ class TimeSeries:
 
     def _get_future_ids(self, h: int):
         if isinstance(self._uids, pl_Series):
-            import polars as pl
-
             np_uids = self._uids.to_numpy()
             if np_uids.dtype.kind == "O":
                 np_uids = np_uids.astype(str)
@@ -568,20 +561,13 @@ class TimeSeries:
             n_series = len(self._uids)
             h = X_df.shape[0] // n_series
             rows = np.arange(self._h, X_df.shape[0], h)
-            if isinstance(X_df, pd.DataFrame):
-                X = X_df.iloc[rows]
+            X = take_rows(X_df, rows)
+            if isinstance(X, pd.DataFrame):
                 new_x = pd.concat([new_x, X.reset_index(drop=True)], axis=1)
             else:
-                X = X_df[rows]
                 new_x = pl_concat([new_x, X], how="horizontal")
-        cols_with_nulls = []
-        for col in new_x.columns:
-            if isinstance(new_x, pd.DataFrame):
-                nulls_in_col = new_x[col].isnull().any()
-            else:
-                nulls_in_col = new_x[col].is_null().any()
-            if nulls_in_col:
-                cols_with_nulls.append(col)
+        # polars unmatched joins return None (nulls)
+        cols_with_nulls = [col for col in new_x.columns if is_none(new_x[col]).any()]
         if cols_with_nulls:
             warnings.warn(f'Found null values in {", ".join(cols_with_nulls)}.')
         self._h += 1
@@ -609,16 +595,10 @@ class TimeSeries:
             if i == 0:
                 preds = self._get_predictions()
                 rename_dict = {f"{self.target_col}_pred": name}
-                if isinstance(preds, pd.DataFrame):
-                    preds = preds.rename(columns=rename_dict, copy=False)
-                else:
-                    preds = preds.rename(rename_dict)
+                preds = rename(preds, rename_dict)
             else:
                 raw_preds = self._get_raw_predictions()
-                if isinstance(preds, pd.DataFrame):
-                    preds[name] = raw_preds
-                else:
-                    preds = preds.with_column(pl_Series(name, raw_preds))
+                preds = assign_columns(preds, name, raw_preds)
         return preds
 
     def _predict_multi(
@@ -660,10 +640,7 @@ class TimeSeries:
             for i in range(horizon):
                 predictions[:, i] = model[i].predict(new_x)
             raw_preds = predictions.ravel()
-            if isinstance(result, pd.DataFrame):
-                result[name] = raw_preds
-            else:
-                result = result.with_columns(pl_Series(name, raw_preds))
+            result = assign_columns(result, name, raw_preds)
         return result
 
     def predict(
@@ -695,32 +672,47 @@ class TimeSeries:
                 )
             if X_df.shape[1] < 3:
                 raise ValueError("Found no exogenous features in `X_df`.")
-            statics = self.static_features_.columns.drop(self.id_col)
-            dynamics = X_df.columns.drop([self.id_col, self.time_col])
-            common = statics.intersection(dynamics).tolist()
+            statics = {c for c in self.static_features_.columns if c != self.id_col}
+            dynamics = {
+                c for c in X_df.columns if c not in [self.id_col, self.time_col]
+            }
+            common = list(statics & dynamics)
             if common:
                 raise ValueError(
                     f"The following features were provided through `X_df` but were considered as static during fit: {common}.\n"
                     "Please re-run the fit step using the `static_features` argument to indicate which features are static. "
                     "If all your features are dynamic please pass an empty list (static_features=[])."
                 )
-            dates_validation = pd.DataFrame(
+            if isinstance(X_df, pd.DataFrame):
+                starts = last_dates + self.freq
+                ends = last_dates + horizon * self.freq
+                df_constructor = pd.DataFrame
+            else:
+                starts = last_dates.dt.offset_by(self.freq)
+                ends = last_dates.clone()
+                for _ in range(horizon):
+                    ends = dates.offset_by(self.freq)
+                df_constructor = pl_DataFrame
+            dates_validation = df_constructor(
                 {
                     self.id_col: self._uids,
-                    "_start": last_dates + self.freq,
-                    "_end": last_dates + horizon * self.freq,
+                    "_start": starts,
+                    "_end": ends,
                 }
             )
-            X_df = X_df.merge(dates_validation, on=[self.id_col])
-            X_df = X_df[X_df[self.time_col].between(X_df["_start"], X_df["_end"])]
+            X_df = join(X_df, dates_validation, on=self.id_col)
+            if isinstance(X_df, pd.DataFrame):
+                mask = X_df[self.time_col].between(X_df["_start"], X_df["_end"])
+            else:
+                mask = X_df[self.time_col].is_between(X_df["_start"], X_df["_end"])
+            X_df = X_df[mask]
             if X_df.shape[0] != len(self._uids) * horizon:
                 raise ValueError(
                     "Found missing inputs in X_df. "
                     "It should have one row per id and date for the complete forecasting horizon"
                 )
-            X_df = X_df.sort_values([self.id_col, self.time_col]).drop(
-                columns=[self.id_col, self.time_col, "_start", "_end"]
-            )
+            drop_cols = [self.id_col, self.time_col, "_start", "_end"]
+            X_df = sort(X_df, [self.id_col, self.time_col]).drop(columns=drop_cols)
         if getattr(self, "max_horizon", None) is None:
             preds = self._predict_recursive(
                 models=models,
@@ -746,10 +738,7 @@ class TimeSeries:
                 for col in model_cols:
                     ga = GroupedArray(preds[col].to_numpy(), indptr)
                     ga = tfm.inverse_transform(ga)
-                    if isinstance(preds, pd.DataFrame):
-                        preds[col] = ga.data
-                    else:
-                        preds = preds.with_columns(pl_Series(col, ga.data))
+                    preds = assign_columns(preds, col, ga.data)
                 tfm.idxs = None
         del self._uids, self._idxs
         return preds
