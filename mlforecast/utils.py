@@ -10,7 +10,6 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
-
 from utilsforecast.data import generate_series
 
 # %% ../nbs/utils.ipynb 4
@@ -23,11 +22,36 @@ def generate_daily_series(
     static_as_categorical: bool = True,
     with_trend: bool = False,
     seed: int = 0,
+    engine: str = "pandas",
 ) -> pd.DataFrame:
-    """Generates `n_series` of different lengths in the interval [`min_length`, `max_length`].
+    """Generate Synthetic Panel Series.
 
-    If `n_static_features > 0`, then each serie gets static features with random values.
-    If `equal_ends == True` then all series end at the same date."""
+    Parameters
+    ----------
+    n_series : int
+        Number of series for synthetic panel.
+    min_length : int (default=50)
+        Minimum length of synthetic panel's series.
+    max_length : int (default=500)
+        Maximum length of synthetic panel's series.
+    n_static_features : int (default=0)
+        Number of static exogenous variables for synthetic panel's series.
+    equal_ends : bool (default=False)
+        Series should end in the same date stamp `ds`.
+    static_as_categorical : bool (default=True)
+        Static features should have a categorical data type.
+    with_trend : bool (default=False)
+        Series should have a (positive) trend.
+    seed : int (default=0)
+        Random seed used for generating the data.
+    engine : str (default='pandas')
+        Output Dataframe type.
+
+    Returns
+    -------
+    pandas or polars DataFrame
+        Synthetic panel with columns [`unique_id`, `ds`, `y`] and exogenous features.
+    """
     series = generate_series(
         n_series=n_series,
         freq="D",
@@ -38,16 +62,24 @@ def generate_daily_series(
         static_as_categorical=static_as_categorical,
         with_trend=with_trend,
         seed=seed,
+        engine=engine,
     )
     n_digits = ceil(log10(n_series))
 
     def int_id_to_str(uid):
         return f"id_{uid:0{n_digits}}"
 
-    series["unique_id"] = series["unique_id"].map(int_id_to_str).astype("category")
+    if engine == "pandas":
+        series["unique_id"] = series["unique_id"].map(int_id_to_str).astype("category")
+    else:
+        import polars as pl
+
+        series = series.with_columns(
+            pl.col("unique_id").map_elements(int_id_to_str).cast(pl.Categorical)
+        )
     return series
 
-# %% ../nbs/utils.ipynb 14
+# %% ../nbs/utils.ipynb 15
 def generate_prices_for_series(
     series: pd.DataFrame, horizon: int = 7, seed: int = 0
 ) -> pd.DataFrame:
@@ -70,7 +102,7 @@ def generate_prices_for_series(
     prices_catalog = pd.concat(dfs).reset_index()
     return prices_catalog
 
-# %% ../nbs/utils.ipynb 17
+# %% ../nbs/utils.ipynb 18
 def single_split(
     df: pd.DataFrame,
     i_window: int,
@@ -105,7 +137,7 @@ def single_split(
     )
     return cutoffs, train_mask, valid_mask
 
-# %% ../nbs/utils.ipynb 18
+# %% ../nbs/utils.ipynb 19
 def backtest_splits(
     df: pd.DataFrame,
     n_windows: int,
@@ -165,3 +197,8 @@ def _ensure_shallow_copy(df: pd.DataFrame) -> pd.DataFrame:
         # https://github.com/pandas-dev/pandas/pull/43406
         df = df.copy()
     return df
+
+# %% ../nbs/utils.ipynb 26
+class _ShortSeriesException(Exception):
+    def __init__(self, idxs):
+        self.idxs = idxs

@@ -6,10 +6,11 @@ __all__ = ['GroupedArray']
 # %% ../nbs/grouped_array.ipynb 1
 from typing import TYPE_CHECKING, Callable, Tuple, Union
 
-if TYPE_CHECKING:
-    import pandas as pd
 import numpy as np
+import pandas as pd
 from numba import njit
+from utilsforecast.compat import DataFrame
+from utilsforecast.processing import DataFrameProcessor
 from window_ops.shift import shift_array
 
 # %% ../nbs/grouped_array.ipynb 2
@@ -165,7 +166,11 @@ class GroupedArray:
             raise ValueError(f"vals must be of size {self[idx].size}")
         self[idx][:] = vals
 
+    def __copy__(self):
+        return GroupedArray(self.data.copy(), self.indptr)
+
     def take(self, idxs: np.ndarray) -> "GroupedArray":
+        idxs = np.asarray(idxs)
         ranges = [range(self.indptr[i], self.indptr[i + 1]) for i in idxs]
         items = [self.data[rng] for rng in ranges]
         sizes = np.array([item.size for item in items])
@@ -175,11 +180,13 @@ class GroupedArray:
 
     @classmethod
     def from_sorted_df(
-        cls, df: "pd.DataFrame", id_col: str, target_col: str
+        cls, df: DataFrame, id_col: str, time_col: str, target_col: str
     ) -> "GroupedArray":
-        sizes = df.groupby(id_col, observed=True).size().values
-        indptr = np.append(0, sizes.cumsum())
-        data = df[target_col].values.copy()
+        proc = DataFrameProcessor(id_col, time_col, target_col)
+        id_counts = proc._counts_by_id(df)
+        sizes = id_counts["counts"].to_numpy()
+        indptr = np.append(0, sizes.cumsum()).astype(np.int32, copy=False)
+        data = df[target_col].to_numpy().copy()
         if data.dtype not in (np.float32, np.float64):
             # since all transformations generate nulls, we need a float dtype
             data = data.astype(np.float32)
