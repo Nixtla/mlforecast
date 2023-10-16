@@ -3,18 +3,25 @@
 # %% auto 0
 __all__ = ['generate_daily_series', 'generate_prices_for_series', 'backtest_splits', 'PredictionIntervals']
 
-# %% ../nbs/utils.ipynb 2
+# %% ../nbs/utils.ipynb 3
 import reprlib
 from math import ceil, log10
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from utilsforecast.compat import DataFrame
+from utilsforecast.compat import DataFrame, Series, pl
 from utilsforecast.data import generate_series
+from utilsforecast.processing import (
+    DataFrameProcessor,
+    filter_with_mask,
+    group_by,
+    offset_dates,
+    take_rows,
+)
 
-# %% ../nbs/utils.ipynb 4
+# %% ../nbs/utils.ipynb 5
 def generate_daily_series(
     n_series: int,
     min_length: int = 50,
@@ -81,7 +88,7 @@ def generate_daily_series(
         )
     return series
 
-# %% ../nbs/utils.ipynb 15
+# %% ../nbs/utils.ipynb 16
 def generate_prices_for_series(
     series: pd.DataFrame, horizon: int = 7, seed: int = 0
 ) -> pd.DataFrame:
@@ -104,44 +111,53 @@ def generate_prices_for_series(
     prices_catalog = pd.concat(dfs).reset_index()
     return prices_catalog
 
-# %% ../nbs/utils.ipynb 18
+# %% ../nbs/utils.ipynb 19
 def single_split(
-    df: pd.DataFrame,
+    df: DataFrame,
     i_window: int,
     n_windows: int,
     h: int,
     id_col: str,
     time_col: str,
     freq: Union[pd.offsets.BaseOffset, int],
-    max_dates: pd.Series,
+    max_dates: Series,
     step_size: Optional[int] = None,
     input_size: Optional[int] = None,
-):
+) -> Tuple[DataFrame, Series, Series]:
     if step_size is None:
         step_size = h
     test_size = h + step_size * (n_windows - 1)
     offset = test_size - i_window * step_size
-    train_ends = max_dates - offset * freq
-    valid_ends = train_ends + h * freq
+    train_ends = offset_dates(max_dates, freq, -offset)
+    valid_ends = offset_dates(train_ends, freq, h)
     train_mask = df[time_col].le(train_ends)
     if input_size is not None:
-        train_mask &= df[time_col].gt(train_ends - input_size * freq)
-    train_sizes = train_mask.groupby(df[id_col], observed=True).sum()
-    if train_sizes.eq(0).any():
-        ids = reprlib.repr(train_sizes[train_sizes.eq(0)].index.tolist())
+        train_starts = offset_dates(train_ends, freq, -input_size)
+        train_mask &= df[time_col].gt(train_starts)
+    train_sizes = group_by(train_mask, df[id_col], maintain_order=True).sum()
+    if isinstance(train_sizes, pd.Series):
+        train_sizes = train_sizes.reset_index()
+    zeros_mask = train_sizes[time_col].eq(0)
+    if zeros_mask.any():
+        ids = list(filter_with_mask(train_sizes[id_col], zeros_mask))
         raise ValueError(f"The following series are too short for the window: {ids}")
     valid_mask = df[time_col].gt(train_ends) & df[time_col].le(valid_ends)
-    cutoffs = (
-        train_ends.set_axis(df[id_col])
-        .groupby(id_col, observed=True)
-        .head(1)
-        .rename("cutoff")
+    proc = DataFrameProcessor(id_col, "", "")
+    last_idx_per_serie = proc.counts_by_id(df)["counts"].to_numpy().cumsum() - 1
+    cutoff_dates = take_rows(train_ends, last_idx_per_serie)
+    if isinstance(cutoff_dates, pd.Series):
+        cutoff_dates = cutoff_dates.reset_index()[time_col]
+    cutoffs = type(df)(
+        {
+            id_col: train_sizes[id_col],
+            "cutoff": cutoff_dates,
+        }
     )
     return cutoffs, train_mask, valid_mask
 
-# %% ../nbs/utils.ipynb 19
+# %% ../nbs/utils.ipynb 20
 def backtest_splits(
-    df: pd.DataFrame,
+    df: DataFrame,
     n_windows: int,
     h: int,
     id_col: str,
@@ -149,8 +165,11 @@ def backtest_splits(
     freq: Union[pd.offsets.BaseOffset, int],
     step_size: Optional[int] = None,
     input_size: Optional[int] = None,
-):
-    max_dates = df.groupby(id_col, observed=True)[time_col].transform("max")
+) -> Tuple[DataFrame, DataFrame, DataFrame]:
+    if isinstance(df, pd.DataFrame):
+        max_dates = df.groupby(id_col, observed=True)[time_col].transform("max")
+    else:
+        max_dates = df.select(pl.col(time_col).max().over(id_col))[time_col]
     for i in range(n_windows):
         cutoffs, train_mask, valid_mask = single_split(
             df,
@@ -164,10 +183,11 @@ def backtest_splits(
             step_size=step_size,
             input_size=input_size,
         )
-        train, valid = df[train_mask], df[valid_mask]
+        train = filter_with_mask(df, train_mask)
+        valid = filter_with_mask(df, valid_mask)
         yield cutoffs, train, valid
 
-# %% ../nbs/utils.ipynb 22
+# %% ../nbs/utils.ipynb 23
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
 
@@ -191,7 +211,7 @@ class PredictionIntervals:
     def __repr__(self):
         return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
 
-# %% ../nbs/utils.ipynb 23
+# %% ../nbs/utils.ipynb 24
 def _ensure_shallow_copy(df: pd.DataFrame) -> pd.DataFrame:
     from packaging.version import Version
 
@@ -200,7 +220,7 @@ def _ensure_shallow_copy(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
     return df
 
-# %% ../nbs/utils.ipynb 24
+# %% ../nbs/utils.ipynb 25
 class _ShortSeriesException(Exception):
     def __init__(self, idxs):
         self.idxs = idxs

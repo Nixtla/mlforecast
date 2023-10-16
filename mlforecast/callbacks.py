@@ -6,7 +6,12 @@ __all__ = ['SaveFeatures']
 # %% ../nbs/callbacks.ipynb 3
 import pandas as pd
 
-from utilsforecast.compat import DataFrame, pl_concat
+from utilsforecast.compat import DataFrame
+from utilsforecast.processing import (
+    assign_columns,
+    drop_index_if_pandas,
+    vertical_concat,
+)
 
 # %% ../nbs/callbacks.ipynb 4
 class SaveFeatures:
@@ -37,19 +42,10 @@ class SaveFeatures:
                 "Inputs list is empty. "
                 "Call `predict` using this callback as before_predict_callback"
             )
-        if isinstance(self._inputs[0], pd.DataFrame):
-            if with_step:
-                res = pd.concat(
-                    [df.assign(step=i) for i, df in enumerate(self._inputs)]
-                )
-            else:
-                res = pd.concat(self._inputs)
-            res = res.reset_index(drop=True)
+        if with_step:
+            dfs = [assign_columns(df, "step", i) for i, df in enumerate(self._inputs)]
         else:
-            if with_step:
-                res = pl_concat(
-                    [df.with_columns(step=i) for i, df in enumerate(self._inputs)]
-                )
-            else:
-                res = pl_concat(self._inputs)
+            dfs = self._inputs
+        res = vertical_concat(dfs)
+        res = drop_index_if_pandas(res)
         return res

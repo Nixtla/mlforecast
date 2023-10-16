@@ -6,6 +6,7 @@ __all__ = ['TimeSeries']
 # %% ../nbs/core.ipynb 3
 import concurrent.futures
 import inspect
+import re
 import warnings
 from collections import Counter, OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -16,19 +17,20 @@ from numba import njit
 from sklearn.base import BaseEstimator
 from utilsforecast.compat import (
     DataFrame,
+    pl,
     pl_DataFrame,
-    pl_Datetime,
     pl_Series,
-    pl_concat,
 )
 from utilsforecast.processing import (
     DataFrameProcessor,
     assign_columns,
     copy_if_pandas,
     drop_index_if_pandas,
+    horizontal_concat,
     is_nan_or_none,
     is_none,
     join,
+    offset_dates,
     rename,
     sort,
     take_rows,
@@ -137,6 +139,7 @@ LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
+TargetTransform = Union[BaseTargetTransform, BaseGroupedArrayTargetTransform]
 
 # %% ../nbs/core.ipynb 17
 class TimeSeries:
@@ -149,7 +152,7 @@ class TimeSeries:
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
         num_threads: int = 1,
-        target_transforms: Optional[List[BaseTargetTransform]] = None,
+        target_transforms: Optional[List[TargetTransform]] = None,
     ):
         self.freq = freq
         if not isinstance(num_threads, int) or num_threads < 1:
@@ -204,7 +207,7 @@ class TimeSeries:
         if isinstance(df, pd.DataFrame):
             time_col_is_datetime = pd.api.types.is_datetime64_dtype(df[time_col])
         else:
-            time_col_is_datetime = isinstance(df[time_col].dtype, pl_Datetime)
+            time_col_is_datetime = isinstance(df[time_col].dtype, pl.Datetime)
         if isinstance(self.freq, str):
             if isinstance(df, pd.DataFrame):
                 self.freq = pd.tseries.frequencies.to_offset(self.freq)
@@ -393,6 +396,7 @@ class TimeSeries:
             target = self.ga.expand_target(max_horizon)
         if self.restore_idxs is not None:
             target = target[self.restore_idxs]
+        del self.restore_idxs
 
         # determine rows to keep
         if dropna:
@@ -416,11 +420,12 @@ class TimeSeries:
             df = df.copy(deep=False)
 
         # lag transforms
-        if isinstance(df, pd.DataFrame):
-            for feat in self.transforms.keys():
-                df[feat] = features[feat]
-        else:
-            df = pl_concat([df, pl_DataFrame(features)], how="horizontal")
+        feature_names = list(self.transforms.keys())
+        if feature_names:
+            feature_values = np.hstack(
+                [features[name][:, None] for name in feature_names]
+            )
+            df = assign_columns(df, feature_names, feature_values)
 
         # date features
         if self.date_features:
@@ -483,10 +488,7 @@ class TimeSeries:
 
     def _update_features(self) -> DataFrame:
         """Compute the current values of all the features using the latest values of the time series."""
-        if isinstance(self.curr_dates, pl_Series):
-            self.curr_dates = self.curr_dates.dt.offset_by(self.freq)
-        else:
-            self.curr_dates += self.freq
+        self.curr_dates = offset_dates(self.curr_dates, self.freq, 1)
         self.test_dates.append(self.curr_dates)
 
         if self.num_threads == 1 or len(self.transforms) == 1:
@@ -513,10 +515,7 @@ class TimeSeries:
 
     def _get_future_ids(self, h: int):
         if isinstance(self._uids, pl_Series):
-            np_uids = self._uids.to_numpy()
-            if np_uids.dtype.kind == "O":
-                np_uids = np_uids.astype(str)
-            uids = pl_Series(np.repeat(np_uids, h), dtype=self._uids.dtype)
+            uids = pl.concat([self._uids for _ in range(h)]).sort()
         else:
             uids = pd.Series(
                 np.repeat(self._uids, h), name=self.id_col, dtype=self.uids.dtype
@@ -562,10 +561,8 @@ class TimeSeries:
             h = X_df.shape[0] // n_series
             rows = np.arange(self._h, X_df.shape[0], h)
             X = take_rows(X_df, rows)
-            if isinstance(X, pd.DataFrame):
-                new_x = pd.concat([new_x, X.reset_index(drop=True)], axis=1)
-            else:
-                new_x = pl_concat([new_x, X], how="horizontal")
+            X = drop_index_if_pandas(X)
+            new_x = horizontal_concat([new_x, X])
         # polars unmatched joins return None (nulls)
         cols_with_nulls = [col for col in new_x.columns if is_none(new_x[col]).any()]
         if cols_with_nulls:
@@ -615,13 +612,11 @@ class TimeSeries:
             )
         uids = self._get_future_ids(horizon)
         if isinstance(self.last_dates, pl_Series):
-            dates_by_horizon = []
-            next_dates = self.last_dates.clone()
-            for i in range(horizon):
-                next_dates = next_dates.dt.offset_by(self.freq).alias(f"time_{i}")
-                dates_by_horizon.append(pl_DataFrame(next_dates))
-            dates = pl_concat(dates_by_horizon, how="horizontal").to_numpy().ravel()
-            result = pl_DataFrame({self.id_col: uids, self.time_col: dates})
+            starts = self.last_dates.offset_by(self.freq)
+            ends = offset_by(self.last_dates, self.freq, horizon)
+            dates = pl.date_ranges(
+                starts, ends, interval=self.freq, eager=True
+            ).explode()
         else:
             dates = np.hstack(
                 [
@@ -630,7 +625,7 @@ class TimeSeries:
                     for i in range(horizon)
                 ]
             )
-            result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
+        result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
         for name, model in models.items():
             self._predict_setup()
             new_x = self._get_features_for_next_step(X_df)
@@ -672,27 +667,20 @@ class TimeSeries:
                 )
             if X_df.shape[1] < 3:
                 raise ValueError("Found no exogenous features in `X_df`.")
-            statics = {c for c in self.static_features_.columns if c != self.id_col}
-            dynamics = {
+            statics = [c for c in self.static_features_.columns if c != self.id_col]
+            dynamics = [
                 c for c in X_df.columns if c not in [self.id_col, self.time_col]
-            }
-            common = list(statics & dynamics)
+            ]
+            common = [c for c in dynamics if c in statics]
             if common:
                 raise ValueError(
                     f"The following features were provided through `X_df` but were considered as static during fit: {common}.\n"
                     "Please re-run the fit step using the `static_features` argument to indicate which features are static. "
                     "If all your features are dynamic please pass an empty list (static_features=[])."
                 )
-            if isinstance(X_df, pd.DataFrame):
-                starts = last_dates + self.freq
-                ends = last_dates + horizon * self.freq
-                df_constructor = pd.DataFrame
-            else:
-                starts = last_dates.dt.offset_by(self.freq)
-                ends = last_dates.clone()
-                for _ in range(horizon):
-                    ends = dates.offset_by(self.freq)
-                df_constructor = pl_DataFrame
+            starts = offset_dates(last_dates, self.freq, 1)
+            ends = offset_dates(last_dates, self.freq, horizon)
+            df_constructor = type(X_df)
             dates_validation = df_constructor(
                 {
                     self.id_col: self._uids,
@@ -701,10 +689,10 @@ class TimeSeries:
                 }
             )
             X_df = join(X_df, dates_validation, on=self.id_col)
-            if isinstance(X_df, pd.DataFrame):
-                mask = X_df[self.time_col].between(X_df["_start"], X_df["_end"])
-            else:
-                mask = X_df[self.time_col].is_between(X_df["_start"], X_df["_end"])
+            between_attr = "between" if isinstance(X_df, pd.DataFrame) else "is_between"
+            mask = getattr(X_df[self.time_col], between_attr)(
+                X_df["_start"], X_df["_end"]
+            )
             X_df = X_df[mask]
             if X_df.shape[0] != len(self._uids) * horizon:
                 raise ValueError(
@@ -729,16 +717,23 @@ class TimeSeries:
                 X_df=X_df,
             )
         if self.target_transforms is not None:
-            model_cols = [
-                c for c in preds.columns if c not in (self.id_col, self.time_col)
-            ]
-            indptr = np.arange(0, horizon * (len(self._uids) + 1), horizon)
+            if any(
+                isinstance(tfm, BaseGroupedArrayTargetTransform)
+                for tfm in self.target_transforms
+            ):
+                model_cols = [
+                    c for c in preds.columns if c not in (self.id_col, self.time_col)
+                ]
+                indptr = np.arange(0, horizon * (len(self._uids) + 1), horizon)
             for tfm in self.target_transforms[::-1]:
                 tfm.idxs = self._idxs
-                for col in model_cols:
-                    ga = GroupedArray(preds[col].to_numpy(), indptr)
-                    ga = tfm.inverse_transform(ga)
-                    preds = assign_columns(preds, col, ga.data)
+                if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                    for col in model_cols:
+                        ga = GroupedArray(preds[col].to_numpy(), indptr)
+                        ga = tfm.inverse_transform(ga)
+                        preds = assign_columns(preds, col, ga.data)
+                else:
+                    preds = tfm.inverse_transform(preds)
                 tfm.idxs = None
         del self._uids, self._idxs
         return preds

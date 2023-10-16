@@ -124,6 +124,9 @@ class BaseLocalScaler(BaseGroupedArrayTargetTransform):
         )
         return GroupedArray(transformed, ga.indptr)
 
+    def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
+        return self.inverse_transform(ga)
+
 # %% ../nbs/target_transforms.ipynb 12
 class LocalStandardScaler(BaseLocalScaler):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""

@@ -429,6 +429,7 @@ class LightGBMCV:
         cv_result : list of tuple.
             List of (boosting rounds, metric value) tuples.
         """
+        self.ts._validate_freq(df, time_col)
         self.setup(
             df=df,
             n_windows=n_windows,

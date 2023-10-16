@@ -183,7 +183,7 @@ class GroupedArray:
         cls, df: DataFrame, id_col: str, time_col: str, target_col: str
     ) -> "GroupedArray":
         proc = DataFrameProcessor(id_col, time_col, target_col)
-        id_counts = proc._counts_by_id(df)
+        id_counts = proc.counts_by_id(df)
         sizes = id_counts["counts"].to_numpy()
         indptr = np.append(0, sizes.cumsum()).astype(np.int32, copy=False)
         data = df[target_col].to_numpy().copy()

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tupl
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, pl_concat, pl_DataFrame
+from utilsforecast.compat import DataFrame, pl_DataFrame
 from utilsforecast.processing import (
     DataFrameProcessor,
     assign_columns,
@@ -29,13 +29,15 @@ from mlforecast.core import (
     LagTransforms,
     Lags,
     Models,
+    TargetTransform,
     TimeSeries,
     _name_models,
 )
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .target_transforms import BaseTargetTransform
+from .grouped_array import GroupedArray
+from .target_transforms import BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals, backtest_splits
 
 # %% ../nbs/forecast.ipynb 6
@@ -135,7 +137,7 @@ class MLForecast:
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
         num_threads: int = 1,
-        target_transforms: Optional[List[BaseTargetTransform]] = None,
+        target_transforms: Optional[List[TargetTransform]] = None,
     ):
         """Forecasting pipeline
 
@@ -331,9 +333,24 @@ class MLForecast:
     def _invert_transforms_fitted(self, df: pd.DataFrame) -> pd.DataFrame:
         if self.ts.target_transforms is None:
             return df
-        sizes = df.groupby(self.ts.id_col, observed=True).size().values
+        if any(
+            isinstance(tfm, BaseGroupedArrayTargetTransform)
+            for tfm in self.ts.target_transforms
+        ):
+            model_cols = [
+                c for c in df.columns if c not in (self.ts.id_col, self.ts.time_col)
+            ]
+            proc = DataFrameProcessor(self.ts.id_col, "", "")
+            sizes = proc.counts_by_id(df)["counts"].to_numpy()
+            indptr = np.append(0, sizes.cumsum())
         for tfm in self.ts.target_transforms[::-1]:
-            df = tfm.inverse_transform_fitted(df, sizes)
+            if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                for col in model_cols:
+                    ga = GroupedArray(df[col].to_numpy(), indptr)
+                    ga = tfm.inverse_transform_fitted(ga)
+                    df = assign_columns(df, col, ga.data)
+            else:
+                df = tfm.inverse_transform(df)
         return df
 
     def _compute_fitted_values(
@@ -464,8 +481,6 @@ class MLForecast:
             return_X_y=True,
         )
         X = X_with_info[self.ts.features_order_]
-        if isinstance(X, pl_DataFrame):
-            X = X.to_numpy()
         self.fit_models(X, y)
         if fitted:
             fitted_values = self._compute_fitted_values(
@@ -724,7 +739,7 @@ class MLForecast:
                 self.cv_models_.append(self.models_)
                 if fitted:
                     self.cv_fitted_values_.append(
-                        self.fcst_fitted_values_.assign(fold=i_window)
+                        assign_columns(self.fcst_fitted_values_, "fold", i_window)
                     )
             if fitted and not should_fit:
                 if self.ts.target_transforms is not None:
@@ -785,6 +800,7 @@ class MLForecast:
             results.append(result)
         del self.models_
         out = vertical_concat(results)
+        out = drop_index_if_pandas(out)
         first_out_cols = [id_col, time_col, "cutoff", target_col]
         remaining_cols = [c for c in out.columns if c not in first_out_cols]
         return out[first_out_cols + remaining_cols]
