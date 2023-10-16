@@ -6,7 +6,6 @@ __all__ = ['TimeSeries']
 # %% ../nbs/core.ipynb 3
 import concurrent.futures
 import inspect
-import re
 import warnings
 from collections import Counter, OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
