@@ -557,8 +557,12 @@ class TimeSeries:
             X = take_rows(X_df, rows)
             X = drop_index_if_pandas(X)
             new_x = horizontal_concat([new_x, X])
-        # polars unmatched joins return None (nulls)
-        cols_with_nulls = [col for col in new_x.columns if is_none(new_x[col]).any()]
+        if isinstance(new_x, pd.DataFrame):
+            nulls = new_x.isnull().any()
+            cols_with_nulls = nulls[nulls].index.tolist()
+        else:
+            nulls = new_x.select(pl.all().is_null().any())
+            cols_with_nulls = [k for k, v in nulls.to_dicts()[0].items() if v]
         if cols_with_nulls:
             warnings.warn(f'Found null values in {", ".join(cols_with_nulls)}.')
         self._h += 1
