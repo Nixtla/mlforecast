@@ -97,7 +97,7 @@ jobs:
           python-version: '3.10' 
           cache: 'pip'
 
-      - name: Install foreast notebook dependencies
+      - name: Install forceast notebook dependencies
         run: pip install . datasetsforecast lightgbm matplotlib nbdev xgboost
 
       - name: Run forecast notebook

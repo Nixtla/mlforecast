@@ -4,7 +4,6 @@
 __all__ = ['generate_daily_series', 'generate_prices_for_series', 'backtest_splits', 'PredictionIntervals']
 
 # %% ../nbs/utils.ipynb 3
-import reprlib
 from math import ceil, log10
 from typing import Generator, Optional, Tuple, Union
 

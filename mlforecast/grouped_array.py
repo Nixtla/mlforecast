@@ -4,10 +4,9 @@
 __all__ = ['GroupedArray']
 
 # %% ../nbs/grouped_array.ipynb 1
-from typing import TYPE_CHECKING, Callable, Tuple, Union
+from typing import Callable, Tuple, Union
 
 import numpy as np
-import pandas as pd
 from numba import njit
 from utilsforecast.compat import DataFrame
 from utilsforecast.processing import DataFrameProcessor
@@ -153,10 +152,10 @@ class GroupedArray:
     def __init__(self, data: np.ndarray, indptr: np.ndarray):
         self.data = data
         self.indptr = indptr
-        self.ngroups = len(indptr) - 1
+        self.n_groups = len(indptr) - 1
 
     def __len__(self) -> int:
-        return self.ngroups
+        return self.n_groups
 
     def __getitem__(self, idx: int) -> np.ndarray:
         return self.data[self.indptr[idx] : self.indptr[idx + 1]]
@@ -219,7 +218,7 @@ class GroupedArray:
     def take_from_groups(self, idx: Union[int, slice]) -> "GroupedArray":
         """Takes `idx` from each group in the array."""
         ranges = [
-            range(self.indptr[i], self.indptr[i + 1])[idx] for i in range(self.ngroups)
+            range(self.indptr[i], self.indptr[i + 1])[idx] for i in range(self.n_groups)
         ]
         items = [self.data[rng] for rng in ranges]
         sizes = np.array([item.size for item in items])
@@ -229,8 +228,8 @@ class GroupedArray:
 
     def append(self, new: np.ndarray) -> "GroupedArray":
         """Appends each element of `new` to each existing group. Returns a copy."""
-        if new.size != self.ngroups:
-            raise ValueError(f"new must be of size {self.ngroups}")
+        if new.size != self.n_groups:
+            raise ValueError(f"new must be of size {self.n_groups}")
         new_data, new_indptr = _append_one(self.data, self.indptr, new)
         return GroupedArray(new_data, new_indptr)
 
@@ -243,6 +242,4 @@ class GroupedArray:
         return GroupedArray(new_data, new_indptr)
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}(ndata={self.data.size}, ngroups={self.ngroups})"
-        )
+        return f"{self.__class__.__name__}(ndata={self.data.size}, n_groups={self.n_groups})"

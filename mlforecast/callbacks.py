@@ -4,8 +4,6 @@
 __all__ = ['SaveFeatures']
 
 # %% ../nbs/callbacks.ipynb 3
-import pandas as pd
-
 from utilsforecast.compat import DataFrame
 from utilsforecast.processing import (
     assign_columns,

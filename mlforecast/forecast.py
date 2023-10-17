@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tupl
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, pl_DataFrame
+from utilsforecast.compat import DataFrame
 from utilsforecast.processing import (
     DataFrameProcessor,
     assign_columns,
@@ -630,7 +630,7 @@ class MLForecast:
                     level=level_,
                     cs_h=self.prediction_intervals.h,
                     cs_n_windows=self.prediction_intervals.n_windows,
-                    n_series=self.ts.ga.ngroups,
+                    n_series=self.ts.ga.n_groups,
                     horizon=h,
                 )
         return forecasts

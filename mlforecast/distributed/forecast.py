@@ -46,7 +46,6 @@ from mlforecast.core import (
     _name_models,
 )
 from ..utils import single_split
-from ..target_transforms import BaseTargetTransform
 
 # %% ../../nbs/distributed.forecast.ipynb 6
 WindowInfo = namedtuple(

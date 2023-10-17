@@ -2,18 +2,16 @@
 
 # %% auto 0
 __all__ = ['BaseTargetTransform', 'BaseGroupedArrayTargetTransform', 'Differences', 'LocalStandardScaler', 'LocalMinMaxScaler',
-           'LocalRobustScaler', 'GlobalSklearnTransformer']
+           'LocalRobustScaler', 'LocalBoxCox', 'GlobalSklearnTransformer']
 
 # %% ../nbs/target_transforms.ipynb 3
 import abc
 import copy
-import reprlib
 from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.base import TransformerMixin, clone
-from numba import njit
 from utilsforecast.compat import DataFrame
 from utilsforecast.target_transforms import (
     LocalBoxCox as BoxCox,
@@ -25,7 +23,7 @@ from utilsforecast.target_transforms import (
 )
 
 from .grouped_array import GroupedArray, _apply_difference
-from .utils import _ensure_shallow_copy, _ShortSeriesException
+from .utils import _ShortSeriesException
 
 # %% ../nbs/target_transforms.ipynb 5
 class BaseTargetTransform(abc.ABC):
@@ -77,7 +75,7 @@ class Differences(BaseGroupedArrayTargetTransform):
         total_diffs = sum(self.differences)
         small_series = original_sizes < total_diffs
         if small_series.any():
-            raise _ShortSeriesException(np.arange(ga.ngroups)[small_series])
+            raise _ShortSeriesException(np.arange(ga.n_groups)[small_series])
         self.original_values_ = []
         n_series = len(ga.indptr) - 1
         for d in self.differences:
@@ -156,6 +154,26 @@ class LocalRobustScaler(BaseLocalScaler):
         self.scaler_factory = lambda: RobustScaler(scale)  # type: ignore
 
 # %% ../nbs/target_transforms.ipynb 19
+class LocalBoxCox(BaseLocalScaler):
+    """Finds the optimum lambda for each serie and applies the Box-Cox transformation"""
+
+    def __init__(self):
+        self.scaler = BoxCox()
+
+    def fit_transform(self, ga: GroupedArray) -> GroupedArray:
+        return GroupedArray(self.scaler.fit_transform(ga), ga.indptr)
+
+    def inverse_transform(self, ga: GroupedArray) -> np.ndarray:
+        from scipy.special import inv_boxcox1p
+
+        sizes = np.diff(ga.indptr)
+        lmbdas = self.scaler.lmbdas_
+        if self.idxs is not None:
+            lmbdas = lmbdas[self.idxs]
+        lmbdas = np.repeat(lmbdas, sizes, axis=0)
+        return inv_boxcox1p(ga.data, lmbdas)
+
+# %% ../nbs/target_transforms.ipynb 21
 class GlobalSklearnTransformer(BaseTargetTransform):
     """Applies the same scikit-learn transformer to all series."""
 
