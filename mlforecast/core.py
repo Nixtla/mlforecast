@@ -28,7 +28,6 @@ from utilsforecast.processing import (
     filter_with_mask,
     horizontal_concat,
     is_nan_or_none,
-    is_none,
     join,
     offset_dates,
     rename,
