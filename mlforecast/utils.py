@@ -6,7 +6,7 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'backtest_spli
 # %% ../nbs/utils.ipynb 3
 import reprlib
 from math import ceil, log10
-from typing import Optional, Tuple, Union
+from typing import Generator, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -165,7 +165,7 @@ def backtest_splits(
     freq: Union[pd.offsets.BaseOffset, int],
     step_size: Optional[int] = None,
     input_size: Optional[int] = None,
-) -> Tuple[DataFrame, DataFrame, DataFrame]:
+) -> Generator[Tuple[DataFrame, DataFrame, DataFrame], None, None]:
     if isinstance(df, pd.DataFrame):
         max_dates = df.groupby(id_col, observed=True)[time_col].transform("max")
     else:

@@ -17,6 +17,7 @@ from utilsforecast.processing import (
     assign_columns,
     copy_if_pandas,
     drop_index_if_pandas,
+    filter_with_mask,
     is_nan,
     join,
     take_rows,
@@ -33,10 +34,10 @@ from mlforecast.core import (
     TimeSeries,
     _name_models,
 )
+from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .grouped_array import GroupedArray
 from .target_transforms import BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals, backtest_splits
 
@@ -61,7 +62,7 @@ def _add_conformal_distribution_intervals(
     cuts = [alpha / 200 for alpha in reversed(alphas)]
     cuts.extend(1 - alpha / 200 for alpha in alphas)
     for model in model_names:
-        scores = cs_df[model].values.reshape(cs_n_windows, n_series, cs_h)
+        scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
         mean = fcst_df[model].to_numpy().reshape(1, n_series, -1)
@@ -280,9 +281,9 @@ class MLForecast:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
                     keep = ~np.isnan(y[:, col])
-                    self.models_[name].append(
-                        clone(model).fit(X.loc[keep], y[keep, col])
-                    )
+                    Xh = filter_with_mask(X, keep)
+                    yh = y[keep, col]
+                    self.models_[name].append(clone(model).fit(Xh, yh))
             else:
                 self.models_[name] = clone(model).fit(X, y)
         return self
@@ -327,7 +328,8 @@ class MLForecast:
         # conformity score for each model
         for model in self.models.keys():
             # compute absolute error for each model
-            cv_results[model] = np.abs(cv_results[model] - cv_results[target_col])
+            abs_err = abs(cv_results[model] - cv_results[target_col])
+            cv_results = assign_columns(cv_results, model, abs_err)
         return cv_results.drop(columns=target_col)
 
     def _invert_transforms_fitted(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -367,14 +369,17 @@ class MLForecast:
         base = copy_if_pandas(base, deep=False)
         processor = DataFrameProcessor(id_col, time_col, "")
         sort_idxs = processor.maybe_compute_sort_indices(base)
+        if sort_idxs is not None:
+            base = take_rows(base, sort_idxs)
+            X = take_rows(X, sort_idxs)
+            y = y[sort_idxs]
         if max_horizon is None:
-            fitted_values = base
-            fitted_values = assign_columns(fitted_values, target_col, y)
-            if sort_idxs is not None:
-                fitted_values = take_rows(fitted_vales, sort_idxs)
+            fitted_values = assign_columns(base, target_col, y)
             for name, model in self.models_.items():
                 assert not isinstance(model, list)  # mypy
                 preds = model.predict(X)
+                # if isinstance(X, pd.DataFrame):
+                #     import pdb; pdb.set_trace()
                 fitted_values = assign_columns(fitted_values, name, preds)
             fitted_values = self._invert_transforms_fitted(fitted_values)
         else:
@@ -382,8 +387,6 @@ class MLForecast:
             for horizon in range(max_horizon):
                 horizon_base = copy_if_pandas(base, deep=True)
                 horizon_base = assign_columns(horizon_base, target_col, y[:, horizon])
-                if sort_idxs is not None:
-                    horizon_base = take_rows(horizon_base, sort_idxs)
                 horizon_fitted_values.append(horizon_base)
             for name, horizon_models in self.models_.items():
                 for horizon, model in enumerate(horizon_models):
@@ -393,7 +396,7 @@ class MLForecast:
                     )
             for horizon, horizon_df in enumerate(horizon_fitted_values):
                 keep_mask = ~is_nan(horizon_df[target_col])
-                horizon_df = horizon_df[keep_mask]
+                horizon_df = filter_with_mask(horizon_df, keep_mask)
                 horizon_df = copy_if_pandas(horizon_df, deep=True)
                 horizon_df = self._invert_transforms_fitted(horizon_df)
                 horizon_df = assign_columns(horizon_df, "h", horizon + 1)
@@ -510,7 +513,7 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         X_df: Optional[DataFrame] = None,
         ids: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """Compute the predictions for the next `h` steps.
 
         Parameters
@@ -710,6 +713,10 @@ class MLForecast:
         results = []
         self.cv_models_ = []
         self.ts._validate_freq(df, time_col)
+        proc = DataFrameProcessor(id_col, time_col, target_col)
+        sort_idxs = proc.maybe_compute_sort_indices(df)
+        if sort_idxs is not None:
+            df = take_rows(df, sort_idxs)
         splits = backtest_splits(
             df,
             n_windows=n_windows,

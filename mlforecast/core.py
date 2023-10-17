@@ -25,6 +25,7 @@ from utilsforecast.processing import (
     assign_columns,
     copy_if_pandas,
     drop_index_if_pandas,
+    filter_with_mask,
     horizontal_concat,
     is_nan_or_none,
     is_none,
@@ -262,8 +263,6 @@ class TimeSeries:
         uids, times, data, indptr, sort_idxs = proc.process(sorted_df)
         if data.ndim == 2:
             data = data[:, 0]
-        # in case we data's type to float
-        sorted_df = assign_columns(sorted_df, target_col, data)
         ga = GroupedArray(data, indptr)
         if isinstance(df, pd.DataFrame):
             self.uids = pd.Index(uids)
@@ -385,7 +384,7 @@ class TimeSeries:
         features = self._compute_transforms()
         if self.restore_idxs is not None:
             for k, v in features.items():
-                features[k] = features[k][self.restore_idxs]
+                features[k] = v[self.restore_idxs]
 
         # target
         self.max_horizon = max_horizon
@@ -410,10 +409,8 @@ class TimeSeries:
             keep_rows = ~(feature_nulls | target_nulls)
             for k, v in features.items():
                 features[k] = v[keep_rows]
-            if isinstance(df, pd.DataFrame):
-                df = df[keep_rows].copy(deep=False)
-            else:
-                df = df.filter(keep_rows)
+            df = filter_with_mask(df, keep_rows)
+            df = copy_if_pandas(df, deep=False)
             target = target[keep_rows]
         elif isinstance(df, pd.DataFrame):
             df = df.copy(deep=False)
@@ -487,7 +484,9 @@ class TimeSeries:
 
     def _update_features(self) -> DataFrame:
         """Compute the current values of all the features using the latest values of the time series."""
-        self.curr_dates = offset_dates(self.curr_dates, self.freq, 1)
+        self.curr_dates: Union[pd.Index, pl_Series] = offset_dates(
+            self.curr_dates, self.freq, 1
+        )
         self.test_dates.append(self.curr_dates)
 
         if self.num_threads == 1 or len(self.transforms) == 1:
@@ -547,7 +546,7 @@ class TimeSeries:
         if self._idxs is not None:
             self.ga = self.ga.take(self._idxs)
             self.curr_dates = self.curr_dates[self._idxs]
-        self.test_dates = []
+        self.test_dates: List[Union[pd.Index, pl_Series]] = []
         self.y_pred = []
         if self.keep_last_n is not None:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
@@ -576,7 +575,7 @@ class TimeSeries:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DataFrame] = None,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """Use `model` to predict the next `horizon` timesteps."""
         for i, (name, model) in enumerate(models.items()):
             self._predict_setup()
@@ -603,7 +602,7 @@ class TimeSeries:
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         X_df: Optional[DataFrame] = None,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         assert self.max_horizon is not None
         if horizon > self.max_horizon:
             raise ValueError(
@@ -611,12 +610,14 @@ class TimeSeries:
             )
         uids = self._get_future_ids(horizon)
         if isinstance(self.last_dates, pl_Series):
-            starts = self.last_dates.offset_by(self.freq)
-            ends = offset_by(self.last_dates, self.freq, horizon)
+            starts = offset_dates(self.last_dates, self.freq, 1)
+            ends = offset_dates(self.last_dates, self.freq, horizon)
             dates = pl.date_ranges(
                 starts, ends, interval=self.freq, eager=True
             ).explode()
+            df_constructor = pl_DataFrame
         else:
+            assert isinstance(self.freq, (pd.offsets.BaseOffset, int))
             dates = np.hstack(
                 [
                     date + (i + 1) * self.freq
@@ -624,7 +625,8 @@ class TimeSeries:
                     for i in range(horizon)
                 ]
             )
-        result = pd.DataFrame({self.id_col: uids, self.time_col: dates})
+            df_constructor = pd.DataFrame
+        result = df_constructor({self.id_col: uids, self.time_col: dates})
         for name, model in models.items():
             self._predict_setup()
             new_x = self._get_features_for_next_step(X_df)
@@ -645,7 +647,7 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DataFrame] = None,
         ids: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         if ids is not None:
             unseen = set(ids) - set(self.uids)
             if unseen:
@@ -725,15 +727,15 @@ class TimeSeries:
                 ]
                 indptr = np.arange(0, horizon * (len(self._uids) + 1), horizon)
             for tfm in self.target_transforms[::-1]:
-                tfm.idxs = self._idxs
                 if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                    tfm.idxs = self._idxs
                     for col in model_cols:
                         ga = GroupedArray(preds[col].to_numpy(), indptr)
                         ga = tfm.inverse_transform(ga)
                         preds = assign_columns(preds, col, ga.data)
+                    tfm.idxs = None
                 else:
                     preds = tfm.inverse_transform(preds)
-                tfm.idxs = None
         del self._uids, self._idxs
         return preds
 

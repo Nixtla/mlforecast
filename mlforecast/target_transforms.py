@@ -58,6 +58,9 @@ class BaseGroupedArrayTargetTransform(abc.ABC):
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         raise NotImplementedError
 
+    def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
+        return self.inverse_transform(ga)
+
 # %% ../nbs/target_transforms.ipynb 7
 class Differences(BaseGroupedArrayTargetTransform):
     """Subtracts previous values of the serie. Can be used to remove trend or seasonalities."""
@@ -150,7 +153,7 @@ class LocalRobustScaler(BaseLocalScaler):
     """
 
     def __init__(self, scale: str):
-        self.scaler_factory = lambda: RobustScaler(scale)
+        self.scaler_factory = lambda: RobustScaler(scale)  # type: ignore
 
 # %% ../nbs/target_transforms.ipynb 19
 class GlobalSklearnTransformer(BaseTargetTransform):
