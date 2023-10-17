@@ -493,15 +493,16 @@ class TimeSeries:
             feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
             features[feat_name] = feat_vals
 
-        features[self.id_col] = self._uids
-        features[self.time_col] = self.curr_dates
-        columns = self.features + [self.id_col, self.time_col]
         if isinstance(self.last_dates, pl_Series):
+            columns = self.features + [self.id_col, self.time_col]
+            features[self.id_col] = self._uids
+            features[self.time_col] = self.curr_dates
             features_df = pl_DataFrame(features, schema=columns)
         else:
-            features_df = pd.DataFrame(features, columns=columns)
-        res = join(self.static_features_, features_df, on=self.id_col)
-        return res
+            features_df = pd.DataFrame(features, columns=self.features)
+            features_df[self.id_col] = self._uids
+            features_df[self.time_col] = self.curr_dates
+        return join(self.static_features_, features_df, on=self.id_col)
 
     def _get_raw_predictions(self) -> np.ndarray:
         return np.array(self.y_pred).ravel("F")

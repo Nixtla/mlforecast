@@ -163,7 +163,7 @@ class LocalBoxCox(BaseLocalScaler):
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         return GroupedArray(self.scaler.fit_transform(ga), ga.indptr)
 
-    def inverse_transform(self, ga: GroupedArray) -> np.ndarray:
+    def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         from scipy.special import inv_boxcox1p
 
         sizes = np.diff(ga.indptr)
@@ -171,7 +171,7 @@ class LocalBoxCox(BaseLocalScaler):
         if self.idxs is not None:
             lmbdas = lmbdas[self.idxs]
         lmbdas = np.repeat(lmbdas, sizes, axis=0)
-        return inv_boxcox1p(ga.data, lmbdas)
+        return GroupedArray(inv_boxcox1p(ga.data, lmbdas), ga.indptr)
 
 # %% ../nbs/target_transforms.ipynb 21
 class GlobalSklearnTransformer(BaseTargetTransform):
