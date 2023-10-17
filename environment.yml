@@ -26,5 +26,5 @@ dependencies:
     - nbdev
     - polars
     - ray<2.4
-    - utilsforecast>=0.0.8
+    - utilsforecast>=0.0.9
     - xgboost_ray
