@@ -416,12 +416,8 @@ class TimeSeries:
             df = df.copy(deep=False)
 
         # lag transforms
-        feature_names = list(self.transforms.keys())
-        if feature_names:
-            feature_values = np.hstack(
-                [features[name][:, None] for name in feature_names]
-            )
-            df = assign_columns(df, feature_names, feature_values)
+        for feat in self.transforms.keys():
+            df = assign_columns(df, feat, features[feat])
 
         # date features
         if self.date_features:
