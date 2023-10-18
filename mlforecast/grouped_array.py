@@ -8,8 +8,6 @@ from typing import Callable, Tuple, Union
 
 import numpy as np
 from numba import njit
-from utilsforecast.compat import DataFrame
-from utilsforecast.processing import counts_by_id
 from window_ops.shift import shift_array
 
 # %% ../nbs/grouped_array.ipynb 2
