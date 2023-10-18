@@ -33,6 +33,7 @@ from utilsforecast.processing import (
     rename,
     sort,
     take_rows,
+    to_numpy,
 )
 from utilsforecast.validation import validate_format
 
@@ -376,6 +377,7 @@ class TimeSeries:
         dropna: bool = True,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
+        as_numpy: bool = False,
     ) -> pd.DataFrame:
         """Add the features to `df`.
 
@@ -431,9 +433,14 @@ class TimeSeries:
 
         # assemble return
         if return_X_y:
-            x_cols = [c for c in df.columns if c != self.target_col]
-            return df[x_cols], target
+            X = df[self.features_order_]
+            if as_numpy:
+                X = to_numpy(X)
+            return X, target
         if max_horizon is not None:
+            # remove original target
+            out_cols = [c for c in df.columns if c != self.target_col]
+            df = df[out_cols]
             target_names = [f"{self.target_col}{i}" for i in range(max_horizon)]
             df = assign_columns(df, target_names, target)
         else:
@@ -453,6 +460,7 @@ class TimeSeries:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
+        as_numpy: bool = False,
     ) -> Union[DataFrame, Tuple[DataFrame, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -461,9 +469,21 @@ class TimeSeries:
         If `keep_last_n` is not None then that number of observations is kept across all series for updates.
         """
         self.dropna = dropna
-        self._fit(data, id_col, time_col, target_col, static_features, keep_last_n)
+        self.as_numpy = as_numpy
+        self._fit(
+            df=data,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+        )
         return self._transform(
-            data, dropna=dropna, max_horizon=max_horizon, return_X_y=return_X_y
+            df=data,
+            dropna=dropna,
+            max_horizon=max_horizon,
+            return_X_y=return_X_y,
+            as_numpy=as_numpy,
         )
 
     def _update_y(self, new: np.ndarray) -> None:
@@ -566,7 +586,10 @@ class TimeSeries:
         if cols_with_nulls:
             warnings.warn(f'Found null values in {", ".join(cols_with_nulls)}.')
         self._h += 1
-        return new_x[self.features_order_]
+        new_x = new_x[self.features_order_]
+        if self.as_numpy:
+            new_x = to_numpy(new_x)
+        return new_x
 
     def _predict_recursive(
         self,

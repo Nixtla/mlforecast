@@ -5,6 +5,7 @@ __all__ = ['MLForecast']
 
 # %% ../nbs/forecast.ipynb 3
 import copy
+import re
 import warnings
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -20,7 +21,9 @@ from utilsforecast.processing import (
     filter_with_mask,
     is_nan,
     join,
+    maybe_compute_sort_indices,
     take_rows,
+    to_numpy,
     vertical_concat,
 )
 
@@ -215,6 +218,7 @@ class MLForecast:
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
+        as_numpy: bool = False,
     ) -> Union[DataFrame, Tuple[DataFrame, np.ndarray]]:
         """Add the features to `data`.
 
@@ -234,10 +238,12 @@ class MLForecast:
             Drop rows with missing values produced by the transformations.
         keep_last_n : int, optional (default=None)
             Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.
-        max_horizon: int, optional (default=None)
+        max_horizon : int, optional (default=None)
             Train this many models, where each model will predict a specific horizon.
-        return_X_y: bool (default=False)
+        return_X_y : bool (default=False)
             Return a tuple with the features and the target. If False will return a single dataframe.
+        as_numpy : bool (default = False)
+            Cast features to numpy array. Only works for `return_X_y=True`.
 
         Returns
         -------
@@ -254,18 +260,19 @@ class MLForecast:
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
             return_X_y=return_X_y,
+            as_numpy=as_numpy,
         )
 
     def fit_models(
         self,
-        X: Union[pd.DataFrame, np.ndarray],
+        X: Union[DataFrame, np.ndarray],
         y: np.ndarray,
     ) -> "MLForecast":
-        """Manually train models. Use this if you called `Forecast.preprocess` beforehand.
+        """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
         Parameters
         ----------
-        X : pandas DataFrame or numpy array
+        X : pandas or polars DataFrame or numpy array
             Features.
         y : numpy array.
             Target.
@@ -355,20 +362,30 @@ class MLForecast:
                 df = tfm.inverse_transform(df)
         return df
 
+    def _extract_X_y(
+        self,
+        prep: DataFrame,
+        target_col: str,
+    ) -> Tuple[Union[DataFrame, np.ndarray], np.ndarray]:
+        X = prep[self.ts.features_order_]
+        targets = [c for c in prep.columns if re.match(rf"^{target_col}\d?$", c)]
+        if len(targets) == 1:
+            targets = targets[0]
+        y = prep[targets].to_numpy()
+        return X, y
+
     def _compute_fitted_values(
         self,
-        X_with_info: DataFrame,
+        base: DataFrame,
+        X: Union[DataFrame, np.ndarray],
         y: np.ndarray,
         id_col: str,
         time_col: str,
         target_col: str,
         max_horizon: Optional[int],
     ) -> DataFrame:
-        X = X_with_info[self.ts.features_order_]
-        base = X_with_info[[id_col, time_col]]
         base = copy_if_pandas(base, deep=False)
-        processor = DataFrameProcessor(id_col, time_col, "")
-        sort_idxs = processor.maybe_compute_sort_indices(base)
+        sort_idxs = maybe_compute_sort_indices(base, id_col, time_col)
         if sort_idxs is not None:
             base = take_rows(base, sort_idxs)
             X = take_rows(X, sort_idxs)
@@ -378,8 +395,6 @@ class MLForecast:
             for name, model in self.models_.items():
                 assert not isinstance(model, list)  # mypy
                 preds = model.predict(X)
-                # if isinstance(X, pd.DataFrame):
-                #     import pdb; pdb.set_trace()
                 fitted_values = assign_columns(fitted_values, name, preds)
             fitted_values = self._invert_transforms_fitted(fitted_values)
         else:
@@ -422,6 +437,7 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         fitted: bool = False,
+        as_numpy: bool = False,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -446,8 +462,10 @@ class MLForecast:
             Train this many models, where each model will predict a specific horizon.
         prediction_intervals : PredictionIntervals, optional (default=None)
             Configuration to calibrate prediction intervals (Conformal Prediction).
-        fitted : bool
+        fitted : bool (default=False)
             Save in-sample predictions.
+        as_numpy : bool (default = False)
+            Cast features to numpy array. Only works for `fitted=False`.
 
         Returns
         -------
@@ -472,7 +490,7 @@ class MLForecast:
                 n_windows=prediction_intervals.n_windows,
                 h=prediction_intervals.h,
             )
-        X_with_info, y = self.preprocess(
+        prep = self.preprocess(
             df=df,
             id_col=id_col,
             time_col=time_col,
@@ -481,13 +499,20 @@ class MLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
-            return_X_y=True,
+            return_X_y=not fitted,
+            as_numpy=as_numpy,
         )
-        X = X_with_info[self.ts.features_order_]
+        if isinstance(prep, tuple):
+            X, y = prep
+        else:
+            base = prep[[id_col, time_col]]
+            X, y = self._extract_X_y(prep, target_col)
+            del prep
         self.fit_models(X, y)
         if fitted:
             fitted_values = self._compute_fitted_values(
-                X_with_info=X_with_info,
+                base=base,
+                X=X,
                 y=y,
                 id_col=id_col,
                 time_col=time_col,
@@ -581,6 +606,7 @@ class MLForecast:
                 keep_last_n=self.ts.keep_last_n,
             )
             new_ts.max_horizon = self.ts.max_horizon
+            new_ts.as_numpy = self.ts.as_numpy
             ts = new_ts
         else:
             ts = self.ts
@@ -655,6 +681,7 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         input_size: Optional[int] = None,
         fitted: bool = False,
+        as_numpy: bool = False,
     ) -> DataFrame:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -704,6 +731,8 @@ class MLForecast:
             Maximum training samples per serie in each window. If None, will use an expanding window.
         fitted : bool (default=False)
             Store the in-sample predictions.
+        as_numpy : bool (default = False)
+            Cast features to numpy array. Only works for `fitted=False`.
 
         Returns
         -------
@@ -753,7 +782,7 @@ class MLForecast:
                     for tfm in self.ts.target_transforms:
                         if hasattr(tfm, "store_fitted"):
                             tfm.store_fitted = True
-                train_X, train_y = self.preprocess(
+                prep = self.preprocess(
                     train,
                     id_col=id_col,
                     time_col=time_col,
@@ -762,10 +791,14 @@ class MLForecast:
                     dropna=dropna,
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
-                    return_X_y=True,
+                    return_X_y=False,
                 )
+                base = prep[[id_col, time_col]]
+                train_X, train_y = self._extract_X_y(prep, target_col)
+                del prep
                 fitted_values = self._compute_fitted_values(
-                    X_with_info=train_X,
+                    base=base,
+                    X=train_X,
                     y=train_y,
                     id_col=id_col,
                     time_col=time_col,
