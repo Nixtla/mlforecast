@@ -23,7 +23,6 @@ from utilsforecast.processing import (
     join,
     maybe_compute_sort_indices,
     take_rows,
-    to_numpy,
     vertical_concat,
 )
 
@@ -770,6 +769,7 @@ class MLForecast:
                     max_horizon=max_horizon,
                     prediction_intervals=prediction_intervals,
                     fitted=fitted,
+                    as_numpy=as_numpy,
                 )
                 self.cv_models_.append(self.models_)
                 if fitted:

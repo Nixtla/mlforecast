@@ -177,19 +177,6 @@ class GroupedArray:
         indptr = np.append(0, sizes.cumsum())
         return GroupedArray(data, indptr)
 
-    @classmethod
-    def from_sorted_df(
-        cls, df: DataFrame, id_col: str, time_col: str, target_col: str
-    ) -> "GroupedArray":
-        id_counts = counts_by_id(df, id_col)
-        sizes = id_counts["counts"].to_numpy()
-        indptr = np.append(0, sizes.cumsum()).astype(np.int32, copy=False)
-        data = df[target_col].to_numpy().copy()
-        if data.dtype not in (np.float32, np.float64):
-            # since all transformations generate nulls, we need a float dtype
-            data = data.astype(np.float32)
-        return cls(data, indptr)
-
     def transform_series(
         self, updates_only: bool, lag: int, func: Callable, *args
     ) -> np.ndarray:
