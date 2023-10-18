@@ -14,9 +14,9 @@ import pandas as pd
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DataFrame
 from utilsforecast.processing import (
-    DataFrameProcessor,
     assign_columns,
     copy_if_pandas,
+    counts_by_id,
     drop_index_if_pandas,
     filter_with_mask,
     is_nan,
@@ -349,8 +349,8 @@ class MLForecast:
             model_cols = [
                 c for c in df.columns if c not in (self.ts.id_col, self.ts.time_col)
             ]
-            proc = DataFrameProcessor(self.ts.id_col, "", "")
-            sizes = proc.counts_by_id(df)["counts"].to_numpy()
+            id_counts = counts_by_id(df, self.ts.id_col)
+            sizes = id_counts["counts"].to_numpy()
             indptr = np.append(0, sizes.cumsum())
         for tfm in self.ts.target_transforms[::-1]:
             if isinstance(tfm, BaseGroupedArrayTargetTransform):
@@ -742,8 +742,7 @@ class MLForecast:
         results = []
         self.cv_models_ = []
         self.ts._validate_freq(df, time_col)
-        proc = DataFrameProcessor(id_col, time_col, target_col)
-        sort_idxs = proc.maybe_compute_sort_indices(df)
+        sort_idxs = maybe_compute_sort_indices(df, id_col, time_col)
         if sort_idxs is not None:
             df = take_rows(df, sort_idxs)
         splits = backtest_splits(

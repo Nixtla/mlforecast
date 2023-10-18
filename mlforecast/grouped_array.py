@@ -9,7 +9,7 @@ from typing import Callable, Tuple, Union
 import numpy as np
 from numba import njit
 from utilsforecast.compat import DataFrame
-from utilsforecast.processing import DataFrameProcessor
+from utilsforecast.processing import counts_by_id
 from window_ops.shift import shift_array
 
 # %% ../nbs/grouped_array.ipynb 2
@@ -181,8 +181,7 @@ class GroupedArray:
     def from_sorted_df(
         cls, df: DataFrame, id_col: str, time_col: str, target_col: str
     ) -> "GroupedArray":
-        proc = DataFrameProcessor(id_col, time_col, target_col)
-        id_counts = proc.counts_by_id(df)
+        id_counts = counts_by_id(df, id_col)
         sizes = id_counts["counts"].to_numpy()
         indptr = np.append(0, sizes.cumsum()).astype(np.int32, copy=False)
         data = df[target_col].to_numpy().copy()
