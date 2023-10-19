@@ -5,7 +5,7 @@ nbdev_docs
 echo "nbdev_docs is done"
 
 echo "Running docs-final-formatting.bash..."
-chmod +x docs-final-formatting.bash
+chmod +x ./action_files/docs-final-formatting.bash
 ./action_files/docs-final-formatting.bash
 echo "docs-final-formatting.bash is done"
 
