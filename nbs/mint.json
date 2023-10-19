@@ -1,0 +1,74 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Nixtla",
+  "logo": {
+    "light": "/light.png",
+    "dark": "/dark.png"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#0E0E0E",
+    "light": "#FAFAFA",
+    "dark": "#0E0E0E",
+    "anchors": {
+      "from": "#2AD0CA",
+      "to": "#0E00F8"
+    }
+  },
+  "topbarCtaButton": {
+    "type": "github",
+    "url": "https://github.com/Nixtla/nixtla"
+  },
+  "topAnchor": {
+    "name": "StatsForecast",
+    "icon": "bolt"
+  },
+  "navigation": [
+    {
+      "group": "",
+      "pages": ["introduction"]
+    },
+    {
+      "group": "Getting Started",
+      "pages": [
+        "docs/install.html",
+        "docs/quick_start_local.html",
+        "docs/quick_start_distributed.html",
+        "docs/end_to_end_walkthrough.html"
+      ]
+    },
+    {
+      "group": "Tutorials",
+      "pages": [
+        "docs/cross_validation.html",
+        "docs/electricity_peak_forecasting.html",
+        "docs/prediction_intervals.html",
+        "docs/transfer_learning.html"
+      ]
+    },
+    {
+      "group": "API Reference",
+      "pages": [
+        {
+          "group": "Local",
+          "pages": [
+            "api-reference/local/forecast.html",
+            "api-reference/local/lgb_cv.html",
+            "api-reference/local/utils.html",
+            "api-reference/local/core.html"
+          ]
+        },
+        {
+          "group": "Distributed",
+          "pages": [
+            "api-reference/distributed/distributed.forecast.html",
+            "api-reference/distributed/distributed.models.dask.lgb.html",
+            "api-reference/distributed/distributed.models.dask.xgb.html",
+            "api-reference/distributed/distributed.models.spark.lgb.html",
+            "api-reference/distributed/distributed.models.spark.xgb.html"
+          ]
+        }
+      ]
+    }
+  ]
+}

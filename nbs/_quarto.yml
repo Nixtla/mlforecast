@@ -1,13 +1,9 @@
 project:
-  type: website
+  type: mintlify
 
 format:
-  html:
-    theme: cosmo
-    fontsize: 1em
-    linestretch: 1.7
-    css: styles.css
-    toc: true
+  mintlify-md:
+    code-fold: true
 
 website:
   twitter-card: 
