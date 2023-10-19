@@ -288,11 +288,11 @@ class MLForecast:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
                     keep = ~np.isnan(y[:, col])
-                    if isinstance(X, DataFrame):
-                        Xh = filter_with_mask(X, keep)
-                    else:
+                    if isinstance(X, np.ndarray):
                         # TODO: migrate to utils
                         Xh = X[keep]
+                    else:
+                        Xh = filter_with_mask(X, keep)
                     yh = y[keep, col]
                     self.models_[name].append(clone(model).fit(Xh, yh))
             else:
