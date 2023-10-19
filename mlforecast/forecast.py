@@ -23,6 +23,7 @@ from utilsforecast.processing import (
     join,
     maybe_compute_sort_indices,
     take_rows,
+    to_numpy,
     vertical_concat,
 )
 
@@ -287,7 +288,11 @@ class MLForecast:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
                     keep = ~np.isnan(y[:, col])
-                    Xh = filter_with_mask(X, keep)
+                    if isinstance(X, DataFrame):
+                        Xh = filter_with_mask(X, keep)
+                    else:
+                        # TODO: migrate to utils
+                        Xh = X[keep]
                     yh = y[keep, col]
                     self.models_[name].append(clone(model).fit(Xh, yh))
             else:
@@ -464,7 +469,7 @@ class MLForecast:
         fitted : bool (default=False)
             Save in-sample predictions.
         as_numpy : bool (default = False)
-            Cast features to numpy array. Only works for `fitted=False`.
+            Cast features to numpy array.
 
         Returns
         -------
@@ -506,6 +511,8 @@ class MLForecast:
         else:
             base = prep[[id_col, time_col]]
             X, y = self._extract_X_y(prep, target_col)
+            if as_numpy:
+                X = to_numpy(X)
             del prep
         self.fit_models(X, y)
         if fitted:
@@ -731,7 +738,7 @@ class MLForecast:
         fitted : bool (default=False)
             Store the in-sample predictions.
         as_numpy : bool (default = False)
-            Cast features to numpy array. Only works for `fitted=False`.
+            Cast features to numpy array.
 
         Returns
         -------
@@ -795,6 +802,8 @@ class MLForecast:
                 assert not isinstance(prep, tuple)
                 base = prep[[id_col, time_col]]
                 train_X, train_y = self._extract_X_y(prep, target_col)
+                if as_numpy:
+                    train_X = to_numpy(train_X)
                 del prep
                 fitted_values = self._compute_fitted_values(
                     base=base,

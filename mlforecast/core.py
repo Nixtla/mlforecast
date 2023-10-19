@@ -27,6 +27,7 @@ from utilsforecast.processing import (
     drop_index_if_pandas,
     filter_with_mask,
     horizontal_concat,
+    is_in,
     is_nan_or_none,
     join,
     offset_dates,
@@ -631,10 +632,11 @@ class TimeSeries:
             raise ValueError(
                 f"horizon must be at most max_horizon ({self.max_horizon})"
             )
+        self._predict_setup()
         uids = self._get_future_ids(horizon)
-        if isinstance(self.last_dates, pl_Series):
-            starts = offset_dates(self.last_dates, self.freq, 1)
-            ends = offset_dates(self.last_dates, self.freq, horizon)
+        if isinstance(self.curr_dates, pl_Series):
+            starts = offset_dates(self.curr_dates, self.freq, 1)
+            ends = offset_dates(self.curr_dates, self.freq, horizon)
             dates = pl.date_ranges(
                 starts, ends, interval=self.freq, eager=True
             ).explode()
@@ -644,7 +646,7 @@ class TimeSeries:
             dates = np.hstack(
                 [
                     date + (i + 1) * self.freq
-                    for date in self.last_dates
+                    for date in self.curr_dates
                     for i in range(horizon)
                 ]
             )
@@ -677,7 +679,7 @@ class TimeSeries:
                 raise ValueError(
                     f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
                 )
-            self._idxs: Optional[np.ndarray] = np.where(self.uids.isin(ids))[0]
+            self._idxs: Optional[np.ndarray] = np.where(is_in(self.uids, ids))[0]
             self._uids = self.uids[self._idxs]
             last_dates = self.last_dates[self._idxs]
         else:
