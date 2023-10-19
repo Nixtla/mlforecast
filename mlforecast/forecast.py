@@ -792,6 +792,7 @@ class MLForecast:
                     max_horizon=max_horizon,
                     return_X_y=False,
                 )
+                assert isinstance(prep, DataFrame)
                 base = prep[[id_col, time_col]]
                 train_X, train_y = self._extract_X_y(prep, target_col)
                 del prep
