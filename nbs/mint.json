@@ -26,24 +26,39 @@
   "navigation": [
     {
       "group": "",
-      "pages": ["introduction"]
+      "pages": ["index.html"]
     },
     {
       "group": "Getting Started",
       "pages": [
-        "docs/install.html",
-        "docs/quick_start_local.html",
-        "docs/quick_start_distributed.html",
-        "docs/end_to_end_walkthrough.html"
+        "docs/getting-started/install.html",
+        "docs/getting-started/quick_start_local.html",
+        "docs/getting-started/quick_start_distributed.html",
+        "docs/getting-started/end_to_end_walkthrough.html"
+      ]
+    },
+    {
+      "group": "How-to guides",
+      "pages": [
+        "docs/how-to-guides/exogenous_features.html",
+        "docs/how-to-guides/cross_validation.html",
+        "docs/how-to-guides/prediction_intervals.html",
+        "docs/how-to-guides/target_transforms_guide.html",
+        "docs/how-to-guides/analyzing_models.html",
+        "docs/how-to-guides/custom_training.html",
+        "docs/how-to-guides/one_model_per_horizon.html",
+        "docs/how-to-guides/custom_date_features.html",
+        "docs/how-to-guides/predict_callbacks.html",
+        "docs/how-to-guides/predict_subset.html",
+        "docs/how-to-guides/transfer_learning.html"
       ]
     },
     {
       "group": "Tutorials",
       "pages": [
-        "docs/cross_validation.html",
-        "docs/electricity_peak_forecasting.html",
-        "docs/prediction_intervals.html",
-        "docs/transfer_learning.html"
+        "docs/tutorials/electricity_load_forecasting.html",
+        "docs/tutorials/electricity_peak_forecasting.html",
+        "docs/tutorials/prediction_intervals_in_forecasting_models.html"
       ]
     },
     {
@@ -52,20 +67,29 @@
         {
           "group": "Local",
           "pages": [
-            "api-reference/local/forecast.html",
-            "api-reference/local/lgb_cv.html",
-            "api-reference/local/utils.html",
-            "api-reference/local/core.html"
+            "forecast.html",
+            "lgb_cv.html",
+            "utils.html",
+            "core.html",
+            "target_transforms.html",
+            "callbacks.html"
           ]
         },
         {
           "group": "Distributed",
           "pages": [
-            "api-reference/distributed/distributed.forecast.html",
-            "api-reference/distributed/distributed.models.dask.lgb.html",
-            "api-reference/distributed/distributed.models.dask.xgb.html",
-            "api-reference/distributed/distributed.models.spark.lgb.html",
-            "api-reference/distributed/distributed.models.spark.xgb.html"
+            "distributed.forecast.html",
+            {
+              "group": "Models",
+              "pages": [
+                "distributed.models.dask.lgb.html",
+                "distributed.models.dask.xgb.html",
+                "distributed.models.ray.lgb.html",
+                "distributed.models.ray.xgb.html",
+                "distributed.models.spark.lgb.html",
+                "distributed.models.spark.xgb.html"
+              ]
+            }
           ]
         }
       ]
