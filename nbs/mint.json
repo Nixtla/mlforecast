@@ -17,11 +17,11 @@
   },
   "topbarCtaButton": {
     "type": "github",
-    "url": "https://github.com/Nixtla/nixtla"
+    "url": "https://github.com/Nixtla/mlforecast"
   },
   "topAnchor": {
-    "name": "StatsForecast",
-    "icon": "bolt"
+    "name": "MLForecast",
+    "icon": "robot"
   },
   "navigation": [
     {
