@@ -1,0 +1,106 @@
+---
+description: Customize the training procedure for your models
+output-file: custom_training.html
+title: Custom training
+
+---
+
+mlforecast abstracts away most of the training details, which is useful
+for iterating quickly. However, sometimes you want more control over the
+fit parameters, the data that goes into the model, etc. This guide shows
+how you can train a model in a specific way and then giving it back to
+mlforecast to produce forecasts with it.
+
+## Data setup
+
+```python
+from mlforecast.utils import generate_daily_series
+```
+
+
+```python
+series = generate_daily_series(5)
+```
+
+## Creating forecast object
+
+```python
+import numpy as np
+from lightgbm import LGBMRegressor
+
+from mlforecast import MLForecast
+```
+
+Instantiate the forecast object without any models.
+
+```python
+fcst = MLForecast(
+    freq='D',    
+    models={},
+    date_features=['dayofweek'],
+)
+```
+
+## Generate training set
+
+Use `MLForecast.preprocess` to generate the training data.
+
+```python
+prep = fcst.preprocess(series)
+prep.head()
+```
+
+|     | unique_id | ds         | y        | dayofweek |
+|-----|-----------|------------|----------|-----------|
+| 0   | id_0      | 2000-01-01 | 0.428973 | 5         |
+| 1   | id_0      | 2000-01-02 | 1.423626 | 6         |
+| 2   | id_0      | 2000-01-03 | 2.311782 | 0         |
+| 3   | id_0      | 2000-01-04 | 3.192191 | 1         |
+| 4   | id_0      | 2000-01-05 | 4.148767 | 2         |
+
+```python
+X = prep.drop(columns=['unique_id', 'ds', 'y'])
+y = prep['y']
+```
+
+## Training
+
+Let’s say you want to use sample weights to train the model, here we
+just use random weights for simplicity.
+
+```python
+rng = np.random.RandomState(0)
+weights = rng.rand(y.size)
+```
+
+We train the model as we normally would and provide the weights through
+the `sample_weight` argument.
+
+```python
+model = LGBMRegressor(verbosity=-1).fit(X, y, sample_weight=weights)
+```
+
+## Computing forecasts
+
+Now we just assign this model to the `MLForecast.models_` attribute.
+Note that you can assign as many models as you want.
+
+```python
+fcst.models_ = {'lgbm': model, 'same_lgbm': model}
+```
+
+And now when calling `MLForecast.predict` mlforecast will use those
+models to compute the forecasts.
+
+```python
+fcst.predict(1)
+```
+
+|     | unique_id | ds         | lgbm     | same_lgbm |
+|-----|-----------|------------|----------|-----------|
+| 0   | id_0      | 2000-08-10 | 3.642456 | 3.642456  |
+| 1   | id_1      | 2000-04-07 | 4.808618 | 4.808618  |
+| 2   | id_2      | 2000-06-16 | 4.808618 | 4.808618  |
+| 3   | id_3      | 2000-08-30 | 2.777129 | 2.777129  |
+| 4   | id_4      | 2001-01-08 | 3.404631 | 3.404631  |
+

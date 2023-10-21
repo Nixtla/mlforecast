@@ -1,0 +1,31 @@
+---
+output-file: callbacks.html
+title: Callbacks
+
+---
+
+------------------------------------------------------------------------
+
+### SaveFeatures
+
+> ``` text
+>  SaveFeatures ()
+> ```
+
+Saves the features in every timestamp.
+
+------------------------------------------------------------------------
+
+### SaveFeatures.get_features
+
+> ``` text
+>  SaveFeatures.get_features (with_step:bool=False)
+> ```
+
+Retrieves the input features for every timestep
+
+|             | **Type**  | **Default** | **Details**                       |
+|-------------|-----------|-------------|-----------------------------------|
+| with_step   | bool      | False       | Add a column indicating the step  |
+| **Returns** | **Union** |             | **DataFrame with input features** |
+

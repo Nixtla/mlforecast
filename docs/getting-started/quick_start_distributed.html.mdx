@@ -1,0 +1,417 @@
+---
+description: Minimal example of distributed training with MLForecast
+output-file: quick_start_distributed.html
+title: Quick start (distributed)
+
+---
+
+The `DistributedMLForecast` class is a high level abstraction that
+encapsulates all the steps in the pipeline (preprocessing, fitting the
+model and computing predictions) and applies them in a distributed way.
+
+The different things that you need to use `DistributedMLForecast` (as
+opposed to `MLForecast`) are:
+
+1.  You need to set up a cluster. We currently support dask, ray and
+    spark.
+2.  Your data needs to be a distributed collection (dask, ray or spark
+    dataframe).
+3.  You need to use a model that implements distributed training in your
+    framework of choice, e.g. SynapseML for LightGBM in spark.
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from window_ops.expanding import expanding_mean
+from window_ops.rolling import rolling_mean
+
+from mlforecast.distributed import DistributedMLForecast
+from mlforecast.target_transforms import Differences
+from mlforecast.utils import backtest_splits, generate_daily_series, generate_prices_for_series
+```
+
+## Dask
+
+```python
+import dask.dataframe as dd
+from dask.distributed import Client
+```
+
+### Client setup
+
+```python
+client = Client(n_workers=2, threads_per_worker=1)
+```
+
+Here we define a client that connects to a
+`dask.distributed.LocalCluster`, however it could be any other kind of
+cluster.
+
+### Data setup
+
+For dask, the data must be a `dask.dataframe.DataFrame`. You need to
+make sure that each time serie is only in one partition and it is
+recommended that you have as many partitions as you have workers. If you
+have more partitions than workers make sure to set `num_threads=1` to
+avoid having nested parallelism.
+
+The required input format is the same as for `MLForecast`, except that
+it’s a `dask.dataframe.DataFrame` instead of a `pandas.Dataframe`.
+
+```python
+series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False)
+npartitions = 10
+partitioned_series = dd.from_pandas(series.set_index('unique_id'), npartitions=npartitions)  # make sure we split by the id_col
+partitioned_series = partitioned_series.map_partitions(lambda df: df.reset_index())
+partitioned_series['unique_id'] = partitioned_series['unique_id'].astype(str)  # can't handle categoricals atm
+partitioned_series
+```
+
+|                | unique_id | ds               | y       | static_0 | static_1 |
+|----------------|-----------|------------------|---------|----------|----------|
+| npartitions=10 |           |                  |         |          |          |
+| id_00          | object    | datetime64\[ns\] | float64 | int64    | int64    |
+| id_10          | ...       | ...              | ...     | ...      | ...      |
+| ...            | ...       | ...              | ...     | ...      | ...      |
+| id_89          | ...       | ...              | ...     | ...      | ...      |
+| id_99          | ...       | ...              | ...     | ...      | ...      |
+
+### Models
+
+In order to perform distributed forecasting, we need to use a model that
+is able to train in a distributed way using `dask`. The current
+implementations are in `DaskLGBMForecast` and `DaskXGBForecast` which
+are just wrappers around the native implementations.
+
+```python
+from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
+from mlforecast.distributed.models.dask.xgb import DaskXGBForecast
+```
+
+
+```python
+models = [DaskXGBForecast(random_state=0), DaskLGBMForecast(random_state=0)]
+```
+
+### Training
+
+Once we have our models we instantiate a `DistributedMLForecast` object
+defining our features. We can then call `fit` on this object passing our
+dask dataframe.
+
+```python
+fcst = DistributedMLForecast(
+    models=models,
+    freq='D',
+    lags=[7],
+    lag_transforms={
+        1: [expanding_mean],
+        7: [(rolling_mean, 14)]
+    },
+    date_features=['dayofweek', 'month'],
+    num_threads=1,
+    engine=client,
+)
+fcst.fit(partitioned_series)
+```
+
+Once we have our fitted models we can compute the predictions for the
+next 7 timesteps.
+
+### Forecasting
+
+```python
+preds = fcst.predict(7)
+preds.compute().head()
+```
+
+|     | unique_id | ds         | DaskXGBForecast | DaskLGBMForecast |
+|-----|-----------|------------|-----------------|------------------|
+| 0   | id_00     | 2001-05-15 | 421.880432      | 421.607612       |
+| 1   | id_00     | 2001-05-16 | 503.725891      | 501.287188       |
+| 2   | id_00     | 2001-05-17 | 21.745794       | 20.218114        |
+| 3   | id_00     | 2001-05-18 | 103.609970      | 103.614699       |
+| 4   | id_00     | 2001-05-19 | 184.415192      | 184.327408       |
+
+### Cross validation
+
+```python
+cv_res = fcst.cross_validation(
+    partitioned_series,
+    n_windows=2,
+    h=14,
+)
+cv_res
+```
+
+
+```python
+cv_res.compute().head()
+```
+
+|     | unique_id | ds         | DaskXGBForecast | DaskLGBMForecast | cutoff     | y          |
+|-----|-----------|------------|-----------------|------------------|------------|------------|
+| 0   | id_00     | 2001-04-17 | 416.596832      | 414.746359       | 2001-04-16 | 404.993322 |
+| 1   | id_00     | 2001-04-18 | 501.541565      | 495.292467       | 2001-04-16 | 508.883226 |
+| 2   | id_00     | 2001-04-19 | 22.663921       | 20.404674        | 2001-04-16 | 1.218119   |
+| 3   | id_00     | 2001-04-20 | 100.937668      | 100.720564       | 2001-04-16 | 109.879770 |
+| 4   | id_00     | 2001-04-21 | 184.458405      | 188.645839       | 2001-04-16 | 163.703847 |
+
+```python
+client.close()
+```
+
+## Spark
+
+### Session setup
+
+```python
+from pyspark.sql import SparkSession
+```
+
+
+```python
+spark = (
+    SparkSession
+    .builder
+    .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:0.10.2")
+    .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
+    .getOrCreate()
+)
+```
+
+### Data setup
+
+For spark, the data must be a `pyspark DataFrame`. You need to make sure
+that each time serie is only in one partition (which you can do using
+`repartitionByRange`, for example) and it is recommended that you have
+as many partitions as you have workers. If you have more partitions than
+workers make sure to set `num_threads=1` to avoid having nested
+parallelism.
+
+The required input format is the same as for `MLForecast`, i.e. it
+should have at least an id column, a time column and a target column.
+
+```python
+numPartitions = 4
+series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False)
+spark_series = spark.createDataFrame(series).repartitionByRange(numPartitions, 'unique_id')
+```
+
+### Models
+
+In order to perform distributed forecasting, we need to use a model that
+is able to train in a distributed way using `spark`. The current
+implementations are in `SparkLGBMForecast` and `SparkXGBForecast` which
+are just wrappers around the native implementations.
+
+```python
+from mlforecast.distributed.models.spark.lgb import SparkLGBMForecast
+
+models = [SparkLGBMForecast()]
+try:
+    from xgboost.spark import SparkXGBRegressor
+    from mlforecast.distributed.models.spark.xgb import SparkXGBForecast
+    models.append(SparkXGBForecast())
+except ModuleNotFoundError:  # py < 38
+    pass
+```
+
+### Training
+
+```python
+fcst = DistributedMLForecast(
+    models,
+    freq='D',
+    lags=[1],
+    lag_transforms={
+        1: [expanding_mean]
+    },
+    date_features=['dayofweek'],
+)
+fcst.fit(
+    spark_series,
+    static_features=['static_0', 'static_1'],
+)
+```
+
+### Forecasting
+
+```python
+preds = fcst.predict(14)
+```
+
+
+```python
+preds.toPandas().head()
+```
+
+``` text
+/hdd/miniforge3/envs/mlforecast/lib/python3.10/site-packages/pyspark/sql/pandas/conversion.py:251: FutureWarning: Passing unit-less datetime64 dtype to .astype is deprecated and will raise in a future version. Pass 'datetime64[ns]' instead
+  series = series.astype(t, copy=False)
+```
+
+|     | unique_id | ds         | SparkLGBMForecast | SparkXGBForecast |
+|-----|-----------|------------|-------------------|------------------|
+| 0   | id_00     | 2001-05-15 | 422.139843        | 421.606537       |
+| 1   | id_00     | 2001-05-16 | 497.180212        | 505.575836       |
+| 2   | id_00     | 2001-05-17 | 13.062478         | 15.462178        |
+| 3   | id_00     | 2001-05-18 | 100.601041        | 102.123245       |
+| 4   | id_00     | 2001-05-19 | 180.707848        | 182.308197       |
+
+### Cross validation
+
+```python
+cv_res = fcst.cross_validation(
+    spark_series,
+    n_windows=2,
+    h=14,
+).toPandas()
+```
+
+
+```python
+cv_res.head()
+```
+
+|     | unique_id | ds         | SparkLGBMForecast | SparkXGBForecast | cutoff     | y          |
+|-----|-----------|------------|-------------------|------------------|------------|------------|
+| 0   | id_21     | 2001-04-28 | 92.870945         | 58.219631        | 2001-04-16 | 58.044008  |
+| 1   | id_04     | 2001-04-23 | 114.502043        | 117.134018       | 2001-04-16 | 118.452839 |
+| 2   | id_18     | 2001-04-17 | 82.597659         | 86.992348        | 2001-04-16 | 80.416969  |
+| 3   | id_20     | 2001-04-21 | 230.254435        | 237.235214       | 2001-04-16 | 230.352460 |
+| 4   | id_23     | 2001-04-17 | 426.386288        | 419.380524       | 2001-04-16 | 432.918548 |
+
+```python
+spark.stop()
+```
+
+## Ray
+
+### Session setup
+
+```python
+import ray
+from ray.cluster_utils import Cluster
+```
+
+
+```python
+ray_cluster = Cluster(
+    initialize_head=True,
+    head_node_args={"num_cpus": 2}
+)
+ray.init(address=ray_cluster.address, ignore_reinit_error=True)
+# add mock node to simulate a cluster
+mock_node = ray_cluster.add_node(num_cpus=2)
+```
+
+### Data setup
+
+For ray, the data must be a `ray DataFrame`. It is recommended that you
+have as many partitions as you have workers. If you have more partitions
+than workers make sure to set `num_threads=1` to avoid having nested
+parallelism.
+
+The required input format is the same as for `MLForecast`, i.e. it
+should have at least an id column, a time column and a target column.
+
+```python
+series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False)
+# we need noncategory unique_id
+series['unique_id'] = series['unique_id'].astype(str)
+ray_series = ray.data.from_pandas(series)
+```
+
+### Models
+
+The ray integration allows to include `lightgbm` (`RayLGBMRegressor`),
+and `xgboost` (`RayXGBRegressor`).
+
+```python
+from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
+from mlforecast.distributed.models.ray.xgb import RayXGBForecast
+```
+
+
+```python
+models = [
+    RayLGBMForecast(),
+    RayXGBForecast(),
+]
+```
+
+### Training
+
+To control the number of partitions to use using Ray, we have to include
+`num_partitions` to `DistributedMLForecast`.
+
+```python
+num_partitions = 4
+```
+
+
+```python
+fcst = DistributedMLForecast(
+    models,
+    freq='D',
+    lags=[1],
+    lag_transforms={
+        1: [expanding_mean]
+    },
+    date_features=['dayofweek'],
+    num_partitions=num_partitions, # Use num_partitions to reduce overhead
+)
+fcst.fit(
+    ray_series,
+    static_features=['static_0', 'static_1'],
+)
+```
+
+### Forecasting
+
+```python
+preds = fcst.predict(14).to_pandas()
+```
+
+
+```python
+preds.head()
+```
+
+|     | unique_id | ds         | RayLGBMForecast | RayXGBForecast |
+|-----|-----------|------------|-----------------|----------------|
+| 0   | id_00     | 2001-05-15 | 422.139843      | 419.180908     |
+| 1   | id_00     | 2001-05-16 | 497.180212      | 502.074249     |
+| 2   | id_00     | 2001-05-17 | 13.062478       | 16.981802      |
+| 3   | id_00     | 2001-05-18 | 100.601041      | 102.311279     |
+| 4   | id_00     | 2001-05-19 | 180.707848      | 181.406143     |
+
+### Cross validation
+
+```python
+cv_res = fcst.cross_validation(
+    ray_series,
+    n_windows=2,
+    h=14,
+).to_pandas()
+```
+
+
+```python
+cv_res.head()
+```
+
+|     | unique_id | ds         | RayLGBMForecast | RayXGBForecast | cutoff     | y          |
+|-----|-----------|------------|-----------------|----------------|------------|------------|
+| 0   | id_10     | 2001-04-17 | 29.912521       | 27.272474      | 2001-04-16 | 34.156241  |
+| 1   | id_10     | 2001-04-18 | 57.589800       | 50.432514      | 2001-04-16 | 53.208507  |
+| 2   | id_10     | 2001-04-19 | 76.750741       | 75.065681      | 2001-04-16 | 71.920677  |
+| 3   | id_10     | 2001-04-20 | 101.297954      | 98.846138      | 2001-04-16 | 102.347087 |
+| 4   | id_10     | 2001-04-21 | 117.002167      | 120.924911     | 2001-04-16 | 119.019914 |
+
+```python
+ray.shutdown()
+```
+

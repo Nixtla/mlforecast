@@ -1,0 +1,143 @@
+---
+description: Distributed pipeline encapsulation
+output-file: distributed.forecast.html
+title: Distributed Forecast
+
+---
+
+------------------------------------------------------------------------
+
+### DistributedMLForecast
+
+> ``` text
+>  DistributedMLForecast (models,
+>                         freq:Union[int,str,pandas._libs.tslibs.offsets.Bas
+>                         eOffset,NoneType]=None,
+>                         lags:Optional[Iterable[int]]=None, lag_transforms:
+>                         Optional[Dict[int,List[Union[Callable,Tuple[Callab
+>                         le,Any]]]]]=None, date_features:Optional[Iterable[
+>                         Union[str,Callable]]]=None, num_threads:int=1, tar
+>                         get_transforms:Optional[List[Union[mlforecast.targ
+>                         et_transforms.BaseTargetTransform,mlforecast.targe
+>                         t_transforms.BaseGroupedArrayTargetTransform]]]=No
+>                         ne, engine=None,
+>                         num_partitions:Optional[int]=None)
+> ```
+
+Multi backend distributed pipeline
+
+------------------------------------------------------------------------
+
+### DistributedMLForecast.fit
+
+> ``` text
+>  DistributedMLForecast.fit (df:~AnyDataFrame, id_col:str='unique_id',
+>                             time_col:str='ds', target_col:str='y',
+>                             static_features:Optional[List[str]]=None,
+>                             dropna:bool=True,
+>                             keep_last_n:Optional[int]=None)
+> ```
+
+Apply the feature engineering and train the models.
+
+|                 | **Type**                  | **Default** | **Details**                                                                                                                |
+|------|------------------|-------------------------|-------------------------|
+| df              | AnyDataFrame              |             | Series data in long format.                                                                                                |
+| id_col          | str                       | unique_id   | Column that identifies each serie.                                                                                         |
+| time_col        | str                       | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                            |
+| target_col      | str                       | y           | Column that contains the target.                                                                                           |
+| static_features | Optional                  | None        | Names of the features that are static and will be repeated when forecasting.                                               |
+| dropna          | bool                      | True        | Drop rows with missing values produced by the transformations.                                                             |
+| keep_last_n     | Optional                  | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| **Returns**     | **DistributedMLForecast** |             | **Forecast object with series values and trained models.**                                                                 |
+
+------------------------------------------------------------------------
+
+### DistributedMLForecast.predict
+
+> ``` text
+>  DistributedMLForecast.predict (h:int,
+>                                 before_predict_callback:Optional[Callable]
+>                                 =None, after_predict_callback:Optional[Cal
+>                                 lable]=None,
+>                                 new_df:Optional[~AnyDataFrame]=None)
+> ```
+
+Compute the predictions for the next `horizon` steps.
+
+|                         | **Type**         | **Default** | **Details**                                                                                                                                                                                                                                                                                         |
+|------|------------------|-------------------------|-------------------------|
+| h                       | int              |             | Forecast horizon.                                                                                                                                                                                                                                                                                   |
+| before_predict_callback | Optional         | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index.                                |
+| after_predict_callback  | Optional         | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                                                 |
+| new_df                  | Optional         | None        | Series data of new observations for which forecasts are to be generated.<br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data.<br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
+| **Returns**             | **AnyDataFrame** |             | **Predictions for each serie and timestep, with one column per model.**                                                                                                                                                                                                                             |
+
+------------------------------------------------------------------------
+
+### DistributedMLForecast.preprocess
+
+> ``` text
+>  DistributedMLForecast.preprocess (df:~AnyDataFrame,
+>                                    id_col:str='unique_id',
+>                                    time_col:str='ds', target_col:str='y', 
+>                                    static_features:Optional[List[str]]=Non
+>                                    e, dropna:bool=True,
+>                                    keep_last_n:Optional[int]=None)
+> ```
+
+Add the features to `data`.
+
+|                 | **Type**         | **Default** | **Details**                                                                                                                |
+|------|------------------|-------------------------|-------------------------|
+| df              | AnyDataFrame     |             | Series data in long format.                                                                                                |
+| id_col          | str              | unique_id   | Column that identifies each serie.                                                                                         |
+| time_col        | str              | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                            |
+| target_col      | str              | y           | Column that contains the target.                                                                                           |
+| static_features | Optional         | None        | Names of the features that are static and will be repeated when forecasting.                                               |
+| dropna          | bool             | True        | Drop rows with missing values produced by the transformations.                                                             |
+| keep_last_n     | Optional         | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| **Returns**     | **AnyDataFrame** |             | **`df` with added features.**                                                                                              |
+
+------------------------------------------------------------------------
+
+### DistributedMLForecast.cross_validation
+
+> ``` text
+>  DistributedMLForecast.cross_validation (df:~AnyDataFrame, n_windows:int,
+>                                          h:int, id_col:str='unique_id',
+>                                          time_col:str='ds',
+>                                          target_col:str='y',
+>                                          step_size:Optional[int]=None, sta
+>                                          tic_features:Optional[List[str]]=
+>                                          None, dropna:bool=True,
+>                                          keep_last_n:Optional[int]=None,
+>                                          refit:bool=True, before_predict_c
+>                                          allback:Optional[Callable]=None, 
+>                                          after_predict_callback:Optional[C
+>                                          allable]=None,
+>                                          input_size:Optional[int]=None)
+> ```
+
+Perform time series cross validation. Creates `n_windows` splits where
+each window has `h` test periods, trains the models, computes the
+predictions and merges the actuals.
+
+|                         | **Type**         | **Default** | **Details**                                                                                                                                                                                                                                                          |
+|------|------------------|-------------------------|-------------------------|
+| df                      | AnyDataFrame     |             | Series data in long format.                                                                                                                                                                                                                                          |
+| n_windows               | int              |             | Number of windows to evaluate.                                                                                                                                                                                                                                       |
+| h                       | int              |             | Number of test periods in each window.                                                                                                                                                                                                                               |
+| id_col                  | str              | unique_id   | Column that identifies each serie.                                                                                                                                                                                                                                   |
+| time_col                | str              | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                                                                                                                                      |
+| target_col              | str              | y           | Column that contains the target.                                                                                                                                                                                                                                     |
+| step_size               | Optional         | None        | Step size between each cross validation window. If None it will be equal to `h`.                                                                                                                                                                                     |
+| static_features         | Optional         | None        | Names of the features that are static and will be repeated when forecasting.                                                                                                                                                                                         |
+| dropna                  | bool             | True        | Drop rows with missing values produced by the transformations.                                                                                                                                                                                                       |
+| keep_last_n             | Optional         | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.                                                                                                                                           |
+| refit                   | bool             | True        | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.                                                                                                                           |
+| before_predict_callback | Optional         | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback  | Optional         | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                  |
+| input_size              | Optional         | None        | Maximum training samples per serie in each window. If None, will use an expanding window.                                                                                                                                                                            |
+| **Returns**             | **AnyDataFrame** |             | **Predictions for each window with the series id, timestamp, target value and predictions from each model.**                                                                                                                                                         |
+

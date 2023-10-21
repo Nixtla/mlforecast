@@ -1,0 +1,30 @@
+---
+description: ray XGBoost forecaster
+output-file: distributed.models.ray.xgb.html
+title: RayXGBForecast
+
+---
+
+Wrapper of `xgboost.ray.RayXGBRegressor` that adds a `model_` property
+that contains the fitted model and is sent to the workers in the
+forecasting step.
+
+------------------------------------------------------------------------
+
+### RayXGBForecast
+
+> ``` text
+>  RayXGBForecast (objective:Union[str,Callable[[numpy.ndarray,numpy.ndarray
+>                  ],Tuple[numpy.ndarray,numpy.ndarray]],NoneType]='reg:squa
+>                  rederror', **kwargs:Any)
+> ```
+
+Implementation of the scikit-learn API for Ray-distributed XGBoost
+regression. See :doc:`/python/sklearn_estimator` for more information.
+
+|             | **Type** | **Default**      | **Details**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|------|------------------|-------------------------|-------------------------|
+| objective   | Union    | reg:squarederror | Specify the learning task and the corresponding learning objective or<br/>a custom objective function to be used (see note below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| kwargs      | Any      |                  | Keyword arguments for XGBoost Booster object. Full documentation of parameters<br/>can be found :doc:`here </parameter>`.<br/>Attempting to set a parameter via the constructor args and \*\*kwargs<br/>dict simultaneously will result in a TypeError.<br/><br/>.. note:: \*\*kwargs unsupported by scikit-learn<br/><br/> \*\*kwargs is unsupported by scikit-learn. We do not guarantee<br/> that parameters passed via this argument will interact properly<br/> with scikit-learn.<br/><br/>.. note:: Custom objective function<br/><br/> A custom objective function can be provided for the `objective`<br/> parameter. In this case, it should have the signature<br/> `objective(y_true, y_pred) -> grad, hess`:<br/><br/> y_true: array_like of shape \[n_samples\]<br/> The target values<br/> y_pred: array_like of shape \[n_samples\]<br/> The predicted values<br/><br/> grad: array_like of shape \[n_samples\]<br/> The value of the gradient for each sample point.<br/> hess: array_like of shape \[n_samples\]<br/> The value of the second derivative for each sample point |
+| **Returns** | **None** |                  |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+

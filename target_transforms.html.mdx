@@ -1,0 +1,216 @@
+---
+output-file: target_transforms.html
+title: Target transforms
+
+---
+
+```python
+import pandas as pd
+from fastcore.test import test_fail
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PowerTransformer
+from utilsforecast.processing import counts_by_id
+
+from mlforecast import MLForecast
+from mlforecast.utils import generate_daily_series
+```
+
+------------------------------------------------------------------------
+
+### BaseTargetTransform
+
+> ``` text
+>  BaseTargetTransform ()
+> ```
+
+Base class used for target transformations.
+
+------------------------------------------------------------------------
+
+### BaseGroupedArrayTargetTransform
+
+> ``` text
+>  BaseGroupedArrayTargetTransform ()
+> ```
+
+Base class used for target transformations that operate on grouped
+arrays.
+
+------------------------------------------------------------------------
+
+### Differences
+
+> ``` text
+>  Differences (differences:Iterable[int])
+> ```
+
+Subtracts previous values of the serie. Can be used to remove trend or
+seasonalities.
+
+```python
+series = generate_daily_series(10, min_length=50, max_length=100)
+```
+
+
+```python
+diffs = Differences([1, 2, 5])
+id_counts = counts_by_id(series, 'unique_id')
+indptr = np.append(0, id_counts['counts'].cumsum())
+ga = GroupedArray(series['y'].values, indptr)
+
+# differences are applied correctly
+transformed = diffs.fit_transform(ga)
+assert diffs.fitted_ == []
+expected = series.copy()
+for d in diffs.differences:
+    expected['y'] -= expected.groupby('unique_id')['y'].shift(d)
+np.testing.assert_allclose(transformed.data, expected['y'].values)
+
+# fitted differences are restored correctly
+diffs.store_fitted = True
+transformed = diffs.fit_transform(ga)
+keep_mask = ~np.isnan(transformed.data)
+restored = diffs.inverse_transform_fitted(transformed)
+np.testing.assert_allclose(ga.data[keep_mask], restored.data[keep_mask])
+restored_subs = diffs.inverse_transform_fitted(transformed.take_from_groups(slice(8, None)))
+np.testing.assert_allclose(ga.data[keep_mask], restored_subs.data)
+
+# short series
+ga = GroupedArray(np.arange(20), np.array([0, 2, 20]))
+test_fail(lambda: diffs.fit_transform(ga), contains="[0]")
+```
+
+
+```python
+def test_scaler(sc, series):
+    id_counts = counts_by_id(series, 'unique_id')
+    indptr = np.append(0, id_counts['counts'].cumsum())
+    ga = GroupedArray(series['y'].values, indptr)
+    transformed = sc.fit_transform(ga)
+    np.testing.assert_allclose(
+        sc.inverse_transform(transformed).data,
+        ga.data,
+    )
+    
+    def filter_df(df):
+        return (
+            df[df['unique_id'].isin(['id_0', 'id_7'])]
+            .groupby('unique_id', observed=True)
+            .head(10)
+        )
+    
+    idxs = [0, 7]
+    subset = ga.take(idxs)
+    transformed_subset = transformed.take(idxs)
+    sc.idxs = idxs
+    np.testing.assert_allclose(
+        sc.inverse_transform(transformed_subset).data,
+        subset.data,
+    )
+```
+
+------------------------------------------------------------------------
+
+### LocalStandardScaler
+
+> ``` text
+>  LocalStandardScaler ()
+> ```
+
+Standardizes each serie by subtracting its mean and dividing by its
+standard deviation.
+
+```python
+test_scaler(LocalStandardScaler(), series)
+```
+
+------------------------------------------------------------------------
+
+### LocalMinMaxScaler
+
+> ``` text
+>  LocalMinMaxScaler ()
+> ```
+
+Scales each serie to be in the \[0, 1\] interval.
+
+```python
+test_scaler(LocalMinMaxScaler(), series)
+```
+
+------------------------------------------------------------------------
+
+### LocalRobustScaler
+
+> ``` text
+>  LocalRobustScaler (scale:str)
+> ```
+
+Scaler robust to outliers.
+
+|       | **Type** | **Details**                                                                                                   |
+|--------|---------------------------|-------------------------------------|
+| scale | str      | Statistic to use for scaling. Can be either ‘iqr’ (Inter Quartile Range) or ‘mad’ (Median Asbolute Deviation) |
+
+```python
+test_scaler(LocalRobustScaler(scale='iqr'), series)
+```
+
+
+```python
+test_scaler(LocalRobustScaler(scale='mad'), series)
+```
+
+------------------------------------------------------------------------
+
+### LocalBoxCox
+
+> ``` text
+>  LocalBoxCox ()
+> ```
+
+Finds the optimum lambda for each serie and applies the Box-Cox
+transformation
+
+```python
+test_scaler(LocalBoxCox(), series)
+```
+
+------------------------------------------------------------------------
+
+### GlobalSklearnTransformer
+
+> ``` text
+>  GlobalSklearnTransformer (transformer:sklearn.base.TransformerMixin)
+> ```
+
+Applies the same scikit-learn transformer to all series.
+
+```python
+# need this import in order for isinstance to work
+from mlforecast.target_transforms import Differences as ExportedDifferences
+```
+
+
+```python
+sk_boxcox = PowerTransformer(method='box-cox', standardize=False)
+boxcox_global = GlobalSklearnTransformer(sk_boxcox)
+single_difference = ExportedDifferences([1])
+series = generate_daily_series(10)
+fcst = MLForecast(
+    models=[LinearRegression()],
+    freq='D',
+    lags=[1, 2],
+    target_transforms=[boxcox_global, single_difference]
+)
+prep = fcst.preprocess(series, dropna=False)
+expected = (
+    pd.Series(
+        sk_boxcox.fit_transform(series[['y']])[:, 0], index=series['unique_id']
+    ).groupby('unique_id')
+    .diff()
+    .values
+)
+np.testing.assert_allclose(prep['y'].values, expected)
+```
+
