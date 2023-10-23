@@ -20,4 +20,4 @@ dependencies:
     - datasetsforecast
     - nbdev
     - polars
-    - utilsforecast>=0.0.11
+    - utilsforecast>=0.0.12
