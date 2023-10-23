@@ -23,6 +23,7 @@ from utilsforecast.compat import (
 from utilsforecast.processing import (
     assign_columns,
     between,
+    cast,
     copy_if_pandas,
     counts_by_id,
     drop_index_if_pandas,
@@ -779,8 +780,8 @@ class TimeSeries:
         df = assign_columns(df, self.id_col, new_ids)
         df = sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
-        new_id_counts = counts_by_id(df, self.id_col)
-        sizes = join(uids, new_id_counts, on=self.id_col, how="outer")
+        id_counts = counts_by_id(df, self.id_col)
+        sizes = join(uids, id_counts, on=self.id_col, how="outer")
         sizes = fill_null(sizes, {"counts": 0})
         sizes = sort(sizes, by=self.id_col)
         new_groups = ~is_in(sizes[self.id_col], uids)
@@ -790,15 +791,15 @@ class TimeSeries:
         last_dates = join(last_dates, curr_last_dates, on=self.id_col, how="left")
         last_dates = fill_null(last_dates, {self.time_col: last_dates["_curr"]})
         last_dates = sort(last_dates, by=self.id_col)
-        self.last_dates = last_dates[self.time_col].astype(self.last_dates.dtype)
+        self.last_dates = cast(last_dates[self.time_col], self.last_dates.dtype)
         self.uids = sort(sizes[self.id_col])
         if isinstance(self.uids, pd.Series):
             self.uids = pd.Index(self.uids)
         if new_groups.any():
             new_ids = filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = filter_with_mask(df, is_in(df[self.id_col], new_ids))
-            new_ids_sizes = counts_by_id(new_ids_df, self.id_col)
-            new_statics = take_rows(df, new_ids_sizes["counts"].cumsum() - 1)
+            new_ids_counts = counts_by_id(new_ids_df, self.id_col)
+            new_statics = take_rows(df, new_ids_counts["counts"].cumsum() - 1)
             new_statics = new_statics[self.static_features_.columns]
             self.static_features_ = vertical_concat(
                 [self.static_features_, new_statics]
