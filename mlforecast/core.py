@@ -723,10 +723,7 @@ class TimeSeries:
                 }
             )
             X_df = join(X_df, dates_validation, on=self.id_col)
-            between_attr = "between" if isinstance(X_df, pd.DataFrame) else "is_between"
-            mask = getattr(X_df[self.time_col], between_attr)(
-                X_df["_start"], X_df["_end"]
-            )
+            mask = between(X_df[self.time_col], X_df["_start"], X_df["_end"])
             X_df = X_df[mask]
             if X_df.shape[0] != len(self._uids) * horizon:
                 raise ValueError(
@@ -793,19 +790,16 @@ class TimeSeries:
         last_dates = join(last_dates, curr_last_dates, on=self.id_col, how="left")
         last_dates = fill_null(last_dates, {self.time_col: last_dates["_curr"]})
         last_dates = sort(last_dates, by=self.id_col)
-        self.last_dates = last_dates[self.time_col]
+        self.last_dates = last_dates[self.time_col].astype(self.last_dates.dtype)
         self.uids = sort(sizes[self.id_col])
         if isinstance(self.uids, pd.Series):
             self.uids = pd.Index(self.uids)
         if new_groups.any():
-            unseen_ids = filter_with_mask(sizes[self.id_col], new_groups)
-            unseen_statics = filter_with_mask(df, is_in(df[self.id_col], unseen_ids))
-            unseen_ids_sizes = filter_with_mask(
-                new_id_counts, is_in(new_id_counts[self.id_col], unseen_ids)
-            )
-            new_statics = take_rows(df, unseen_ids_sizes["counts"].cumsum() - 1)[
-                self.static_features_.columns
-            ]
+            new_ids = filter_with_mask(sizes[self.id_col], new_groups)
+            new_ids_df = filter_with_mask(df, is_in(df[self.id_col], new_ids))
+            new_ids_sizes = counts_by_id(new_ids_df, self.id_col)
+            new_statics = take_rows(df, new_ids_sizes["counts"].cumsum() - 1)
+            new_statics = new_statics[self.static_features_.columns]
             self.static_features_ = vertical_concat(
                 [self.static_features_, new_statics]
             )
