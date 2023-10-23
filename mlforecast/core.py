@@ -21,7 +21,6 @@ from utilsforecast.compat import (
     pl_Series,
 )
 from utilsforecast.processing import (
-    DataFrameProcessor,
     assign_columns,
     between,
     copy_if_pandas,
@@ -36,6 +35,7 @@ from utilsforecast.processing import (
     join,
     match_if_categorical,
     offset_dates,
+    process_df,
     rename,
     sort,
     take_rows,
@@ -264,10 +264,14 @@ class TimeSeries:
         self.time_col = time_col
         self.keep_last_n = keep_last_n
         self.static_features = static_features
-        proc = DataFrameProcessor(id_col, time_col, target_col)
         sorted_df = df[[id_col, time_col, target_col]]
         sorted_df = copy_if_pandas(sorted_df, deep=False)
-        uids, times, data, indptr, sort_idxs = proc.process(sorted_df)
+        uids, times, data, indptr, sort_idxs = process_df(
+            df=sorted_df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+        )
         if data.ndim == 2:
             data = data[:, 0]
         ga = GroupedArray(data, indptr)
