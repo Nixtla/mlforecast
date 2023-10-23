@@ -3,5 +3,5 @@ select = ["F", "ARG"]
 
 exclude = ["_nbdev.py"]
 
-# [tool.mypy]
-# ignore_missing_imports = true
+[tool.mypy]
+ignore_missing_imports = true
