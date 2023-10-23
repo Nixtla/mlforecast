@@ -23,18 +23,24 @@ from utilsforecast.compat import (
 from utilsforecast.processing import (
     DataFrameProcessor,
     assign_columns,
+    between,
     copy_if_pandas,
+    counts_by_id,
     drop_index_if_pandas,
+    fill_null,
     filter_with_mask,
+    group_by_agg,
     horizontal_concat,
     is_in,
     is_nan_or_none,
     join,
+    match_if_categorical,
     offset_dates,
     rename,
     sort,
     take_rows,
     to_numpy,
+    vertical_concat,
 )
 from utilsforecast.validation import validate_format
 
@@ -515,15 +521,10 @@ class TimeSeries:
             features[feat_name] = feat_vals
 
         if isinstance(self.last_dates, pl_Series):
-            columns = self.features + [self.id_col, self.time_col]
-            features[self.id_col] = self._uids
-            features[self.time_col] = self.curr_dates
-            features_df = pl_DataFrame(features, schema=columns)
+            features_df = pl_DataFrame(features, schema=self.features)
         else:
             features_df = pd.DataFrame(features, columns=self.features)
-            features_df[self.id_col] = self._uids
-            features_df[self.time_col] = self.curr_dates
-        return join(self.static_features_, features_df, on=self.id_col)
+        return horizontal_concat([self._static_features, features_df])
 
     def _get_raw_predictions(self) -> np.ndarray:
         return np.array(self.y_pred).ravel("F")
@@ -681,10 +682,13 @@ class TimeSeries:
                 )
             self._idxs: Optional[np.ndarray] = np.where(is_in(self.uids, ids))[0]
             self._uids = self.uids[self._idxs]
+            self._static_features = take_rows(self.static_features_, self._idxs)
+            self._static_features = drop_index_if_pandas(self._static_features)
             last_dates = self.last_dates[self._idxs]
         else:
             self._idxs = None
             self._uids = self.uids
+            self._static_features = self.static_features_
             last_dates = self.last_dates
         if X_df is not None:
             if self.id_col not in X_df or self.time_col not in X_df:
@@ -761,40 +765,44 @@ class TimeSeries:
                     tfm.idxs = None
                 else:
                     preds = tfm.inverse_transform(preds)
-        del self._uids, self._idxs
+        del self._uids, self._idxs, self._static_features
         return preds
 
-    def update(self, df: pd.DataFrame) -> None:
+    def update(self, df: DataFrame) -> None:
         """Update the values of the stored series."""
-        df = df.sort_values([self.id_col, self.time_col])
-        new_sizes = df.groupby(self.id_col, observed=True).size()
-        prev_sizes = pd.Series(np.full(self.uids.size, 0), index=self.uids)
-        sizes = new_sizes.add(prev_sizes, fill_value=0)
-        values = df[self.target_col].values
-        new_groups = ~sizes.index.isin(self.uids)
-        self.last_dates = pd.Index(
-            df.groupby(self.id_col, observed=True)[self.time_col]
-            .max()
-            .reindex(sizes.index)
-            .fillna(dict(zip(self.uids, self.last_dates)))
-        ).astype(self.last_dates.dtype)
-        self.uids = sizes.index
-        new_statics = df.iloc[new_sizes.cumsum() - 1].set_index(self.id_col)
-        orig_dtypes = self.static_features_.dtypes
-        if pd.api.types.is_categorical_dtype(orig_dtypes[self.id_col]):
-            orig_categories = orig_dtypes[self.id_col].categories.tolist()
-            missing_categories = set(self.uids) - set(orig_categories)
-            if missing_categories:
-                orig_dtypes[self.id_col] = pd.CategoricalDtype(
-                    categories=orig_categories + list(missing_categories)
-                )
-        self.static_features_ = self.static_features_.set_index(self.id_col).reindex(
-            self.uids
-        )
-        self.static_features_.update(new_statics)
-        self.static_features_ = self.static_features_.reset_index().astype(orig_dtypes)
+        validate_format(df, self.id_col, self.time_col, self.target_col)
+        self.uids, new_ids = match_if_categorical(self.uids, df[self.id_col])
+        df = assign_columns(df, self.id_col, new_ids)
+        df = sort(df, by=[self.id_col, self.time_col])
+        values = df[self.target_col].to_numpy()
+        new_id_counts = counts_by_id(df, self.id_col)
+        sizes = join(self.uids, new_id_counts, on=self.id_col, how="outer")
+        sizes = fill_null(sizes, {"counts": 0})
+        sizes = sort(sizes, by=self.id_col)
+        new_groups = ~is_in(sizes[self.id_col], self.uids)
+        last_dates = group_by_agg(df, self.id_col, {self.time_col: "max"})
+        last_dates = join(sizes, last_dates, on=self.id_col, how="left")
+        curr_last_dates = type(df)({self.id_col: self.uids, "_curr": self.last_dates})
+        last_dates = join(last_dates, curr_last_dates, on=self.id_col, how="left")
+        last_dates = fill_null(last_dates, {self.time_col: last_dates["_curr"]})
+        last_dates = sort(last_dates, by=self.id_col)
+        self.last_dates = last_dates[self.time_col]
+        self.uids = sort(sizes[self.id_col])
+        if new_groups.any():
+            unseen_ids = filter_with_mask(sizes[self.id_col], new_groups)
+            unseen_statics = filter_with_mask(df, is_in(df[self.id_col], unseen_ids))
+            unseen_ids_sizes = filter_with_mask(
+                new_id_counts, is_in(new_id_counts[self.id_col], unseen_ids)
+            )
+            new_statics = take_rows(df, unseen_ids_sizes["counts"].cumsum() - 1)[
+                self.static_features_.columns
+            ]
+            self.static_features_ = vertical_concat(
+                [self.static_features_, new_statics]
+            )
+            self.static_features_ = sort(self.static_features_, self.id_col)
         self._ga = self._ga.append_several(
-            new_sizes=sizes.values.astype(np.int32),
+            new_sizes=sizes["counts"].to_numpy().astype(np.int32),
             new_values=values,
-            new_groups=new_groups,
+            new_groups=new_groups.to_numpy(),
         )
