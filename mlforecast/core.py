@@ -775,23 +775,28 @@ class TimeSeries:
     def update(self, df: DataFrame) -> None:
         """Update the values of the stored series."""
         validate_format(df, self.id_col, self.time_col, self.target_col)
-        self.uids, new_ids = match_if_categorical(self.uids, df[self.id_col])
+        uids = self.uids
+        if isinstance(uids, pd.Index):
+            uids = pd.Series(uids)
+        uids, new_ids = match_if_categorical(uids, df[self.id_col])
         df = assign_columns(df, self.id_col, new_ids)
         df = sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
         new_id_counts = counts_by_id(df, self.id_col)
-        sizes = join(self.uids, new_id_counts, on=self.id_col, how="outer")
+        sizes = join(uids, new_id_counts, on=self.id_col, how="outer")
         sizes = fill_null(sizes, {"counts": 0})
         sizes = sort(sizes, by=self.id_col)
-        new_groups = ~is_in(sizes[self.id_col], self.uids)
+        new_groups = ~is_in(sizes[self.id_col], uids)
         last_dates = group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = join(sizes, last_dates, on=self.id_col, how="left")
-        curr_last_dates = type(df)({self.id_col: self.uids, "_curr": self.last_dates})
+        curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
         last_dates = join(last_dates, curr_last_dates, on=self.id_col, how="left")
         last_dates = fill_null(last_dates, {self.time_col: last_dates["_curr"]})
         last_dates = sort(last_dates, by=self.id_col)
         self.last_dates = last_dates[self.time_col]
         self.uids = sort(sizes[self.id_col])
+        if isinstance(self.uids, pd.Series):
+            self.uids = pd.Index(self.uids)
         if new_groups.any():
             unseen_ids = filter_with_mask(sizes[self.id_col], new_groups)
             unseen_statics = filter_with_mask(df, is_in(df[self.id_col], unseen_ids))
