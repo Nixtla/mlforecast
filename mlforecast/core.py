@@ -725,7 +725,7 @@ class TimeSeries:
             )
             X_df = join(X_df, dates_validation, on=self.id_col)
             mask = between(X_df[self.time_col], X_df["_start"], X_df["_end"])
-            X_df = X_df[mask]
+            X_df = filter_with_mask(X_df, mask)
             if X_df.shape[0] != len(self._uids) * horizon:
                 raise ValueError(
                     "Found missing inputs in X_df. "

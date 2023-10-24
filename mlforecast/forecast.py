@@ -19,6 +19,7 @@ from utilsforecast.processing import (
     counts_by_id,
     drop_index_if_pandas,
     filter_with_mask,
+    is_in,
     is_nan,
     join,
     maybe_compute_sort_indices,
@@ -660,14 +661,21 @@ class MLForecast:
                 conformal_method = _get_conformal_method(
                     self.prediction_intervals.method
                 )
+                if ids is not None:
+                    ids_mask = is_in(self._cs_df[self.ts.id_col], ids)
+                    cs_df = filter_with_mask(self._cs_df, ids_mask)
+                    n_series = len(ids)
+                else:
+                    cs_df = self._cs_df
+                    n_series = self.ts.ga.n_groups
                 forecasts = conformal_method(
                     forecasts,
-                    self._cs_df,
+                    cs_df,
                     model_names=list(model_names),
                     level=level_,
                     cs_h=self.prediction_intervals.h,
                     cs_n_windows=self.prediction_intervals.n_windows,
-                    n_series=self.ts.ga.n_groups,
+                    n_series=n_series,
                     horizon=h,
                 )
         return forecasts
