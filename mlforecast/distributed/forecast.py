@@ -615,8 +615,4 @@ class DistributedMLForecast:
                 engine=self.engine,
             )
             results.append(fa.get_native_as_df(preds))
-        if len(results) == 1:
-            return results[0]
-        if len(results) == 2:
-            return fa.union(results[0], results[1])
-        return fa.union(results[0], results[1], results[2:])
+        return fa.union(*results)
