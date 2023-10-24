@@ -27,16 +27,17 @@ series = generate_daily_series(5)
 ```python
 import numpy as np
 from lightgbm import LGBMRegressor
+from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
 ```
 
-Instantiate the forecast object without any models.
+Suppose we want to train a linear regression with the default settings.
 
 ```python
 fcst = MLForecast(
-    freq='D',    
-    models={},
+    models={'lr': LinearRegression()},
+    freq='D',
     date_features=['dayofweek'],
 )
 ```
@@ -63,10 +64,34 @@ X = prep.drop(columns=['unique_id', 'ds', 'y'])
 y = prep['y']
 ```
 
-## Training
+## Regular training
 
-Let’s say you want to use sample weights to train the model, here we
-just use random weights for simplicity.
+Since we don’t want to do anything special in our training process for
+the linear regression, we can just call `MLForecast.fit_models`
+
+```python
+fcst.fit_models(X, y)
+```
+
+``` text
+MLForecast(models=[lr], freq=<Day>, lag_features=[], date_features=['dayofweek'], num_threads=1)
+```
+
+This has trained the linear regression model and is now available in the
+`MLForecast.models_` attribute.
+
+```python
+fcst.models_
+```
+
+``` text
+{'lr': LinearRegression()}
+```
+
+## Custom training
+
+Now suppose you also want to train a LightGBM model on the same data,
+but specifying sample weights.
 
 ```python
 rng = np.random.RandomState(0)
@@ -82,25 +107,30 @@ model = LGBMRegressor(verbosity=-1).fit(X, y, sample_weight=weights)
 
 ## Computing forecasts
 
-Now we just assign this model to the `MLForecast.models_` attribute.
+Now we just assign this model to the `MLForecast.models_` dictionary.
 Note that you can assign as many models as you want.
 
 ```python
-fcst.models_ = {'lgbm': model, 'same_lgbm': model}
+fcst.models_['lgbm'] = model
+fcst.models_
 ```
 
-And now when calling `MLForecast.predict` mlforecast will use those
+``` text
+{'lr': LinearRegression(), 'lgbm': LGBMRegressor(verbosity=-1)}
+```
+
+And now when calling `MLForecast.predict`, mlforecast will use those
 models to compute the forecasts.
 
 ```python
 fcst.predict(1)
 ```
 
-|     | unique_id | ds         | lgbm     | same_lgbm |
-|-----|-----------|------------|----------|-----------|
-| 0   | id_0      | 2000-08-10 | 3.642456 | 3.642456  |
-| 1   | id_1      | 2000-04-07 | 4.808618 | 4.808618  |
-| 2   | id_2      | 2000-06-16 | 4.808618 | 4.808618  |
-| 3   | id_3      | 2000-08-30 | 2.777129 | 2.777129  |
-| 4   | id_4      | 2001-01-08 | 3.404631 | 3.404631  |
+|     | unique_id | ds         | lr       | lgbm     |
+|-----|-----------|------------|----------|----------|
+| 0   | id_0      | 2000-08-10 | 3.247803 | 3.642456 |
+| 1   | id_1      | 2000-04-07 | 3.182126 | 4.808618 |
+| 2   | id_2      | 2000-06-16 | 3.182126 | 4.808618 |
+| 3   | id_3      | 2000-08-30 | 3.313480 | 2.777129 |
+| 4   | id_4      | 2001-01-08 | 3.444834 | 3.404631 |
 
