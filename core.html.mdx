@@ -6,6 +6,7 @@ title: Core
 
 ```python
 import copy
+import datetime
 
 from nbdev import show_doc
 from fastcore.test import test_eq, test_fail, test_warns
@@ -355,7 +356,9 @@ pd.testing.assert_frame_equal(
 ## TimeSeries.update
 
 > ``` text
->  TimeSeries.update (df:pandas.core.frame.DataFrame)
+>  TimeSeries.update
+>                     (df:Union[pandas.core.frame.DataFrame,polars.dataframe
+>                     .frame.DataFrame])
 > ```
 
 Update the values of the stored series.

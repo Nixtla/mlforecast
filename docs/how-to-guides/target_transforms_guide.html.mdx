@@ -136,7 +136,6 @@ preds = fcst.fit(serie).predict(48)
 fig, ax = plt.subplots()
 pd.concat([serie.tail(24 * 10), preds]).set_index('ds').plot(ax=ax)
 plt.close()
-fig.savefig('../../target_transforms__zeros.png')
 ```
 
 ![](/docs/how-to-guides/../../figs/target_transforms__zeros.png)
