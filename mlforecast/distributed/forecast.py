@@ -59,7 +59,7 @@ class DistributedMLForecast:
     def __init__(
         self,
         models,
-        freq: Optional[Freq] = None,
+        freq: Freq,
         lags: Optional[Lags] = None,
         lag_transforms: Optional[LagTransforms] = None,
         date_features: Optional[Iterable[DateFeature]] = None,
