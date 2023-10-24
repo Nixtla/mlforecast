@@ -5,7 +5,6 @@ title: Core
 ---
 
 ```python
-import copy
 import datetime
 
 from nbdev import show_doc
@@ -253,7 +252,7 @@ keep_last_n = 15
 
 ts = TimeSeries(**flow_config)
 df = ts.fit_transform(series, id_col='unique_id', time_col='ds', target_col='y', keep_last_n=keep_last_n)
-ts._uids = ts.uids.tolist()
+ts._uids = ts.uids
 ts._idxs = np.arange(len(ts.ga))
 ts._predict_setup()
 
