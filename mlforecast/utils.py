@@ -15,12 +15,10 @@ import pandas as pd
 from utilsforecast.compat import DataFrame, Series, pl
 from utilsforecast.data import generate_series
 from utilsforecast.processing import (
-    counts_by_id,
     filter_with_mask,
     group_by,
     is_in,
     offset_dates,
-    take_rows,
 )
 
 # %% ../nbs/utils.ipynb 5
