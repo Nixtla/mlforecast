@@ -6,7 +6,8 @@ __all__ = ['transform_exog']
 # %% ../nbs/feature_engineering.ipynb 3
 from typing import Optional
 
-from utilsforecast.compat import DataFrame
+import pandas as pd
+from utilsforecast.compat import DataFrame, pl_DataFrame
 from utilsforecast.processing import (
     drop_index_if_pandas,
     horizontal_concat,
@@ -62,6 +63,7 @@ def transform_exog(
     validate_format(df, id_col, time_col, target_col)
     _, _, data, indptr, sort_idxs = process_df(df, id_col, time_col, target_col)
     results = {}
+    cols = []
     for j, target in enumerate(targets):
         ga = GroupedArray(data[:, j], indptr)
         named_tfms = {f"{target}_{k}": v for k, v in tfms.items()}
@@ -74,9 +76,14 @@ def transform_exog(
                 transforms=named_tfms, num_threads=num_threads, updates_only=False
             )
         results.update(computed_tfms)
+        cols.extend(list(named_tfms.keys()))
+    if isinstance(df, pd.DataFrame):
+        results = pd.DataFrame(results, columns=cols)
+    else:
+        results = pl_DataFrame(results, schema=cols)
     if sort_idxs is not None:
         base_df = take_rows(df, sort_idxs)
     else:
         base_df = df
     base_df = drop_index_if_pandas(base_df)
-    return horizontal_concat([base_df, type(df)(results)])
+    return horizontal_concat([base_df, results])
