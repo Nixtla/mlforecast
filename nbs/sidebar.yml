@@ -38,6 +38,7 @@ website:
             - utils.ipynb
             - core.ipynb
             - target_transforms.ipynb
+            - feature_engineering.ipynb
             - callbacks.ipynb
           - section: Distributed
             contents:

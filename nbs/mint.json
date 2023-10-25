@@ -73,6 +73,7 @@
             "utils.html",
             "core.html",
             "target_transforms.html",
+            "feature_engineering.html",
             "callbacks.html"
           ]
         },
