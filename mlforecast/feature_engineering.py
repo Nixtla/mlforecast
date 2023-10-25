@@ -6,7 +6,6 @@ __all__ = ['transform_exog']
 # %% ../nbs/feature_engineering.ipynb 3
 from typing import Optional
 
-import pandas as pd
 from utilsforecast.compat import DataFrame
 from utilsforecast.processing import (
     drop_index_if_pandas,
