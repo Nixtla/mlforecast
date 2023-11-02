@@ -8,8 +8,16 @@ try:
     import coreforecast.lag_transforms as core_tfms
     from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 
+    from mlforecast.lag_transforms import BaseLagTransform, Lag
+
     CORE_INSTALLED = True
 except ImportError:
     core_tfms = None
     CoreGroupedArray = None
+
+    class BaseLagTransform:
+        ...
+
+    Lag = None
+
     CORE_INSTALLED = False

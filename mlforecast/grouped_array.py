@@ -11,8 +11,7 @@ import numpy as np
 from numba import njit
 from window_ops.shift import shift_array
 
-from .compat import CoreGroupedArray
-from .lag_transforms import BaseLagTransform
+from .compat import BaseLagTransform, CoreGroupedArray
 
 # %% ../nbs/grouped_array.ipynb 2
 @njit(nogil=True)

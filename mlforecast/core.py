@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from numba import njit
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import (
     DataFrame,
     pl,
@@ -47,9 +47,8 @@ from utilsforecast.processing import (
 )
 from utilsforecast.validation import validate_format
 
-from .compat import CORE_INSTALLED, CoreGroupedArray
+from .compat import CORE_INSTALLED, BaseLagTransform, Lag
 from .grouped_array import GroupedArray
-from .lag_transforms import BaseLagTransform, Lag
 from mlforecast.target_transforms import (
     BaseGroupedArrayTargetTransform,
     BaseTargetTransform,
@@ -102,7 +101,7 @@ def _pascal2camel(pascal_str: str) -> str:
 
 # %% ../nbs/core.ipynb 14
 def _build_lag_transform_name(tfm: BaseLagTransform, lag: int) -> str:
-    tfm_params = list(inspect.signature(tfm.__init__).parameters.items())
+    tfm_params = list(inspect.signature(tfm.__init__).parameters.items())  # type: ignore
     tfm_name = f"{_pascal2camel(tfm.__class__.__name__)}_lag{lag}"
     changed_params = [
         f"{name}{getattr(tfm, name)}"
@@ -185,7 +184,7 @@ def _parse_transforms(
         for tfm in lag_transforms[lag]:
             if isinstance(tfm, BaseLagTransform):
                 tfm_name = _build_lag_transform_name(tfm, lag)
-                transforms[tfm_name] = tfm._set_core_tfm(lag)
+                transforms[tfm_name] = clone(tfm)._set_core_tfm(lag)
             else:
                 tfm, *args = _as_tuple(tfm)
                 tfm_name = _build_transform_name(lag, tfm, *args)
