@@ -9,8 +9,16 @@ __all__ = ['RollingMean', 'RollingStd', 'RollingMin', 'RollingMax', 'SeasonalRol
 from typing import Optional
 
 import numpy as np
-import coreforecast.lag_transforms as core_tfms
-from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
+
+try:
+    import coreforecast.lag_transforms as core_tfms
+    from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
+except ImportError:
+    raise ImportError(
+        "The lag_transforms module requires the coreforecast package. "
+        "Please install it with `pip install coreforecast`.\n"
+        'You can also install mlforecast with the lag_transforms extra: `pip install "mlforecast[lag_transforms]"`'
+    ) from None
 from sklearn.base import BaseEstimator
 
 # %% ../nbs/lag_transforms.ipynb 4
