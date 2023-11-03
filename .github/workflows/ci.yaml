@@ -55,9 +55,6 @@ jobs:
           create-args: python=${{ matrix.python-version }}
           cache-environment: true
 
-      - name: tmp
-        run: pip install git+https://github.com/nixtla/coreforecast.git@lag-tfms
-
       - name: Install the library
         run: pip install ./
 
@@ -81,9 +78,6 @@ jobs:
           environment-file: local_environment.yml
           create-args: python=${{ matrix.python-version }}
           cache-environment: true
-
-      - name: tmp
-        run: pip install git+https://github.com/nixtla/coreforecast.git@lag-tfms
 
       - name: Install the library
         run: pip install ./

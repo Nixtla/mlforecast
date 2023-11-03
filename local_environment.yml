@@ -17,6 +17,7 @@ dependencies:
   - window-ops
   - xgboost
   - pip:
+    - coreforecast>=0.0.2
     - datasetsforecast
     - nbdev
     - polars

@@ -19,6 +19,7 @@ dependencies:
   - window-ops
   - xgboost
   - pip:
+    - coreforecast>=0.0.2
     - datasetsforecast
     - duckdb<0.8
     - fugue[ray]
