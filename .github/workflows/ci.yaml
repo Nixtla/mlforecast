@@ -55,11 +55,14 @@ jobs:
           create-args: python=${{ matrix.python-version }}
           cache-environment: true
 
+      - name: tmp
+        run: pip install git+https://github.com/nixtla/coreforecast.git@lag-tfms
+
       - name: Install the library
         run: pip install ./
 
       - name: Run all tests
-        run: nbdev_test --n_workers 1 --do_print --timing --flags polars
+        run: nbdev_test --n_workers 1 --do_print --timing --flags 'polars core'
 
   run-local-tests:
     runs-on: ${{ matrix.os }}
