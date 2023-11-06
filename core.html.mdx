@@ -14,6 +14,7 @@ from window_ops.rolling import rolling_mean
 from window_ops.shift import shift_array
 
 from mlforecast.callbacks import SaveFeatures
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import generate_daily_series, generate_prices_for_series
 ```
@@ -134,7 +135,7 @@ then the function and then the function arguments.
 test_eq(
     ts.transforms, 
     {
-        'lag7': (7, _identity),
+        'lag7': Lag(7),
         'expanding_mean_lag1': (1, expanding_mean), 
         'rolling_mean_lag1_window_size7': (1, rolling_mean, 7)
         
