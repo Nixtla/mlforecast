@@ -1,0 +1,2078 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.3.450">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="description" content="In this example we will show how to perform electricity load forecasting using MLForecast alongside many models. We also compare them against the prophet library.">
+
+<title>mlforecast - Electricity Load Forecast</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../../">
+<link href="../../favicon.png" rel="icon" type="image/png">
+<script src="../../site_libs/quarto-html/quarto.js"></script>
+<script src="../../site_libs/quarto-html/popper.min.js"></script>
+<script src="../../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../../site_libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../../site_libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 20,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script async="" src="https://www.googletagmanager.com/gtag/js?id=G-NXJNCVR18L"></script>
+
+<script type="text/javascript">
+
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-NXJNCVR18L', { 'anonymize_ip': true});
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" integrity="sha512-c3Nl8+7g4LMSTdrm621y7kf9v3SDPnhxLNhcjFJbKECVnmZHTdo+IRO05sNLTH/D3vA6u1X32ehoLC7WFVdheg==" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.5.1/jquery.min.js" integrity="sha512-bLT0Qm9VnAYZDflyKcBaQ2gg0hSYNQrJ8RilYldYQ1FxQYoCLtUjuuRuZo+fjqhx/qtq/1itJ0C2ejDxltZVFg==" crossorigin="anonymous"></script>
+<script type="application/javascript">define('jquery', [],function() {return window.jQuery;})</script>
+
+
+<link rel="stylesheet" href="../../styles.css">
+<meta property="og:title" content="mlforecast - Electricity Load Forecast">
+<meta property="og:description" content="In this example we will show how to perform electricity load forecasting using MLForecast alongside many models. We also compare them against the prophet library.">
+<meta property="og:image" content="https://github.com/Nixtla/styles/blob/2abf51612584169874c90cd7c4d347e3917eaf73/images/Banner%20Github.png">
+<meta property="og:site-name" content="mlforecast">
+<meta name="twitter:title" content="mlforecast - Electricity Load Forecast">
+<meta name="twitter:description" content="In this example we will show how to perform electricity load forecasting using MLForecast alongside many models. We also compare them against the prophet library.">
+<meta name="twitter:image" content="https://farm6.staticflickr.com/5510/14338202952_93595258ff_z.jpg">
+<meta name="twitter:site" content="@Nixtlainc">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+
+<body class="nav-sidebar floating nav-fixed">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg navbar-dark ">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container">
+    <a class="navbar-brand" href="../../index.html">
+    <span class="navbar-title">mlforecast</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="../../docs/getting-started/quick_start_local.html" rel="" target="" aria-current="page">
+ <span class="menu-text">Get Started</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-nixtlaverse" role="button" data-bs-toggle="dropdown" aria-expanded="false" rel="" target="">
+ <span class="menu-text">NixtlaVerse</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-nixtlaverse">    
+        <li>
+    <a class="dropdown-item" href="https://github.com/nixtla/statsforecast" rel="" target="">
+ <span class="dropdown-text">StatsForecast ⚡️</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://github.com/nixtla/neuralforecast" rel="" target="">
+ <span class="dropdown-text">NeuralForecast 🧠</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://github.com/nixtla/hierarchicalforecast" rel="" target="">
+ <span class="dropdown-text">HierarchicalForecast 👑</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-help" role="button" data-bs-toggle="dropdown" aria-expanded="false" rel="" target="">
+ <span class="menu-text">Help</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-help">    
+        <li>
+    <a class="dropdown-item" href="https://github.com/nixtla/mlforecast/issues/new/choose" rel="" target=""><i class="bi bi-bug" role="img">
+</i> 
+ <span class="dropdown-text">Report an Issue</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="https://join.slack.com/t/nixtlaworkspace/shared_invite/zt-135dssye9-fWTzMpv2WBthq8NK0Yvu6A" rel="" target=""><i class="bi bi-chat-right-text" role="img">
+</i> 
+ <span class="dropdown-text">Join our Slack</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/nixtla/mlforecast" rel="" target=""><i class="bi bi-github" role="img">
+</i> 
+ <span class="menu-text"></span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://twitter.com/nixtlainc" rel="" target=""><i class="bi bi-twitter" role="img" aria-label="Nixtla Twitter">
+</i> 
+ <span class="menu-text"></span></a>
+  </li>  
+</ul>
+            <div class="quarto-navbar-tools">
+</div>
+          </div> <!-- /navcollapse -->
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar,#quarto-sidebar-glass" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+      <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../../docs/tutorials/electricity_load_forecasting.html">Tutorials</a></li><li class="breadcrumb-item"><a href="../../docs/tutorials/electricity_load_forecasting.html">Electricity Load Forecast</a></li></ol></nav>
+      <a class="flex-grow-1" role="button" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar,#quarto-sidebar-glass" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+      </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">mlforecast</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="false">
+ <span class="menu-text">Getting started</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/getting-started/install.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Install</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/getting-started/quick_start_local.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Quick start (local)</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/getting-started/quick_start_distributed.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Quick start (distributed)</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/getting-started/end_to_end_walkthrough.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">End to end walkthrough</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="false">
+ <span class="menu-text">How-to guides</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/exogenous_features.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Exogenous features</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/lag_transforms_guide.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Lag transformations</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/transforming_exog.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Transforming exogenous features</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/cross_validation.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Cross validation</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/prediction_intervals.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Probabilistic forecasting</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/target_transforms_guide.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Target transformations</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/analyzing_models.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Analyzing the trained models</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/custom_training.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Custom training</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/training_with_numpy.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Training with numpy arrays</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/one_model_per_horizon.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">One model per step</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/custom_date_features.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Custom date features</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/predict_callbacks.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Predict callbacks</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/predict_subset.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Predicting a subset of ids</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/how-to-guides/transfer_learning.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Transfer Learning</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="true">
+ <span class="menu-text">Tutorials</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/tutorials/electricity_load_forecasting.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Electricity Load Forecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/tutorials/electricity_peak_forecasting.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Detect Demand Peaks</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../docs/tutorials/prediction_intervals_in_forecasting_models.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Prediction intervals</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false">
+ <span class="menu-text">API reference</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" aria-expanded="false">
+ <span class="menu-text">Local</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../forecast.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">MLForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../lgb_cv.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">LightGBMCV</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../utils.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Utils</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Core</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../target_transforms.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Target transforms</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../lag_transforms.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Lag transforms</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../feature_engineering.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Feature engineering</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../callbacks.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Callbacks</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" aria-expanded="false">
+ <span class="menu-text">Distributed</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.forecast.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Distributed Forecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" aria-expanded="false">
+ <span class="menu-text">Models</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.dask.lgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">DaskLGBMForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.dask.xgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">DaskXGBForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.ray.lgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">RayLGBMForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.ray.xgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">RayXGBForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.spark.lgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">SparkLGBMForecast</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../../distributed.models.spark.xgb.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">SparkXGBForecast</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar,#quarto-sidebar-glass"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#introduction" id="toc-introduction" class="nav-link active" data-scroll-target="#introduction">Introduction</a></li>
+  <li><a href="#libraries" id="toc-libraries" class="nav-link" data-scroll-target="#libraries">Libraries</a></li>
+  <li><a href="#forecast-using-multiple-seasonalities" id="toc-forecast-using-multiple-seasonalities" class="nav-link" data-scroll-target="#forecast-using-multiple-seasonalities">Forecast using Multiple Seasonalities</a>
+  <ul class="collapse">
+  <li><a href="#electricity-load-data" id="toc-electricity-load-data" class="nav-link" data-scroll-target="#electricity-load-data">Electricity Load Data</a></li>
+  <li><a href="#analizing-seasonalities" id="toc-analizing-seasonalities" class="nav-link" data-scroll-target="#analizing-seasonalities">Analizing Seasonalities</a></li>
+  <li><a href="#model-selection-with-cross-validation" id="toc-model-selection-with-cross-validation" class="nav-link" data-scroll-target="#model-selection-with-cross-validation">Model Selection with Cross-Validation</a></li>
+  <li><a href="#test-evaluation" id="toc-test-evaluation" class="nav-link" data-scroll-target="#test-evaluation">Test Evaluation</a></li>
+  <li><a href="#comparison-with-prophet" id="toc-comparison-with-prophet" class="nav-link" data-scroll-target="#comparison-with-prophet">Comparison with Prophet</a></li>
+  </ul></li>
+  </ul>
+<div class="toc-actions"><div><i class="bi bi-github"></i></div><div class="action-links"><p><a href="https://github.com/Nixtla/mlforecast/issues/new" class="toc-action">Report an issue</a></p></div></div></nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Electricity Load Forecast</h1>
+</div>
+
+<div>
+  <div class="description">
+    In this example we will show how to perform electricity load forecasting using MLForecast alongside many models. We also compare them against the prophet library.
+  </div>
+</div>
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+</header>
+
+<!-- WARNING: THIS FILE WAS AUTOGENERATED! DO NOT EDIT! -->
+<section id="introduction" class="level2">
+<h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
+<p>Some time series are generated from very low frequency data. These data generally exhibit multiple seasonalities. For example, hourly data may exhibit repeated patterns every hour (every 24 observations) or every day (every 24 * 7, hours per day, observations). This is the case for electricity load. Electricity load may vary hourly, e.g., during the evenings electricity consumption may be expected to increase. But also, the electricity load varies by week. Perhaps on weekends there is an increase in electrical activity.</p>
+<p>In this example we will show how to model the two seasonalities of the time series to generate accurate forecasts in a short time. We will use hourly PJM electricity load data. The original data can be found <a href="https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption">here</a>.</p>
+</section>
+<section id="libraries" class="level2">
+<h2 class="anchored" data-anchor-id="libraries">Libraries</h2>
+<p>In this example we will use the following libraries:</p>
+<ul>
+<li><a href="https://nixtla.github.io/mlforecast/"><code>mlforecast</code></a>. Accurate and ⚡️ fast forecasting withc lassical machine learning models.</li>
+<li><a href="https://github.com/facebook/prophet"><code>prophet</code></a>. Benchmark model developed by Facebook.</li>
+<li><a href="https://nixtla.github.io/utilsforecast/"><code>utilsforecast</code></a>. Library with different functions for forecasting evaluation.</li>
+</ul>
+<p>If you have already installed the libraries you can skip the next cell, if not be sure to run it.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># %%capture</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># !pip install prophet</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># !pip install -U mlforecast</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># !pip install -U utilsforecast</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="forecast-using-multiple-seasonalities" class="level2">
+<h2 class="anchored" data-anchor-id="forecast-using-multiple-seasonalities">Forecast using Multiple Seasonalities</h2>
+<section id="electricity-load-data" class="level3">
+<h3 class="anchored" data-anchor-id="electricity-load-data">Electricity Load Data</h3>
+<p>According to the <a href="https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption">dataset’s page</a>,</p>
+<blockquote class="blockquote">
+<p>PJM Interconnection LLC (PJM) is a regional transmission organization (RTO) in the United States. It is part of the Eastern Interconnection grid operating an electric transmission system serving all or parts of Delaware, Illinois, Indiana, Kentucky, Maryland, Michigan, New Jersey, North Carolina, Ohio, Pennsylvania, Tennessee, Virginia, West Virginia, and the District of Columbia. The hourly power consumption data comes from PJM’s website and are in megawatts (MW).</p>
+</blockquote>
+<p>Let’s take a look to the data.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> matplotlib.pyplot <span class="im">as</span> plt</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> numpy <span class="im">as</span> np</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pandas <span class="im">as</span> pd</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> utilsforecast.plotting <span class="im">import</span> plot_series</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>pd.plotting.register_matplotlib_converters()</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>plt.rc(<span class="st">"figure"</span>, figsize<span class="op">=</span>(<span class="dv">10</span>, <span class="dv">8</span>))</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>plt.rc(<span class="st">"font"</span>, size<span class="op">=</span><span class="dv">10</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>data_url <span class="op">=</span> <span class="st">'https://raw.githubusercontent.com/panambY/Hourly_Energy_Consumption/master/data/PJM_Load_hourly.csv'</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>df <span class="op">=</span> pd.read_csv(data_url, parse_dates<span class="op">=</span>[<span class="st">'Datetime'</span>])</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>df.columns <span class="op">=</span> [<span class="st">'ds'</span>, <span class="st">'y'</span>]</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>df.insert(<span class="dv">0</span>, <span class="st">'unique_id'</span>, <span class="st">'PJM_Load_hourly'</span>)</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>df[<span class="st">'ds'</span>] <span class="op">=</span> pd.to_datetime(df[<span class="st">'ds'</span>])</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>df <span class="op">=</span> df.sort_values([<span class="st">'unique_id'</span>, <span class="st">'ds'</span>]).reset_index(drop<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f'Shape of the data </span><span class="sc">{</span>df<span class="sc">.</span>shape<span class="sc">}</span><span class="ss">'</span>)</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>df.tail()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Shape of the data (32896, 3)</code></pre>
+</div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">y</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32891</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 20:00:00</td>
+<td>36392.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">32892</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 21:00:00</td>
+<td>35082.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32893</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 22:00:00</td>
+<td>33890.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">32894</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 23:00:00</td>
+<td>32590.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32895</td>
+<td>PJM_Load_hourly</td>
+<td>2002-01-01 00:00:00</td>
+<td>31569.0</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>fig <span class="op">=</span> plot_series(df)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p><img src="../../figs/load_forecasting__raw.png" class="img-fluid"></p>
+<p>We clearly observe that the time series exhibits seasonal patterns. Moreover, the time series contains <code>32,896</code> observations, so it is necessary to use very computationally efficient methods to display them in production.</p>
+<p>We are going to split our series in order to create a train and test set. The model will be tested using the last 24 hours of the timeseries.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>threshold_time <span class="op">=</span> df[<span class="st">'ds'</span>].<span class="bu">max</span>() <span class="op">-</span> pd.Timedelta(hours<span class="op">=</span><span class="dv">24</span>)</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Split the dataframe</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>df_train <span class="op">=</span> df[df[<span class="st">'ds'</span>] <span class="op">&lt;=</span> threshold_time]</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>df_last_24_hours <span class="op">=</span> df[df[<span class="st">'ds'</span>] <span class="op">&gt;</span> threshold_time]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</section>
+<section id="analizing-seasonalities" class="level3">
+<h3 class="anchored" data-anchor-id="analizing-seasonalities">Analizing Seasonalities</h3>
+<p>First we must visualize the seasonalities of the model. As mentioned before, the electricity load presents seasonalities every 24 hours (Hourly) and every 24 * 7 (Daily) hours. Therefore, we will use <code>[24, 24 * 7]</code> as the seasonalities for the model. In order to analize how they affect our series we are going to use the <code>Difference</code> method.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> mlforecast <span class="im">import</span> MLForecast</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> mlforecast.target_transforms <span class="im">import</span> Differences</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>We can use the <code>MLForecast.preprocess</code> method to explore different transformations. It looks like these series have a strong seasonality on the hour of the day, so we can subtract the value from the same hour in the previous day to remove it. This can be done with the <code>mlforecast.target_transforms.Differences</code> transformer, which we pass through <code>target_transforms</code>.</p>
+<p>In order to analize the trends individually and combined we are going to plot them individually and combined. Therefore, we can compare them against the original series. We can use the next function for that.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> plot_differences(df, differences,fname):</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    prep <span class="op">=</span> [df]</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Plot individual Differences</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> d <span class="kw">in</span> differences:</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        fcst <span class="op">=</span> MLForecast(</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        models<span class="op">=</span>[],  <span class="co"># we're not interested in modeling yet</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>        freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        target_transforms<span class="op">=</span>[Differences([d])],</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>        df_ <span class="op">=</span> fcst.preprocess(df)</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>        df_[<span class="st">'unique_id'</span>] <span class="op">=</span> df_[<span class="st">'unique_id'</span>] <span class="op">+</span> <span class="ss">f'_</span><span class="sc">{</span>d<span class="sc">}</span><span class="ss">'</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        prep.append(df_)</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Plot combined Differences</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    fcst <span class="op">=</span> MLForecast(</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    models<span class="op">=</span>[],  <span class="co"># we're not interested in modeling yet</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    target_transforms<span class="op">=</span>[Differences([<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>])],</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    df_ <span class="op">=</span> fcst.preprocess(df)</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    df_[<span class="st">'unique_id'</span>] <span class="op">=</span> df_[<span class="st">'unique_id'</span>] <span class="op">+</span> <span class="ss">f'_all_diff'</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    prep.append(df_)</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>    prep <span class="op">=</span> pd.concat(prep, ignore_index<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>    <span class="co">#return prep</span></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    n_series <span class="op">=</span> <span class="bu">len</span>(prep[<span class="st">'unique_id'</span>].unique())</span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    fig, ax <span class="op">=</span> plt.subplots(nrows<span class="op">=</span>n_series, figsize<span class="op">=</span>(<span class="dv">7</span> <span class="op">*</span> n_series, <span class="dv">10</span><span class="op">*</span>n_series), squeeze<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> title, axi <span class="kw">in</span> <span class="bu">zip</span>(prep[<span class="st">'unique_id'</span>].unique(), ax.flat):</span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>        df_ <span class="op">=</span> prep[prep[<span class="st">'unique_id'</span>] <span class="op">==</span> title]</span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>        df_.set_index(<span class="st">'ds'</span>)[<span class="st">'y'</span>].plot(title<span class="op">=</span>title, ax<span class="op">=</span>axi)</span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    fig.savefig(<span class="ss">f'../../figs/</span><span class="sc">{</span>fname<span class="sc">}</span><span class="ss">'</span>, bbox_inches<span class="op">=</span><span class="st">'tight'</span>)</span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>    plt.close()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>Since the seasonalities are present at <code>24</code> hours (daily) and <code>24*7</code> (weekly) we are going to substract them from the serie using <code>Differences([24, 24*7])</code> and plot them.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>plot_differences(df<span class="op">=</span>df_train, differences<span class="op">=</span>[<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>], fname<span class="op">=</span><span class="st">'load_forecasting__differences.png'</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p><img src="../../figs/load_forecasting__differences.png" class="img-fluid"></p>
+<p>As we can see when we extract the 24 difference (daily) in <code>PJM_Load_hourly_24</code> the series seem to stabilize sisnce the peaks seem more uniform in comparison with the original series <code>PJM_Load_hourly</code>.</p>
+<p>When we extrac the 24*7 (weekly) <code>PJM_Load_hourly_168</code> difference we can see there is more periodicity in the peaks in comparison with the original series.</p>
+<p>Finally we can see the result from the combined result from substracting all the differences <code>PJM_Load_hourly_all_diff</code>.</p>
+<p>For modeling we are going to use both difference for the forecasting, therefore we are setting the argument <code>target_transforms</code> from the <code>MLForecast</code> object equal to <code>[Differences([24, 24*7])]</code>, if we wanted to include a yearly difference we would need to add the term <code>24*365</code>.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>fcst <span class="op">=</span> MLForecast(</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    models<span class="op">=</span>[],  <span class="co"># we're not interested in modeling yet</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    target_transforms<span class="op">=</span>[Differences([<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>])],</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>prep <span class="op">=</span> fcst.preprocess(df_train)</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>prep</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">y</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">192</td>
+<td>PJM_Load_hourly</td>
+<td>1998-04-09 02:00:00</td>
+<td>831.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">193</td>
+<td>PJM_Load_hourly</td>
+<td>1998-04-09 03:00:00</td>
+<td>918.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">194</td>
+<td>PJM_Load_hourly</td>
+<td>1998-04-09 04:00:00</td>
+<td>760.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">195</td>
+<td>PJM_Load_hourly</td>
+<td>1998-04-09 05:00:00</td>
+<td>849.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">196</td>
+<td>PJM_Load_hourly</td>
+<td>1998-04-09 06:00:00</td>
+<td>710.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">...</td>
+<td>...</td>
+<td>...</td>
+<td>...</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32867</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-30 20:00:00</td>
+<td>3417.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">32868</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-30 21:00:00</td>
+<td>3596.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32869</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-30 22:00:00</td>
+<td>3501.0</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">32870</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-30 23:00:00</td>
+<td>3939.0</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">32871</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 00:00:00</td>
+<td>4235.0</td>
+</tr>
+</tbody>
+</table>
+
+<p>32680 rows × 3 columns</p>
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>fig <span class="op">=</span> plot_series(prep)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p><img src="../../figs/load_forecasting__transformed.png" class="img-fluid"></p>
+</section>
+<section id="model-selection-with-cross-validation" class="level3">
+<h3 class="anchored" data-anchor-id="model-selection-with-cross-validation">Model Selection with Cross-Validation</h3>
+<p>We can test many models simoultaneously using MLForecast <code>cross_validation</code>. We can import <code>lightgbm</code> and <code>scikit-learn</code> models and try different combinations of them, alongside different target transformations (as the ones we created previously) and historical variables.<br>
+You can see an in-depth tutorial on how to use <code>MLForecast</code> <a href="https://nixtla.github.io/mlforecast/docs/cross_validation.html">Cross Validation methods here</a></p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> lightgbm <span class="im">as</span> lgb</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> mlforecast.target_transforms <span class="im">import</span> Differences</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> window_ops.expanding <span class="im">import</span> expanding_mean</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> window_ops.rolling <span class="im">import</span> rolling_mean</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.base <span class="im">import</span> BaseEstimator</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.linear_model <span class="im">import</span> Lasso, LinearRegression, Ridge</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.neighbors <span class="im">import</span> KNeighborsRegressor</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.neural_network <span class="im">import</span> MLPRegressor</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> sklearn.ensemble <span class="im">import</span> RandomForestRegressor</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>We can create a benchmark <code>Naive</code> model that uses the electricity load of the last hour as prediction <code>lag1</code> as showed in the next cell. You can create your own models and try them with <code>MLForecast</code> using the same structure.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Naive(BaseEstimator):</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> fit(<span class="va">self</span>, X, y):</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="va">self</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> predict(<span class="va">self</span>, X):</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> X[<span class="st">'lag1'</span>]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>Now let’s try differen models from the <code>scikit-learn</code> library: <code>Lasso</code>, <code>LinearRegression</code>, <code>Ridge</code>, <code>KNN</code>, <code>MLP</code> and <code>Random Forest</code> alongside the <code>LightGBM</code>. You can add any model to the dictionary to train and compare them by adding them to the dictionary (<code>models</code>) as shown.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Model dictionary</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>models <span class="op">=</span>{</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        <span class="st">'naive'</span>: Naive(),</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lgbm'</span>: lgb.LGBMRegressor(verbosity<span class="op">=-</span><span class="dv">1</span>),</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lasso'</span>: Lasso(),</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lin_reg'</span>: LinearRegression(),</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">'ridge'</span>: Ridge(),</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">'knn'</span>: KNeighborsRegressor(),</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">'mlp'</span>: MLPRegressor(), </span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">'rf'</span>: RandomForestRegressor()</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    }</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>The we can instanciate the <code>MLForecast</code> class with the models we want to try along side <code>target_transforms</code>, <code>lags</code>, <code>lag_transforms</code>, and <code>date_features</code>. All this features are applied to the models we selected.</p>
+<p>In this case we use the 1st, 12th and 24th lag, which are passed as a list. Potentially you could pass a <code>range</code>.</p>
+<pre><code>lags=[1,12,24]</code></pre>
+<p>Lag transforms are defined as a dictionary where the keys are the lags and the values are lists of functions that transform an array. These must be <a href="http://numba.pydata.org/">numba</a> jitted functions (so that computing the features doesn’t become a bottleneck). There are some implemented in the <a href="https://github.com/jmoralez/window_ops">window-ops</a> package but you can also implement your own.<br>
+For this example we applied an expanding mean to the first lag, and a rolling mean to the 24th lag.</p>
+<pre><code>    lag_transforms={  
+            1: [expanding_mean],
+            24: [(rolling_mean, 48)],
+        }</code></pre>
+<p>For using the date features you need to be sure that your time column is made of timestamps. Then it might make sense to extract features like week, dayofweek, quarter, etc. You can do that by passing a list of strings with <a href="https://pandas.pydata.org/docs/user_guide/timeseries.html#time-date-components">pandas time/date components</a>. You can also pass functions that will take the time column as input, as we’ll show here.<br>
+Here we add month, hour and dayofweek features:</p>
+<pre><code>    date_features=['month', 'hour', 'dayofweek']
+</code></pre>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>mlf <span class="op">=</span> MLForecast(</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    models <span class="op">=</span> models, </span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    target_transforms<span class="op">=</span>[Differences([<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>])],</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    lags<span class="op">=</span>[<span class="dv">1</span>,<span class="dv">12</span>,<span class="dv">24</span>], <span class="co"># Lags to be used as features</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>    lag_transforms<span class="op">=</span>{  </span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>        <span class="dv">1</span>: [expanding_mean],</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>        <span class="dv">24</span>: [(rolling_mean, <span class="dv">48</span>)],</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    },</span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    date_features<span class="op">=</span>[<span class="st">'month'</span>, <span class="st">'hour'</span>, <span class="st">'dayofweek'</span>]</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>Now we use the <code>cross_validation</code> method to train and evalaute the models. + <code>df</code>: Receives the training data + <code>h</code>: Forecast horizon + <code>n_windows</code>: The number of folds we want to predict</p>
+<p>You can specify the names of the time series id, time and target columns. + <code>id_col</code>:Column that identifies each serie ( Default <em>unique_id</em> ) + <code>time_col</code>: Column that identifies each timestep, its values can be timestamps or integer( Default <em>ds</em> ) + <code>target_col</code>:Column that contains the target ( Default <em>y</em> )</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>crossvalidation_df <span class="op">=</span> mlf.cross_validation(</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    df<span class="op">=</span>df_train,</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    h<span class="op">=</span><span class="dv">24</span>,</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    n_windows<span class="op">=</span><span class="dv">4</span>,</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    refit<span class="op">=</span><span class="va">False</span>,</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>crossvalidation_df.head()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">cutoff</th>
+<th data-quarto-table-cell-role="th">y</th>
+<th data-quarto-table-cell-role="th">naive</th>
+<th data-quarto-table-cell-role="th">lgbm</th>
+<th data-quarto-table-cell-role="th">lasso</th>
+<th data-quarto-table-cell-role="th">lin_reg</th>
+<th data-quarto-table-cell-role="th">ridge</th>
+<th data-quarto-table-cell-role="th">knn</th>
+<th data-quarto-table-cell-role="th">mlp</th>
+<th data-quarto-table-cell-role="th">rf</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-27 01:00:00</td>
+<td>2001-12-27</td>
+<td>28332.0</td>
+<td>28837.0</td>
+<td>28526.505572</td>
+<td>28703.185712</td>
+<td>28702.625949</td>
+<td>28702.625956</td>
+<td>28479.0</td>
+<td>28834.839479</td>
+<td>28277.94</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-27 02:00:00</td>
+<td>2001-12-27</td>
+<td>27329.0</td>
+<td>27969.0</td>
+<td>27467.860847</td>
+<td>27693.502318</td>
+<td>27692.395954</td>
+<td>27692.395969</td>
+<td>27521.6</td>
+<td>27940.414699</td>
+<td>27307.90</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-27 03:00:00</td>
+<td>2001-12-27</td>
+<td>26986.0</td>
+<td>27435.0</td>
+<td>26605.710615</td>
+<td>26991.795124</td>
+<td>26990.157567</td>
+<td>26990.157589</td>
+<td>26451.6</td>
+<td>27370.170779</td>
+<td>26599.23</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-27 04:00:00</td>
+<td>2001-12-27</td>
+<td>27009.0</td>
+<td>27401.0</td>
+<td>26284.065138</td>
+<td>26789.418399</td>
+<td>26787.262262</td>
+<td>26787.262291</td>
+<td>26388.4</td>
+<td>27294.232077</td>
+<td>26366.54</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">4</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-27 05:00:00</td>
+<td>2001-12-27</td>
+<td>27555.0</td>
+<td>28169.0</td>
+<td>26823.617078</td>
+<td>27369.643789</td>
+<td>27366.983075</td>
+<td>27366.983111</td>
+<td>26779.6</td>
+<td>28014.090505</td>
+<td>27095.55</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>Now we can plot each model and window (fold) to see how it behaves</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> plot_cv(df, df_cv, uid, fname, last_n<span class="op">=</span><span class="dv">24</span> <span class="op">*</span> <span class="dv">14</span>, models<span class="op">=</span>{}):</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    cutoffs <span class="op">=</span> df_cv.query(<span class="st">'unique_id == @uid'</span>)[<span class="st">'cutoff'</span>].unique()</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    fig, ax <span class="op">=</span> plt.subplots(nrows<span class="op">=</span><span class="bu">len</span>(cutoffs), ncols<span class="op">=</span><span class="dv">1</span>, figsize<span class="op">=</span>(<span class="dv">14</span>, <span class="dv">14</span>), gridspec_kw<span class="op">=</span><span class="bu">dict</span>(hspace<span class="op">=</span><span class="fl">0.8</span>))</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> cutoff, axi <span class="kw">in</span> <span class="bu">zip</span>(cutoffs, ax.flat):</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>        max_date <span class="op">=</span> df_cv.query(<span class="st">'unique_id == @uid &amp; cutoff == @cutoff'</span>)[<span class="st">'ds'</span>].<span class="bu">max</span>()</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>        df[df[<span class="st">'ds'</span>] <span class="op">&lt;</span> max_date].query(<span class="st">'unique_id == @uid'</span>).tail(last_n).set_index(<span class="st">'ds'</span>).plot(ax<span class="op">=</span>axi, title<span class="op">=</span>uid, y<span class="op">=</span><span class="st">'y'</span>)</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> m <span class="kw">in</span> models.keys():</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>            df_cv.query(<span class="st">'unique_id == @uid &amp; cutoff == @cutoff'</span>).set_index(<span class="st">'ds'</span>).plot(ax<span class="op">=</span>axi, title<span class="op">=</span>uid, y<span class="op">=</span>m)          </span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    fig.savefig(<span class="ss">f'../../figs/</span><span class="sc">{</span>fname<span class="sc">}</span><span class="ss">'</span>, bbox_inches<span class="op">=</span><span class="st">'tight'</span>)</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    plt.close()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>plot_cv(df_train, crossvalidation_df, <span class="st">'PJM_Load_hourly'</span>, <span class="st">'load_forecasting__predictions.png'</span>, models<span class="op">=</span>models)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p><img src="../../figs/load_forecasting__predictions.png" class="img-fluid"></p>
+<p>Visually examining the forecasts can give us some idea of how the model is behaving, yet in order to asses the performace we need to evaluate them trough metrics. For that we use the <a href="https://nixtla.github.io/utilsforecast/">utilsforecast</a> library that contains many useful metrics and an evaluate function.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> utilsforecast.losses <span class="im">import</span> <span class="op">*</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> utilsforecast.evaluation <span class="im">import</span> evaluate</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Metrics to be used for evaluation</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>metrics <span class="op">=</span> [</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    mae,</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    rmse,</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    mape,</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    smape</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    ]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb25"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Function to evaluate the crossvalidation</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> evaluate_crossvalidation(crossvalidation_df, metrics, models):</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    evaluations <span class="op">=</span> []</span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> c <span class="kw">in</span> crossvalidation_df[<span class="st">'cutoff'</span>].unique():</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>        df_cv <span class="op">=</span> crossvalidation_df.query(<span class="st">'cutoff == @c'</span>)</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>        evaluation <span class="op">=</span> evaluate(</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>            df <span class="op">=</span> df_cv,</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>            metrics<span class="op">=</span>metrics,</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>            models<span class="op">=</span><span class="bu">list</span>(models.keys())</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>        evaluations.append(evaluation)</span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    evaluations <span class="op">=</span> pd.concat(evaluations, ignore_index<span class="op">=</span><span class="va">True</span>).drop(columns<span class="op">=</span><span class="st">'unique_id'</span>)</span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>    evaluations <span class="op">=</span> evaluations.groupby(<span class="st">'metric'</span>).mean()</span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> evaluations.style.background_gradient(cmap<span class="op">=</span><span class="st">'RdYlGn_r'</span>, axis<span class="op">=</span><span class="dv">1</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb26"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>evaluate_crossvalidation(crossvalidation_df, metrics, models)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<style type="text/css">
+#T_5cb77_row0_col0, #T_5cb77_row1_col0, #T_5cb77_row2_col0, #T_5cb77_row3_col0 {
+  background-color: #a50026;
+  color: #f1f1f1;
+}
+#T_5cb77_row0_col1, #T_5cb77_row1_col1, #T_5cb77_row2_col1, #T_5cb77_row3_col1 {
+  background-color: #006837;
+  color: #f1f1f1;
+}
+#T_5cb77_row0_col2, #T_5cb77_row1_col3, #T_5cb77_row1_col4, #T_5cb77_row3_col3, #T_5cb77_row3_col4 {
+  background-color: #0c7f43;
+  color: #f1f1f1;
+}
+#T_5cb77_row0_col3, #T_5cb77_row0_col4 {
+  background-color: #0e8245;
+  color: #f1f1f1;
+}
+#T_5cb77_row0_col5 {
+  background-color: #e0f295;
+  color: #000000;
+}
+#T_5cb77_row0_col6, #T_5cb77_row2_col6 {
+  background-color: #ecf7a6;
+  color: #000000;
+}
+#T_5cb77_row0_col7, #T_5cb77_row2_col7, #T_5cb77_row3_col7 {
+  background-color: #cdea83;
+  color: #000000;
+}
+#T_5cb77_row1_col2 {
+  background-color: #0a7b41;
+  color: #f1f1f1;
+}
+#T_5cb77_row1_col5, #T_5cb77_row3_col5 {
+  background-color: #ddf191;
+  color: #000000;
+}
+#T_5cb77_row1_col6, #T_5cb77_row2_col5 {
+  background-color: #e6f59d;
+  color: #000000;
+}
+#T_5cb77_row1_col7 {
+  background-color: #cbe982;
+  color: #000000;
+}
+#T_5cb77_row2_col2 {
+  background-color: #06733d;
+  color: #f1f1f1;
+}
+#T_5cb77_row2_col3, #T_5cb77_row2_col4 {
+  background-color: #08773f;
+  color: #f1f1f1;
+}
+#T_5cb77_row3_col2 {
+  background-color: #0b7d42;
+  color: #f1f1f1;
+}
+#T_5cb77_row3_col6 {
+  background-color: #e3f399;
+  color: #000000;
+}
+</style>
+
+<table id="T_5cb77" data-quarto-postprocess="true" class="table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th class="blank level0" data-quarto-table-cell-role="th">&nbsp;</th>
+<th id="T_5cb77_level0_col0" class="col_heading level0 col0" data-quarto-table-cell-role="th">naive</th>
+<th id="T_5cb77_level0_col1" class="col_heading level0 col1" data-quarto-table-cell-role="th">lgbm</th>
+<th id="T_5cb77_level0_col2" class="col_heading level0 col2" data-quarto-table-cell-role="th">lasso</th>
+<th id="T_5cb77_level0_col3" class="col_heading level0 col3" data-quarto-table-cell-role="th">lin_reg</th>
+<th id="T_5cb77_level0_col4" class="col_heading level0 col4" data-quarto-table-cell-role="th">ridge</th>
+<th id="T_5cb77_level0_col5" class="col_heading level0 col5" data-quarto-table-cell-role="th">knn</th>
+<th id="T_5cb77_level0_col6" class="col_heading level0 col6" data-quarto-table-cell-role="th">mlp</th>
+<th id="T_5cb77_level0_col7" class="col_heading level0 col7" data-quarto-table-cell-role="th">rf</th>
+</tr>
+<tr class="odd">
+<th class="index_name level0" data-quarto-table-cell-role="th">metric</th>
+<th class="blank col0" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col1" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col2" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col3" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col4" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col5" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col6" data-quarto-table-cell-role="th">&nbsp;</th>
+<th class="blank col7" data-quarto-table-cell-role="th">&nbsp;</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td id="T_5cb77_level0_row0" class="row_heading level0 row0" data-quarto-table-cell-role="th">mae</td>
+<td id="T_5cb77_row0_col0" class="data row0 col0">1631.395833</td>
+<td id="T_5cb77_row0_col1" class="data row0 col1">971.536200</td>
+<td id="T_5cb77_row0_col2" class="data row0 col2">1003.796433</td>
+<td id="T_5cb77_row0_col3" class="data row0 col3">1007.998597</td>
+<td id="T_5cb77_row0_col4" class="data row0 col4">1007.998547</td>
+<td id="T_5cb77_row0_col5" class="data row0 col5">1248.145833</td>
+<td id="T_5cb77_row0_col6" class="data row0 col6">1268.841369</td>
+<td id="T_5cb77_row0_col7" class="data row0 col7">1219.286771</td>
+</tr>
+<tr class="even">
+<td id="T_5cb77_level0_row1" class="row_heading level0 row1" data-quarto-table-cell-role="th">mape</td>
+<td id="T_5cb77_row1_col0" class="data row1 col0">0.049759</td>
+<td id="T_5cb77_row1_col1" class="data row1 col1">0.030966</td>
+<td id="T_5cb77_row1_col2" class="data row1 col2">0.031760</td>
+<td id="T_5cb77_row1_col3" class="data row1 col3">0.031888</td>
+<td id="T_5cb77_row1_col4" class="data row1 col4">0.031888</td>
+<td id="T_5cb77_row1_col5" class="data row1 col5">0.038721</td>
+<td id="T_5cb77_row1_col6" class="data row1 col6">0.039149</td>
+<td id="T_5cb77_row1_col7" class="data row1 col7">0.037969</td>
+</tr>
+<tr class="odd">
+<td id="T_5cb77_level0_row2" class="row_heading level0 row2" data-quarto-table-cell-role="th">rmse</td>
+<td id="T_5cb77_row2_col0" class="data row2 col0">1871.398919</td>
+<td id="T_5cb77_row2_col1" class="data row2 col1">1129.713256</td>
+<td id="T_5cb77_row2_col2" class="data row2 col2">1148.616156</td>
+<td id="T_5cb77_row2_col3" class="data row2 col3">1153.262719</td>
+<td id="T_5cb77_row2_col4" class="data row2 col4">1153.262664</td>
+<td id="T_5cb77_row2_col5" class="data row2 col5">1451.964390</td>
+<td id="T_5cb77_row2_col6" class="data row2 col6">1463.836007</td>
+<td id="T_5cb77_row2_col7" class="data row2 col7">1409.549197</td>
+</tr>
+<tr class="even">
+<td id="T_5cb77_level0_row3" class="row_heading level0 row3" data-quarto-table-cell-role="th">smape</td>
+<td id="T_5cb77_row3_col0" class="data row3 col0">0.024786</td>
+<td id="T_5cb77_row3_col1" class="data row3 col1">0.015886</td>
+<td id="T_5cb77_row3_col2" class="data row3 col2">0.016269</td>
+<td id="T_5cb77_row3_col3" class="data row3 col3">0.016338</td>
+<td id="T_5cb77_row3_col4" class="data row3 col4">0.016338</td>
+<td id="T_5cb77_row3_col5" class="data row3 col5">0.019549</td>
+<td id="T_5cb77_row3_col6" class="data row3 col6">0.019704</td>
+<td id="T_5cb77_row3_col7" class="data row3 col7">0.019252</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p>We can se that the model <code>lgbm</code> has top performance in most metrics folowed by the <code>lasso regression</code>. Both models perform way better than the <code>naive</code>.</p>
+</section>
+<section id="test-evaluation" class="level3">
+<h3 class="anchored" data-anchor-id="test-evaluation">Test Evaluation</h3>
+<p>Now we are going to evaluate their perfonce in the test set. We can use both of them for forecasting the test alongside some prediction intervals. For that we can use the <a href="https://nixtla.github.io/mlforecast/utils.html#predictionintervals"><code>PredictionIntervals</code></a> function in <code>mlforecast.utils</code>.<br>
+You can see an in-depth tutotorial of <a href="https://nixtla.github.io/mlforecast/docs/prediction_intervals.html">Probabilistic Forecasting here</a></p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> mlforecast.utils <span class="im">import</span> PredictionIntervals</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>models_evaluation <span class="op">=</span>{</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lgbm'</span>: lgb.LGBMRegressor(verbosity<span class="op">=-</span><span class="dv">1</span>),</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lasso'</span>: Lasso(),</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>mlf_evaluation <span class="op">=</span> MLForecast(</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    models <span class="op">=</span> models_evaluation, </span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>    freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>    target_transforms<span class="op">=</span>[Differences([<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>])],</span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    lags<span class="op">=</span>[<span class="dv">1</span>,<span class="dv">12</span>,<span class="dv">24</span>], </span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    lag_transforms<span class="op">=</span>{  </span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>        <span class="dv">1</span>: [expanding_mean],</span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>        <span class="dv">24</span>: [(rolling_mean, <span class="dv">48</span>)],</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>    },</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>    date_features<span class="op">=</span>[<span class="st">'month'</span>, <span class="st">'hour'</span>, <span class="st">'dayofweek'</span>]</span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>Now we’re ready to generate the point forecasts and the prediction intervals. To do this, we’ll use the <code>fit</code> method, which takes the following arguments:</p>
+<ul>
+<li><code>df</code>: Series data in long format.</li>
+<li><code>id_col</code>: Column that identifies each series. In our case, unique_id.</li>
+<li><code>time_col</code>: Column that identifies each timestep, its values can be timestamps or integers. In our case, ds.</li>
+<li><code>target_col</code>: Column that contains the target. In our case, y.</li>
+</ul>
+<p>The <code>PredictionIntervals</code> function is used to compute prediction intervals for the models using <a href="https://valeman.medium.com/how-to-predict-full-probability-distribution-using-machine-learning-conformal-predictive-f8f4d805e420">Conformal Prediction</a>. The function takes the following arguments: + <code>n_windows</code>: represents the number of cross-validation windows used to calibrate the intervals + <code>h</code>: the forecast horizon</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb29"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>mlf_evaluation.fit(</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    df <span class="op">=</span> df_train,</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    prediction_intervals<span class="op">=</span>PredictionIntervals(n_windows<span class="op">=</span><span class="dv">4</span>, h<span class="op">=</span><span class="dv">24</span>)</span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<pre><code>MLForecast(models=[lgbm, lasso], freq=&lt;Hour&gt;, lag_features=['lag1', 'lag12', 'lag24', 'expanding_mean_lag1', 'rolling_mean_lag24_window_size48'], date_features=['month', 'hour', 'dayofweek'], num_threads=1)</code></pre>
+</div>
+</div>
+<p>Now that the model has been trained we are going to forecast the next 24 hours using the <code>predict</code> method so we can compare them to our <code>test</code> data. Additionally, we are going to create prediction intervals at <code>levels</code> <code>[90,95]</code>.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb31"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>levels <span class="op">=</span> [<span class="dv">90</span>, <span class="dv">95</span>] <span class="co"># Levels for prediction intervals</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>forecasts <span class="op">=</span> mlf_evaluation.predict(<span class="dv">24</span>, level<span class="op">=</span>levels)</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>forecasts.head()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">lgbm</th>
+<th data-quarto-table-cell-role="th">lasso</th>
+<th data-quarto-table-cell-role="th">lgbm-lo-95</th>
+<th data-quarto-table-cell-role="th">lgbm-lo-90</th>
+<th data-quarto-table-cell-role="th">lgbm-hi-90</th>
+<th data-quarto-table-cell-role="th">lgbm-hi-95</th>
+<th data-quarto-table-cell-role="th">lasso-lo-95</th>
+<th data-quarto-table-cell-role="th">lasso-lo-90</th>
+<th data-quarto-table-cell-role="th">lasso-hi-90</th>
+<th data-quarto-table-cell-role="th">lasso-hi-95</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 01:00:00</td>
+<td>28847.573176</td>
+<td>29124.085976</td>
+<td>28544.593464</td>
+<td>28567.603130</td>
+<td>29127.543222</td>
+<td>29150.552888</td>
+<td>28762.752269</td>
+<td>28772.604275</td>
+<td>29475.567677</td>
+<td>29485.419682</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 02:00:00</td>
+<td>27862.589195</td>
+<td>28365.330749</td>
+<td>27042.311414</td>
+<td>27128.839888</td>
+<td>28596.338503</td>
+<td>28682.866977</td>
+<td>27528.548959</td>
+<td>27619.065224</td>
+<td>29111.596275</td>
+<td>29202.112539</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 03:00:00</td>
+<td>27044.418960</td>
+<td>27712.161676</td>
+<td>25596.659896</td>
+<td>25688.230426</td>
+<td>28400.607493</td>
+<td>28492.178023</td>
+<td>26236.955369</td>
+<td>26338.087102</td>
+<td>29086.236251</td>
+<td>29187.367984</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 04:00:00</td>
+<td>26976.104125</td>
+<td>27661.572733</td>
+<td>25249.961527</td>
+<td>25286.024722</td>
+<td>28666.183529</td>
+<td>28702.246724</td>
+<td>25911.133521</td>
+<td>25959.815715</td>
+<td>29363.329750</td>
+<td>29412.011944</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">4</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 05:00:00</td>
+<td>26694.246238</td>
+<td>27393.922370</td>
+<td>25044.220845</td>
+<td>25051.548832</td>
+<td>28336.943644</td>
+<td>28344.271631</td>
+<td>25751.547897</td>
+<td>25762.524815</td>
+<td>29025.319924</td>
+<td>29036.296843</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>The <code>predict</code> method returns a DataFrame witht the predictions for each model (<code>lasso</code> and <code>lgbm</code>) along side the prediction tresholds. The high-threshold is indicated by the keyword <code>hi</code>, the low-threshold by the keyword <code>lo</code>, and the level by the number in the column names.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb32"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>test <span class="op">=</span> df_last_24_hours.merge(forecasts, how<span class="op">=</span><span class="st">'left'</span>, on<span class="op">=</span>[<span class="st">'unique_id'</span>, <span class="st">'ds'</span>])</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>test.head()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">y</th>
+<th data-quarto-table-cell-role="th">lgbm</th>
+<th data-quarto-table-cell-role="th">lasso</th>
+<th data-quarto-table-cell-role="th">lgbm-lo-95</th>
+<th data-quarto-table-cell-role="th">lgbm-lo-90</th>
+<th data-quarto-table-cell-role="th">lgbm-hi-90</th>
+<th data-quarto-table-cell-role="th">lgbm-hi-95</th>
+<th data-quarto-table-cell-role="th">lasso-lo-95</th>
+<th data-quarto-table-cell-role="th">lasso-lo-90</th>
+<th data-quarto-table-cell-role="th">lasso-hi-90</th>
+<th data-quarto-table-cell-role="th">lasso-hi-95</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 01:00:00</td>
+<td>29001.0</td>
+<td>28847.573176</td>
+<td>29124.085976</td>
+<td>28544.593464</td>
+<td>28567.603130</td>
+<td>29127.543222</td>
+<td>29150.552888</td>
+<td>28762.752269</td>
+<td>28772.604275</td>
+<td>29475.567677</td>
+<td>29485.419682</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 02:00:00</td>
+<td>28138.0</td>
+<td>27862.589195</td>
+<td>28365.330749</td>
+<td>27042.311414</td>
+<td>27128.839888</td>
+<td>28596.338503</td>
+<td>28682.866977</td>
+<td>27528.548959</td>
+<td>27619.065224</td>
+<td>29111.596275</td>
+<td>29202.112539</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 03:00:00</td>
+<td>27830.0</td>
+<td>27044.418960</td>
+<td>27712.161676</td>
+<td>25596.659896</td>
+<td>25688.230426</td>
+<td>28400.607493</td>
+<td>28492.178023</td>
+<td>26236.955369</td>
+<td>26338.087102</td>
+<td>29086.236251</td>
+<td>29187.367984</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 04:00:00</td>
+<td>27874.0</td>
+<td>26976.104125</td>
+<td>27661.572733</td>
+<td>25249.961527</td>
+<td>25286.024722</td>
+<td>28666.183529</td>
+<td>28702.246724</td>
+<td>25911.133521</td>
+<td>25959.815715</td>
+<td>29363.329750</td>
+<td>29412.011944</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">4</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 05:00:00</td>
+<td>28427.0</td>
+<td>26694.246238</td>
+<td>27393.922370</td>
+<td>25044.220845</td>
+<td>25051.548832</td>
+<td>28336.943644</td>
+<td>28344.271631</td>
+<td>25751.547897</td>
+<td>25762.524815</td>
+<td>29025.319924</td>
+<td>29036.296843</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>Now we can evaluate the metrics and performance in the <code>test</code> set.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb33"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>evaluate(</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>            df <span class="op">=</span> test,</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>            metrics<span class="op">=</span>metrics,</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>            models<span class="op">=</span><span class="bu">list</span>(models_evaluation.keys())</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>            )</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">metric</th>
+<th data-quarto-table-cell-role="th">lgbm</th>
+<th data-quarto-table-cell-role="th">lasso</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>mae</td>
+<td>1092.050817</td>
+<td>899.979743</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>rmse</td>
+<td>1340.422762</td>
+<td>1163.695525</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>mape</td>
+<td>0.033600</td>
+<td>0.027688</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>smape</td>
+<td>0.017137</td>
+<td>0.013812</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<p>We can see that the <code>lasso</code> regression performed slighty better than the <code>LightGBM</code> for the test set. Additonally, we can also plot the forecasts alongside their prediction intervals. For that we can use the <code>plot_series</code> method available in <code>utilsforecast.plotting</code>.</p>
+<p>We can plot one or many models at once alongside their coinfidence intervals.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb34"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>fig <span class="op">=</span> plot_series(</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>    df_train, </span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    test, </span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    models<span class="op">=</span>[<span class="st">'lasso'</span>, <span class="st">'lgbm'</span>],</span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>    plot_random<span class="op">=</span><span class="va">False</span>, </span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>    level<span class="op">=</span>levels, </span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>    max_insample_length<span class="op">=</span><span class="dv">24</span></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p><img src="../../figs/load_forecasting__prediction_intervals.png" class="img-fluid"></p>
+</section>
+<section id="comparison-with-prophet" class="level3">
+<h3 class="anchored" data-anchor-id="comparison-with-prophet">Comparison with Prophet</h3>
+<p>One of the most widely used models for time series forecasting is <code>Prophet</code>. This model is known for its ability to model different seasonalities (weekly, daily yearly). We will use this model as a benchmark to see if the <code>lgbm</code> alongside <code>MLForecast</code> adds value for this time series.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb35"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> prophet <span class="im">import</span> Prophet</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> time <span class="im">import</span> time</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb36"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="co"># create prophet model</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>prophet <span class="op">=</span> Prophet(interval_width<span class="op">=</span><span class="fl">0.9</span>)</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>init <span class="op">=</span> time()</span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>prophet.fit(df_train)</span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="co"># produce forecasts</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>future <span class="op">=</span> prophet.make_future_dataframe(periods<span class="op">=</span><span class="bu">len</span>(df_last_24_hours), freq<span class="op">=</span><span class="st">'H'</span>, include_history<span class="op">=</span><span class="va">False</span>)</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>forecast_prophet <span class="op">=</span> prophet.predict(future)</span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>end <span class="op">=</span> time()</span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="co"># data wrangling</span></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>forecast_prophet <span class="op">=</span> forecast_prophet[[<span class="st">'ds'</span>, <span class="st">'yhat'</span>, <span class="st">'yhat_lower'</span>, <span class="st">'yhat_upper'</span>]]</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>forecast_prophet.columns <span class="op">=</span> [<span class="st">'ds'</span>, <span class="st">'Prophet'</span>, <span class="st">'Prophet-lo-90'</span>, <span class="st">'Prophet-hi-90'</span>]</span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>forecast_prophet.insert(<span class="dv">0</span>, <span class="st">'unique_id'</span>, <span class="st">'PJM_Load_hourly'</span>)</span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>forecast_prophet.head()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">Prophet</th>
+<th data-quarto-table-cell-role="th">Prophet-lo-90</th>
+<th data-quarto-table-cell-role="th">Prophet-hi-90</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 01:00:00</td>
+<td>25294.246960</td>
+<td>20452.615295</td>
+<td>30151.111598</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 02:00:00</td>
+<td>24000.725423</td>
+<td>18954.861631</td>
+<td>28946.645807</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 03:00:00</td>
+<td>23324.771966</td>
+<td>18562.568378</td>
+<td>28009.837383</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 04:00:00</td>
+<td>23332.519871</td>
+<td>18706.835864</td>
+<td>28253.861051</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">4</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 05:00:00</td>
+<td>24107.126827</td>
+<td>18966.217684</td>
+<td>28907.516733</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb37"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a>time_prophet <span class="op">=</span> (end <span class="op">-</span> init) </span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f'Prophet Time: </span><span class="sc">{</span>time_prophet<span class="sc">:.2f}</span><span class="ss"> seconds'</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>Prophet Time: 36.90 seconds</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb39"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a>models_comparison <span class="op">=</span>{</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>        <span class="st">'lgbm'</span>: lgb.LGBMRegressor(verbosity<span class="op">=-</span><span class="dv">1</span>)</span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>mlf_comparison <span class="op">=</span> MLForecast(</span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>    models <span class="op">=</span> models_comparison, </span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a>    freq<span class="op">=</span><span class="st">'H'</span>,  <span class="co"># our series have hourly frequency </span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a>    target_transforms<span class="op">=</span>[Differences([<span class="dv">24</span>, <span class="dv">24</span><span class="op">*</span><span class="dv">7</span>])],</span>
+<span id="cb39-9"><a href="#cb39-9" aria-hidden="true" tabindex="-1"></a>    lags<span class="op">=</span>[<span class="dv">1</span>,<span class="dv">12</span>,<span class="dv">24</span>],</span>
+<span id="cb39-10"><a href="#cb39-10" aria-hidden="true" tabindex="-1"></a>    lag_transforms<span class="op">=</span>{  </span>
+<span id="cb39-11"><a href="#cb39-11" aria-hidden="true" tabindex="-1"></a>        <span class="dv">1</span>: [expanding_mean],</span>
+<span id="cb39-12"><a href="#cb39-12" aria-hidden="true" tabindex="-1"></a>        <span class="dv">24</span>: [(rolling_mean, <span class="dv">48</span>)],</span>
+<span id="cb39-13"><a href="#cb39-13" aria-hidden="true" tabindex="-1"></a>    },</span>
+<span id="cb39-14"><a href="#cb39-14" aria-hidden="true" tabindex="-1"></a>    date_features<span class="op">=</span>[<span class="st">'month'</span>, <span class="st">'hour'</span>, <span class="st">'dayofweek'</span>]</span>
+<span id="cb39-15"><a href="#cb39-15" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb39-16"><a href="#cb39-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-17"><a href="#cb39-17" aria-hidden="true" tabindex="-1"></a>init <span class="op">=</span> time()</span>
+<span id="cb39-18"><a href="#cb39-18" aria-hidden="true" tabindex="-1"></a>mlf_comparison.fit(</span>
+<span id="cb39-19"><a href="#cb39-19" aria-hidden="true" tabindex="-1"></a>    df <span class="op">=</span> df_train,</span>
+<span id="cb39-20"><a href="#cb39-20" aria-hidden="true" tabindex="-1"></a>    prediction_intervals<span class="op">=</span>PredictionIntervals(n_windows<span class="op">=</span><span class="dv">4</span>, h<span class="op">=</span><span class="dv">24</span>)</span>
+<span id="cb39-21"><a href="#cb39-21" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb39-22"><a href="#cb39-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-23"><a href="#cb39-23" aria-hidden="true" tabindex="-1"></a>levels <span class="op">=</span> [<span class="dv">90</span>]</span>
+<span id="cb39-24"><a href="#cb39-24" aria-hidden="true" tabindex="-1"></a>forecasts_comparison <span class="op">=</span> mlf_comparison.predict(<span class="dv">24</span>, level<span class="op">=</span>levels)</span>
+<span id="cb39-25"><a href="#cb39-25" aria-hidden="true" tabindex="-1"></a>end <span class="op">=</span> time()</span>
+<span id="cb39-26"><a href="#cb39-26" aria-hidden="true" tabindex="-1"></a>forecasts_comparison.head()</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">unique_id</th>
+<th data-quarto-table-cell-role="th">ds</th>
+<th data-quarto-table-cell-role="th">lgbm</th>
+<th data-quarto-table-cell-role="th">lgbm-lo-90</th>
+<th data-quarto-table-cell-role="th">lgbm-hi-90</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">0</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 01:00:00</td>
+<td>28847.573176</td>
+<td>28567.603130</td>
+<td>29127.543222</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">1</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 02:00:00</td>
+<td>27862.589195</td>
+<td>27128.839888</td>
+<td>28596.338503</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">2</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 03:00:00</td>
+<td>27044.418960</td>
+<td>25688.230426</td>
+<td>28400.607493</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">3</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 04:00:00</td>
+<td>26976.104125</td>
+<td>25286.024722</td>
+<td>28666.183529</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">4</td>
+<td>PJM_Load_hourly</td>
+<td>2001-12-31 05:00:00</td>
+<td>26694.246238</td>
+<td>25051.548832</td>
+<td>28336.943644</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb40"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>time_lgbm <span class="op">=</span> (end <span class="op">-</span> init)</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f'LGBM Time: </span><span class="sc">{</span>time_lgbm<span class="sc">:.2f}</span><span class="ss"> seconds'</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>LGBM Time: 1.34 seconds</code></pre>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb42"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a>metrics_comparison <span class="op">=</span> df_last_24_hours.merge(forecasts_comparison, how<span class="op">=</span><span class="st">'left'</span>, on<span class="op">=</span>[<span class="st">'unique_id'</span>, <span class="st">'ds'</span>]).merge(</span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a>    forecast_prophet, how<span class="op">=</span><span class="st">'left'</span>, on<span class="op">=</span>[<span class="st">'unique_id'</span>, <span class="st">'ds'</span>])</span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a>metrics_comparison <span class="op">=</span> evaluate(</span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a>            df <span class="op">=</span> metrics_comparison,</span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a>            metrics<span class="op">=</span>metrics,</span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a>            models<span class="op">=</span>[<span class="st">'Prophet'</span>, <span class="st">'lgbm'</span>]</span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a>metrics_comparison.reset_index(drop<span class="op">=</span><span class="va">True</span>).style.background_gradient(cmap<span class="op">=</span><span class="st">'RdYlGn_r'</span>, axis<span class="op">=</span><span class="dv">1</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<style type="text/css">
+#T_e4038_row0_col2, #T_e4038_row1_col2, #T_e4038_row2_col2, #T_e4038_row3_col2 {
+  background-color: #a50026;
+  color: #f1f1f1;
+}
+#T_e4038_row0_col3, #T_e4038_row1_col3, #T_e4038_row2_col3, #T_e4038_row3_col3 {
+  background-color: #006837;
+  color: #f1f1f1;
+}
+</style>
+
+<table id="T_e4038" data-quarto-postprocess="true" class="table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th class="blank level0" data-quarto-table-cell-role="th">&nbsp;</th>
+<th id="T_e4038_level0_col0" class="col_heading level0 col0" data-quarto-table-cell-role="th">unique_id</th>
+<th id="T_e4038_level0_col1" class="col_heading level0 col1" data-quarto-table-cell-role="th">metric</th>
+<th id="T_e4038_level0_col2" class="col_heading level0 col2" data-quarto-table-cell-role="th">Prophet</th>
+<th id="T_e4038_level0_col3" class="col_heading level0 col3" data-quarto-table-cell-role="th">lgbm</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td id="T_e4038_level0_row0" class="row_heading level0 row0" data-quarto-table-cell-role="th">0</td>
+<td id="T_e4038_row0_col0" class="data row0 col0">PJM_Load_hourly</td>
+<td id="T_e4038_row0_col1" class="data row0 col1">mae</td>
+<td id="T_e4038_row0_col2" class="data row0 col2">2282.966977</td>
+<td id="T_e4038_row0_col3" class="data row0 col3">1092.050817</td>
+</tr>
+<tr class="even">
+<td id="T_e4038_level0_row1" class="row_heading level0 row1" data-quarto-table-cell-role="th">1</td>
+<td id="T_e4038_row1_col0" class="data row1 col0">PJM_Load_hourly</td>
+<td id="T_e4038_row1_col1" class="data row1 col1">rmse</td>
+<td id="T_e4038_row1_col2" class="data row1 col2">2721.817203</td>
+<td id="T_e4038_row1_col3" class="data row1 col3">1340.422762</td>
+</tr>
+<tr class="odd">
+<td id="T_e4038_level0_row2" class="row_heading level0 row2" data-quarto-table-cell-role="th">2</td>
+<td id="T_e4038_row2_col0" class="data row2 col0">PJM_Load_hourly</td>
+<td id="T_e4038_row2_col1" class="data row2 col1">mape</td>
+<td id="T_e4038_row2_col2" class="data row2 col2">0.073750</td>
+<td id="T_e4038_row2_col3" class="data row2 col3">0.033600</td>
+</tr>
+<tr class="even">
+<td id="T_e4038_level0_row3" class="row_heading level0 row3" data-quarto-table-cell-role="th">3</td>
+<td id="T_e4038_row3_col0" class="data row3 col0">PJM_Load_hourly</td>
+<td id="T_e4038_row3_col1" class="data row3 col1">smape</td>
+<td id="T_e4038_row3_col2" class="data row3 col2">0.038633</td>
+<td id="T_e4038_row3_col3" class="data row3 col3">0.017137</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p>As we can see <code>lgbm</code> had consistently better metrics than <code>prophet</code>.</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb43"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a>metrics_comparison[<span class="st">'improvement'</span>] <span class="op">=</span> metrics_comparison[<span class="st">'Prophet'</span>] <span class="op">/</span>  metrics_comparison[<span class="st">'lgbm'</span>]</span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>metrics_comparison[<span class="st">'improvement'</span>] <span class="op">=</span> metrics_comparison[<span class="st">'improvement'</span>].<span class="bu">apply</span>(<span class="kw">lambda</span> x: <span class="ss">f'</span><span class="sc">{</span>x<span class="sc">:.2f}</span><span class="ss">'</span>)</span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>metrics_comparison.set_index(<span class="st">'metric'</span>)[[<span class="st">'improvement'</span>]]</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-display">
+<div>
+
+
+<table class="dataframe table table-sm table-striped small" data-quarto-postprocess="true" data-border="1">
+<thead>
+<tr class="header">
+<th data-quarto-table-cell-role="th"></th>
+<th data-quarto-table-cell-role="th">improvement</th>
+</tr>
+<tr class="odd">
+<th data-quarto-table-cell-role="th">metric</th>
+<th data-quarto-table-cell-role="th"></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">mae</td>
+<td>2.09</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">rmse</td>
+<td>2.03</td>
+</tr>
+<tr class="odd">
+<td data-quarto-table-cell-role="th">mape</td>
+<td>2.19</td>
+</tr>
+<tr class="even">
+<td data-quarto-table-cell-role="th">smape</td>
+<td>2.25</td>
+</tr>
+</tbody>
+</table>
+
+</div>
+</div>
+</div>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb44"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="ss">f'lgbm with MLForecast has a speedup of </span><span class="sc">{</span>time_prophet<span class="op">/</span>time_lgbm<span class="sc">:.2f}</span><span class="ss"> compared with prophet'</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<div class="cell-output cell-output-stdout">
+<pre><code>lgbm with MLForecast has a speedup of 27.62 compared with prophet</code></pre>
+</div>
+</div>
+<p>We can see that <code>lgbm</code> with <code>MLForecast</code> was able to provide metrics at least twice as good as <code>Prophet</code> as seen in the column <code>improvement</code> above, and way faster.</p>
+
+
+</section>
+</section>
+
+<p>Give us a ⭐ on <a href="https://github.com/nixtla/mlforecast">Github</a></p></main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+  function tippyHover(el, contentFn) {
+    const config = {
+      allowHTML: true,
+      content: contentFn,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start'
+    };
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      return note.innerHTML;
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+</body></html>
