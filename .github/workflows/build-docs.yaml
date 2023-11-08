@@ -41,7 +41,9 @@ jobs:
           cp nbs/mint.json _docs/mint.json
           cp docs-scripts/imgs/* _docs/
       - name: Configure redirects for gh-pages
-        run: python docs-scripts/configure-redirects.py mlforecast
+        run: |
+          python docs-scripts/configure-redirects.py mlforecast
+          ls -l gh-pages
       - name: Deploy to Mintlify Docs
         if: github.event_name == 'push'
         uses: peaceiris/actions-gh-pages@v3
