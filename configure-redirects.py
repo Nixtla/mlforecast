@@ -20,10 +20,9 @@ template = """<!DOCTYPE html>
 </html>"""
 
 pages_dir = Path('gh-pages')
-for page in Path('_docs').rglob('*.html'):
-    rel_page = page.relative_to('_docs')
+for page in Path('nbs').rglob('*.ipynb'):
+    rel_page = page.with_suffix('.html').relative_to('nbs')
     new_path = pages_dir / rel_page
     new_path.parent.mkdir(exist_ok=True, parents=True)
-    print(new_path)
     content = template.format(new_url=f'{new_domain}/{rel_page}')
     new_path.write_text(content)
