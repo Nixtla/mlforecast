@@ -42,7 +42,7 @@ jobs:
           cp docs-scripts/imgs/* _docs/
       - name: Configure redirects for gh-pages
         run: |
-          python docs-scripts/configure-redirects.py mlforecast
+          python configure-redirects.py mlforecast
           ls -l gh-pages
       - name: Deploy to Mintlify Docs
         if: github.event_name == 'push'
