@@ -34,16 +34,16 @@ jobs:
           cp -r docs-scripts/mintlify/ nbs/_extensions/
           python docs-scripts/update-quarto.py
           nbdev_docs
+      - name: Configure redirects for gh-pages
+        run: |
+          python configure-redirects.py mlforecast
+          ls -lh gh-pages
       - name: Apply final formats
         run: bash ./docs-scripts/docs-final-formatting.bash
       - name: Copy over necessary assets
         run: |
           cp nbs/mint.json _docs/mint.json
           cp docs-scripts/imgs/* _docs/
-      - name: Configure redirects for gh-pages
-        run: |
-          python configure-redirects.py mlforecast
-          ls -l gh-pages
       - name: Deploy to Mintlify Docs
         if: github.event_name == 'push'
         uses: peaceiris/actions-gh-pages@v3
