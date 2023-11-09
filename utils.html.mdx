@@ -145,20 +145,6 @@ test_fail(lambda: generate_prices_for_series(series), contains='equal ends')
 
 ------------------------------------------------------------------------
 
-### backtest_splits
-
-> ``` text
->  backtest_splits
->                   (df:Union[pandas.core.frame.DataFrame,polars.dataframe.f
->                   rame.DataFrame], n_windows:int, h:int, id_col:str,
->                   time_col:str,
->                   freq:Union[pandas._libs.tslibs.offsets.BaseOffset,int],
->                   step_size:Optional[int]=None,
->                   input_size:Optional[int]=None)
-> ```
-
-------------------------------------------------------------------------
-
 ### PredictionIntervals
 
 > ``` text
