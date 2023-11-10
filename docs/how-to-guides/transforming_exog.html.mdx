@@ -31,7 +31,8 @@ prices.head(2)
 Suppose that you have some series along with their prices for each id
 and date and you want to compute forecasts for the next 7 days. Since
 the price is a dynamic feature you have to provide the future values
-through `X_df` in `MLForecast.predict`.
+through `X_df` in
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict).
 
 If you want to use not only the price but the lag7 of the price and the
 expanding mean of the lag1 for example, you can compute them before

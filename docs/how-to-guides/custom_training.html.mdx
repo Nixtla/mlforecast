@@ -44,7 +44,9 @@ fcst = MLForecast(
 
 ## Generate training set
 
-Use `MLForecast.preprocess` to generate the training data.
+Use
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
+to generate the training data.
 
 ```python
 prep = fcst.preprocess(series)
@@ -67,7 +69,8 @@ y = prep['y']
 ## Regular training
 
 Since we don’t want to do anything special in our training process for
-the linear regression, we can just call `MLForecast.fit_models`
+the linear regression, we can just call
+[`MLForecast.fit_models`](https://Nixtla.github.io/forecast.html#mlforecast.fit_models)
 
 ```python
 fcst.fit_models(X, y)
@@ -119,8 +122,9 @@ fcst.models_
 {'lr': LinearRegression(), 'lgbm': LGBMRegressor(verbosity=-1)}
 ```
 
-And now when calling `MLForecast.predict`, mlforecast will use those
-models to compute the forecasts.
+And now when calling
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict),
+mlforecast will use those models to compute the forecasts.
 
 ```python
 fcst.predict(1)

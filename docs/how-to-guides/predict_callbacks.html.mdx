@@ -42,7 +42,8 @@ def inspect_input(new_x):
 ```
 
 And now we can pass this function to the `before_predict_callback`
-argument of `MLForecast.predict`.
+argument of
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict).
 
 ```python
 fcst = MLForecast(lgb.LGBMRegressor(verbosity=-1), freq='D', lags=[1, 2])
@@ -68,7 +69,9 @@ preds
 
 Saving the features that are sent as input to the model in each
 timestamp can be helpful, for example to estimate SHAP values. This can
-be easily achieved with the `SaveFeatures` callback.
+be easily achieved with the
+[`SaveFeatures`](https://Nixtla.github.io/callbacks.html#savefeatures)
+callback.
 
 ```python
 from mlforecast.callbacks import SaveFeatures
@@ -99,7 +102,7 @@ When predicting with the recursive strategy (the default) the
 predictions for each timestamp are used to update the target and
 recompute the features. If you want to do something to these predictions
 before that happens you can use the `after_predict_callback` argument of
-`MLForecast.predict`.
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict).
 
 ### Increasing predictions values
 

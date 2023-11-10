@@ -56,12 +56,14 @@ fig = plot_series(df, max_insample_length=24 * 14)
 
 ![](/docs/getting-started/../../figs/end_to_end_walkthrough__eda.png)
 
-We can use the `MLForecast.preprocess` method to explore different
-transformations. It looks like these series have a strong seasonality on
-the hour of the day, so we can subtract the value from the same hour in
-the previous day to remove it. This can be done with the
-`mlforecast.target_transforms.Differences` transformer, which we pass
-through `target_transforms`.
+We can use the
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
+method to explore different transformations. It looks like these series
+have a strong seasonality on the hour of the day, so we can subtract the
+value from the same hour in the previous day to remove it. This can be
+done with the
+[`mlforecast.target_transforms.Differences`](https://Nixtla.github.io/target_transforms.html#differences)
+transformer, which we pass through `target_transforms`.
 
 ```python
 from mlforecast import MLForecast
@@ -336,13 +338,14 @@ np.testing.assert_allclose(preds['Naive'], last_vals['y'])
 ## Training
 
 Once you’ve decided the features, transformations and models that you
-want to use you can use the `MLForecast.fit` method instead, which will
-do the preprocessing and then train the models. The models can be
-specified as a list (which will name them by using their class name and
-an index if there are repeated classes) or as a dictionary where the
-keys are the names you want to give to the models, i.e. the name of the
-column that will hold their predictions, and the values are the models
-themselves.
+want to use you can use the
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit)
+method instead, which will do the preprocessing and then train the
+models. The models can be specified as a list (which will name them by
+using their class name and an index if there are repeated classes) or as
+a dictionary where the keys are the names you want to give to the
+models, i.e. the name of the column that will hold their predictions,
+and the values are the models themselves.
 
 ```python
 import lightgbm as lgb
@@ -466,7 +469,8 @@ using them to predict a validation set and measuring their performance.
 
 Since our data depends on time, we make our splits by removing the last
 portions of the series and using them as validation sets. This process
-is implemented in `MLForecast.cross_validation`.
+is implemented in
+[`MLForecast.cross_validation`](https://Nixtla.github.io/forecast.html#mlforecast.cross_validation).
 
 ```python
 fcst = MLForecast(
@@ -577,11 +581,12 @@ dtype: float64
 
 ### LightGBMCV
 
-In the same spirit of estimating our model’s performance, `LightGBMCV`
-allows us to train a few
-[LightGBM](https://github.com/microsoft/LightGBM) models on different
-partitions of the data. The main differences with
-`MLForecast.cross_validation` are:
+In the same spirit of estimating our model’s performance,
+[`LightGBMCV`](https://Nixtla.github.io/lgb_cv.html#lightgbmcv) allows
+us to train a few [LightGBM](https://github.com/microsoft/LightGBM)
+models on different partitions of the data. The main differences with
+[`MLForecast.cross_validation`](https://Nixtla.github.io/forecast.html#mlforecast.cross_validation)
+are:
 
 -   It can only train LightGBM models.
 -   It trains all models **simultaneously** and gives us per-iteration
@@ -661,8 +666,10 @@ fig = plot_series(cv.cv_preds_, cv.cv_preds_.drop(columns='window'), max_insampl
 You can use this class to quickly try different configurations of
 features and hyperparameters. Once you’ve found a combination that works
 you can train a model with those features and hyperparameters on all the
-data by creating an `MLForecast` object from the `LightGBMCV` one as
-follows:
+data by creating an
+[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
+from the [`LightGBMCV`](https://Nixtla.github.io/lgb_cv.html#lightgbmcv)
+one as follows:
 
 ```python
 final_fcst = MLForecast.from_cv(cv)

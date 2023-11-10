@@ -77,16 +77,18 @@ fig = plot_series(Y_df_M3)
 
 ## Model Training
 
-Using the `MLForecast.fit` method you can train a set of models to your
-dataset. You can modify the hyperparameters of the model to get a better
-accuracy, in this case we will use the default hyperparameters of
-`lgb.LGBMRegressor`.
+Using the
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit)
+method you can train a set of models to your dataset. You can modify the
+hyperparameters of the model to get a better accuracy, in this case we
+will use the default hyperparameters of `lgb.LGBMRegressor`.
 
 ```python
 models = [lgb.LGBMRegressor(verbosity=-1)]
 ```
 
-The `MLForecast` object has the following parameters:
+The [`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast)
+object has the following parameters:
 
 -   `models`: a list of sklearn-like (`fit` and `predict`) models.
 -   `freq`: a string indicating the frequency of the data. See [panda’s
@@ -117,8 +119,10 @@ fcst.fit(Y_df_M3);
 ## Transfer M3 to AirPassengers
 
 Now we can transfer the trained model to forecast `AirPassengers` with
-the `MLForecast.predict` method, we just have to pass the new dataframe
-to the `new_data` argument.
+the
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict)
+method, we just have to pass the new dataframe to the `new_data`
+argument.
 
 ```python
 Y_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/air-passengers.csv', parse_dates=['ds'])

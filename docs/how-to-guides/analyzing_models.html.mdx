@@ -55,11 +55,13 @@ fcst.fit(series)
 MLForecast(models=[lr], freq=<Day>, lag_features=['lag1'], date_features=['dayofweek'], num_threads=1)
 ```
 
-What `MLForecast.fit` does is save the required data for the predict
-step and also train the models (in this case the linear regression). The
-trained models are available in the `MLForecast.models_` attribute,
-which is a dictionary where the keys are the model names and the values
-are the model themselves.
+What
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit)
+does is save the required data for the predict step and also train the
+models (in this case the linear regression). The trained models are
+available in the `MLForecast.models_` attribute, which is a dictionary
+where the keys are the model names and the values are the model
+themselves.
 
 ```python
 fcst.models_
@@ -90,7 +92,7 @@ import shap
 ### Training set
 
 If you need to generate the training data you can use
-`MLForecast.preprocess`.
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess).
 
 ```python
 prep = fcst.preprocess(series)
@@ -162,7 +164,8 @@ preds.head()
 | 3   | id_3      | 2000-08-30 | 4.048894 |
 | 4   | id_4      | 2001-01-08 | 3.524532 |
 
-You can now retrieve the features by using `SaveFeatures.get_features`
+You can now retrieve the features by using
+[`SaveFeatures.get_features`](https://Nixtla.github.io/callbacks.html#savefeatures.get_features)
 
 ```python
 features = save_feats.get_features()

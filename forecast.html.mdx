@@ -73,6 +73,10 @@ train.shape, valid.shape
 
 ------------------------------------------------------------------------
 
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L137"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
 ### MLForecast
 
 > ``` text
@@ -123,6 +127,10 @@ MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag24', 'lag48', 'lag7
 Once we have this setup we can compute the features and fit the model.
 
 ------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L443"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
 
@@ -175,6 +183,10 @@ fcst.fit(train, fitted=True);
 
 ------------------------------------------------------------------------
 
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L544"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
 ### MLForecast.forecast_fitted_values
 
 > ``` text
@@ -204,6 +216,10 @@ fcst.forecast_fitted_values()
 Once we’ve run this we’re ready to compute our predictions.
 
 ------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L550"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
 
@@ -248,11 +264,12 @@ fig.savefig('figs/forecast__predict.png', bbox_inches='tight')
 
 #### Prediction intervals
 
-With `MLForecast`, you can generate prediction intervals using Conformal
-Prediction. To configure Conformal Prediction, you need to pass an
-instance of the `PredictionIntervals` class to the
-`prediction_intervals` argument of the `fit` method. The class takes
-three parameters: `n_windows`, `h` and `method`.
+With [`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast),
+you can generate prediction intervals using Conformal Prediction. To
+configure Conformal Prediction, you need to pass an instance of the
+[`PredictionIntervals`](https://Nixtla.github.io/utils.html#predictionintervals)
+class to the `prediction_intervals` argument of the `fit` method. The
+class takes three parameters: `n_windows`, `h` and `method`.
 
 -   `n_windows` represents the number of cross-validation windows used
     to calibrate the intervals
@@ -328,9 +345,10 @@ fig.savefig('figs/forecast__predict_intervals.png', bbox_inches='tight')
 
 If you want to reduce the computational time and produce intervals with
 the same width for the whole forecast horizon, simple pass `h=1` to the
-`PredictionIntervals` class. The caveat of this strategy is that in some
-cases, variance of the absolute residuals maybe be small (even zero), so
-the intervals may be too narrow.
+[`PredictionIntervals`](https://Nixtla.github.io/utils.html#predictionintervals)
+class. The caveat of this strategy is that in some cases, variance of
+the absolute residuals maybe be small (even zero), so the intervals may
+be too narrow.
 
 ```python
 fcst.fit(
@@ -382,6 +400,10 @@ If you want to take a look at the data that will be used to train the
 models you can call `Forecast.preprocess`.
 
 ------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L212"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.preprocess
 
@@ -436,6 +458,10 @@ only stores the series information.
 
 ------------------------------------------------------------------------
 
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L268"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
 ### MLForecast.fit_models
 
 > ``` text
@@ -444,7 +470,8 @@ only stores the series information.
 >                         y:numpy.ndarray)
 > ```
 
-Manually train models. Use this if you called `MLForecast.preprocess`
+Manually train models. Use this if you called
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
 beforehand.
 
 |             | **Type**       | **Details**                              |
@@ -468,6 +495,10 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ```
 
 ------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L689"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
 
@@ -526,11 +557,12 @@ the first part is used for training and the second one for validation.
 Since the data is time dependant we usually take the last *x*
 observations from our data as the validation set.
 
-This process is implemented in `MLForecast.cross_validation`, which
-takes our data and performs the process described above for `n_windows`
-times where each window has `h` validation samples in it. For example,
-if we have 100 samples and we want to perform 2 backtests each of size
-14, the splits will be as follows:
+This process is implemented in
+[`MLForecast.cross_validation`](https://Nixtla.github.io/forecast.html#mlforecast.cross_validation),
+which takes our data and performs the process described above for
+`n_windows` times where each window has `h` validation samples in it.
+For example, if we have 100 samples and we want to perform 2 backtests
+each of size 14, the splits will be as follows:
 
 1.  Train: 1 to 72. Validation: 73 to 86.
 2.  Train: 1 to 86. Validation: 87 to 100.
@@ -674,6 +706,10 @@ fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutof
 
 ------------------------------------------------------------------------
 
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L198"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
 ### MLForecast.from_cv
 
 > ``` text
@@ -682,9 +718,13 @@ fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutof
 
 Once you’ve found a set of features and parameters that work for your
 problem you can build a forecast object from it using
-`MLForecast.from_cv`, which takes the trained `LightGBMCV` object and
-builds an `MLForecast` object that will use the same features and
-parameters. Then you can call fit and predict as you normally would.
+[`MLForecast.from_cv`](https://Nixtla.github.io/forecast.html#mlforecast.from_cv),
+which takes the trained
+[`LightGBMCV`](https://Nixtla.github.io/lgb_cv.html#lightgbmcv) object
+and builds an
+[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
+that will use the same features and parameters. Then you can call fit
+and predict as you normally would.
 
 ```python
 cv = LightGBMCV(

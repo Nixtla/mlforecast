@@ -35,11 +35,16 @@ In mlforecast the required columns are the series identifier, time and
 target. Any extra columns you have, like `static_0` and `product_id`
 here are considered to be static and are replicated when constructing
 the features for the next timestamp. You can disable this by passing
-`static_features` to `MLForecast.preprocess` or `MLForecast.fit`, which
-will only keep the columns you define there as static. Keep in mind that
-all features in your input dataframe will be used for training, so
-you’ll have to provide the future values of exogenous features to
-`MLForecast.predict` through the `X_df` argument.
+`static_features` to
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
+or
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit),
+which will only keep the columns you define there as static. Keep in
+mind that all features in your input dataframe will be used for
+training, so you’ll have to provide the future values of exogenous
+features to
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict)
+through the `X_df` argument.
 
 Consider the following example. Suppose that we have a prices catalog
 for each id and date.
@@ -73,9 +78,12 @@ series_with_prices.head()
 | 3   | id_00     | 2000-10-08 | 258.987900 | 79       | 45         | 0.544883 |
 | 4   | id_00     | 2000-10-09 | 344.940404 | 79       | 45         | 0.423655 |
 
-This dataframe will be passed to `MLForecast.fit` (or
-`MLForecast.preprocess`). However, since the price is dynamic we have to
-tell that method that only `static_0` and `product_id` are static.
+This dataframe will be passed to
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit)
+(or
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)).
+However, since the price is dynamic we have to tell that method that
+only `static_0` and `product_id` are static.
 
 ```python
 fcst = MLForecast(
@@ -116,8 +124,8 @@ fcst.ts.features_order_
 ```
 
 So in order to update the price in each timestep we just call
-`MLForecast.predict` with our forecast horizon and pass the prices
-catalog through `X_df`.
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict)
+with our forecast horizon and pass the prices catalog through `X_df`.
 
 ```python
 preds = fcst.predict(h=7, X_df=prices_catalog)

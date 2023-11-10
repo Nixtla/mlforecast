@@ -9,8 +9,12 @@ on building `Prediction intervals in forecasting models` using
 `mlforecast`.
 
 During this walkthrough, we will become familiar with the main
-`MlForecast` class and some relevant methods such as `MLForecast.fit`,
-`MLForecast.predict` and `MLForecast.cross_validation` in other.
+`MlForecast` class and some relevant methods such as
+[`MLForecast.fit`](https://Nixtla.github.io/forecast.html#mlforecast.fit),
+[`MLForecast.predict`](https://Nixtla.github.io/forecast.html#mlforecast.predict)
+and
+[`MLForecast.cross_validation`](https://Nixtla.github.io/forecast.html#mlforecast.cross_validation)
+in other.
 
 Let’s start!!!
 
@@ -667,14 +671,16 @@ use the `XGBoost model`.
 model1 = [xgb.XGBRegressor()]
 ```
 
-We can use the `MLForecast.preprocess` method to explore different
-transformations.
+We can use the
+[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
+method to explore different transformations.
 
 If it is true that the series we are working with is a stationary series
 see (Dickey fuller test), however for the sake of practice and
 instruction in this guide, we will apply the difference to our series,
 we will do this using the `target_transforms parameter` and calling the
-diff function like: `mlforecast.target_transforms.Differences`
+diff function like:
+[`mlforecast.target_transforms.Differences`](https://Nixtla.github.io/target_transforms.html#differences)
 
 ```python
 mlf = MLForecast(models=model1,
