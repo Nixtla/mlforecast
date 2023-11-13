@@ -91,10 +91,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 Utility class for storing and transforming time series data.
 
-The [`TimeSeries`](https://Nixtla.github.io/core.html#timeseries) class
-takes care of defining the transformations to be performed (`lags`,
-`lag_transforms` and `date_features`). The transformations can be
-computed using multithreading if `num_threads > 1`.
+The
+[`TimeSeries`](https://Nixtla.github.io/mlforecast/core.html#timeseries)
+class takes care of defining the transformations to be performed
+(`lags`, `lag_transforms` and `date_features`). The transformations can
+be computed using multithreading if `num_threads > 1`.
 
 ```python
 def month_start_or_end(dates):
@@ -149,7 +150,7 @@ test_eq(
 
 Note that for `lags` we define the transformation as the identity
 function applied to its corresponding lag. This is because
-[`_transform_series`](https://Nixtla.github.io/grouped_array.html#_transform_series)
+[`_transform_series`](https://Nixtla.github.io/mlforecast/grouped_array.html#_transform_series)
 takes the lag as an argument and shifts the array before computing the
 transformation.
 
@@ -231,7 +232,7 @@ pd.testing.assert_frame_equal(
 ```
 
 If you pass `static_features` to
-[`TimeSeries.fit_transform`](https://Nixtla.github.io/core.html#timeseries.fit_transform)
+[`TimeSeries.fit_transform`](https://Nixtla.github.io/mlforecast/core.html#timeseries.fit_transform)
 then only these are kept.
 
 ```python
@@ -279,7 +280,7 @@ test_eq(df.shape[0], series.shape[0] - (2 + 13) * ts.ga.n_groups)
 test_eq(ts.ga.data.size, ts.ga.n_groups * keep_last_n)
 ```
 
-[`TimeSeries.fit_transform`](https://Nixtla.github.io/core.html#timeseries.fit_transform)
+[`TimeSeries.fit_transform`](https://Nixtla.github.io/mlforecast/core.html#timeseries.fit_transform)
 requires that the *y* column doesn’t have any null values. This is
 because the transformations could propagate them forward, so if you have
 null values in the *y* column you’ll get an error.
@@ -312,7 +313,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 > ```
 
 Once we have a trained model we can use
-[`TimeSeries.predict`](https://Nixtla.github.io/core.html#timeseries.predict)
+[`TimeSeries.predict`](https://Nixtla.github.io/mlforecast/core.html#timeseries.predict)
 passing the model and the horizon to get the predictions back.
 
 ```python

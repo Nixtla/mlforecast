@@ -149,7 +149,7 @@ plt.close()
 There are some transformations that don’t require to learn any
 parameters, such as applying logarithm for example. These can be easily
 defined using the
-[`GlobalSklearnTransformer`](https://Nixtla.github.io/target_transforms.html#globalsklearntransformer),
+[`GlobalSklearnTransformer`](https://Nixtla.github.io/mlforecast/target_transforms.html#globalsklearntransformer),
 which takes a scikit-learn compatible transformer and applies it to all
 series. Here’s an example on how to define a transformation that applies
 logarithm to each value of the series + 1, which can help avoid
@@ -194,7 +194,7 @@ plot({'original': serie, 'Log + Differences': log_diffs}, 'target_transforms__lo
 
 In order to implement your own target transformation you have to define
 a class that inherits from
-[`mlforecast.target_transforms.BaseTargetTransform`](https://Nixtla.github.io/target_transforms.html#basetargettransform)
+[`mlforecast.target_transforms.BaseTargetTransform`](https://Nixtla.github.io/mlforecast/target_transforms.html#basetargettransform)
 (this takes care of setting the column names as the `id_col`, `time_col`
 and `target_col` attributes) and implement the `fit_transform` and
 `inverse_transform` methods. Here’s an example on how to define a

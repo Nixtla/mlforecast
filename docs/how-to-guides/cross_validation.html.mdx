@@ -11,8 +11,8 @@ title: Cross validation
 ### Prerequesites
 
 This tutorial assumes basic familiarity with
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast). For a
-minimal example visit the [Quick Start](quick_start_local.html)
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast).
+For a minimal example visit the [Quick Start](quick_start_local.html)
 
 </Warning>
 
@@ -50,7 +50,7 @@ You can use Colab to run this Notebook interactively
 ## Install libraries
 
 We assume that you have
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast)
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
 already installed. If not, check this guide for instructions on [how to
 install MLForecast](../getting-started/install.html).
 
@@ -88,8 +88,8 @@ Y_df.head()
 | 4   | H1        | 5   | 511.0 |
 
 The input to
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) is a
-data frame in [long
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+is a data frame in [long
 format](https://www.theanalysisfactor.com/wide-and-long-data/) with
 three columns: `unique_id`, `ds` and `y`:
 
@@ -146,8 +146,8 @@ mlf = MLForecast(
 ## Perform time series cross-validation
 
 Once the
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
-has been instantiated, we can use the [cross_validation
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+object has been instantiated, we can use the [cross_validation
 method](../../forecast.html#mlforecast.cross_validation).
 
 For this particular example, we’ll use 3 windows of 24 hours.

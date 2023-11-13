@@ -71,7 +71,7 @@ for best practices.**
 Current Python alternatives for machine learning models are slow,
 inaccurate and don’t scale well. So we created a library that can be
 used to forecast in production environments.
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast)
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
 includes efficient feature engineering to train any machine learning
 model (with `fit` and `predict` methods such as
 [`sklearn`](https://scikit-learn.org/stable/)) to fit millions of time
@@ -170,10 +170,10 @@ models = [
 ### Forecast object
 
 Now instantiate a
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
-with the models and the features that you want to use. The features can
-be lags, transformations on the lags and date features. The lag
-transformations are defined as [numba](http://numba.pydata.org/)
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+object with the models and the features that you want to use. The
+features can be lags, transformations on the lags and date features. The
+lag transformations are defined as [numba](http://numba.pydata.org/)
 *jitted* functions that transform an array, if they have additional
 arguments you can either supply a tuple (`transform_func`, `arg1`,
 `arg2`, …) or define new functions fixing the arguments. You can also

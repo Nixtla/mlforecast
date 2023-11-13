@@ -6,15 +6,16 @@ title: Quick start (distributed)
 ---
 
 The
-[`DistributedMLForecast`](https://Nixtla.github.io/distributed.forecast.html#distributedmlforecast)
+[`DistributedMLForecast`](https://Nixtla.github.io/mlforecast/distributed.forecast.html#distributedmlforecast)
 class is a high level abstraction that encapsulates all the steps in the
 pipeline (preprocessing, fitting the model and computing predictions)
 and applies them in a distributed way.
 
 The different things that you need to use
-[`DistributedMLForecast`](https://Nixtla.github.io/distributed.forecast.html#distributedmlforecast)
+[`DistributedMLForecast`](https://Nixtla.github.io/mlforecast/distributed.forecast.html#distributedmlforecast)
 (as opposed to
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast)) are:
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast))
+are:
 
 1.  You need to set up a cluster. We currently support dask, ray and
     spark.
@@ -61,7 +62,7 @@ have more partitions than workers make sure to set `num_threads=1` to
 avoid having nested parallelism.
 
 The required input format is the same as for
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast),
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast),
 except that it’s a `dask.dataframe.DataFrame` instead of a
 `pandas.Dataframe`.
 
@@ -88,9 +89,9 @@ partitioned_series
 In order to perform distributed forecasting, we need to use a model that
 is able to train in a distributed way using `dask`. The current
 implementations are in
-[`DaskLGBMForecast`](https://Nixtla.github.io/distributed.models.dask.lgb.html#dasklgbmforecast)
+[`DaskLGBMForecast`](https://Nixtla.github.io/mlforecast/distributed.models.dask.lgb.html#dasklgbmforecast)
 and
-[`DaskXGBForecast`](https://Nixtla.github.io/distributed.models.dask.xgb.html#daskxgbforecast)
+[`DaskXGBForecast`](https://Nixtla.github.io/mlforecast/distributed.models.dask.xgb.html#daskxgbforecast)
 which are just wrappers around the native implementations.
 
 ```python
@@ -106,7 +107,7 @@ models = [DaskXGBForecast(random_state=0), DaskLGBMForecast(random_state=0)]
 ### Training
 
 Once we have our models we instantiate a
-[`DistributedMLForecast`](https://Nixtla.github.io/distributed.forecast.html#distributedmlforecast)
+[`DistributedMLForecast`](https://Nixtla.github.io/mlforecast/distributed.forecast.html#distributedmlforecast)
 object defining our features. We can then call `fit` on this object
 passing our dask dataframe.
 
@@ -201,7 +202,7 @@ workers make sure to set `num_threads=1` to avoid having nested
 parallelism.
 
 The required input format is the same as for
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast),
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast),
 i.e. it should have at least an id column, a time column and a target
 column.
 
@@ -216,9 +217,9 @@ spark_series = spark.createDataFrame(series).repartitionByRange(numPartitions, '
 In order to perform distributed forecasting, we need to use a model that
 is able to train in a distributed way using `spark`. The current
 implementations are in
-[`SparkLGBMForecast`](https://Nixtla.github.io/distributed.models.spark.lgb.html#sparklgbmforecast)
+[`SparkLGBMForecast`](https://Nixtla.github.io/mlforecast/distributed.models.spark.lgb.html#sparklgbmforecast)
 and
-[`SparkXGBForecast`](https://Nixtla.github.io/distributed.models.spark.xgb.html#sparkxgbforecast)
+[`SparkXGBForecast`](https://Nixtla.github.io/mlforecast/distributed.models.spark.xgb.html#sparkxgbforecast)
 which are just wrappers around the native implementations.
 
 ```python
@@ -330,7 +331,7 @@ than workers make sure to set `num_threads=1` to avoid having nested
 parallelism.
 
 The required input format is the same as for
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast),
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast),
 i.e. it should have at least an id column, a time column and a target
 column.
 
@@ -363,7 +364,7 @@ models = [
 
 To control the number of partitions to use using Ray, we have to include
 `num_partitions` to
-[`DistributedMLForecast`](https://Nixtla.github.io/distributed.forecast.html#distributedmlforecast).
+[`DistributedMLForecast`](https://Nixtla.github.io/mlforecast/distributed.forecast.html#distributedmlforecast).
 
 ```python
 num_partitions = 4

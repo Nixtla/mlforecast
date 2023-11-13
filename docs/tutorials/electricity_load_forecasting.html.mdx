@@ -135,12 +135,12 @@ from mlforecast.target_transforms import Differences
 ```
 
 We can use the
-[`MLForecast.preprocess`](https://Nixtla.github.io/forecast.html#mlforecast.preprocess)
+[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
 method to explore different transformations. It looks like these series
 have a strong seasonality on the hour of the day, so we can subtract the
 value from the same hour in the previous day to remove it. This can be
 done with the
-[`mlforecast.target_transforms.Differences`](https://Nixtla.github.io/target_transforms.html#differences)
+[`mlforecast.target_transforms.Differences`](https://Nixtla.github.io/mlforecast/target_transforms.html#differences)
 transformer, which we pass through `target_transforms`.
 
 In order to analize the trends individually and combined we are going to
@@ -204,9 +204,9 @@ all the differences `PJM_Load_hourly_all_diff`.
 
 For modeling we are going to use both difference for the forecasting,
 therefore we are setting the argument `target_transforms` from the
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
-equal to `[Differences([24, 24*7])]`, if we wanted to include a yearly
-difference we would need to add the term `24*365`.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+object equal to `[Differences([24, 24*7])]`, if we wanted to include a
+yearly difference we would need to add the term `24*365`.
 
 ```python
 fcst = MLForecast(
@@ -246,8 +246,8 @@ and try different combinations of them, alongside different target
 transformations (as the ones we created previously) and historical
 variables.  
 You can see an in-depth tutorial on how to use
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) [Cross
-Validation methods
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+[Cross Validation methods
 here](https://nixtla.github.io/mlforecast/docs/cross_validation.html)
 
 ```python
@@ -266,8 +266,8 @@ from sklearn.ensemble import RandomForestRegressor
 We can create a benchmark `Naive` model that uses the electricity load
 of the last hour as prediction `lag1` as showed in the next cell. You
 can create your own models and try them with
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) using
-the same structure.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+using the same structure.
 
 ```python
 class Naive(BaseEstimator):
@@ -298,10 +298,10 @@ models ={
 ```
 
 The we can instanciate the
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) class
-with the models we want to try along side `target_transforms`, `lags`,
-`lag_transforms`, and `date_features`. All this features are applied to
-the models we selected.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+class with the models we want to try along side `target_transforms`,
+`lags`, `lag_transforms`, and `date_features`. All this features are
+applied to the models we selected.
 
 In this case we use the 1st, 12th and 24th lag, which are passed as a
 list. Potentially you could pass a `range`.
@@ -465,7 +465,7 @@ the `naive`.
 Now we are going to evaluate their perfonce in the test set. We can use
 both of them for forecasting the test alongside some prediction
 intervals. For that we can use the
-[\[`PredictionIntervals`\](https://Nixtla.github.io/utils.html#predictionintervals)](https://nixtla.github.io/mlforecast/utils.html#predictionintervals)
+[\[`PredictionIntervals`\](https://Nixtla.github.io/mlforecast/utils.html#predictionintervals)](https://nixtla.github.io/mlforecast/utils.html#predictionintervals)
 function in `mlforecast.utils`.  
 You can see an in-depth tutotorial of [Probabilistic Forecasting
 here](https://nixtla.github.io/mlforecast/docs/prediction_intervals.html)
@@ -506,7 +506,7 @@ following arguments:
 -   `target_col`: Column that contains the target. In our case, y.
 
 The
-[`PredictionIntervals`](https://Nixtla.github.io/utils.html#predictionintervals)
+[`PredictionIntervals`](https://Nixtla.github.io/mlforecast/utils.html#predictionintervals)
 function is used to compute prediction intervals for the models using
 [Conformal
 Prediction](https://valeman.medium.com/how-to-predict-full-probability-distribution-using-machine-learning-conformal-predictive-f8f4d805e420).
@@ -606,8 +606,8 @@ One of the most widely used models for time series forecasting is
 `Prophet`. This model is known for its ability to model different
 seasonalities (weekly, daily yearly). We will use this model as a
 benchmark to see if the `lgbm` alongside
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) adds
-value for this time series.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+adds value for this time series.
 
 ```python
 from prophet import Prophet
@@ -737,7 +737,7 @@ lgbm with MLForecast has a speedup of 27.62 compared with prophet
 ```
 
 We can see that `lgbm` with
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) was
-able to provide metrics at least twice as good as `Prophet` as seen in
-the column `improvement` above, and way faster.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+was able to provide metrics at least twice as good as `Prophet` as seen
+in the column `improvement` above, and way faster.
 

@@ -31,7 +31,7 @@ the day such as 6:00pm vs 3:00am or for specific days such as Sunday vs
 Friday.
 
 First, we will load ERCOT historic demand, then we will use the
-[`MLForecast.cross_validation`](https://Nixtla.github.io/forecast.html#mlforecast.cross_validation)
+[`MLForecast.cross_validation`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.cross_validation)
 method to fit the `LightGBM` model and forecast daily load during
 September. Finally, we show how to use the forecasts to detect the
 coincident peak.
@@ -109,8 +109,8 @@ computationally efficient methods to deploy them in production.
 ## Fit and Forecast LightGBM model
 
 Import the
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) class
-and the models you need.
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+class and the models you need.
 
 ```python
 import lightgbm as lgb
@@ -136,8 +136,8 @@ models = [
 ```
 
 We fit the model by instantiating a
-[`MLForecast`](https://Nixtla.github.io/forecast.html#mlforecast) object
-with the following required parameters:
+[`MLForecast`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast)
+object with the following required parameters:
 
 -   `models`: a list of sklearn-like (fit and predict) models.
 
