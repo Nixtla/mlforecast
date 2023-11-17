@@ -22,11 +22,10 @@ dependencies:
   - pip:
     - datasetsforecast
     - duckdb<0.8
-    - fugue[ray]>=0.8.7
+    - fugue[ray]
     - lightgbm_ray
     - nbdev
     - polars
-    - ray
-    - triad>=0.9.3
+    - triad==0.9.1
     - utilsforecast>=0.0.13
     - xgboost_ray
