@@ -751,7 +751,7 @@ class TimeSeries:
                 msg = (
                     "Found missing inputs in X_df. "
                     "It should have one row per id and date for the complete forecasting horizon.\n"
-                    f"Got: {X_df.shape[0]} rows, expected: {len(self._uids) * horizon} rows "
+                    f"Got: {X_df.shape[0]:,} rows, expected: {len(self._uids) * horizon:,} rows "
                     f"(horizon={horizon:,}, n_ids={len(self._uids):,})."
                 )
                 raise ValueError(msg)
