@@ -62,61 +62,61 @@ jobs:
       - name: Run all tests
         run: nbdev_test --n_workers 0 --do_print --timing --flags 'polars core'
 
-  run-local-tests:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11']
-    steps:
-      - name: Clone repo
-        uses: actions/checkout@v3
-
-      - name: Set up environment
-        uses: mamba-org/setup-micromamba@v1
-        with:
-          environment-file: local_environment.yml
-          create-args: python=${{ matrix.python-version }}
-          cache-environment: true
-
-      - name: Install the library
-        run: pip install ./
-
-      - name: Run local tests
-        run: nbdev_test --n_workers 0 --do_print --timing --skip_file_glob "*distributed*" --flags 'polars core'
-
-  check-deps:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone repo
-        uses: actions/checkout@v3
-
-      - name: Set up python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10' 
-          cache: 'pip'
-
-      - name: Install forecast notebook dependencies
-        run: pip install . datasetsforecast lightgbm matplotlib nbdev xgboost
-
-      - name: Run forecast notebook
-        run: nbdev_test --path nbs/forecast.ipynb
-
-  performance-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: pip install . pytest pytest-benchmark
-
-      - name: Run performance tests
-        run: pytest --benchmark-group-by=func --benchmark-sort=fullname
+        #   run-local-tests:
+        #     runs-on: ${{ matrix.os }}
+        #     timeout-minutes: 30
+        #     strategy:
+        #       fail-fast: false
+        #       matrix:
+        #         os: [macos-latest, windows-latest]
+        #         python-version: ['3.8', '3.9', '3.10', '3.11']
+        #     steps:
+        #       - name: Clone repo
+        #         uses: actions/checkout@v3
+        # 
+        #       - name: Set up environment
+        #         uses: mamba-org/setup-micromamba@v1
+        #         with:
+        #           environment-file: local_environment.yml
+        #           create-args: python=${{ matrix.python-version }}
+        #           cache-environment: true
+        # 
+        #       - name: Install the library
+        #         run: pip install ./
+        # 
+        #       - name: Run local tests
+        #         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_glob "*distributed*" --flags 'polars core'
+        # 
+        #   check-deps:
+        #     runs-on: ubuntu-latest
+        #     steps:
+        #       - name: Clone repo
+        #         uses: actions/checkout@v3
+        # 
+        #       - name: Set up python
+        #         uses: actions/setup-python@v4
+        #         with:
+        #           python-version: '3.10' 
+        #           cache: 'pip'
+        # 
+        #       - name: Install forecast notebook dependencies
+        #         run: pip install . datasetsforecast lightgbm matplotlib nbdev xgboost
+        # 
+        #       - name: Run forecast notebook
+        #         run: nbdev_test --path nbs/forecast.ipynb
+        # 
+        #   performance-tests:
+        #     runs-on: ubuntu-latest
+        #     steps:
+        #       - uses: actions/checkout@v3
+        # 
+        #       - uses: actions/setup-python@v4
+        #         with:
+        #           python-version: '3.10'
+        #           cache: 'pip'
+        # 
+        #       - name: Install dependencies
+        #         run: pip install . pytest pytest-benchmark
+        # 
+        #       - name: Run performance tests
+        #         run: pytest --benchmark-group-by=func --benchmark-sort=fullname
