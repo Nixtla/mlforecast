@@ -82,7 +82,7 @@ Install the necessary packages using
 ## Load and explore the data
 
 For this example, we’ll use the hourly dataset from the [M4
-Competition](https://www.sciencedirect.com/science/article/pii/S0169207019301128).
+Competition](https://www.sciencedirect.com/science/article/pii/s0169207019301128).
 We first need to download the data from a URL and then load it as a
 `pandas` dataframe. Notice that we’ll load the train and the test data
 separately. We’ll also rename the `y` column of the test data as
@@ -164,13 +164,13 @@ MLForecast can train multiple models that follow the `sklearn` syntax
 
 For this example, we’ll use the following `sklearn` baseline models:
 
--   [Lasso](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Lasso.html)
--   [LinearRegression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LinearRegression.html)
--   [Ridge](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.Ridge.html)
+-   [Lasso](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.lasso.html)
+-   [LinearRegression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.linearregression.html)
+-   [Ridge](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.ridge.html)
 -   [K-Nearest
-    Neighbors](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsRegressor.html)
+    Neighbors](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.kneighborsregressor.html)
 -   [Multilayer Perceptron
-    (NeuralNetwork)](https://scikit-learn.org/stable/modules/generated/sklearn.neural_network.MLPRegressor.html)
+    (NeuralNetwork)](https://scikit-learn.org/stable/modules/generated/sklearn.neural_network.mlpregressor.html)
 
 To use these models, we first need to import them from `sklearn` and
 then we need to instantiate them.
@@ -356,7 +356,7 @@ values than others.
 
 -   [Kamile Stankeviciute, Ahmed M. Alaa and Mihaela van der Schaar
     (2021). “Conformal Time-Series
-    Forecasting”](https://proceedings.neurips.cc/paper/2021/file/312f1ba2a72318edaaa995a67835fad5-Paper.pdf)
+    Forecasting”](https://proceedings.neurips.cc/paper/2021/file/312f1ba2a72318edaaa995a67835fad5-paper.pdf)
 -   [Rob J. Hyndman and George Athanasopoulos (2018). “Forecasting
     principles and practice, The Statistical Forecasting
     Perspective”](https://otexts.com/fpp3/perspective.html).

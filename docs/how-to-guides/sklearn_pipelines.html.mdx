@@ -7,7 +7,7 @@ title: Using scikit-learn pipelines
 
 mlforecast takes scikit-learn estimators as models, which means you can
 provide [scikit-learn’s
-pipelines](https://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html)
+pipelines](https://scikit-learn.org/stable/modules/generated/sklearn.pipeline.pipeline.html)
 as models in order to further apply transformations to the data before
 passing it to the model.
 
@@ -39,7 +39,7 @@ as a single column, however, that’s not the optimal format for a linear
 regression model, which benefits more from having indicator columns for
 each day of the week (removing one to avoid colinearity). We can achieve
 this by using [scikit-learn’s
-OneHotEncoder](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.OneHotEncoder.html)
+OneHotEncoder](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.onehotencoder.html)
 and then fitting our linear regression model, which we can do in the
 following way:
 
