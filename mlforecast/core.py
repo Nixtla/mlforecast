@@ -473,9 +473,10 @@ class TimeSeries:
             ):
                 dates = pd.DatetimeIndex(dates)
             for feature in self.date_features:
-                if feature in df:
+                feat_name = feature.__name__ if callable(feature) else feature
+                if feat_name in df:
                     continue
-                feat_name, feat_vals = self._compute_date_feature(dates, feature)
+                _, feat_vals = self._compute_date_feature(dates, feature)
                 df = assign_columns(df, feat_name, feat_vals)
 
         # assemble return
