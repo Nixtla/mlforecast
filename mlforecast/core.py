@@ -81,7 +81,7 @@ date_features_dtypes = {
 }
 
 # %% ../nbs/core.ipynb 11
-def _build_transform_name(lag, tfm, *args) -> str:
+def _build_function_transform_name(tfm: Callable, lag: int, *args) -> str:
     """Creates a name for a transformation based on `lag`, the name of the function and its arguments."""
     tfm_name = f"{tfm.__name__}_lag{lag}"
     func_params = inspect.signature(tfm).parameters
@@ -113,6 +113,16 @@ def _build_lag_transform_name(tfm: BaseLagTransform, lag: int) -> str:
     return tfm_name
 
 # %% ../nbs/core.ipynb 16
+def _build_transform_name(
+    tfm: Union[Callable, BaseLagTransform], lag: int, *args
+) -> str:
+    if callable(tfm):
+        name = _build_function_transform_name(tfm, lag, *args)
+    else:
+        name = _build_lag_transform_name(tfm, lag)
+    return name
+
+# %% ../nbs/core.ipynb 17
 def _name_models(current_names):
     ctr = Counter(current_names)
     if not ctr:
@@ -130,7 +140,7 @@ def _name_models(current_names):
         names[-i] = name
     return names
 
-# %% ../nbs/core.ipynb 18
+# %% ../nbs/core.ipynb 19
 @njit
 def _identity(x: np.ndarray) -> np.ndarray:
     """Do nothing to the input."""
@@ -160,7 +170,7 @@ def _expand_target(data, indptr, max_horizon):
             n += 1
     return out
 
-# %% ../nbs/core.ipynb 19
+# %% ../nbs/core.ipynb 20
 Freq = Union[int, str, pd.offsets.BaseOffset]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
@@ -169,12 +179,15 @@ DateFeature = Union[str, Callable]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 TargetTransform = Union[BaseTargetTransform, BaseGroupedArrayTargetTransform]
 
-# %% ../nbs/core.ipynb 20
+# %% ../nbs/core.ipynb 21
 def _parse_transforms(
     lags: Lags,
     lag_transforms: LagTransforms,
+    namer: Optional[Callable] = None,
 ) -> Dict[str, Tuple[Any, ...]]:
     transforms: Dict[str, Union[Tuple[Any, ...], BaseLagTransform]] = OrderedDict()
+    if namer is None:
+        namer = _build_transform_name
     for lag in lags:
         if CORE_INSTALLED:
             transforms[f"lag{lag}"] = Lag(lag)
@@ -183,15 +196,15 @@ def _parse_transforms(
     for lag in lag_transforms.keys():
         for tfm in lag_transforms[lag]:
             if isinstance(tfm, BaseLagTransform):
-                tfm_name = _build_lag_transform_name(tfm, lag)
+                tfm_name = namer(tfm, lag)
                 transforms[tfm_name] = clone(tfm)._set_core_tfm(lag)
             else:
                 tfm, *args = _as_tuple(tfm)
-                tfm_name = _build_transform_name(lag, tfm, *args)
+                tfm_name = namer(tfm, lag, *args)
                 transforms[tfm_name] = (lag, tfm, *args)
     return transforms
 
-# %% ../nbs/core.ipynb 21
+# %% ../nbs/core.ipynb 22
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
@@ -203,6 +216,7 @@ class TimeSeries:
         date_features: Optional[Iterable[DateFeature]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[TargetTransform]] = None,
+        transforms_namer: Optional[Callable] = None,
     ):
         self.freq = freq
         if not isinstance(num_threads, int) or num_threads < 1:
@@ -224,7 +238,9 @@ class TimeSeries:
                 raise ValueError(
                     "Can't use a lambda as a date feature because the function name gets used as the feature name."
                 )
-        self.transforms = _parse_transforms(self.lags, self.lag_transforms)
+        self.transforms = _parse_transforms(
+            lags=self.lags, lag_transforms=self.lag_transforms, namer=transforms_namer
+        )
         self.ga: GroupedArray
 
     @property
