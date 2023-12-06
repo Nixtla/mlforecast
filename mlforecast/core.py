@@ -201,6 +201,7 @@ def _parse_transforms(
                 transforms[tfm_name] = clone(tfm)._set_core_tfm(lag)
             else:
                 tfm, *args = _as_tuple(tfm)
+                assert callable(tfm)
                 tfm_name = namer(tfm, lag, *args)
                 transforms[tfm_name] = (lag, tfm, *args)
     return transforms
