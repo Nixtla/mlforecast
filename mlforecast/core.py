@@ -218,7 +218,7 @@ class TimeSeries:
         date_features: Optional[Iterable[DateFeature]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[TargetTransform]] = None,
-        transforms_namer: Optional[Callable] = None,
+        lag_transforms_namer: Optional[Callable] = None,
     ):
         self.freq = freq
         if not isinstance(num_threads, int) or num_threads < 1:
@@ -241,7 +241,9 @@ class TimeSeries:
                     "Can't use a lambda as a date feature because the function name gets used as the feature name."
                 )
         self.transforms = _parse_transforms(
-            lags=self.lags, lag_transforms=self.lag_transforms, namer=transforms_namer
+            lags=self.lags,
+            lag_transforms=self.lag_transforms,
+            namer=lag_transforms_namer,
         )
         self.ga: GroupedArray
 
