@@ -88,20 +88,22 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >              date_features:Optional[Iterable[Union[str,Callable]]]=None,
 >              num_threads:int=1, target_transforms:Optional[List[Union[mlfo
 >              recast.target_transforms.BaseTargetTransform,mlforecast.targe
->              t_transforms.BaseGroupedArrayTargetTransform]]]=None)
+>              t_transforms.BaseGroupedArrayTargetTransform]]]=None,
+>              lag_transforms_namer:Optional[Callable]=None)
 > ```
 
 Forecasting pipeline
 
-|                   | **Type** | **Default** | **Details**                                                                                                               |
+|                      | **Type** | **Default** | **Details**                                                                                                               |
 |------|------------------|-------------------------|-------------------------|
-| models            | Union    |             | Models that will be trained and used to compute the forecasts.                                                            |
-| freq              | Union    |             | Pandas offset, pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                    |
-| lags              | Optional | None        | Lags of the target to use as features.                                                                                    |
-| lag_transforms    | Optional | None        | Mapping of target lags to their transformations.                                                                          |
-| date_features     | Optional | None        | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.           |
-| num_threads       | int      | 1           | Number of threads to use when computing the features.                                                                     |
-| target_transforms | Optional | None        | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
+| models               | Union    |             | Models that will be trained and used to compute the forecasts.                                                            |
+| freq                 | Union    |             | Pandas offset, pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                    |
+| lags                 | Optional | None        | Lags of the target to use as features.                                                                                    |
+| lag_transforms       | Optional | None        | Mapping of target lags to their transformations.                                                                          |
+| date_features        | Optional | None        | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.           |
+| num_threads          | int      | 1           | Number of threads to use when computing the features.                                                                     |
+| target_transforms    | Optional | None        | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
+| lag_transforms_namer | Optional | None        | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name.           |
 
 The MLForecast object encapsulates the feature engineering + training
 the models + forecasting
@@ -129,7 +131,7 @@ Once we have this setup we can compute the features and fit the model.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L443"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L447"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
@@ -184,7 +186,7 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L544"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L548"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.forecast_fitted_values
@@ -218,7 +220,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L550"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L554"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -403,7 +405,7 @@ models you can call `Forecast.preprocess`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L212"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L216"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.preprocess
@@ -460,7 +462,7 @@ only stores the series information.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L268"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L272"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit_models
@@ -498,7 +500,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L689"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L693"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
@@ -708,7 +710,7 @@ fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutof
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L198"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L202"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.from_cv
