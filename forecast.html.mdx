@@ -186,6 +186,68 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L542"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### MLForecast.make_future_dataframe
+
+> ``` text
+>  MLForecast.make_future_dataframe (h:int)
+> ```
+
+Create a dataframe with all ids and future times in the forecasting
+horizon.
+
+|             | **Type**  | **Details**                                      |
+|-------------|-----------|--------------------------------------------------|
+| h           | int       | Number of periods to predict.                    |
+| **Returns** | **Union** | **DataFrame with expected ids and future times** |
+
+```python
+expected_future = fcst.make_future_dataframe(h=1)
+expected_future
+```
+
+|     | unique_id | ds  |
+|-----|-----------|-----|
+| 0   | H196      | 961 |
+| 1   | H256      | 961 |
+| 2   | H381      | 961 |
+| 3   | H413      | 961 |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L566"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### MLForecast.get_missing_future
+
+> ``` text
+>  MLForecast.get_missing_future (h:int,
+>                                 X_df:Union[pandas.core.frame.DataFrame,pol
+>                                 ars.dataframe.frame.DataFrame])
+> ```
+
+Get the missing id and time combinations in `X_df`.
+
+|             | **Type**  | **Details**                                                                                  |
+|--------|---------------------------|-------------------------------------|
+| h           | int       | Number of periods to predict.                                                                |
+| X_df        | Union     | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| **Returns** | **Union** | **DataFrame with expected ids and future times missing in `X_df`**                           |
+
+```python
+missing_future = fcst.get_missing_future(h=1, X_df=expected_future.head(2))
+pd.testing.assert_frame_equal(
+    missing_future,
+    expected_future.tail(2).reset_index(drop=True)
+)
+```
+
+------------------------------------------------------------------------
+
+<a
 href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L536"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
@@ -220,7 +282,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L542"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L585"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -500,7 +562,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L681"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L724"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
