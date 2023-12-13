@@ -61,7 +61,7 @@ Apply the feature engineering and train the models.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L451"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L453"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.predict
@@ -70,7 +70,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  DistributedMLForecast.predict (h:int,
 >                                 before_predict_callback:Optional[Callable]
 >                                 =None, after_predict_callback:Optional[Cal
->                                 lable]=None,
+>                                 lable]=None, X_df:Optional[pandas.core.fra
+>                                 me.DataFrame]=None,
 >                                 new_df:Optional[~AnyDataFrame]=None)
 > ```
 
@@ -81,6 +82,7 @@ Compute the predictions for the next `horizon` steps.
 | h                       | int              |             | Forecast horizon.                                                                                                                                                                                                                                                                                   |
 | before_predict_callback | Optional         | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index.                                |
 | after_predict_callback  | Optional         | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                                                 |
+| X_df                    | Optional         | None        | Dataframe with the future exogenous features. Should have the id column and the time column.                                                                                                                                                                                                        |
 | new_df                  | Optional         | None        | Series data of new observations for which forecasts are to be generated.<br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data.<br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
 | **Returns**             | **AnyDataFrame** |             | **Predictions for each serie and timestep, with one column per model.**                                                                                                                                                                                                                             |
 
@@ -117,7 +119,7 @@ Add the features to `data`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L510"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L518"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.cross_validation
