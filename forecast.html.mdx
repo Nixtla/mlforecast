@@ -186,7 +186,7 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L542"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L564"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.make_future_dataframe
@@ -218,7 +218,7 @@ expected_future
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L566"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L588"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.get_missing_future
@@ -254,10 +254,17 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ### MLForecast.forecast_fitted_values
 
 > ``` text
->  MLForecast.forecast_fitted_values ()
+>  MLForecast.forecast_fitted_values
+>                                     (level:Optional[List[Union[int,float]]
+>                                     ]=None)
 > ```
 
 Access in-sample predictions.
+
+|             | **Type**  | **Default** | **Details**                                                   |
+|------|------------------|-------------------------|-------------------------|
+| level       | Optional  | None        | Confidence levels between 0 and 100 for prediction intervals. |
+| **Returns** | **Union** |             | **Dataframe with predictions for the training set**           |
 
 ```python
 fcst.forecast_fitted_values()
@@ -277,12 +284,30 @@ fcst.forecast_fitted_values()
 | 3070 | H413      | 959 | 38.0 | 48.691257     |
 | 3071 | H413      | 960 | 46.0 | 46.652238     |
 
+```python
+fcst.forecast_fitted_values(level=[90])
+```
+
+|      | unique_id | ds  | y    | LGBMRegressor | LGBMRegressor-lo-90 | LGBMRegressor-hi-90 |
+|------|-----------|-----|------|---------------|---------------------|---------------------|
+| 0    | H196      | 193 | 12.7 | 12.671271     | 12.540634           | 12.801909           |
+| 1    | H196      | 194 | 12.3 | 12.271271     | 12.140634           | 12.401909           |
+| 2    | H196      | 195 | 11.9 | 11.871271     | 11.740634           | 12.001909           |
+| 3    | H196      | 196 | 11.7 | 11.671271     | 11.540634           | 11.801909           |
+| 4    | H196      | 197 | 11.4 | 11.471271     | 11.340634           | 11.601909           |
+| ...  | ...       | ... | ...  | ...           | ...                 | ...                 |
+| 3067 | H413      | 956 | 59.0 | 68.280574     | 58.846640           | 77.714509           |
+| 3068 | H413      | 957 | 58.0 | 70.427570     | 60.993636           | 79.861504           |
+| 3069 | H413      | 958 | 53.0 | 44.767965     | 35.334031           | 54.201899           |
+| 3070 | H413      | 959 | 38.0 | 48.691257     | 39.257323           | 58.125191           |
+| 3071 | H413      | 960 | 46.0 | 46.652238     | 37.218304           | 56.086172           |
+
 Once we’ve run this we’re ready to compute our predictions.
 
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L585"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L607"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -562,7 +587,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L724"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L746"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
