@@ -31,6 +31,8 @@ series.head()
 | 3   | id_00     | 2000-10-08 | 258.987900 | 79       | 45         |
 | 4   | id_00     | 2000-10-09 | 344.940404 | 79       | 45         |
 
+## Use existing exogenous features
+
 In mlforecast the required columns are the series identifier, time and
 target. Any extra columns you have, like `static_0` and `product_id`
 here are considered to be static and are replicated when constructing
@@ -101,7 +103,7 @@ fcst.fit(series_with_prices, static_features=['static_0', 'product_id'])
 ```
 
 ``` text
-MLForecast(models=[LGBMRegressor], freq=<Day>, lag_features=['lag7', 'expanding_mean_lag1', 'rolling_mean_lag7_window_size14'], date_features=['dayofweek', 'month'], num_threads=2)
+MLForecast(models=[LGBMRegressor], freq=D, lag_features=['lag7', 'expanding_mean_lag1', 'rolling_mean_lag7_window_size14'], date_features=['dayofweek', 'month'], num_threads=2)
 ```
 
 The features used for training are stored in
@@ -139,4 +141,94 @@ preds.head()
 | 2   | id_00     | 2001-05-17 | 20.321885     |
 | 3   | id_00     | 2001-05-18 | 102.310778    |
 | 4   | id_00     | 2001-05-19 | 185.340281    |
+
+## Generating exogenous features
+
+Nixtla provides some utilities to generate exogenous features for both
+training and forecasting such as [statsforecast’s
+mstl_decomposition](https://nixtlaverse.nixtla.io/statsforecast/docs/how-to-guides/generating_features.html)
+or the [transform_exog function](transforming_exog.html). We also have
+[utilsforecast’s fourier
+function](https://nixtlaverse.nixtla.io/utilsforecast/feature_engineering.html#fourier),
+which we’ll demonstrate here.
+
+```python
+from sklearn.linear_model import LinearRegression
+from utilsforecast.feature_engineering import fourier
+```
+
+Suppose you start with some data like the one above where we have a
+couple of static features.
+
+```python
+series.head()
+```
+
+|     | unique_id | ds         | y          | static_0 | product_id |
+|-----|-----------|------------|------------|----------|------------|
+| 0   | id_00     | 2000-10-05 | 39.811983  | 79       | 45         |
+| 1   | id_00     | 2000-10-06 | 103.274013 | 79       | 45         |
+| 2   | id_00     | 2000-10-07 | 176.574744 | 79       | 45         |
+| 3   | id_00     | 2000-10-08 | 258.987900 | 79       | 45         |
+| 4   | id_00     | 2000-10-09 | 344.940404 | 79       | 45         |
+
+Now we’d like to add some fourier terms to model the seasonality. We can
+do that with the following:
+
+```python
+transformed_df, future_df = fourier(series, freq='D', season_length=7, k=2, h=7)
+```
+
+This provides an extended training dataset.
+
+```python
+transformed_df.head()
+```
+
+|     | unique_id | ds         | y          | static_0 | product_id | sin1_7    | sin2_7    | cos1_7    | cos2_7    |
+|-----|-----------|------------|------------|----------|------------|-----------|-----------|-----------|-----------|
+| 0   | id_00     | 2000-10-05 | 39.811983  | 79       | 45         | 0.781832  | 0.974928  | 0.623490  | -0.222521 |
+| 1   | id_00     | 2000-10-06 | 103.274013 | 79       | 45         | 0.974928  | -0.433884 | -0.222521 | -0.900969 |
+| 2   | id_00     | 2000-10-07 | 176.574744 | 79       | 45         | 0.433884  | -0.781831 | -0.900969 | 0.623490  |
+| 3   | id_00     | 2000-10-08 | 258.987900 | 79       | 45         | -0.433884 | 0.781832  | -0.900969 | 0.623490  |
+| 4   | id_00     | 2000-10-09 | 344.940404 | 79       | 45         | -0.974928 | 0.433884  | -0.222521 | -0.900969 |
+
+Along with the future values of the features.
+
+```python
+future_df.head()
+```
+
+|     | unique_id | ds         | sin1_7    | sin2_7    | cos1_7    | cos2_7    |
+|-----|-----------|------------|-----------|-----------|-----------|-----------|
+| 0   | id_00     | 2001-05-15 | -0.781828 | -0.974930 | 0.623494  | -0.222511 |
+| 1   | id_00     | 2001-05-16 | 0.000006  | 0.000011  | 1.000000  | 1.000000  |
+| 2   | id_00     | 2001-05-17 | 0.781835  | 0.974925  | 0.623485  | -0.222533 |
+| 3   | id_00     | 2001-05-18 | 0.974927  | -0.433895 | -0.222527 | -0.900963 |
+| 4   | id_00     | 2001-05-19 | 0.433878  | -0.781823 | -0.900972 | 0.623500  |
+
+We can now train using only these features (and the static ones).
+
+```python
+fcst2 = MLForecast(models=LinearRegression(), freq='D')
+fcst2.fit(transformed_df, static_features=['static_0', 'product_id'])
+```
+
+``` text
+MLForecast(models=[LinearRegression], freq=D, lag_features=[], date_features=[], num_threads=1)
+```
+
+And provide the future values to the predict method.
+
+```python
+fcst2.predict(h=7, X_df=future_df).head()
+```
+
+|     | unique_id | ds         | LinearRegression |
+|-----|-----------|------------|------------------|
+| 0   | id_00     | 2001-05-15 | 275.822342       |
+| 1   | id_00     | 2001-05-16 | 262.258117       |
+| 2   | id_00     | 2001-05-17 | 238.195850       |
+| 3   | id_00     | 2001-05-18 | 240.997814       |
+| 4   | id_00     | 2001-05-19 | 262.247123       |
 
