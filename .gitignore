@@ -157,3 +157,10 @@ _proc/
 index_files
 _docs
 nbs/docs/**/*.xls*
+
+# serialized files
+*.pkl
+*.pickle
+
+# AWS SAM
+.aws-sam

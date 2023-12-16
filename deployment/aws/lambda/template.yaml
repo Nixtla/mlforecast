@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  PredictFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Timeout: 60
+      MemorySize: 128
+      Events:
+        Predict:
+          Type: Api
+          Properties:
+            Path: /predict
+            Method: post
+    Metadata:
+      DockerTag: python3.9-v1
+      Dockerfile: Dockerfile
+      DockerContext: ./app
+
+Outputs:
+  ApiURL:
+    Description: "API Gateway endpoint URL for Prod stage for the lambda function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/predict/"
+  LambdaFunctionArn:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt PredictFunction.Arn
+  IAMRoleArn:
+    Description: "Implicit IAM Role created for the function"
+    Value: !GetAtt PredictFunctionRole.Arn
