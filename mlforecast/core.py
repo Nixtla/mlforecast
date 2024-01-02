@@ -770,7 +770,8 @@ class TimeSeries:
         id_counts = ufp.counts_by_id(df, self.id_col)
         try:
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
-        except KeyError:
+        except (KeyError, ValueError):
+            # pandas raises key error, polars before coalesce raises value error
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer")
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
