@@ -557,7 +557,7 @@ class TimeSeries:
         return df
 
     def _predict_setup(self) -> None:
-        self._ga = copy.copy(self.ga)
+        self.ga = copy.copy(self._ga)
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
         else:
@@ -632,7 +632,6 @@ class TimeSeries:
             raise ValueError(
                 f"horizon must be at most max_horizon ({self.max_horizon})"
             )
-        self._predict_setup()
         uids = self._get_future_ids(horizon)
         starts = ufp.offset_times(self.curr_dates, self.freq, 1)
         dates = ufp.time_ranges(starts, self.freq, periods=horizon)
@@ -719,21 +718,28 @@ class TimeSeries:
                 raise ValueError(msg)
             drop_cols = [self.id_col, self.time_col, "_start", "_end"]
             X_df = ufp.sort(X_df, [self.id_col, self.time_col]).drop(columns=drop_cols)
-        if getattr(self, "max_horizon", None) is None:
-            preds = self._predict_recursive(
-                models=models,
-                horizon=horizon,
-                before_predict_callback=before_predict_callback,
-                after_predict_callback=after_predict_callback,
-                X_df=X_df,
-            )
-        else:
-            preds = self._predict_multi(
-                models=models,
-                horizon=horizon,
-                before_predict_callback=before_predict_callback,
-                X_df=X_df,
-            )
+        # backup original series. the ga attribute gets modified
+        # and is copied from _ga at the start of each model's predict
+        self._ga = copy.copy(self.ga)
+        try:
+            if getattr(self, "max_horizon", None) is None:
+                preds = self._predict_recursive(
+                    models=models,
+                    horizon=horizon,
+                    before_predict_callback=before_predict_callback,
+                    after_predict_callback=after_predict_callback,
+                    X_df=X_df,
+                )
+            else:
+                preds = self._predict_multi(
+                    models=models,
+                    horizon=horizon,
+                    before_predict_callback=before_predict_callback,
+                    X_df=X_df,
+                )
+        finally:
+            self.ga = self._ga
+            del self._ga
         if self.target_transforms is not None:
             if any(
                 isinstance(tfm, BaseGroupedArrayTargetTransform)
@@ -753,8 +759,7 @@ class TimeSeries:
                     tfm.idxs = None
                 else:
                     preds = tfm.inverse_transform(preds)
-        self.ga = self._ga
-        del self._uids, self._idxs, self._static_features, self._ga
+        del self._uids, self._idxs, self._static_features
         return preds
 
     def update(self, df: DataFrame) -> None:
