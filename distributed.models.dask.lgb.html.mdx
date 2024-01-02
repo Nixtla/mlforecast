@@ -33,9 +33,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                    min_child_samples:int=20, subsample:float=1.0,
 >                    subsample_freq:int=0, colsample_bytree:float=1.0,
 >                    reg_alpha:float=0.0, reg_lambda:float=0.0, random_state
->                    :Union[int,numpy.random.mtrand.RandomState,NoneType]=No
->                    ne, n_jobs:Optional[int]=None,
->                    importance_type:str='split',
+>                    :Union[int,numpy.random.mtrand.RandomState,ForwardRef('
+>                    np.random.Generator'),NoneType]=None,
+>                    n_jobs:Optional[int]=None, importance_type:str='split',
 >                    client:Optional[distributed.client.Client]=None,
 >                    **kwargs:Any)
 > ```
