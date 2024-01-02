@@ -632,6 +632,7 @@ class TimeSeries:
             raise ValueError(
                 f"horizon must be at most max_horizon ({self.max_horizon})"
             )
+        self._predict_setup()
         uids = self._get_future_ids(horizon)
         starts = ufp.offset_times(self.curr_dates, self.freq, 1)
         dates = ufp.time_ranges(starts, self.freq, periods=horizon)
