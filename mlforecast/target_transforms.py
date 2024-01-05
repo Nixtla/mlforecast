@@ -138,12 +138,11 @@ class BaseLocalScaler(BaseGroupedArrayTargetTransform):
         self.scaler_ = self.scaler_factory()
         if self._is_utils_tfm():
             transformed = self.scaler_.fit_transform(ga)
-            out = GroupedArray(transformed, ga.indptr)
         else:
             core_ga = CoreGroupedArray(ga.data, ga.indptr)
             self.scaler_.fit(core_ga)
-            out = GroupedArray(self.scaler_.transform(core_ga), ga.indptr)
-        return out
+            transformed = self.scaler_.transform(core_ga)
+        return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         stats = self.scaler_.stats_
