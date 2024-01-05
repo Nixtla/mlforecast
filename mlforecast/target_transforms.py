@@ -64,7 +64,7 @@ class BaseGroupedArrayTargetTransform(abc.ABC):
         ...
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
-        ...
+        return self.inverse_transform(ga)
 
 # %% ../nbs/target_transforms.ipynb 7
 class Differences(BaseGroupedArrayTargetTransform):
