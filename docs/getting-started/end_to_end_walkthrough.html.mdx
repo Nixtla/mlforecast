@@ -54,7 +54,7 @@ features.
 fig = plot_series(df, max_insample_length=24 * 14)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__eda.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__eda.png)
 
 We can use the
 [`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
@@ -102,7 +102,7 @@ series look like now.
 fig = plot_series(prep)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__differences.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__differences.png)
 
 ## Adding features
 
@@ -408,7 +408,7 @@ preds
 fig = plot_series(df, preds, max_insample_length=24 * 7)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__predictions.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__predictions.png)
 
 ## Updating series’ values
 
@@ -510,7 +510,7 @@ cv_result
 fig = plot_series(cv_result, cv_result.drop(columns='cutoff'), max_insample_length=0)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__cv.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__cv.png)
 
 We can compute the RMSE on each split.
 
@@ -662,7 +662,7 @@ cv.cv_preds_
 fig = plot_series(cv.cv_preds_, cv.cv_preds_.drop(columns='window'), max_insample_length=0)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__lgbcv.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__lgbcv.png)
 
 You can use this class to quickly try different configurations of
 features and hyperparameters. Once you’ve found a combination that works
@@ -680,5 +680,5 @@ preds = final_fcst.predict(48)
 fig = plot_series(df, preds, max_insample_length=24 * 14)
 ```
 
-![](/docs/getting-started/../../figs/end_to_end_walkthrough__final_forecast.png)
+![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__final_forecast.png)
 

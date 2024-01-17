@@ -103,7 +103,7 @@ Shape of the data (32896, 3)
 fig = plot_series(df)
 ```
 
-![](/docs/tutorials/../../figs/load_forecasting__raw.png)
+![](/mlforecast/docs/tutorials/../../figs/load_forecasting__raw.png)
 
 We clearly observe that the time series exhibits seasonal patterns.
 Moreover, the time series contains `32,896` observations, so it is
@@ -189,7 +189,7 @@ Since the seasonalities are present at `24` hours (daily) and `24*7`
 plot_differences(df=df_train, differences=[24, 24*7], fname='load_forecasting__differences.png')
 ```
 
-![](/docs/tutorials/../../figs/load_forecasting__differences.png)
+![](/mlforecast/docs/tutorials/../../figs/load_forecasting__differences.png)
 
 As we can see when we extract the 24 difference (daily) in
 `PJM_Load_hourly_24` the series seem to stabilize sisnce the peaks seem
@@ -236,7 +236,7 @@ prep
 fig = plot_series(prep)
 ```
 
-![](/docs/tutorials/../../figs/load_forecasting__transformed.png)
+![](/mlforecast/docs/tutorials/../../figs/load_forecasting__transformed.png)
 
 ### Model Selection with Cross-Validation
 
@@ -401,7 +401,7 @@ def plot_cv(df, df_cv, uid, fname, last_n=24 * 14, models={}):
 plot_cv(df_train, crossvalidation_df, 'PJM_Load_hourly', 'load_forecasting__predictions.png', models=models)
 ```
 
-![](/docs/tutorials/../../figs/load_forecasting__predictions.png)
+![](/mlforecast/docs/tutorials/../../figs/load_forecasting__predictions.png)
 
 Visually examining the forecasts can give us some idea of how the model
 is behaving, yet in order to asses the performace we need to evaluate
@@ -598,7 +598,7 @@ fig = plot_series(
 )
 ```
 
-![](/docs/tutorials/../../figs/load_forecasting__prediction_intervals.png)
+![](/mlforecast/docs/tutorials/../../figs/load_forecasting__prediction_intervals.png)
 
 ### Comparison with Prophet
 

@@ -58,7 +58,7 @@ def plot(series, fname):
 plot({'original': serie}, 'target_transforms__eda.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__eda.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__eda.png)
 
 We can see that our data has a trend as well as a clear seasonality. We
 can try removing the trend first.
@@ -73,7 +73,7 @@ without_trend = fcst.preprocess(serie)
 plot({'original': serie, 'without trend': without_trend}, 'target_transforms__diff1.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__diff1.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__diff1.png)
 
 The trend is gone, we can now try taking the 24 difference (subtract the
 value at the same hour in the previous day).
@@ -88,7 +88,7 @@ without_trend_and_seasonality = fcst.preprocess(serie)
 plot({'original': serie, 'without trend and seasonality': without_trend_and_seasonality}, 'target_transforms__diff2.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__diff2.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__diff2.png)
 
 ### LocalStandardScaler
 
@@ -113,7 +113,7 @@ var     1.0
 Name: y, dtype: float64
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__standardized.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__standardized.png)
 
 Now that we’ve captured the components of the serie (trend +
 seasonality), we could try forecasting it with a model that always
@@ -138,7 +138,7 @@ pd.concat([serie.tail(24 * 10), preds]).set_index('ds').plot(ax=ax)
 plt.close()
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__zeros.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__zeros.png)
 
 ## Global transformations
 
@@ -171,7 +171,7 @@ log1p_transformed = fcst.preprocess(serie)
 plot({'original': serie, 'Log transformed': log1p_transformed}, 'target_transforms__log.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__log.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__log.png)
 
 We can also combine this with local transformations. For example we can
 apply log first and then differencing.
@@ -186,7 +186,7 @@ log_diffs = fcst.preprocess(serie)
 plot({'original': serie, 'Log + Differences': log_diffs}, 'target_transforms__log_diffs.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__log_diffs.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__log_diffs.png)
 
 ## Custom transformations
 
@@ -236,5 +236,5 @@ minmax_scaled = fcst.preprocess(serie)
 plot({'original': serie, 'min-max scaled': minmax_scaled}, 'target_transforms__minmax.png')
 ```
 
-![](/docs/how-to-guides/../../figs/target_transforms__minmax.png)
+![](/mlforecast/docs/how-to-guides/../../figs/target_transforms__minmax.png)
 

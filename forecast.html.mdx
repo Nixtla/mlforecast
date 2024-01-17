@@ -349,7 +349,7 @@ fig = plot_series(train, results, max_insample_length=0)
 fig.savefig('figs/forecast__predict.png', bbox_inches='tight')
 ```
 
-![](/figs/forecast__predict.png)
+![](/mlforecast/figs/forecast__predict.png)
 
 #### Prediction intervals
 
@@ -431,7 +431,7 @@ fig = plot_series(train, results, max_insample_length=0, level=[50, 80, 95])
 fig.savefig('figs/forecast__predict_intervals.png', bbox_inches='tight')
 ```
 
-![](/figs/forecast__predict_intervals.png)
+![](/mlforecast/figs/forecast__predict_intervals.png)
 
 If you want to reduce the computational time and produce intervals with
 the same width for the whole forecast horizon, simple pass `h=1` to the
@@ -460,7 +460,7 @@ fig = plot_series(train, results, max_insample_length=0, level=[90])
 fig.savefig('figs/forecast__predict_intervals_window_size_1.png', bbox_inches='tight')
 ```
 
-![](/figs/forecast__predict_intervals_window_size_1.png)
+![](/mlforecast/figs/forecast__predict_intervals_window_size_1.png)
 
 #### Forecast using a pretrained model
 
@@ -484,7 +484,7 @@ ercot_fcsts = fcst.predict(horizon, new_df=ercot_df)
 fig = plot_series(ercot_df, ercot_fcsts, max_insample_length=48 * 2)
 ```
 
-![](/figs/forecast__ercot.png)
+![](/mlforecast/figs/forecast__ercot.png)
 
 If you want to take a look at the data that will be used to train the
 models you can call `Forecast.preprocess`.
@@ -786,13 +786,13 @@ for refit, expected_models in zip([True, False, 2], [4, 1, 2]):
 fig = plot_series(cv_results, cv_results.drop(columns='cutoff'), max_insample_length=0)
 ```
 
-![](/figs/forecast__cross_validation.png)
+![](/mlforecast/figs/forecast__cross_validation.png)
 
 ```python
 fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutoff'), level=[90], max_insample_length=0)
 ```
 
-![](/figs/forecast__cross_validation_intervals.png)
+![](/mlforecast/figs/forecast__cross_validation_intervals.png)
 
 ------------------------------------------------------------------------
 

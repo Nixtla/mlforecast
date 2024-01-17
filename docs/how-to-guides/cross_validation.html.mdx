@@ -110,7 +110,7 @@ function.
 fig = plot_series(Y_df, max_ids=4, plot_random=False, max_insample_length=24 * 14)
 ```
 
-![](/docs/how-to-guides/../../figs/cross_validation__series.png)
+![](/mlforecast/docs/how-to-guides/../../figs/cross_validation__series.png)
 
 ## Define forecast object
 
@@ -204,7 +204,7 @@ def plot_cv(df, df_cv, uid, fname, last_n=24 * 14):
 plot_cv(Y_df, crossvalidation_df, 'H1', '../../figs/cross_validation__predictions.png')
 ```
 
-![](/docs/how-to-guides/../../figs/cross_validation__predictions.png)
+![](/mlforecast/docs/how-to-guides/../../figs/cross_validation__predictions.png)
 
 Notice that in each cutoff period, we generated a forecast for the next
 24 hours using only the data `y` before said period.
