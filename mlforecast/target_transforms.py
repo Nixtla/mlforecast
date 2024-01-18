@@ -14,6 +14,7 @@ import pandas as pd
 from sklearn.base import TransformerMixin, clone
 from utilsforecast.compat import DataFrame
 from utilsforecast.target_transforms import (
+    BaseTargetTransform as UtilsTargetTransform,
     LocalBoxCox as BoxCox,
     LocalMinMaxScaler as MinMaxScaler,
     LocalRobustScaler as RobustScaler,
@@ -22,6 +23,7 @@ from utilsforecast.target_transforms import (
     _transform,
 )
 
+from .compat import CORE_INSTALLED, CoreGroupedArray, core_scalers
 from .grouped_array import GroupedArray, _apply_difference
 from .utils import _ShortSeriesException
 
@@ -34,13 +36,16 @@ class BaseTargetTransform(abc.ABC):
         self.time_col = time_col
         self.target_col = target_col
 
-    @abc.abstractmethod
-    def fit_transform(self, df: DataFrame) -> DataFrame:
+    def update(self, df: DataFrame) -> DataFrame:
         raise NotImplementedError
 
     @abc.abstractmethod
+    def fit_transform(self, df: DataFrame) -> DataFrame:
+        ...
+
+    @abc.abstractmethod
     def inverse_transform(self, df: DataFrame) -> DataFrame:
-        raise NotImplementedError
+        ...
 
 # %% ../nbs/target_transforms.ipynb 6
 class BaseGroupedArrayTargetTransform(abc.ABC):
@@ -49,12 +54,16 @@ class BaseGroupedArrayTargetTransform(abc.ABC):
     idxs: Optional[np.ndarray] = None
 
     @abc.abstractmethod
+    def update(self, ga: GroupedArray) -> GroupedArray:
+        ...
+
+    @abc.abstractmethod
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        raise NotImplementedError
+        ...
 
     @abc.abstractmethod
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
-        raise NotImplementedError
+        ...
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
         return self.inverse_transform(ga)
@@ -89,6 +98,12 @@ class Differences(BaseGroupedArrayTargetTransform):
             self.original_values_.append(GroupedArray(new_data, new_indptr))
         return ga
 
+    def update(self, ga: GroupedArray) -> GroupedArray:
+        transformed = copy.copy(ga)
+        for d, orig_ga in zip(self.differences, self.original_values_):
+            orig_ga.update_difference(d, transformed)
+        return transformed
+
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         ga = copy.copy(ga)
         for d, orig_vals_ga in zip(
@@ -109,13 +124,24 @@ class Differences(BaseGroupedArrayTargetTransform):
 
 # %% ../nbs/target_transforms.ipynb 10
 class BaseLocalScaler(BaseGroupedArrayTargetTransform):
-    """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
-
     scaler_factory: type
+
+    def _is_utils_tfm(self):
+        return isinstance(self.scaler_, UtilsTargetTransform)
+
+    def update(self, ga: GroupedArray) -> GroupedArray:
+        if not self._is_utils_tfm():
+            ga = CoreGroupedArray(ga.data, ga.indptr)
+        return GroupedArray(self.scaler_.transform(ga), ga.indptr)
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         self.scaler_ = self.scaler_factory()
-        transformed = self.scaler_.fit_transform(ga)
+        if self._is_utils_tfm():
+            transformed = self.scaler_.fit_transform(ga)
+        else:
+            core_ga = CoreGroupedArray(ga.data, ga.indptr)
+            self.scaler_.fit(core_ga)
+            transformed = self.scaler_.transform(core_ga)
         return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
@@ -124,9 +150,14 @@ class BaseLocalScaler(BaseGroupedArrayTargetTransform):
             stats = stats[self.idxs]
         if stats.shape[0] != ga.n_groups:
             raise ValueError("Found different number of groups in scaler.")
-        transformed = _transform(
-            ga.data, ga.indptr, stats, _common_scaler_inverse_transform
-        )
+        if self._is_utils_tfm() or self.idxs is not None:
+            # core scalers can't transform a subset
+            transformed = _transform(
+                ga.data, ga.indptr, stats, _common_scaler_inverse_transform
+            )
+        else:
+            core_ga = CoreGroupedArray(ga.data, ga.indptr)
+            transformed = self.scaler_.inverse_transform(core_ga)
         return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
@@ -136,13 +167,15 @@ class BaseLocalScaler(BaseGroupedArrayTargetTransform):
 class LocalStandardScaler(BaseLocalScaler):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
 
-    scaler_factory = StandardScaler
+    scaler_factory = (
+        core_scalers.LocalStandardScaler if CORE_INSTALLED else StandardScaler
+    )
 
 # %% ../nbs/target_transforms.ipynb 14
 class LocalMinMaxScaler(BaseLocalScaler):
     """Scales each serie to be in the [0, 1] interval."""
 
-    scaler_factory = MinMaxScaler
+    scaler_factory = core_scalers.LocalMinMaxScaler if CORE_INSTALLED else MinMaxScaler
 
 # %% ../nbs/target_transforms.ipynb 16
 class LocalRobustScaler(BaseLocalScaler):
@@ -155,23 +188,23 @@ class LocalRobustScaler(BaseLocalScaler):
     """
 
     def __init__(self, scale: str):
-        self.scaler_factory = lambda: RobustScaler(scale)  # type: ignore
+        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale) if CORE_INSTALLED else RobustScaler(scale)  # type: ignore
 
 # %% ../nbs/target_transforms.ipynb 19
 class LocalBoxCox(BaseLocalScaler):
     """Finds the optimum lambda for each serie and applies the Box-Cox transformation"""
 
     def __init__(self):
-        self.scaler = BoxCox()
+        self.scaler_ = BoxCox()
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        return GroupedArray(self.scaler.fit_transform(ga), ga.indptr)
+        return GroupedArray(self.scaler_.fit_transform(ga), ga.indptr)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         from scipy.special import inv_boxcox1p
 
         sizes = np.diff(ga.indptr)
-        lmbdas = self.scaler.lmbdas_
+        lmbdas = self.scaler_.lmbdas_
         if self.idxs is not None:
             lmbdas = lmbdas[self.idxs]
         lmbdas = np.repeat(lmbdas, sizes, axis=0)
@@ -183,6 +216,11 @@ class GlobalSklearnTransformer(BaseTargetTransform):
 
     def __init__(self, transformer: TransformerMixin):
         self.transformer = transformer
+
+    def update(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy(deep=False)
+        df[self.target_col] = self.transformer_.transform(df[[self.target_col]].values)
+        return df
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy(deep=False)

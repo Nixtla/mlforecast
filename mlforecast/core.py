@@ -561,7 +561,7 @@ class TimeSeries:
         return df
 
     def _predict_setup(self) -> None:
-        self._ga = copy.copy(self.ga)
+        self.ga = copy.copy(self._ga)
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
         else:
@@ -657,6 +657,12 @@ class TimeSeries:
             result = ufp.assign_columns(result, name, raw_preds)
         return result
 
+    def _has_ga_target_tfms(self):
+        return any(
+            isinstance(tfm, BaseGroupedArrayTargetTransform)
+            for tfm in self.target_transforms
+        )
+
     def predict(
         self,
         models: Dict[str, Union[BaseEstimator, List[BaseEstimator]]],
@@ -723,26 +729,30 @@ class TimeSeries:
                 raise ValueError(msg)
             drop_cols = [self.id_col, self.time_col, "_start", "_end"]
             X_df = ufp.sort(X_df, [self.id_col, self.time_col]).drop(columns=drop_cols)
-        if getattr(self, "max_horizon", None) is None:
-            preds = self._predict_recursive(
-                models=models,
-                horizon=horizon,
-                before_predict_callback=before_predict_callback,
-                after_predict_callback=after_predict_callback,
-                X_df=X_df,
-            )
-        else:
-            preds = self._predict_multi(
-                models=models,
-                horizon=horizon,
-                before_predict_callback=before_predict_callback,
-                X_df=X_df,
-            )
+        # backup original series. the ga attribute gets modified
+        # and is copied from _ga at the start of each model's predict
+        self._ga = copy.copy(self.ga)
+        try:
+            if getattr(self, "max_horizon", None) is None:
+                preds = self._predict_recursive(
+                    models=models,
+                    horizon=horizon,
+                    before_predict_callback=before_predict_callback,
+                    after_predict_callback=after_predict_callback,
+                    X_df=X_df,
+                )
+            else:
+                preds = self._predict_multi(
+                    models=models,
+                    horizon=horizon,
+                    before_predict_callback=before_predict_callback,
+                    X_df=X_df,
+                )
+        finally:
+            self.ga = self._ga
+            del self._ga
         if self.target_transforms is not None:
-            if any(
-                isinstance(tfm, BaseGroupedArrayTargetTransform)
-                for tfm in self.target_transforms
-            ):
+            if self._has_ga_target_tfms():
                 model_cols = [
                     c for c in preds.columns if c not in (self.id_col, self.time_col)
                 ]
@@ -751,14 +761,15 @@ class TimeSeries:
                 if isinstance(tfm, BaseGroupedArrayTargetTransform):
                     tfm.idxs = self._idxs
                     for col in model_cols:
-                        ga = GroupedArray(preds[col].to_numpy(), indptr)
+                        ga = GroupedArray(
+                            preds[col].to_numpy().astype(self.ga.data.dtype), indptr
+                        )
                         ga = tfm.inverse_transform(ga)
                         preds = ufp.assign_columns(preds, col, ga.data)
                     tfm.idxs = None
                 else:
                     preds = tfm.inverse_transform(preds)
-        self.ga = self._ga
-        del self._uids, self._idxs, self._static_features, self._ga
+        del self._uids, self._idxs, self._static_features
         return preds
 
     def save(self, path: Union[str, Path]) -> None:
@@ -778,11 +789,17 @@ class TimeSeries:
         if isinstance(uids, pd.Index):
             uids = pd.Series(uids)
         uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
+        df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)
         df = ufp.sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
+        values = values.astype(self.ga.data.dtype, copy=False)
         id_counts = ufp.counts_by_id(df, self.id_col)
-        sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer")
+        try:
+            sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
+        except (KeyError, ValueError):
+            # pandas raises key error, polars before coalesce raises value error
+            sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer")
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
@@ -794,9 +811,12 @@ class TimeSeries:
         last_dates = ufp.sort(last_dates, by=self.id_col)
         self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
         self.uids = ufp.sort(sizes[self.id_col])
-        if isinstance(self.uids, pd.Series):
+        if isinstance(df, pd.DataFrame):
             self.uids = pd.Index(self.uids)
+            self.last_dates = pd.Index(self.last_dates)
         if new_groups.any():
+            if self.target_transforms is not None:
+                raise ValueError("Can not update target_transforms with new series.")
             new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
             new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
@@ -808,6 +828,17 @@ class TimeSeries:
                 [self.static_features_, new_statics]
             )
             self.static_features_ = ufp.sort(self.static_features_, self.id_col)
+        if self.target_transforms is not None:
+            if self._has_ga_target_tfms():
+                indptr = np.append(0, id_counts["counts"]).cumsum()
+            for tfm in self.target_transforms:
+                if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                    ga = GroupedArray(values, indptr)
+                    ga = tfm.update(ga)
+                    df = ufp.assign_columns(df, self.target_col, ga.data)
+                else:
+                    df = tfm.update(df)
+                values = df[self.target_col].to_numpy()
         self.ga = self.ga.append_several(
             new_sizes=sizes["counts"].to_numpy().astype(np.int32),
             new_values=values,
