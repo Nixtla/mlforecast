@@ -13,6 +13,7 @@ notebook](https://www.kaggle.com/code/lemuz90/m4-competition).
 
 ```python
 import random
+import tempfile
 
 import lightgbm as lgb
 import matplotlib.pyplot as plt
@@ -74,7 +75,7 @@ train.shape, valid.shape
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L123"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L126"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast
@@ -131,7 +132,7 @@ Once we have this setup we can compute the features and fit the model.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L435"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L438"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
@@ -186,7 +187,45 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L564"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L945"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### MLForecast.save
+
+> ``` text
+>  MLForecast.save (path:Union[str,pathlib.Path])
+> ```
+
+Save forecast object
+
+|             | **Type** | **Details**                               |
+|-------------|----------|-------------------------------------------|
+| path        | Union    | Directory where artifacts will be stored. |
+| **Returns** | **None** |                                           |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L957"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### MLForecast.load
+
+> ``` text
+>  MLForecast.load (path:Union[str,pathlib.Path])
+> ```
+
+Load forecast object
+
+|             | **Type**       | **Details**                     |
+|-------------|----------------|---------------------------------|
+| path        | Union          | Directory with saved artifacts. |
+| **Returns** | **MLForecast** |                                 |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L567"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.make_future_dataframe
@@ -218,7 +257,7 @@ expected_future
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L588"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L591"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.get_missing_future
@@ -248,7 +287,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L536"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L539"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.forecast_fitted_values
@@ -307,7 +346,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L607"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L610"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -492,7 +531,7 @@ models you can call `Forecast.preprocess`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L202"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L205"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.preprocess
@@ -549,7 +588,7 @@ only stores the series information.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L258"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L261"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit_models
@@ -587,7 +626,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L746"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L750"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
@@ -797,7 +836,7 @@ fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutof
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L188"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L191"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.from_cv
