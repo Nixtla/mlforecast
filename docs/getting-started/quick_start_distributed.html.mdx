@@ -143,11 +143,11 @@ preds.head()
 
 |     | unique_id | ds         | DaskXGBForecast | DaskLGBMForecast |
 |-----|-----------|------------|-----------------|------------------|
-| 0   | id_00     | 2002-09-27 | 18.819103       | 17.900281        |
-| 1   | id_00     | 2002-09-28 | 89.682961       | 91.353827        |
-| 2   | id_00     | 2002-09-29 | 167.320984      | 167.335792       |
-| 3   | id_00     | 2002-09-30 | 245.242462      | 243.613032       |
-| 4   | id_00     | 2002-10-01 | 315.341370      | 313.804709       |
+| 0   | id_00     | 2002-09-27 | 19.435570       | 17.420052        |
+| 1   | id_00     | 2002-09-28 | 90.069359       | 89.933465        |
+| 2   | id_00     | 2002-09-29 | 166.154678      | 165.127939       |
+| 3   | id_00     | 2002-09-30 | 244.439392      | 246.553488       |
+| 4   | id_00     | 2002-10-01 | 317.734375      | 319.077260       |
 
 ### Saving and loading
 
@@ -198,6 +198,24 @@ We can verify that this object produces the same results.
 preds = fa.as_pandas(fcst.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
+```
+
+### Converting to local
+
+Another option to store your distributed forecast object is to first
+turn it into a local one and then save it. Keep in mind that in order to
+do that all the remote data that is stored from the series will have to
+be pulled into a single machine (the scheduler in dask, driver in spark,
+etc.), so you have to be sure that it’ll fit in memory, it should
+consume about 2x the size of your target column (you can reduce this
+further by using the `keep_last_n` argument in the `fit` method).
+
+```python
+local_fcst = fcst.to_local()
+local_preds = local_fcst.predict(10)
+# we don't check the dtype because sometimes these are arrow dtypes
+# or different precisions of float
+pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
 ```
 
 ### Cross validation
@@ -279,14 +297,12 @@ which are just wrappers around the native implementations.
 
 ```python
 from mlforecast.distributed.models.spark.lgb import SparkLGBMForecast
+from mlforecast.distributed.models.spark.xgb import SparkXGBForecast
+```
 
-models = [SparkLGBMForecast()]
-try:
-    from xgboost.spark import SparkXGBRegressor
-    from mlforecast.distributed.models.spark.xgb import SparkXGBForecast
-    models.append(SparkXGBForecast())
-except ModuleNotFoundError:  # py < 38
-    pass
+
+```python
+models = [SparkLGBMForecast(), SparkXGBForecast()]
 ```
 
 ### Training
@@ -310,18 +326,18 @@ fcst.fit(
 ### Forecasting
 
 ```python
-preds = fcst.predict(14)
+preds = fcst.predict(14).toPandas()
 ```
 
 
 ```python
-preds.toPandas().head()
+preds.head()
 ```
 
 |     | unique_id | ds         | SparkLGBMForecast | SparkXGBForecast |
 |-----|-----------|------------|-------------------|------------------|
-| 0   | id_00     | 2001-05-15 | 422.139843        | 417.848083       |
-| 1   | id_00     | 2001-05-16 | 497.180212        | 503.371185       |
+| 0   | id_00     | 2001-05-15 | 422.139843        | 424.463562       |
+| 1   | id_00     | 2001-05-16 | 497.180212        | 505.564667       |
 | 2   | id_00     | 2001-05-17 | 13.062478         | 18.514997        |
 | 3   | id_00     | 2001-05-18 | 100.601041        | 109.317825       |
 | 4   | id_00     | 2001-05-19 | 180.707848        | 181.431747       |
@@ -375,8 +391,22 @@ preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_
 pd.testing.assert_frame_equal(preds, preds2)
 ```
 
-``` text
-                                                                                
+### Converting to local
+
+Another option to store your distributed forecast object is to first
+turn it into a local one and then save it. Keep in mind that in order to
+do that all the remote data that is stored from the series will have to
+be pulled into a single machine (the scheduler in dask, driver in spark,
+etc.), so you have to be sure that it’ll fit in memory, it should
+consume about 2x the size of your target column (you can reduce this
+further by using the `keep_last_n` argument in the `fit` method).
+
+```python
+local_fcst = fcst.to_local()
+local_preds = local_fcst.predict(10)
+# we don't check the dtype because sometimes these are arrow dtypes
+# or different precisions of float
+pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
 ```
 
 ### Cross validation
@@ -504,8 +534,8 @@ preds.head()
 
 |     | unique_id | ds         | RayLGBMForecast | RayXGBForecast |
 |-----|-----------|------------|-----------------|----------------|
-| 0   | id_00     | 2001-05-15 | 422.139843      | 418.110107     |
-| 1   | id_00     | 2001-05-16 | 497.180212      | 502.229492     |
+| 0   | id_00     | 2001-05-15 | 422.139843      | 424.179993     |
+| 1   | id_00     | 2001-05-16 | 497.180212      | 501.030060     |
 | 2   | id_00     | 2001-05-17 | 13.062478       | 18.364956      |
 | 3   | id_00     | 2001-05-18 | 100.601041      | 102.921730     |
 | 4   | id_00     | 2001-05-19 | 180.707848      | 183.109436     |
@@ -549,6 +579,24 @@ We can verify that this object produces the same results.
 preds = fa.as_pandas(fcst.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
+```
+
+### Converting to local
+
+Another option to store your distributed forecast object is to first
+turn it into a local one and then save it. Keep in mind that in order to
+do that all the remote data that is stored from the series will have to
+be pulled into a single machine (the scheduler in dask, driver in spark,
+etc.), so you have to be sure that it’ll fit in memory, it should
+consume about 2x the size of your target column (you can reduce this
+further by using the `keep_last_n` argument in the `fit` method).
+
+```python
+local_fcst = fcst.to_local()
+local_preds = local_fcst.predict(10)
+# we don't check the dtype because sometimes these are arrow dtypes
+# or different precisions of float
+pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
 ```
 
 ### Cross validation

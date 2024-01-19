@@ -8,7 +8,7 @@ title: Distributed Forecast
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L57"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L60"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast
@@ -32,7 +32,7 @@ Multi backend distributed pipeline
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L383"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L386"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.fit
@@ -61,7 +61,7 @@ Apply the feature engineering and train the models.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L459"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L462"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.predict
@@ -89,7 +89,64 @@ Compute the predictions for the next `horizon` steps.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L287"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L645"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### DistributedMLForecast.save
+
+> ``` text
+>  DistributedMLForecast.save (path:str)
+> ```
+
+Save forecast object
+
+|             | **Type** | **Details**                               |
+|-------------|----------|-------------------------------------------|
+| path        | str      | Directory where artifacts will be stored. |
+| **Returns** | **None** |                                           |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L678"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### DistributedMLForecast.load
+
+> ``` text
+>  DistributedMLForecast.load (path:str, engine)
+> ```
+
+Load forecast object
+
+|             | **Type**                  | **Details**                                                             |
+|--------|---------------------------|-------------------------------------|
+| path        | str                       | Directory with saved artifacts.                                         |
+| engine      | fugue execution engine    | Dask Client, Spark Session, etc to use for the distributed computation. |
+| **Returns** | **DistributedMLForecast** |                                                                         |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L715"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### DistributedMLForecast.to_local
+
+> ``` text
+>  DistributedMLForecast.to_local ()
+> ```
+
+Convert this distributed forecast object into a local one
+
+This pulls all the data from the remote machines, so you have to be sure
+that it fits in the scheduler/driver. If you’re not sure use the save
+method instead.
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L290"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.preprocess
@@ -119,7 +176,7 @@ Add the features to `data`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L524"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L527"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.cross_validation
