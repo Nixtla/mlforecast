@@ -39,6 +39,7 @@ from mlforecast.core import (
     TimeSeries,
     _name_models,
 )
+
 from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
