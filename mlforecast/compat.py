@@ -9,7 +9,7 @@ try:
     import coreforecast.scalers as core_scalers
     from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 
-    from mlforecast.lag_transforms import BaseLagTransform, Lag
+    from mlforecast.lag_transforms import _BaseLagTransform, Lag
 
     CORE_INSTALLED = True
 except ImportError:
@@ -17,7 +17,7 @@ except ImportError:
     core_scalers = None
     CoreGroupedArray = None
 
-    class BaseLagTransform:
+    class _BaseLagTransform:
         ...
 
     Lag = None

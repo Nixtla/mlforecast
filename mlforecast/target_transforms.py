@@ -144,13 +144,17 @@ class AutoDifferences(BaseGroupedArrayTargetTransform):
         return GroupedArray(self.scaler_.fit_transform(core_ga), ga.indptr)
 
     def update(self, ga: GroupedArray) -> GroupedArray:
-        raise NotImplementedError
+        core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
+        return GroupedArray(self.scaler_.update(core_ga), ga.indptr)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.inverse_transform(core_ga), ga.indptr)
 
-# %% ../nbs/target_transforms.ipynb 11
+    def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
+        raise NotImplementedError
+
+# %% ../nbs/target_transforms.ipynb 12
 class AutoSeasonalDifferences(AutoDifferences):
     """Find and apply the optimal number of seasonal differences to each group.
 
@@ -174,10 +178,7 @@ class AutoSeasonalDifferences(AutoDifferences):
             n_seasons=n_seasons,
         )
 
-    def update(self, ga: GroupedArray) -> GroupedArray:
-        raise NotImplementedError
-
-# %% ../nbs/target_transforms.ipynb 12
+# %% ../nbs/target_transforms.ipynb 14
 class AutoSeasonalityAndDifferences(AutoDifferences):
     """Find the length of the seasonal period and apply the optimal number of differences to each group.
 
@@ -201,10 +202,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
             n_seasons=n_seasons,
         )
 
-    def update(self, ga: GroupedArray) -> GroupedArray:
-        raise NotImplementedError
-
-# %% ../nbs/target_transforms.ipynb 13
+# %% ../nbs/target_transforms.ipynb 16
 class BaseLocalScaler(BaseGroupedArrayTargetTransform):
     scaler_factory: type
 
@@ -245,7 +243,7 @@ class BaseLocalScaler(BaseGroupedArrayTargetTransform):
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
         return self.inverse_transform(ga)
 
-# %% ../nbs/target_transforms.ipynb 15
+# %% ../nbs/target_transforms.ipynb 18
 class LocalStandardScaler(BaseLocalScaler):
     """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
 
@@ -253,13 +251,13 @@ class LocalStandardScaler(BaseLocalScaler):
         core_scalers.LocalStandardScaler if CORE_INSTALLED else StandardScaler
     )
 
-# %% ../nbs/target_transforms.ipynb 17
+# %% ../nbs/target_transforms.ipynb 20
 class LocalMinMaxScaler(BaseLocalScaler):
     """Scales each serie to be in the [0, 1] interval."""
 
     scaler_factory = core_scalers.LocalMinMaxScaler if CORE_INSTALLED else MinMaxScaler
 
-# %% ../nbs/target_transforms.ipynb 19
+# %% ../nbs/target_transforms.ipynb 22
 class LocalRobustScaler(BaseLocalScaler):
     """Scaler robust to outliers.
 
@@ -272,7 +270,7 @@ class LocalRobustScaler(BaseLocalScaler):
     def __init__(self, scale: str):
         self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale) if CORE_INSTALLED else RobustScaler(scale)  # type: ignore
 
-# %% ../nbs/target_transforms.ipynb 22
+# %% ../nbs/target_transforms.ipynb 25
 class LocalBoxCox(BaseLocalScaler):
     """Finds the optimum lambda for each serie and applies the Box-Cox transformation"""
 
@@ -292,7 +290,7 @@ class LocalBoxCox(BaseLocalScaler):
         lmbdas = np.repeat(lmbdas, sizes, axis=0)
         return GroupedArray(inv_boxcox1p(ga.data, lmbdas), ga.indptr)
 
-# %% ../nbs/target_transforms.ipynb 24
+# %% ../nbs/target_transforms.ipynb 27
 class GlobalSklearnTransformer(BaseTargetTransform):
     """Applies the same scikit-learn transformer to all series."""
 

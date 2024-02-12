@@ -22,8 +22,10 @@ except ImportError:
 from sklearn.base import BaseEstimator
 
 # %% ../nbs/lag_transforms.ipynb 4
-class BaseLagTransform(BaseEstimator):
-    _core_tfm: core_tfms.BaseLagTransform
+class _BaseLagTransform(BaseEstimator):
+    _core_tfm: getattr(
+        core_tfms, "_BaseLagTransform", getattr(core_tfms, "BaseLagTransform", None)
+    )
 
     def transform(self, ga: CoreGroupedArray) -> np.ndarray:
         return self._core_tfm.transform(ga)
@@ -32,7 +34,7 @@ class BaseLagTransform(BaseEstimator):
         return self._core_tfm.update(ga)
 
 # %% ../nbs/lag_transforms.ipynb 5
-class Lag(BaseLagTransform):
+class Lag(_BaseLagTransform):
     def __init__(self, lag: int):
         self.lag = lag
         self._core_tfm = core_tfms.Lag(lag=lag)
@@ -41,7 +43,7 @@ class Lag(BaseLagTransform):
         return isinstance(other, Lag) and self.lag == other.lag
 
 # %% ../nbs/lag_transforms.ipynb 6
-class RollingBase(BaseLagTransform):
+class RollingBase(_BaseLagTransform):
     "Rolling statistic"
 
     def __init__(self, window_size: int, min_samples: Optional[int] = None):
@@ -95,7 +97,7 @@ class RollingQuantile(RollingBase):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 9
-class SeasonalRollingBase(BaseLagTransform):
+class _SeasonalRollingBase(_BaseLagTransform):
     """Rolling statistic over seasonal periods"""
 
     def __init__(
@@ -126,23 +128,23 @@ class SeasonalRollingBase(BaseLagTransform):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 10
-class SeasonalRollingMean(SeasonalRollingBase):
+class SeasonalRollingMean(_SeasonalRollingBase):
     tfm_name = "SeasonalRollingMean"
 
 
-class SeasonalRollingStd(SeasonalRollingBase):
+class SeasonalRollingStd(_SeasonalRollingBase):
     tfm_name = "SeasonalRollingStd"
 
 
-class SeasonalRollingMin(SeasonalRollingBase):
+class SeasonalRollingMin(_SeasonalRollingBase):
     tfm_name = "SeasonalRollingMin"
 
 
-class SeasonalRollingMax(SeasonalRollingBase):
+class SeasonalRollingMax(_SeasonalRollingBase):
     tfm_name = "SeasonalRollingMax"
 
 
-class SeasonalRollingQuantile(SeasonalRollingBase):
+class SeasonalRollingQuantile(_SeasonalRollingBase):
     def __init__(
         self,
         p: float,
@@ -168,7 +170,7 @@ class SeasonalRollingQuantile(SeasonalRollingBase):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 12
-class ExpandingBase(BaseLagTransform):
+class _ExpandingBase(_BaseLagTransform):
     """Expanding statistic"""
 
     def __init__(self):
@@ -179,23 +181,23 @@ class ExpandingBase(BaseLagTransform):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 13
-class ExpandingMean(ExpandingBase):
+class ExpandingMean(_ExpandingBase):
     tfm_name = "ExpandingMean"
 
 
-class ExpandingStd(ExpandingBase):
+class ExpandingStd(_ExpandingBase):
     tfm_name = "ExpandingStd"
 
 
-class ExpandingMin(ExpandingBase):
+class ExpandingMin(_ExpandingBase):
     tfm_name = "ExpandingMin"
 
 
-class ExpandingMax(ExpandingBase):
+class ExpandingMax(_ExpandingBase):
     tfm_name = "ExpandingMax"
 
 
-class ExpandingQuantile(ExpandingBase):
+class ExpandingQuantile(_ExpandingBase):
     def __init__(self, p: float):
         self.p = p
 
@@ -204,7 +206,7 @@ class ExpandingQuantile(ExpandingBase):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 15
-class ExponentiallyWeightedMean(BaseLagTransform):
+class ExponentiallyWeightedMean(_BaseLagTransform):
     """Exponentially weighted average"""
 
     def __init__(self, alpha: float):
