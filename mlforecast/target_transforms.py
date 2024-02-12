@@ -8,7 +8,7 @@ __all__ = ['BaseTargetTransform', 'BaseGroupedArrayTargetTransform', 'Difference
 # %% ../nbs/target_transforms.ipynb 3
 import abc
 import copy
-from typing import Iterable, List, Optional, Union
+from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
