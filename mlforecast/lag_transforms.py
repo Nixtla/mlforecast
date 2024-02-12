@@ -24,10 +24,6 @@ from sklearn.base import BaseEstimator
 
 # %% ../nbs/lag_transforms.ipynb 4
 class BaseLagTransform(BaseEstimator):
-    _core_tfm: getattr(
-        core_tfms, "BaseLagTransform", getattr(core_tfms, "BaseLagTransform", None)
-    )
-
     def _set_core_tfm(self, lag: int) -> "BaseLagTransform":
         init_args = {
             k: getattr(self, k) for k in inspect.signature(self.__init__).parameters
