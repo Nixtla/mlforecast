@@ -43,7 +43,7 @@ class Lag(_BaseLagTransform):
         return isinstance(other, Lag) and self.lag == other.lag
 
 # %% ../nbs/lag_transforms.ipynb 6
-class RollingBase(_BaseLagTransform):
+class _RollingBase(_BaseLagTransform):
     "Rolling statistic"
 
     def __init__(self, window_size: int, min_samples: Optional[int] = None):
@@ -66,23 +66,23 @@ class RollingBase(_BaseLagTransform):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 7
-class RollingMean(RollingBase):
+class RollingMean(_RollingBase):
     tfm_name = "RollingMean"
 
 
-class RollingStd(RollingBase):
+class RollingStd(_RollingBase):
     tfm_name = "RollingStd"
 
 
-class RollingMin(RollingBase):
+class RollingMin(_RollingBase):
     tfm_name = "RollingMin"
 
 
-class RollingMax(RollingBase):
+class RollingMax(_RollingBase):
     tfm_name = "RollingMax"
 
 
-class RollingQuantile(RollingBase):
+class RollingQuantile(_RollingBase):
     def __init__(self, p: float, window_size: int, min_samples: Optional[int] = None):
         super().__init__(window_size=window_size, min_samples=min_samples)
         self.p = p
@@ -97,7 +97,7 @@ class RollingQuantile(RollingBase):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 9
-class _SeasonalRollingBase(_BaseLagTransform):
+class _Seasonal_RollingBase(_BaseLagTransform):
     """Rolling statistic over seasonal periods"""
 
     def __init__(
@@ -128,23 +128,23 @@ class _SeasonalRollingBase(_BaseLagTransform):
         return self
 
 # %% ../nbs/lag_transforms.ipynb 10
-class SeasonalRollingMean(_SeasonalRollingBase):
+class SeasonalRollingMean(_Seasonal_RollingBase):
     tfm_name = "SeasonalRollingMean"
 
 
-class SeasonalRollingStd(_SeasonalRollingBase):
+class SeasonalRollingStd(_Seasonal_RollingBase):
     tfm_name = "SeasonalRollingStd"
 
 
-class SeasonalRollingMin(_SeasonalRollingBase):
+class SeasonalRollingMin(_Seasonal_RollingBase):
     tfm_name = "SeasonalRollingMin"
 
 
-class SeasonalRollingMax(_SeasonalRollingBase):
+class SeasonalRollingMax(_Seasonal_RollingBase):
     tfm_name = "SeasonalRollingMax"
 
 
-class SeasonalRollingQuantile(_SeasonalRollingBase):
+class SeasonalRollingQuantile(_Seasonal_RollingBase):
     def __init__(
         self,
         p: float,
