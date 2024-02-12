@@ -11,7 +11,7 @@ import numpy as np
 from numba import njit
 from window_ops.shift import shift_array
 
-from .compat import _BaseLagTransform, CoreGroupedArray
+from .compat import BaseLagTransform, CoreGroupedArray
 
 # %% ../nbs/grouped_array.ipynb 2
 @njit(nogil=True)
@@ -197,7 +197,7 @@ class GroupedArray:
 
     def apply_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]],
+        transforms: Dict[str, Union[Tuple[Any, ...], BaseLagTransform]],
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:
         """Apply the transformations using the main process.
@@ -206,10 +206,10 @@ class GroupedArray:
         """
         results = {}
         offset = 1 if updates_only else 0
-        if any(isinstance(tfm, _BaseLagTransform) for tfm in transforms.values()):
+        if any(isinstance(tfm, BaseLagTransform) for tfm in transforms.values()):
             core_ga = CoreGroupedArray(self.data, self.indptr)
         for tfm_name, tfm in transforms.items():
-            if isinstance(tfm, _BaseLagTransform):
+            if isinstance(tfm, BaseLagTransform):
                 if updates_only:
                     results[tfm_name] = tfm.update(core_ga)
                 else:
@@ -223,7 +223,7 @@ class GroupedArray:
 
     def apply_multithreaded_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]],
+        transforms: Dict[str, Union[Tuple[Any, ...], BaseLagTransform]],
         num_threads: int,
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:
@@ -237,7 +237,7 @@ class GroupedArray:
         numba_tfms = {}
         core_tfms = {}
         for name, tfm in transforms.items():
-            if isinstance(tfm, _BaseLagTransform):
+            if isinstance(tfm, BaseLagTransform):
                 core_tfms[name] = tfm
             else:
                 numba_tfms[name] = tfm

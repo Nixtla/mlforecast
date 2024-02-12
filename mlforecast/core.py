@@ -28,7 +28,7 @@ from utilsforecast.compat import (
 )
 from utilsforecast.validation import validate_format, validate_freq
 
-from .compat import CORE_INSTALLED, _BaseLagTransform, Lag
+from .compat import CORE_INSTALLED, BaseLagTransform, Lag
 from .grouped_array import GroupedArray
 from mlforecast.target_transforms import (
     BaseGroupedArrayTargetTransform,
@@ -81,7 +81,7 @@ def _pascal2camel(pascal_str: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", pascal_str).lower()
 
 # %% ../nbs/core.ipynb 14
-def _build_lag_transform_name(tfm: _BaseLagTransform, lag: int) -> str:
+def _build_lag_transform_name(tfm: BaseLagTransform, lag: int) -> str:
     tfm_params = list(inspect.signature(tfm.__init__).parameters.items())  # type: ignore
     tfm_name = f"{_pascal2camel(tfm.__class__.__name__)}_lag{lag}"
     changed_params = [
@@ -95,7 +95,7 @@ def _build_lag_transform_name(tfm: _BaseLagTransform, lag: int) -> str:
 
 # %% ../nbs/core.ipynb 16
 def _build_transform_name(
-    tfm: Union[Callable, _BaseLagTransform], lag: int, *args
+    tfm: Union[Callable, BaseLagTransform], lag: int, *args
 ) -> str:
     if callable(tfm):
         name = _build_function_transform_name(tfm, lag, *args)
@@ -159,7 +159,7 @@ LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 TargetTransform = Union[BaseTargetTransform, BaseGroupedArrayTargetTransform]
-Transforms = Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]]
+Transforms = Dict[str, Union[Tuple[Any, ...], BaseLagTransform]]
 
 # %% ../nbs/core.ipynb 21
 def _parse_transforms(
@@ -177,7 +177,7 @@ def _parse_transforms(
             transforms[f"lag{lag}"] = (lag, _identity)
     for lag in lag_transforms.keys():
         for tfm in lag_transforms[lag]:
-            if isinstance(tfm, _BaseLagTransform):
+            if isinstance(tfm, BaseLagTransform):
                 tfm_name = namer(tfm, lag)
                 transforms[tfm_name] = clone(tfm)._set_core_tfm(lag)
             else:
