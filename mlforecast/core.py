@@ -6,7 +6,6 @@ __all__ = ['TimeSeries']
 # %% ../nbs/core.ipynb 3
 import copy
 import inspect
-import re
 import reprlib
 import warnings
 from collections import Counter, OrderedDict
@@ -18,7 +17,6 @@ import fsspec
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
-from numba import njit
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import (
     DataFrame,
@@ -28,10 +26,10 @@ from utilsforecast.compat import (
 )
 from utilsforecast.validation import validate_format, validate_freq
 
-from .compat import CORE_INSTALLED, BaseLagTransform, Lag
 from .grouped_array import GroupedArray
+from .lag_transforms import _BaseLagTransform, Lag
 from mlforecast.target_transforms import (
-    BaseGroupedArrayTargetTransform,
+    _BaseGroupedArrayTargetTransform,
     BaseTargetTransform,
 )
 from .utils import _ShortSeriesException, _ensure_shallow_copy
@@ -77,25 +75,12 @@ def _build_function_transform_name(tfm: Callable, lag: int, *args) -> str:
     return tfm_name
 
 # %% ../nbs/core.ipynb 13
-def _pascal2camel(pascal_str: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", pascal_str).lower()
+def _build_lag_transform_name(tfm: _BaseLagTransform, lag: int) -> str:
+    return tfm._get_name(lag)
 
-# %% ../nbs/core.ipynb 14
-def _build_lag_transform_name(tfm: BaseLagTransform, lag: int) -> str:
-    tfm_params = list(inspect.signature(tfm.__init__).parameters.items())  # type: ignore
-    tfm_name = f"{_pascal2camel(tfm.__class__.__name__)}_lag{lag}"
-    changed_params = [
-        f"{name}{getattr(tfm, name)}"
-        for name, arg in tfm_params
-        if arg.default != getattr(tfm, name)
-    ]
-    if changed_params:
-        tfm_name += "_" + "_".join(changed_params)
-    return tfm_name
-
-# %% ../nbs/core.ipynb 16
+# %% ../nbs/core.ipynb 15
 def _build_transform_name(
-    tfm: Union[Callable, BaseLagTransform], lag: int, *args
+    tfm: Union[Callable, _BaseLagTransform], lag: int, *args
 ) -> str:
     if callable(tfm):
         name = _build_function_transform_name(tfm, lag, *args)
@@ -103,7 +88,7 @@ def _build_transform_name(
         name = _build_lag_transform_name(tfm, lag)
     return name
 
-# %% ../nbs/core.ipynb 17
+# %% ../nbs/core.ipynb 16
 def _name_models(current_names):
     ctr = Counter(current_names)
     if not ctr:
@@ -121,47 +106,24 @@ def _name_models(current_names):
         names[-i] = name
     return names
 
-# %% ../nbs/core.ipynb 19
-@njit
-def _identity(x: np.ndarray) -> np.ndarray:
-    """Do nothing to the input."""
-    return x
-
-
+# %% ../nbs/core.ipynb 18
 def _as_tuple(x):
     """Return a tuple from the input."""
     if isinstance(x, tuple):
         return x
     return (x,)
 
-
-@njit
-def _expand_target(data, indptr, max_horizon):
-    out = np.empty((data.size, max_horizon), dtype=data.dtype)
-    n_series = len(indptr) - 1
-    n = 0
-    for i in range(n_series):
-        serie = data[indptr[i] : indptr[i + 1]]
-        for j in range(serie.size):
-            upper = min(serie.size - j, max_horizon)
-            for k in range(upper):
-                out[n, k] = serie[j + k]
-            for k in range(upper, max_horizon):
-                out[n, k] = np.nan
-            n += 1
-    return out
-
-# %% ../nbs/core.ipynb 20
+# %% ../nbs/core.ipynb 19
 Freq = Union[int, str, pd.offsets.BaseOffset]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
 DateFeature = Union[str, Callable]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
-TargetTransform = Union[BaseTargetTransform, BaseGroupedArrayTargetTransform]
-Transforms = Dict[str, Union[Tuple[Any, ...], BaseLagTransform]]
+TargetTransform = Union[BaseTargetTransform, _BaseGroupedArrayTargetTransform]
+Transforms = Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]]
 
-# %% ../nbs/core.ipynb 21
+# %% ../nbs/core.ipynb 20
 def _parse_transforms(
     lags: Lags,
     lag_transforms: LagTransforms,
@@ -171,13 +133,10 @@ def _parse_transforms(
     if namer is None:
         namer = _build_transform_name
     for lag in lags:
-        if CORE_INSTALLED:
-            transforms[f"lag{lag}"] = Lag(lag)
-        else:
-            transforms[f"lag{lag}"] = (lag, _identity)
+        transforms[f"lag{lag}"] = Lag(lag)
     for lag in lag_transforms.keys():
         for tfm in lag_transforms[lag]:
-            if isinstance(tfm, BaseLagTransform):
+            if isinstance(tfm, _BaseLagTransform):
                 tfm_name = namer(tfm, lag)
                 transforms[tfm_name] = clone(tfm)._set_core_tfm(lag)
             else:
@@ -187,7 +146,7 @@ def _parse_transforms(
                 transforms[tfm_name] = (lag, tfm, *args)
     return transforms
 
-# %% ../nbs/core.ipynb 22
+# %% ../nbs/core.ipynb 21
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
@@ -218,7 +177,7 @@ class TimeSeries:
         self.target_transforms = target_transforms
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
-                if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                     tfm.set_num_threads(num_threads)
         for feature in self.date_features:
             if callable(feature) and feature.__name__ == "<lambda>":
@@ -232,6 +191,11 @@ class TimeSeries:
             namer=lag_transforms_namer,
         )
         self.ga: GroupedArray
+
+    def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
+        return {
+            k: v for k, v in self.transforms.items() if isinstance(v, _BaseLagTransform)
+        }
 
     @property
     def _date_feature_names(self):
@@ -296,7 +260,7 @@ class TimeSeries:
             self._restore_idxs = None
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
-                if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                     try:
                         ga = tfm.fit_transform(ga)
                     except _ShortSeriesException as exc:
@@ -522,7 +486,7 @@ class TimeSeries:
         )
         self.test_dates.append(self.curr_dates)
 
-        features = self._compute_transforms(self.transforms, updates_only=True)
+        features = self._compute_transforms(self._transforms, updates_only=True)
 
         for feature in self.date_features:
             feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
@@ -566,12 +530,17 @@ class TimeSeries:
 
     def _predict_setup(self) -> None:
         self.ga = copy.copy(self._ga)
+        self._transforms = copy.deepcopy(self.transforms)
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
         else:
             self.curr_dates = self.last_dates.copy()
         if self._idxs is not None:
             self.ga = self.ga.take(self._idxs)
+            for name, tfm in self._transforms.items():
+                if hasattr(tfm, "take"):
+                    tfm = tfm.take(self._idxs)
+                self._transforms[name] = tfm
             self.curr_dates = self.curr_dates[self._idxs]
         self.test_dates: List[Union[pd.Index, pl_Series]] = []
         self.y_pred = []
@@ -663,7 +632,7 @@ class TimeSeries:
 
     def _has_ga_target_tfms(self):
         return any(
-            isinstance(tfm, BaseGroupedArrayTargetTransform)
+            isinstance(tfm, _BaseGroupedArrayTargetTransform)
             for tfm in self.target_transforms
         )
 
@@ -762,18 +731,18 @@ class TimeSeries:
                 ]
                 indptr = np.arange(0, horizon * (len(self._uids) + 1), horizon)
             for tfm in self.target_transforms[::-1]:
-                if isinstance(tfm, BaseGroupedArrayTargetTransform):
-                    tfm.idxs = self._idxs
+                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                    if self._idxs is not None:
+                        tfm = tfm.take(self._idxs)
                     for col in model_cols:
                         ga = GroupedArray(
                             preds[col].to_numpy().astype(self.ga.data.dtype), indptr
                         )
                         ga = tfm.inverse_transform(ga)
                         preds = ufp.assign_columns(preds, col, ga.data)
-                    tfm.idxs = None
                 else:
                     preds = tfm.inverse_transform(preds)
-        del self._uids, self._idxs, self._static_features
+        del self._uids, self._idxs, self._static_features, self._transforms
         return preds
 
     def save(self, path: Union[str, Path]) -> None:
@@ -836,7 +805,7 @@ class TimeSeries:
             if self._has_ga_target_tfms():
                 indptr = np.append(0, id_counts["counts"]).cumsum()
             for tfm in self.target_transforms:
-                if isinstance(tfm, BaseGroupedArrayTargetTransform):
+                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                     ga = GroupedArray(values, indptr)
                     ga = tfm.update(ga)
                     df = ufp.assign_columns(df, self.target_col, ga.data)
