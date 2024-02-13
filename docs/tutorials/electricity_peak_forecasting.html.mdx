@@ -1,10 +1,11 @@
 ---
-description: In this example we will show how to perform electricity load forecasting
-  on the ERCOT (Texas) market for detecting daily peaks.
+description: >-
+  In this example we will show how to perform electricity load forecasting on
+  the ERCOT (Texas) market for detecting daily peaks.
 output-file: electricity_peak_forecasting.html
 title: Detect Demand Peaks
-
 ---
+
 
 ## Introduction
 
@@ -43,12 +44,10 @@ coincident peak.
 3.  Fit LightGBM model and forecast
 4.  Peak detection
 
-<Tip>
-
-You can use Colab to run this Notebook interactively
-<a href="https://colab.research.google.com/github/Nixtla/mlforecast/blob/main/nbs/examples/electricity_peak_forecasting.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
-
-</Tip>
+> **Tip**
+>
+> You can use Colab to run this Notebook interactively
+> <a href="https://colab.research.google.com/github/Nixtla/mlforecast/blob/main/nbs/examples/electricity_peak_forecasting.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
 
 ## Libraries
 
@@ -121,13 +120,11 @@ from mlforecast.target_transforms import Differences
 
 First, instantiate the model and define the parameters.
 
-<Tip>
-
-In this example we are using the default parameters of the
-`lgb.LGBMRegressor` model, but you can change them to improve the
-forecasting performance.
-
-</Tip>
+> **Tip**
+>
+> In this example we are using the default parameters of the
+> `lgb.LGBMRegressor` model, but you can change them to improve the
+> forecasting performance.
 
 ```python
 models = [
@@ -160,14 +157,12 @@ mlf = MLForecast(
 )
 ```
 
-<Tip>
-
-In this example, we are only using differences and lags to produce
-features. See the [full
-documentation](https://nixtla.github.io/mlforecast/forecast.html#mlforecast)
-to see all available features.
-
-</Tip>
+> **Tip**
+>
+> In this example, we are only using differences and lags to produce
+> features. See the [full
+> documentation](https://nixtla.github.io/mlforecast/forecast.html#mlforecast)
+> to see all available features.
 
 The `cross_validation` method allows the user to simulate multiple
 historic forecasts, greatly simplifying pipelines by replacing for loops
@@ -210,13 +205,11 @@ crossvalidation_df.head()
 | 3   | ERCOT     | 2022-09-01 03:00:00 | 2022-08-31 23:00:00 | 41663.156771 | 42091.768192  |
 | 4   | ERCOT     | 2022-09-01 04:00:00 | 2022-08-31 23:00:00 | 41710.621904 | 42481.403168  |
 
-<Important>
-
-When using `cross_validation` make sure the forecasts are produced at
-the desired timestamps. Check the `cutoff` column which specifices the
-last timestamp before the forecasting window.
-
-</Important>
+> **Important**
+>
+> When using `cross_validation` make sure the forecasts are produced at
+> the desired timestamps. Check the `cutoff` column which specifices the
+> last timestamp before the forecasting window.
 
 ## Peak Detection
 
@@ -266,14 +259,12 @@ plt.close()
 
 ![](/mlforecast/docs/tutorials/../../figs/electricity_peak_forecasting__predicted_peak.png)
 
-<Important>
-
-In this example we only include September. However, MLForecast and
-LightGBM can correctly predict the peaks for the 4 months of 2022. You
-can try this by increasing the `n_windows` parameter of
-`cross_validation` or filtering the `Y_df` dataset.
-
-</Important>
+> **Important**
+>
+> In this example we only include September. However, MLForecast and
+> LightGBM can correctly predict the peaks for the 4 months of 2022. You
+> can try this by increasing the `n_windows` parameter of
+> `cross_validation` or filtering the `Y_df` dataset.
 
 ## Next steps
 

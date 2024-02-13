@@ -1,8 +1,8 @@
 ---
 output-file: target_transforms.html
 title: Target transforms
-
 ---
+
 
 ```python
 import pandas as pd
@@ -18,7 +18,7 @@ from mlforecast.utils import generate_daily_series
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L31"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L32"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### BaseTargetTransform
@@ -32,7 +32,7 @@ Base class used for target transformations.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L51"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L52"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### BaseGroupedArrayTargetTransform
@@ -47,7 +47,7 @@ arrays.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L72"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L77"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### Differences
@@ -75,7 +75,7 @@ transformed = diffs.fit_transform(ga)
 assert diffs.fitted_ == []
 expected = series.copy()
 for d in diffs.differences:
-    expected['y'] -= expected.groupby('unique_id')['y'].shift(d)
+    expected['y'] -= expected.groupby('unique_id', observed=True)['y'].shift(d)
 np.testing.assert_allclose(transformed.data, expected['y'].values)
 
 # fitted differences are restored correctly
@@ -110,6 +110,62 @@ ga = GroupedArray(np.arange(20), np.array([0, 2, 20]))
 test_fail(lambda: diffs.fit_transform(ga), contains="[0]")
 ```
 
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L131"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### AutoDifferences
+
+> ``` text
+>  AutoDifferences (max_diffs:int)
+> ```
+
+Find and apply the optimal number of differences to each serie.
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L158"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### AutoSeasonalDifferences
+
+> ``` text
+>  AutoSeasonalDifferences (season_length:int, max_diffs:int,
+>                           n_seasons:Optional[int]=10)
+> ```
+
+Find and apply the optimal number of seasonal differences to each group.
+
+|               | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                  |
+|------|------------------|-------------------------|-------------------------|
+| season_length | int      |             | Length of the seasonal period.                                                                                                                                                                                                                               |
+| max_diffs     | int      |             | Maximum number of differences to apply.                                                                                                                                                                                                                      |
+| n_seasons     | Optional | 10          | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L182"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### AutoSeasonalityAndDifferences
+
+> ``` text
+>  AutoSeasonalityAndDifferences (max_season_length:int, max_diffs:int,
+>                                 n_seasons:Optional[int]=10)
+> ```
+
+Find the length of the seasonal period and apply the optimal number of
+differences to each group.
+
+|                   | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                      |
+|------|------------------|-------------------------|-------------------------|
+| max_season_length | int      |             | Maximum length of the seasonal period.                                                                                                                                                                                                                           |
+| max_diffs         | int      |             | Maximum number of differences to apply.                                                                                                                                                                                                                          |
+| n_seasons         | Optional | 10          | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `max_season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
 
 ```python
 def test_scaler(sc, series):
@@ -137,7 +193,7 @@ def test_scaler(sc, series):
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L167"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L247"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalStandardScaler
@@ -156,7 +212,7 @@ test_scaler(LocalStandardScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L175"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L255"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalMinMaxScaler
@@ -174,7 +230,7 @@ test_scaler(LocalMinMaxScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L181"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L261"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalRobustScaler
@@ -201,7 +257,7 @@ test_scaler(LocalRobustScaler(scale='mad'), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L194"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L274"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalBoxCox
@@ -220,7 +276,7 @@ test_scaler(LocalBoxCox(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L214"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L294"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### GlobalSklearnTransformer
@@ -252,7 +308,7 @@ prep = fcst.preprocess(series, dropna=False)
 expected = (
     pd.Series(
         sk_boxcox.fit_transform(series[['y']])[:, 0], index=series['unique_id']
-    ).groupby('unique_id')
+    ).groupby('unique_id', observed=True)
     .diff()
     .values
 )

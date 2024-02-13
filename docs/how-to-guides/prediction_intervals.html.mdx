@@ -1,19 +1,15 @@
 ---
-description: In this example, we'll implement prediction intervals
+description: 'In this example, we''ll implement prediction intervals'
 output-file: prediction_intervals.html
 title: Probabilistic forecasting
-
 ---
 
-<Warning>
 
-### Prerequesites
-
-This tutorial assumes basic familiarity with MLForecast. For a minimal
-example visit the [Quick
-Start](https://nixtla.github.io/mlforecast/docs/quick_start_local.html)
-
-</Warning>
+> **Prerequesites**
+>
+> This tutorial assumes basic familiarity with MLForecast. For a minimal
+> example visit the [Quick
+> Start](https://nixtla.github.io/mlforecast/docs/quick_start_local.html)
 
 ## Introduction
 
@@ -40,25 +36,17 @@ have a good understanding of how to add probabilistic intervals to
 learn how to generate plots with the historical data, the point
 forecasts, and the prediction intervals.
 
-<Important>
+> **Important**
+>
+> Although the terms are often confused, prediction intervals are not
+> the same as [confidence
+> intervals](https://robjhyndman.com/hyndsight/intervals/).
 
-### Important
-
-Although the terms are often confused, prediction intervals are not the
-same as [confidence
-intervals](https://robjhyndman.com/hyndsight/intervals/).
-
-</Important>
-
-<Warning>
-
-### Warning
-
-In practice, most prediction intervals are too narrow since models do
-not account for all sources of uncertainty. A discussion about this can
-be found [here](https://robjhyndman.com/hyndsight/narrow-pi/).
-
-</Warning>
+> **Warning**
+>
+> In practice, most prediction intervals are too narrow since models do
+> not account for all sources of uncertainty. A discussion about this
+> can be found [here](https://robjhyndman.com/hyndsight/narrow-pi/).
 
 **Outline:**
 
@@ -67,12 +55,10 @@ be found [here](https://robjhyndman.com/hyndsight/narrow-pi/).
 3.  Train models
 4.  Plot prediction intervals
 
-<Tip>
-
-You can use Colab to run this Notebook interactively
-<a href="https://colab.research.google.com/github/Nixtla/mlforecast/blob/main/nbs/docs/prediction_intervals.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
-
-</Tip>
+> **Tip**
+>
+> You can use Colab to run this Notebook interactively
+> <a href="https://colab.research.google.com/github/Nixtla/mlforecast/blob/main/nbs/docs/prediction_intervals.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
 
 ## Install libraries
 
