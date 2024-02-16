@@ -151,6 +151,10 @@ class DistributedMLForecast:
                 static_features=static_features,
                 keep_last_n=keep_last_n,
             )
+            core_tfms = ts._get_core_lag_tfms()
+            if core_tfms:
+                # populate the stats needed for the updates
+                ts._compute_transforms(core_tfms, updates_only=False)
             ts.as_numpy = False
             return [
                 [
@@ -749,6 +753,19 @@ class DistributedMLForecast:
         uids = possibly_concat_indices([ts.uids for ts in all_ts])
         last_dates = possibly_concat_indices([ts.last_dates for ts in all_ts])
         statics = ufp.vertical_concat([ts.static_features_ for ts in all_ts])
+        core_tfms = [ts._get_core_lag_tfms() for ts in all_ts]
+        combined_core_tfms = {}
+        if core_tfms[0]:  # at least one core_tfm
+            for name in core_tfms[0].keys():
+                first_tfm = core_tfms[0][name]
+                if not hasattr(first_tfm._core_tfm, "stats_"):
+                    combined_tfm = first_tfm
+                else:
+                    combined_tfm = copy.deepcopy(first_tfm)
+                    combined_tfm._core_tfm.stats_ = np.vstack(
+                        [tfm[name]._core_tfm.stats_ for tfm in core_tfms]
+                    )
+                combined_core_tfms[name] = combined_tfm
         sizes = np.hstack([np.diff(ts.ga.indptr) for ts in all_ts])
         data = np.hstack([ts.ga.data for ts in all_ts])
         indptr = np.append(0, sizes).cumsum()
@@ -765,6 +782,9 @@ class DistributedMLForecast:
             last_dates = last_dates[sort_idxs]
             statics = ufp.take_rows(statics, sort_idxs)
             statics = ufp.drop_index_if_pandas(statics)
+            for tfm in combined_core_tfms:
+                if hasattr(tfm, "stats_"):
+                    tfm.stats_ = tfm.stats_[sort_idxs]
             old_data = data.copy()
             old_indptr = indptr.copy()
             indptr = np.append(0, sizes[sort_idxs]).cumsum()
@@ -782,6 +802,7 @@ class DistributedMLForecast:
         ts.last_dates = last_dates
         ts.ga = ga
         ts.static_features_ = statics
+        ts.transforms.update(combined_core_tfms)
         fcst = MLForecast(models=self.models_, freq=ts.freq)
         fcst.ts = ts
         fcst.models_ = self.models_

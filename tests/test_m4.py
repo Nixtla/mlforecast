@@ -1,5 +1,3 @@
-import os
-
 import lightgbm as lgb
 import pandas as pd
 import pytest
@@ -44,9 +42,9 @@ configs = {
         },
         "metrics": {
             "lgb": {
-                "SMAPE": 10.297590,
-                "MASE": 0.871648,
-                "OWA": 0.462056,
+                "SMAPE": 10.206856,
+                "MASE": 0.861700,
+                "OWA": 0.457511,
             },
             "enet": {
                 "SMAPE": 26.721835,
@@ -58,7 +56,6 @@ configs = {
     "Daily": {
         "lgb_params": {
             "n_estimators": 30,
-            "verbosity": -1,
             "num_leaves": 128,
         },
         "mlf_params": {
@@ -71,9 +68,9 @@ configs = {
         },
         "metrics": {
             "lgb": {
-                "SMAPE": 2.987347,
-                "MASE": 3.204883,
-                "OWA": 0.979305,
+                "SMAPE": 2.984803,
+                "MASE": 3.202900,
+                "OWA": 0.978585,
             },
             "enet": {
                 "SMAPE": 2.989625,
@@ -86,7 +83,6 @@ configs = {
         "lgb_params": {
             "n_estimators": 100,
             "objective": "l1",
-            "verbosity": -1,
             "num_leaves": 256,
         },
         "mlf_params": {
@@ -99,9 +95,9 @@ configs = {
         },
         "metrics": {
             "lgb": {
-                "SMAPE": 8.101391,
-                "MASE": 2.222513,
-                "OWA": 0.842275,
+                "SMAPE": 8.238175,
+                "MASE": 2.222099,
+                "OWA": 0.849666,
             },
             "enet": {
                 "SMAPE": 9.794393,
@@ -114,7 +110,6 @@ configs = {
         "lgb_params": {
             "n_estimators": 100,
             "objective": "l1",
-            "verbosity": -1,
             "num_leaves": 256,
         },
         "mlf_params": {
@@ -127,9 +122,9 @@ configs = {
         },
         "metrics": {
             "lgb": {
-                "SMAPE": 13.253997,
-                "MASE": 3.014702,
-                "OWA": 0.784784,
+                "SMAPE": 13.281131,
+                "MASE": 3.018999,
+                "OWA": 0.786155,
             },
             "enet": {
                 "SMAPE": 15.363430,
@@ -157,13 +152,13 @@ def test_performance(group):
     fcst = MLForecast(
         models={
             "lgb": lgb.LGBMRegressor(
-                force_col_wise=True, verbose=-1, **cfg["lgb_params"]
+                random_state=0, n_jobs=1, verbosity=-1, **cfg["lgb_params"]
             ),
             "enet": ElasticNet(),
         },
         freq=1,
         **cfg["mlf_params"],
-        num_threads=os.cpu_count(),
+        num_threads=2,
     )
     fcst.fit(train)
     preds = fcst.predict(horizon)

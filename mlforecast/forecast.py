@@ -685,12 +685,9 @@ class MLForecast:
                 static_features=self.ts.static_features,
                 keep_last_n=self.ts.keep_last_n,
             )
-            core_tfms = {
-                k: v
-                for k, v in new_ts.transforms.items()
-                if isinstance(v, _BaseLagTransform)
-            }
+            core_tfms = new_ts._get_core_lag_tfms()
             if core_tfms:
+                # populate the stats needed for the updates
                 new_ts._compute_transforms(core_tfms, updates_only=False)
             new_ts.max_horizon = self.ts.max_horizon
             new_ts.as_numpy = self.ts.as_numpy
