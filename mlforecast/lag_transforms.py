@@ -95,20 +95,16 @@ class _RollingBase(_BaseLagTransform):
         self.min_samples = min_samples
 
 # %% ../nbs/lag_transforms.ipynb 8
-class RollingMean(_RollingBase):
-    ...
+class RollingMean(_RollingBase): ...
 
 
-class RollingStd(_RollingBase):
-    ...
+class RollingStd(_RollingBase): ...
 
 
-class RollingMin(_RollingBase):
-    ...
+class RollingMin(_RollingBase): ...
 
 
-class RollingMax(_RollingBase):
-    ...
+class RollingMax(_RollingBase): ...
 
 
 class RollingQuantile(_RollingBase):
@@ -148,20 +144,16 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.min_samples = min_samples
 
 # %% ../nbs/lag_transforms.ipynb 11
-class SeasonalRollingMean(_Seasonal_RollingBase):
-    ...
+class SeasonalRollingMean(_Seasonal_RollingBase): ...
 
 
-class SeasonalRollingStd(_Seasonal_RollingBase):
-    ...
+class SeasonalRollingStd(_Seasonal_RollingBase): ...
 
 
-class SeasonalRollingMin(_Seasonal_RollingBase):
-    ...
+class SeasonalRollingMin(_Seasonal_RollingBase): ...
 
 
-class SeasonalRollingMax(_Seasonal_RollingBase):
-    ...
+class SeasonalRollingMax(_Seasonal_RollingBase): ...
 
 
 class SeasonalRollingQuantile(_Seasonal_RollingBase):
@@ -183,24 +175,19 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
 class _ExpandingBase(_BaseLagTransform):
     """Expanding statistic"""
 
-    def __init__(self):
-        ...
+    def __init__(self): ...
 
 # %% ../nbs/lag_transforms.ipynb 14
-class ExpandingMean(_ExpandingBase):
-    ...
+class ExpandingMean(_ExpandingBase): ...
 
 
-class ExpandingStd(_ExpandingBase):
-    ...
+class ExpandingStd(_ExpandingBase): ...
 
 
-class ExpandingMin(_ExpandingBase):
-    ...
+class ExpandingMin(_ExpandingBase): ...
 
 
-class ExpandingMax(_ExpandingBase):
-    ...
+class ExpandingMax(_ExpandingBase): ...
 
 
 class ExpandingQuantile(_ExpandingBase):
@@ -241,7 +228,7 @@ class Offset(_BaseLagTransform):
         self._core_tfm = clone(self.tfm)._set_core_tfm(lag + self.n)
         return self
 
-# %% ../nbs/lag_transforms.ipynb 21
+# %% ../nbs/lag_transforms.ipynb 20
 class Combine(_BaseLagTransform):
     """Combine two lag transformations using an operator
 
