@@ -16,7 +16,7 @@ dependencies:
   - shap
   - statsmodels
   - window-ops
-  - xgboost
+  - py-xgboost-cpu
   - pip:
     - datasetsforecast
     - nbdev
