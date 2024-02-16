@@ -32,7 +32,7 @@ Base class used for target transformations.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L52"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L50"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### BaseGroupedArrayTargetTransform
@@ -47,7 +47,7 @@ arrays.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L77"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L72"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### Differences
@@ -113,7 +113,7 @@ test_fail(lambda: diffs.fit_transform(ga), contains="[0]")
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L131"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L126"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoDifferences
@@ -148,7 +148,7 @@ Find and apply the optimal number of seasonal differences to each group.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L182"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L187"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoSeasonalityAndDifferences
@@ -193,7 +193,7 @@ def test_scaler(sc, series):
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L247"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L257"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalStandardScaler
@@ -212,7 +212,7 @@ test_scaler(LocalStandardScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L255"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L265"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalMinMaxScaler
@@ -230,7 +230,7 @@ test_scaler(LocalMinMaxScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L261"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L271"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalRobustScaler
@@ -257,7 +257,7 @@ test_scaler(LocalRobustScaler(scale='mad'), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L274"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L284"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalBoxCox
@@ -276,7 +276,7 @@ test_scaler(LocalBoxCox(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L294"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L304"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### GlobalSklearnTransformer
