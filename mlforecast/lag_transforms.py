@@ -10,7 +10,7 @@ __all__ = ['RollingMean', 'RollingStd', 'RollingMin', 'RollingMax', 'RollingQuan
 import copy
 import inspect
 import re
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 import coreforecast.lag_transforms as core_tfms
@@ -58,6 +58,14 @@ class _BaseLagTransform(BaseEstimator):
     def take(self, idxs: np.ndarray) -> "_BaseLagTransform":
         out = copy.deepcopy(self)
         out._core_tfm = self._core_tfm.take(idxs)
+        return out
+
+    @staticmethod
+    def stack(transforms: Sequence["_BaseLagTransform"]) -> "_BaseLagTransform":
+        out = copy.deepcopy(transforms[0])
+        out._core_tfm = transforms[0]._core_tfm.stack(
+            [tfm._core_tfm for tfm in transforms]
+        )
         return out
 
 # %% ../nbs/lag_transforms.ipynb 6

@@ -7,7 +7,7 @@ __all__ = ['BaseTargetTransform', 'Differences', 'AutoDifferences', 'AutoSeasona
 # %% ../nbs/target_transforms.ipynb 3
 import abc
 import copy
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
 import coreforecast.scalers as core_scalers
 import numpy as np
@@ -40,6 +40,9 @@ class BaseTargetTransform(abc.ABC):
     def update(self, df: DataFrame) -> DataFrame:
         raise NotImplementedError
 
+    def stack(transforms: Sequence["BaseTargetTransform"]) -> "BaseTargetTransform":
+        raise NotImplementedError
+
     @abc.abstractmethod
     def fit_transform(self, df: DataFrame) -> DataFrame: ...
 
@@ -68,8 +71,17 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
         return self.inverse_transform(ga)
 
     @abc.abstractmethod
-    def take(self, idxs: np.ndarray) -> "_BaseGroupedArrayTargetTransform":
-        ...
+    def take(self, idxs: np.ndarray) -> "_BaseGroupedArrayTargetTransform": ...
+
+    @staticmethod
+    def stack(
+        scalers: Sequence["_BaseGroupedArrayTargetTransform"],
+    ) -> "_BaseGroupedArrayTargetTransform":
+        first_scaler = scalers[0]
+        core_scaler = first_scaler.scaler_
+        out = copy.deepcopy(first_scaler)
+        out.scaler_ = core_scaler.stack([sc.scaler_ for sc in scalers])
+        return out
 
 # %% ../nbs/target_transforms.ipynb 7
 class Differences(_BaseGroupedArrayTargetTransform):
@@ -129,6 +141,18 @@ class Differences(_BaseGroupedArrayTargetTransform):
         out.scalers_ = [scaler.take(idxs) for scaler in self.scalers_]
         return out
 
+    @staticmethod
+    def stack(scalers: Sequence["Differences"]) -> "Differences":
+        first_scaler = scalers[0]
+        core_scaler = first_scaler.scalers_[0]
+        diffs = first_scaler.differences
+        out = Differences(diffs)
+        out.scalers_ = [
+            core_scaler.stack([sc.scalers_[i] for sc in scalers])
+            for i in range(len(diffs))
+        ]
+        return out
+
 # %% ../nbs/target_transforms.ipynb 10
 class AutoDifferences(_BaseGroupedArrayTargetTransform):
     """Find and apply the optimal number of differences to each serie.
@@ -139,11 +163,6 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         Maximum number of differences to apply."""
 
     def __init__(self, max_diffs: int):
-        if not CORE_INSTALLED:
-            raise ImportError(
-                "coreforecast is required for this transformation. "
-                "Please follow the installation instructions at https://github.com/Nixtla/coreforecast/#installation"
-            )
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
@@ -184,11 +203,6 @@ class AutoSeasonalDifferences(AutoDifferences):
     def __init__(
         self, season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
-        if not CORE_INSTALLED:
-            raise ImportError(
-                "coreforecast is required for this transformation. "
-                "Please follow the installation instructions at https://github.com/Nixtla/coreforecast/#installation"
-            )
         self.scaler_ = core_scalers.AutoSeasonalDifferences(
             season_length=season_length,
             max_diffs=max_diffs,
@@ -213,11 +227,6 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
-        if not CORE_INSTALLED:
-            raise ImportError(
-                "coreforecast is required for this transformation. "
-                "Please follow the installation instructions at https://github.com/Nixtla/coreforecast/#installation"
-            )
         self.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=max_season_length,
             max_diffs=max_diffs,
@@ -297,6 +306,12 @@ class LocalBoxCox(_BaseLocalScaler):
         out.scaler_.lmbdas_ = self.scaler_.lmbdas_[idxs]
         return out
 
+    @staticmethod
+    def stack(scalers: Sequence["LocalBoxCox"]) -> "LocalBoxCox":
+        out = LocalBoxCox()
+        out.scaler_.lmbdas_ = np.hstack([sc.scaler_.lmbdas_ for sc in scalers])
+        return out
+
 # %% ../nbs/target_transforms.ipynb 27
 class GlobalSklearnTransformer(BaseTargetTransform):
     """Applies the same scikit-learn transformer to all series."""
@@ -323,3 +338,8 @@ class GlobalSklearnTransformer(BaseTargetTransform):
         df = df.copy(deep=False)
         df[self.target_col] = self.transformer_.transform(df[[self.target_col]].values)
         return df
+
+    def stack(
+        transforms: Sequence["GlobalSklearnTransformer"],
+    ) -> "GlobalSklearnTransformer":
+        return transforms[0]
