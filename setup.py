@@ -28,7 +28,6 @@ requirements = cfg['requirements'].split()
 dask_requirements = cfg['dask_requirements'].split()
 ray_requirements = cfg['ray_requirements'].split()
 spark_requirements = cfg['spark_requirements'].split()
-lag_tfms_requirements = cfg['lag_tfms_requirements'].split()
 aws_requirements = cfg['aws_requirements'].split()
 azure_requirements = cfg['azure_requirements'].split()
 gcp_requirements = cfg['gcp_requirements'].split()
@@ -36,7 +35,6 @@ all_extras = [
     dask_requirements,
     ray_requirements,
     spark_requirements,
-    lag_tfms_requirements,
     aws_requirements,
     azure_requirements,
     gcp_requirements,
