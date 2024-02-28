@@ -7,6 +7,7 @@ dependencies:
   - lightgbm
   - matplotlib
   - nbformat
+  - nomkl
   - numba
   - pandas
   - pip
@@ -20,5 +21,5 @@ dependencies:
   - pip:
     - datasetsforecast
     - nbdev
-    - polars
+    - polars<0.20.11
     - utilsforecast>=0.0.27
