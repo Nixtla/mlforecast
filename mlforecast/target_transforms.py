@@ -147,6 +147,11 @@ class Differences(_BaseGroupedArrayTargetTransform):
         core_scaler = first_scaler.scalers_[0]
         diffs = first_scaler.differences
         out = Differences(diffs)
+        out.fitted_ = []
+        for i in range(len(scalers[0].fitted_)):
+            data = np.hstack([sc.fitted_[i].data for sc in scalers])
+            sizes = np.hstack([np.diff(sc.fitted_[i].indptr) for sc in scalers])
+            out.fitted_.append(GroupedArray(data, np.append(0, sizes.cumsum())))
         out.scalers_ = [
             core_scaler.stack([sc.scalers_[i] for sc in scalers])
             for i in range(len(diffs))
