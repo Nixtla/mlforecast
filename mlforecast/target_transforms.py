@@ -15,15 +15,6 @@ import pandas as pd
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import TransformerMixin, clone
 from utilsforecast.compat import DataFrame
-from utilsforecast.target_transforms import (
-    BaseTargetTransform as UtilsTargetTransform,
-    LocalBoxCox as BoxCox,
-    LocalMinMaxScaler as MinMaxScaler,
-    LocalRobustScaler as RobustScaler,
-    LocalStandardScaler as StandardScaler,
-    _common_scaler_inverse_transform,
-    _transform,
-)
 
 from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
@@ -100,7 +91,6 @@ class Differences(_BaseGroupedArrayTargetTransform):
         if small_series.any():
             raise _ShortSeriesException(np.arange(ga.n_groups)[small_series])
         self.scalers_ = []
-        n_series = len(ga)
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         for d in self.differences:
             if self.store_fitted:
@@ -292,30 +282,9 @@ class LocalBoxCox(_BaseLocalScaler):
     """Finds the optimum lambda for each serie and applies the Box-Cox transformation"""
 
     def __init__(self):
-        self.scaler_ = BoxCox()
-
-    def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        return GroupedArray(self.scaler_.fit_transform(ga), ga.indptr)
-
-    def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
-        from scipy.special import inv_boxcox1p
-
-        sizes = np.diff(ga.indptr)
-        lmbdas = self.scaler_.lmbdas_
-        lmbdas = np.repeat(lmbdas, sizes, axis=0)
-        return GroupedArray(inv_boxcox1p(ga.data, lmbdas), ga.indptr)
-
-    def take(self, idxs: np.ndarray) -> "LocalBoxCox":
-        out = LocalBoxCox()
-        out.scaler_ = BoxCox()
-        out.scaler_.lmbdas_ = self.scaler_.lmbdas_[idxs]
-        return out
-
-    @staticmethod
-    def stack(scalers: Sequence["LocalBoxCox"]) -> "LocalBoxCox":
-        out = LocalBoxCox()
-        out.scaler_.lmbdas_ = np.hstack([sc.scaler_.lmbdas_ for sc in scalers])
-        return out
+        self.scaler_factory = lambda: core_scalers.LocalBoxCoxScaler(
+            method="loglik", lower=0.0
+        )
 
 # %% ../nbs/target_transforms.ipynb 27
 class GlobalSklearnTransformer(BaseTargetTransform):

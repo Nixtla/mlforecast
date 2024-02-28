@@ -8,5 +8,5 @@ try:
     from window_ops.shift import shift_array
 except ImportError:
 
-    def shift_array(*args, **kwargs):
+    def shift_array(*_args, **_kwargs):
         raise Exception

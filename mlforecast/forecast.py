@@ -29,7 +29,6 @@ from mlforecast.core import (
     _name_models,
 )
 from .grouped_array import GroupedArray
-from .lag_transforms import _BaseLagTransform
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
