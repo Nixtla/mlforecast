@@ -2,6 +2,7 @@ name: mlforecast
 channels:
   - conda-forge
 dependencies:
+  - coreforecast>=0.0.7
   - fsspec
   - holidays<0.21
   - lightgbm
