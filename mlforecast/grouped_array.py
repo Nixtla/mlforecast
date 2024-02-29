@@ -5,7 +5,7 @@ __all__ = ['GroupedArray']
 
 # %% ../nbs/grouped_array.ipynb 1
 import concurrent.futures
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Mapping, Tuple, Union
 
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 import numpy as np
@@ -131,7 +131,7 @@ class GroupedArray:
 
     def apply_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]],
+        transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:
         """Apply the transformations using the main process.
@@ -157,7 +157,7 @@ class GroupedArray:
 
     def apply_multithreaded_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]],
+        transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
         num_threads: int,
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:

@@ -18,6 +18,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -304,7 +305,9 @@ class TimeSeries:
         return self
 
     def _compute_transforms(
-        self, transforms: Transforms, updates_only: bool
+        self,
+        transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
+        updates_only: bool,
     ) -> Dict[str, np.ndarray]:
         """Compute the transformations defined in the constructor.
 
@@ -673,10 +676,10 @@ class TimeSeries:
                 for i, tfm in enumerate(self.target_transforms):
                     if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                         self.target_transforms[i] = tfm.take(idxs)
-            for name, tfm in self.transforms.items():
-                if hasattr(tfm, "take"):
-                    tfm = tfm.take(idxs)
-                self.transforms[name] = tfm
+            for name, lag_tfm in self.transforms.items():
+                if isinstance(lag_tfm, _BaseLagTransform):
+                    lag_tfm = lag_tfm.take(idxs)
+                self.transforms[name] = lag_tfm
         try:
             yield
         finally:
