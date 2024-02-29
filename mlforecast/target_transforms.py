@@ -31,6 +31,7 @@ class BaseTargetTransform(abc.ABC):
     def update(self, df: DataFrame) -> DataFrame:
         raise NotImplementedError
 
+    @staticmethod
     def stack(transforms: Sequence["BaseTargetTransform"]) -> "BaseTargetTransform":
         raise NotImplementedError
 
@@ -45,6 +46,7 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
     """Base class used for target transformations that operate on grouped arrays."""
 
     num_threads: int = 1
+    scaler_: core_scalers._BaseLocalScaler
 
     def set_num_threads(self, num_threads: int) -> None:
         self.num_threads = num_threads
@@ -132,7 +134,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return out
 
     @staticmethod
-    def stack(scalers: Sequence["Differences"]) -> "Differences":
+    def stack(scalers: Sequence["Differences"]) -> "Differences":  # type: ignore[override]
         first_scaler = scalers[0]
         core_scaler = first_scaler.scalers_[0]
         diffs = first_scaler.differences
@@ -313,7 +315,6 @@ class GlobalSklearnTransformer(BaseTargetTransform):
         df[self.target_col] = self.transformer_.transform(df[[self.target_col]].values)
         return df
 
-    def stack(
-        transforms: Sequence["GlobalSklearnTransformer"],
-    ) -> "GlobalSklearnTransformer":
+    @staticmethod
+    def stack(transforms: Sequence["GlobalSklearnTransformer"]) -> "GlobalSklearnTransformer":  # type: ignore[override]
         return transforms[0]
