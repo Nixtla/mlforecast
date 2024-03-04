@@ -152,21 +152,18 @@ Name: y, dtype: float64
 ### Lag transforms
 
 Lag transforms are defined as a dictionary where the keys are the lags
-and the values are lists of functions that transform an array. These
-must be [numba](http://numba.pydata.org/) jitted functions (so that
-computing the features doesn’t become a bottleneck). There are some
-implemented in the [window-ops
+and the values are the transformations that we want to apply to that
+lag. The lag transformations can be either objects from the
+`mlforecast.lag_transforms` module or [numba](http://numba.pydata.org/)
+jitted functions (so that computing the features doesn’t become a
+bottleneck and we can bypass the GIL when using multithreading), we have
+some implemented in the [window-ops
 package](https://github.com/jmoralez/window_ops) but you can also
 implement your own.
 
-If the function takes two or more arguments you can either:
-
--   supply a tuple (tfm_func, arg1, arg2, …)
--   define a new function fixing the arguments
-
 ```python
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from numba import njit
-from window_ops.expanding import expanding_mean
 from window_ops.rolling import rolling_mean
 ```
 
@@ -182,8 +179,8 @@ fcst = MLForecast(
     freq=1,
     target_transforms=[Differences([24])],    
     lag_transforms={
-        1: [expanding_mean],
-        24: [(rolling_mean, 48), rolling_mean_48],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48), rolling_mean_48],
     },
 )
 prep = fcst.preprocess(df)
@@ -370,8 +367,8 @@ fcst = MLForecast(
     target_transforms=[Differences([24])],
     lags=[1, 24],
     lag_transforms={
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=[hour_index],
 )
@@ -497,8 +494,8 @@ fcst = MLForecast(
     target_transforms=[Differences([24])],
     lags=[1, 24],
     lag_transforms={
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=[hour_index],
 )
@@ -518,11 +515,11 @@ cv_result
 | 3   | H196      | 820  | 816    | 14.2 | 14.275964     |
 | 4   | H196      | 821  | 816    | 13.9 | 13.973491     |
 | ... | ...       | ...  | ...    | ...  | ...           |
-| 187 | H413      | 1004 | 960    | 99.0 | 65.644823     |
-| 188 | H413      | 1005 | 960    | 88.0 | 71.717097     |
-| 189 | H413      | 1006 | 960    | 47.0 | 76.704377     |
-| 190 | H413      | 1007 | 960    | 41.0 | 53.446638     |
-| 191 | H413      | 1008 | 960    | 34.0 | 54.902634     |
+| 763 | H413      | 1004 | 960    | 99.0 | 65.644823     |
+| 764 | H413      | 1005 | 960    | 88.0 | 71.717097     |
+| 765 | H413      | 1006 | 960    | 47.0 | 76.704377     |
+| 766 | H413      | 1007 | 960    | 41.0 | 53.446638     |
+| 767 | H413      | 1008 | 960    | 34.0 | 54.902634     |
 
 ```python
 fig = plot_series(cv_result, cv_result.drop(columns='cutoff'), max_insample_length=0)
@@ -569,7 +566,7 @@ can try removing the differencing and using an exponentially weighted
 average of the lag 1 instead of the expanding mean.
 
 ```python
-from window_ops.ewm import ewm_mean
+from mlforecast.lag_transforms import ExponentiallyWeightedMean
 ```
 
 
@@ -579,8 +576,8 @@ fcst = MLForecast(
     freq=1,
     lags=[1, 24],
     lag_transforms={
-        1: [(ewm_mean, 0.5)],
-        24: [(rolling_mean, 48)],      
+        1: [ExponentiallyWeightedMean(alpha=0.5)],
+        24: [RollingMean(window_size=48)],      
     },
     date_features=[hour_index],    
 )
@@ -593,7 +590,7 @@ evaluate_cv(cv_result2).mean()
 ```
 
 ``` text
-LGBMRegressor    25.874446
+LGBMRegressor    25.874439
 dtype: float64
 ```
 
@@ -623,8 +620,8 @@ cv = LightGBMCV(
     target_transforms=[Differences([24])],
     lags=[1, 24],
     lag_transforms={
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=[hour_index],
     num_threads=2,

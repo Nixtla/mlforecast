@@ -13,6 +13,9 @@ transformations to apply to that lag.
 ## Data setup
 
 ```python
+import numpy as np
+
+from mlforecast import MLForecast
 from mlforecast.utils import generate_daily_series
 ```
 
@@ -21,24 +24,153 @@ from mlforecast.utils import generate_daily_series
 data = generate_daily_series(10)
 ```
 
-## window-ops
+## Built-in transformations
+
+The built-in lag transformations are in the `mlforecast.lag_transforms`
+module.
+
+```python
+from mlforecast.lag_transforms import RollingMean, ExpandingStd
+```
+
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [ExpandingStd()],
+        7: [RollingMean(window_size=7, min_samples=1), RollingMean(window_size=14)]
+    },
+)
+```
+
+Once you define your transformations you can see what they look like
+with
+[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess).
+
+```python
+fcst.preprocess(data).head(2)
+```
+
+|     | unique_id | ds         | y        | expanding_std_lag1 | rolling_mean_lag7_window_size7_min_samples1 | rolling_mean_lag7_window_size14 |
+|-----|-----------|------------|----------|--------------------|---------------------------------------------|---------------------------------|
+| 20  | id_0      | 2000-01-21 | 6.319961 | 1.956363           | 3.234486                                    | 3.283064                        |
+| 21  | id_0      | 2000-01-22 | 0.071677 | 2.028545           | 3.256055                                    | 3.291068                        |
+
+### Extending the built-in transformations
+
+You can compose the built-in transformations by using the
+[`Combine`](https://Nixtla.github.io/mlforecast/lag_transforms.html#combine)
+class, which takes two transformations and an operator.
+
+```python
+import operator
+
+from mlforecast.lag_transforms import Combine
+```
+
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [
+            RollingMean(window_size=7),
+            RollingMean(window_size=14),
+            Combine(
+                RollingMean(window_size=7),
+                RollingMean(window_size=14),
+                operator.truediv,
+            )
+        ],
+    },
+)
+prep = fcst.preprocess(data)
+prep.head(2)
+```
+
+|     | unique_id | ds         | y        | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size14 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag1_window_size14 |
+|-----|-----------|------------|----------|--------------------------------|---------------------------------|------------------------------------------------------------------------|
+| 14  | id_0      | 2000-01-15 | 0.435006 | 3.234486                       | 3.283064                        | 0.985204                                                               |
+| 15  | id_0      | 2000-01-16 | 1.489309 | 3.256055                       | 3.291068                        | 0.989361                                                               |
+
+```python
+np.testing.assert_allclose(
+    prep['rolling_mean_lag1_window_size7'] / prep['rolling_mean_lag1_window_size14'],
+    prep['rolling_mean_lag1_window_size7_truediv_rolling_mean_lag1_window_size14']
+)
+```
+
+If you want one of the transformations in
+[`Combine`](https://Nixtla.github.io/mlforecast/lag_transforms.html#combine)
+to be applied to a different lag you can use the
+[`Offset`](https://Nixtla.github.io/mlforecast/lag_transforms.html#offset)
+class, which will apply the offset first and then the transformation.
+
+```python
+from mlforecast.lag_transforms import Offset
+```
+
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [
+            RollingMean(window_size=7),
+            Combine(
+                RollingMean(window_size=7),
+                Offset(RollingMean(window_size=7), n=1),
+                operator.truediv,
+            )
+        ],
+        2: [RollingMean(window_size=7)]
+    },
+)
+prep = fcst.preprocess(data)
+prep.head(2)
+```
+
+|     | unique_id | ds         | y        | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag2_window_size7 | rolling_mean_lag2_window_size7 |
+|-----|-----------|------------|----------|--------------------------------|-----------------------------------------------------------------------|--------------------------------|
+| 8   | id_0      | 2000-01-09 | 1.462798 | 3.326081                       | 0.998331                                                              | 3.331641                       |
+| 9   | id_0      | 2000-01-10 | 2.035518 | 3.360938                       | 1.010480                                                              | 3.326081                       |
+
+```python
+np.testing.assert_allclose(
+    prep['rolling_mean_lag1_window_size7'] / prep['rolling_mean_lag2_window_size7'],
+    prep['rolling_mean_lag1_window_size7_truediv_rolling_mean_lag2_window_size7']
+)
+```
+
+## numba-based transformations
 
 The [window-ops package](https://github.com/jmoralez/window_ops)
 provides transformations defined as [numba](https://numba.pydata.org/)
 [JIT compiled](https://en.wikipedia.org/wiki/just-in-time_compilation)
-functions, which allows you to use them directly and also composing them
-very easily. We use numba because it makes them really fast and can also
+functions. We use numba because it makes them really fast and can also
 bypass [python’s
 GIL](https://wiki.python.org/moin/globalinterpreterlock), which allows
 running them concurrently with multithreading.
 
+The main benefit of using these transformations is that they’re very
+easy to implement. However, when we need to update their values on the
+predict step they can very slow, because we have to call the function
+again on the complete history and just keep the last value, so if
+performance is a concern you should try to use the built-in ones or set
+`keep_last_n` in
+[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
+or
+[`MLForecast.fit`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.fit)
+to the minimum number of samples that your transformations require.
+
 ```python
-import numpy as np
 from numba import njit
 from window_ops.expanding import expanding_mean
 from window_ops.shift import shift_array
-
-from mlforecast import MLForecast
 ```
 
 
@@ -85,134 +217,5 @@ done with `offset=2` here.
 np.testing.assert_allclose(prep['lag1'] / prep['lag2'], prep['ratio_over_previous_lag1'])
 np.testing.assert_allclose(prep['lag1'] / prep['lag3'], prep['ratio_over_previous_lag1_offset2'])
 np.testing.assert_allclose(prep['lag2'] - prep['lag3'], prep['diff_over_previous_lag2'])
-```
-
-## Built-in transformations (experimental)
-
-The built-in lag transformations are in the `mlforecast.lag_transforms`
-module. This module is experimental, so in order to use it you need the
-`coreforecast` package, which you can get with:
-`pip install coreforecast` or
-`pip install "mlforecast[lag_transforms]"`. If you installed mlforecast
-from conda then you should already have it.
-
-The main benefit of using these transformations is that since they’re
-defined as classes they contain more information on the transformation
-that is being applied and can thus make it more efficiently, e.g. in
-order to update a rolling mean it just looks at the last `window_size`
-values, whereas the functions from window-ops have to re-apply the
-transformation on the full history. Another benefit is that the
-multithreading is done on the series, as opposed to the transformations,
-which can help in cases where the transformations are very different.
-Also, the multithreading is done in C++, so there’s no risk of getting
-blocked by the GIL.
-
-```python
-from mlforecast.lag_transforms import RollingMean, ExpandingStd
-```
-
-
-```python
-fcst = MLForecast(
-    models=[],
-    freq='D',
-    lag_transforms={
-        1: [ExpandingStd()],
-        7: [RollingMean(window_size=7, min_samples=1), RollingMean(window_size=14)]
-    },
-)
-```
-
-Once you define your transformations you can see what they look like
-with
-[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess).
-
-```python
-fcst.preprocess(data).head(2)
-```
-
-|     | unique_id | ds         | y        | expanding_std_lag1 | rolling_mean_lag7_window_size7_min_samples1 | rolling_mean_lag7_window_size14 |
-|-----|-----------|------------|----------|--------------------|---------------------------------------------|---------------------------------|
-| 20  | id_0      | 2000-01-21 | 6.319961 | 1.956363           | 3.234486                                    | 3.283064                        |
-| 21  | id_0      | 2000-01-22 | 0.071677 | 2.028545           | 3.256055                                    | 3.291068                        |
-
-### Extending the built-in transformations
-
-You can compose these transformations by defining a new class that
-defines the `transform` and `update` methods. Consider the following
-example:
-
-```python
-import coreforecast.lag_transforms as core_tfms
-from coreforecast.grouped_array import GroupedArray
-```
-
-
-```python
-class RollingMeansRatioCore:
-    def __init__(self, lag: int, window_one: int, window_two: int):
-        self.lag = lag
-        self.window_one = window_one
-        self.window_two = window_two
-
-    def transform(self, ga: GroupedArray) -> np.ndarray:
-        self.tfm1 = core_tfms.RollingMean(self.lag, self.window_one)
-        self.tfm2 = core_tfms.RollingMean(self.lag, self.window_two)
-        return self.tfm1.transform(ga) / self.tfm2.transform(ga)
-
-    def update(self, ga: GroupedArray) -> np.ndarray:
-        return self.tfm1.update(ga) / self.tfm2.update(ga)
-```
-
-In order to keep the mlforecast API for lag transforms where the lag is
-the key, we have to wrap this transformation in another one. We hope to
-deprecate this in the future so that you only need to define the
-previous class. The wrapper class needs to implement the `_set_core_tfm`
-method which takes the lag and sets the `_core_tfm` attribute to be a
-transformation like the one we defined above.
-
-```python
-from mlforecast.lag_transforms import BaseLagTransform
-```
-
-
-```python
-class RollingMeansRatio(BaseLagTransform):
-    def __init__(self, window_one: int, window_two: int):
-        self.window_one = window_one
-        self.window_two = window_two
-
-    def _set_core_tfm(self, lag: int):
-        self._core_tfm = RollingMeansRatioCore(lag, self.window_one, self.window_two)
-        return self
-```
-
-
-```python
-fcst = MLForecast(
-    models=[],
-    freq='D',
-    lag_transforms={
-        1: [
-            RollingMean(window_size=7),
-            RollingMean(window_size=14),
-            RollingMeansRatio(window_one=7, window_two=14)
-        ],
-    },
-)
-prep = fcst.preprocess(data)
-prep.head(2)
-```
-
-|     | unique_id | ds         | y        | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size14 | rolling_means_ratio_lag1_window_one7_window_two14 |
-|-----|-----------|------------|----------|--------------------------------|---------------------------------|---------------------------------------------------|
-| 14  | id_0      | 2000-01-15 | 0.435006 | 3.234486                       | 3.283064                        | 0.985204                                          |
-| 15  | id_0      | 2000-01-16 | 1.489309 | 3.256055                       | 3.291068                        | 0.989361                                          |
-
-```python
-np.testing.assert_allclose(
-    prep['rolling_mean_lag1_window_size7'] / prep['rolling_mean_lag1_window_size14'],
-    prep['rolling_means_ratio_lag1_window_one7_window_two14']
-)
 ```
 

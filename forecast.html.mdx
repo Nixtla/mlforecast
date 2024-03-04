@@ -22,10 +22,8 @@ import xgboost as xgb
 from datasetsforecast.m4 import M4, M4Info
 from sklearn.linear_model import LinearRegression
 from utilsforecast.plotting import plot_series
-from window_ops.ewm import ewm_mean
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
 
+from mlforecast.lag_transforms import ExpandingMean, ExponentiallyWeightedMean, RollingMean
 from mlforecast.lgb_cv import LightGBMCV
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import generate_daily_series
@@ -89,7 +87,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >              date_features:Optional[Iterable[Union[str,Callable]]]=None,
 >              num_threads:int=1, target_transforms:Optional[List[Union[mlfo
 >              recast.target_transforms.BaseTargetTransform,mlforecast.targe
->              t_transforms.BaseGroupedArrayTargetTransform]]]=None,
+>              t_transforms._BaseGroupedArrayTargetTransform]]]=None,
 >              lag_transforms_namer:Optional[Callable]=None)
 > ```
 
@@ -115,7 +113,7 @@ fcst = MLForecast(
     freq=1,
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        48: [(ewm_mean, 0.3)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
     },
     num_threads=1,
     target_transforms=[Differences([24])],
@@ -124,7 +122,7 @@ fcst
 ```
 
 ``` text
-MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', 'lag144', 'lag168', 'ewm_mean_lag48_alpha0.3'], date_features=[], num_threads=1)
+MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', 'lag144', 'lag168', 'exponentially_weighted_mean_lag48_alpha0.3'], date_features=[], num_threads=1)
 ```
 
 Once we have this setup we can compute the features and fit the model.
@@ -172,7 +170,7 @@ fcst = MLForecast(
     freq=1,
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        48: [(ewm_mean, 0.3)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
     },
     num_threads=1,
     target_transforms=[Differences([24])],
@@ -187,7 +185,7 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L945"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L951"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.save
@@ -206,7 +204,7 @@ Save forecast object
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L957"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L963"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.load
@@ -385,7 +383,6 @@ We can see at a couple of results.
 ```python
 results = valid.merge(predictions, on=['unique_id', 'ds'])
 fig = plot_series(train, results, max_insample_length=0)
-fig.savefig('figs/forecast__predict.png', bbox_inches='tight')
 ```
 
 ![](/mlforecast/figs/forecast__predict.png)
@@ -425,10 +422,6 @@ the `predict` method using the `level` argument. Levels must lie between
 
 ```python
 predictions_w_intervals = fcst.predict(48, level=[50, 80, 95])
-```
-
-
-```python
 predictions_w_intervals.head()
 ```
 
@@ -440,34 +433,11 @@ predictions_w_intervals.head()
 | 3   | H196      | 964 | 14.971271     | 14.858042           | 14.871271           | 14.905091           | 15.037452           | 15.071271           | 15.084501           |
 | 4   | H196      | 965 | 14.671271     | 14.553632           | 14.553632           | 14.562452           | 14.780091           | 14.788911           | 14.788911           |
 
-```python
-# test we can forecast horizon lower than h 
-# with prediction intervals
-for method in ['conformal_distribution', 'conformal_errors']:
-    fcst.fit(
-        train, 
-        prediction_intervals=PredictionIntervals(n_windows=3, h=48)
-    )
-
-    preds_h_lower_h = fcst.predict(1, level=[50, 80, 95])
-    preds_h_lower_h = fcst.predict(30, level=[50, 80, 95])
-
-    # test monotonicity of intervals
-    test_eq(
-        preds_h_lower_h.filter(regex='lo|hi').apply(
-            lambda x: x.is_monotonic_increasing,
-            axis=1
-        ).sum(),
-        len(preds_h_lower_h)
-    )
-```
-
 Let’s explore the generated intervals.
 
 ```python
 results = valid.merge(predictions_w_intervals, on=['unique_id', 'ds'])
 fig = plot_series(train, results, max_insample_length=0, level=[50, 80, 95])
-fig.savefig('figs/forecast__predict_intervals.png', bbox_inches='tight')
 ```
 
 ![](/mlforecast/figs/forecast__predict_intervals.png)
@@ -496,7 +466,6 @@ Let’s explore the generated intervals.
 ```python
 results = valid.merge(predictions_w_intervals_ws_1, on=['unique_id', 'ds'])
 fig = plot_series(train, results, max_insample_length=0, level=[90])
-fig.savefig('figs/forecast__predict_intervals_window_size_1.png', bbox_inches='tight')
 ```
 
 ![](/mlforecast/figs/forecast__predict_intervals_window_size_1.png)
@@ -568,19 +537,19 @@ prep_df = fcst.preprocess(train)
 prep_df
 ```
 
-|        | unique_id | ds  | y    | lag24 | lag48 | lag72 | lag96 | lag120 | lag144 | lag168 | ewm_mean_lag48_alpha0.3 |
-|--------|-----------|-----|------|-------|-------|-------|-------|--------|--------|--------|-------------------------|
-| 86988  | H196      | 193 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.002810                |
-| 86989  | H196      | 194 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.031967                |
-| 86990  | H196      | 195 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.2    | 0.1    | 0.052377                |
-| 86991  | H196      | 196 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.2    | 0.1    | 0.2    | 0.036664                |
-| 86992  | H196      | 197 | 0.0  | 0.0   | 0.0   | 0.1   | 0.2   | 0.2    | 0.1    | 0.2    | 0.025665                |
-| ...    | ...       | ... | ...  | ...   | ...   | ...   | ...   | ...    | ...    | ...    | ...                     |
-| 325187 | H413      | 956 | 0.0  | 10.0  | 1.0   | 6.0   | -53.0 | 44.0   | -21.0  | 21.0   | 7.963225                |
-| 325188 | H413      | 957 | 9.0  | 10.0  | 10.0  | -7.0  | -46.0 | 27.0   | -19.0  | 24.0   | 8.574257                |
-| 325189 | H413      | 958 | 16.0 | 8.0   | 5.0   | -9.0  | -36.0 | 32.0   | -13.0  | 8.0    | 7.501980                |
-| 325190 | H413      | 959 | -3.0 | 17.0  | -7.0  | 2.0   | -31.0 | 22.0   | 5.0    | -2.0   | 3.151386                |
-| 325191 | H413      | 960 | 15.0 | 11.0  | -6.0  | -5.0  | -17.0 | 22.0   | -18.0  | 10.0   | 0.405970                |
+|        | unique_id | ds  | y    | lag24 | lag48 | lag72 | lag96 | lag120 | lag144 | lag168 | exponentially_weighted_mean_lag48_alpha0.3 |
+|--------|-----------|-----|------|-------|-------|-------|-------|--------|--------|--------|--------------------------------------------|
+| 86988  | H196      | 193 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.002810                                   |
+| 86989  | H196      | 194 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.031967                                   |
+| 86990  | H196      | 195 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.2    | 0.1    | 0.052377                                   |
+| 86991  | H196      | 196 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.2    | 0.1    | 0.2    | 0.036664                                   |
+| 86992  | H196      | 197 | 0.0  | 0.0   | 0.0   | 0.1   | 0.2   | 0.2    | 0.1    | 0.2    | 0.025665                                   |
+| ...    | ...       | ... | ...  | ...   | ...   | ...   | ...   | ...    | ...    | ...    | ...                                        |
+| 325187 | H413      | 956 | 0.0  | 10.0  | 1.0   | 6.0   | -53.0 | 44.0   | -21.0  | 21.0   | 7.963225                                   |
+| 325188 | H413      | 957 | 9.0  | 10.0  | 10.0  | -7.0  | -46.0 | 27.0   | -19.0  | 24.0   | 8.574257                                   |
+| 325189 | H413      | 958 | 16.0 | 8.0   | 5.0   | -9.0  | -36.0 | 32.0   | -13.0  | 8.0    | 7.501980                                   |
+| 325190 | H413      | 959 | -3.0 | 17.0  | -7.0  | 2.0   | -31.0 | 22.0   | 5.0    | -2.0   | 3.151386                                   |
+| 325191 | H413      | 960 | 15.0 | 11.0  | -6.0  | -5.0  | -17.0 | 22.0   | -18.0  | 10.0   | 0.405970                                   |
 
 If we do this we then have to call `Forecast.fit_models`, since this
 only stores the series information.
@@ -615,7 +584,7 @@ fcst.fit_models(X, y)
 ```
 
 ``` text
-MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', 'lag144', 'lag168', 'ewm_mean_lag48_alpha0.3'], date_features=[], num_threads=1)
+MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', 'lag144', 'lag168', 'exponentially_weighted_mean_lag48_alpha0.3'], date_features=[], num_threads=1)
 ```
 
 ```python
@@ -626,7 +595,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L750"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L754"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
@@ -715,9 +684,9 @@ fcst = MLForecast(
     freq=1,
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        1: [(rolling_mean, 24)],
-        24: [(rolling_mean, 24)],
-        48: [(ewm_mean, 0.3)],
+        1: [RollingMean(window_size=24)],
+        24: [RollingMean(window_size=24)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
     },
     num_threads=1,
     target_transforms=[Differences([24])],
@@ -860,7 +829,7 @@ cv = LightGBMCV(
     freq=1,
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        48: [(ewm_mean, 0.3)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
     },
     num_threads=1,
     target_transforms=[Differences([24])]
@@ -888,24 +857,4 @@ Using best iteration: 40
 fcst = MLForecast.from_cv(cv)
 assert cv.best_iteration_ == fcst.models['LGBMRegressor'].n_estimators
 ```
-
-
-```python
-fcst.fit(train)
-fcst.predict(horizon)
-```
-
-|     | unique_id | ds   | LGBMRegressor |
-|-----|-----------|------|---------------|
-| 0   | H196      | 961  | 16.111079     |
-| 1   | H196      | 962  | 15.711079     |
-| 2   | H196      | 963  | 15.311079     |
-| 3   | H196      | 964  | 15.011079     |
-| 4   | H196      | 965  | 14.711079     |
-| ... | ...       | ...  | ...           |
-| 187 | H413      | 1004 | 92.722032     |
-| 188 | H413      | 1005 | 69.153603     |
-| 189 | H413      | 1006 | 68.811675     |
-| 190 | H413      | 1007 | 53.693346     |
-| 191 | H413      | 1008 | 46.055481     |
 

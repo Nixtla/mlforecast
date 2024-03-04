@@ -253,15 +253,14 @@ here](https://nixtla.github.io/mlforecast/docs/cross_validation.html)
 
 ```python
 import lightgbm as lgb
-from mlforecast.target_transforms import Differences
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
-
 from sklearn.base import BaseEstimator
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.ensemble import RandomForestRegressor
+
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
+from mlforecast.target_transforms import Differences
 ```
 
 We can create a benchmark `Naive` model that uses the electricity load
@@ -312,20 +311,9 @@ lags=[1,12,24]
 ```
 
 Lag transforms are defined as a dictionary where the keys are the lags
-and the values are lists of functions that transform an array. These
-must be [numba](http://numba.pydata.org/) jitted functions (so that
-computing the features doesn’t become a bottleneck). There are some
-implemented in the [window-ops](https://github.com/jmoralez/window_ops)
-package but you can also implement your own.  
-For this example we applied an expanding mean to the first lag, and a
-rolling mean to the 24th lag.
-
-``` text
-    lag_transforms={  
-            1: [expanding_mean],
-            24: [(rolling_mean, 48)],
-        }
-```
+and the values are lists of the transformations that we want to apply to
+that lag. You can refer to the [lag transformations
+guide](../how-to-guides/lag_transforms_guide.html) for more details.
 
 For using the date features you need to be sure that your time column is
 made of timestamps. Then it might make sense to extract features like
@@ -347,8 +335,8 @@ mlf = MLForecast(
     target_transforms=[Differences([24, 24*7])],
     lags=[1,12,24], # Lags to be used as features
     lag_transforms={  
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=['month', 'hour', 'dayofweek']
 )
@@ -376,11 +364,11 @@ crossvalidation_df.head()
 
 |     | unique_id       | ds                  | cutoff     | y       | naive   | lgbm         | lasso        | lin_reg      | ridge        | knn     | mlp          | rf       |
 |-----|-----------------|---------------------|------------|---------|---------|--------------|--------------|--------------|--------------|---------|--------------|----------|
-| 0   | PJM_Load_hourly | 2001-12-27 01:00:00 | 2001-12-27 | 28332.0 | 28837.0 | 28526.505572 | 28703.185712 | 28702.625949 | 28702.625956 | 28479.0 | 28834.839479 | 28277.94 |
-| 1   | PJM_Load_hourly | 2001-12-27 02:00:00 | 2001-12-27 | 27329.0 | 27969.0 | 27467.860847 | 27693.502318 | 27692.395954 | 27692.395969 | 27521.6 | 27940.414699 | 27307.90 |
-| 2   | PJM_Load_hourly | 2001-12-27 03:00:00 | 2001-12-27 | 26986.0 | 27435.0 | 26605.710615 | 26991.795124 | 26990.157567 | 26990.157589 | 26451.6 | 27370.170779 | 26599.23 |
-| 3   | PJM_Load_hourly | 2001-12-27 04:00:00 | 2001-12-27 | 27009.0 | 27401.0 | 26284.065138 | 26789.418399 | 26787.262262 | 26787.262291 | 26388.4 | 27294.232077 | 26366.54 |
-| 4   | PJM_Load_hourly | 2001-12-27 05:00:00 | 2001-12-27 | 27555.0 | 28169.0 | 26823.617078 | 27369.643789 | 27366.983075 | 27366.983111 | 26779.6 | 28014.090505 | 27095.55 |
+| 0   | PJM_Load_hourly | 2001-12-27 01:00:00 | 2001-12-27 | 28332.0 | 28837.0 | 28526.505572 | 28703.185712 | 28702.625949 | 28702.625956 | 28479.0 | 28660.021947 | 27995.17 |
+| 1   | PJM_Load_hourly | 2001-12-27 02:00:00 | 2001-12-27 | 27329.0 | 27969.0 | 27467.860847 | 27693.502318 | 27692.395954 | 27692.395969 | 27521.6 | 27584.635434 | 27112.50 |
+| 2   | PJM_Load_hourly | 2001-12-27 03:00:00 | 2001-12-27 | 26986.0 | 27435.0 | 26605.710615 | 26991.795124 | 26990.157567 | 26990.157589 | 26451.6 | 26809.412477 | 26529.72 |
+| 3   | PJM_Load_hourly | 2001-12-27 04:00:00 | 2001-12-27 | 27009.0 | 27401.0 | 26284.065138 | 26789.418399 | 26787.262262 | 26787.262291 | 26388.4 | 26523.416348 | 26490.83 |
+| 4   | PJM_Load_hourly | 2001-12-27 05:00:00 | 2001-12-27 | 27555.0 | 28169.0 | 26823.617078 | 27369.643789 | 27366.983075 | 27366.983111 | 26779.6 | 26986.355992 | 27180.69 |
 
 Now we can plot each model and window (fold) to see how it behaves
 
@@ -411,7 +399,7 @@ them trough metrics. For that we use the
 contains many useful metrics and an evaluate function.
 
 ```python
-from utilsforecast.losses import *
+from utilsforecast.losses import mae, mape, rmse, smape
 from utilsforecast.evaluation import evaluate
 ```
 
@@ -423,7 +411,7 @@ metrics = [
     rmse,
     mape,
     smape
-    ]
+]
 ```
 
 
@@ -452,10 +440,10 @@ evaluate_crossvalidation(crossvalidation_df, metrics, models)
 |        | naive       | lgbm        | lasso       | lin_reg     | ridge       | knn         | mlp         | rf          |
 |--------|-------------|-------------|-------------|-------------|-------------|-------------|-------------|-------------|
 | metric |             |             |             |             |             |             |             |             |
-| mae    | 1631.395833 | 971.536200  | 1003.796433 | 1007.998597 | 1007.998547 | 1248.145833 | 1268.841369 | 1219.286771 |
-| mape   | 0.049759    | 0.030966    | 0.031760    | 0.031888    | 0.031888    | 0.038721    | 0.039149    | 0.037969    |
-| rmse   | 1871.398919 | 1129.713256 | 1148.616156 | 1153.262719 | 1153.262664 | 1451.964390 | 1463.836007 | 1409.549197 |
-| smape  | 0.024786    | 0.015886    | 0.016269    | 0.016338    | 0.016338    | 0.019549    | 0.019704    | 0.019252    |
+| mae    | 1631.395833 | 971.536200  | 1003.796433 | 1007.998597 | 1007.998547 | 1248.145833 | 1870.547722 | 1017.957813 |
+| mape   | 0.049759    | 0.030966    | 0.031760    | 0.031888    | 0.031888    | 0.038721    | 0.057504    | 0.032341    |
+| rmse   | 1871.398919 | 1129.713256 | 1148.616156 | 1153.262719 | 1153.262664 | 1451.964390 | 2102.098238 | 1154.647164 |
+| smape  | 0.024786    | 0.015886    | 0.016269    | 0.016338    | 0.016338    | 0.019549    | 0.029917    | 0.016563    |
 
 We can se that the model `lgbm` has top performance in most metrics
 folowed by the `lasso regression`. Both models perform way better than
@@ -488,8 +476,8 @@ mlf_evaluation = MLForecast(
     target_transforms=[Differences([24, 24*7])],
     lags=[1,12,24], 
     lag_transforms={  
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=['month', 'hour', 'dayofweek']
 )
@@ -523,7 +511,7 @@ mlf_evaluation.fit(
 ```
 
 ``` text
-MLForecast(models=[lgbm, lasso], freq=<Hour>, lag_features=['lag1', 'lag12', 'lag24', 'expanding_mean_lag1', 'rolling_mean_lag24_window_size48'], date_features=['month', 'hour', 'dayofweek'], num_threads=1)
+MLForecast(models=[lgbm, lasso], freq=H, lag_features=['lag1', 'lag12', 'lag24', 'expanding_mean_lag1', 'rolling_mean_lag24_window_size48'], date_features=['month', 'hour', 'dayofweek'], num_threads=1)
 ```
 
 Now that the model has been trained we are going to forecast the next 24
@@ -567,10 +555,10 @@ Now we can evaluate the metrics and performance in the `test` set.
 
 ```python
 evaluate(
-            df = test,
-            metrics=metrics,
-            models=list(models_evaluation.keys())
-            )
+    df = test,
+    metrics=metrics,
+    models=list(models_evaluation.keys())
+)
 ```
 
 |     | unique_id       | metric | lgbm        | lasso       |
@@ -615,6 +603,9 @@ from prophet import Prophet
 from time import time
 ```
 
+``` text
+Importing plotly failed. Interactive plots will not work.
+```
 
 ```python
 # create prophet model
@@ -634,11 +625,11 @@ forecast_prophet.head()
 
 |     | unique_id       | ds                  | Prophet      | Prophet-lo-90 | Prophet-hi-90 |
 |-----|-----------------|---------------------|--------------|---------------|---------------|
-| 0   | PJM_Load_hourly | 2001-12-31 01:00:00 | 25294.246960 | 20452.615295  | 30151.111598  |
-| 1   | PJM_Load_hourly | 2001-12-31 02:00:00 | 24000.725423 | 18954.861631  | 28946.645807  |
-| 2   | PJM_Load_hourly | 2001-12-31 03:00:00 | 23324.771966 | 18562.568378  | 28009.837383  |
-| 3   | PJM_Load_hourly | 2001-12-31 04:00:00 | 23332.519871 | 18706.835864  | 28253.861051  |
-| 4   | PJM_Load_hourly | 2001-12-31 05:00:00 | 24107.126827 | 18966.217684  | 28907.516733  |
+| 0   | PJM_Load_hourly | 2001-12-31 01:00:00 | 25333.448442 | 20589.873559  | 30370.174820  |
+| 1   | PJM_Load_hourly | 2001-12-31 02:00:00 | 24039.925936 | 18927.503487  | 29234.930903  |
+| 2   | PJM_Load_hourly | 2001-12-31 03:00:00 | 23363.998793 | 18428.462513  | 28292.424622  |
+| 3   | PJM_Load_hourly | 2001-12-31 04:00:00 | 23371.799609 | 18206.273446  | 28181.023448  |
+| 4   | PJM_Load_hourly | 2001-12-31 05:00:00 | 24146.468610 | 19356.171497  | 29006.546759  |
 
 ```python
 time_prophet = (end - init) 
@@ -646,13 +637,13 @@ print(f'Prophet Time: {time_prophet:.2f} seconds')
 ```
 
 ``` text
-Prophet Time: 36.90 seconds
+Prophet Time: 18.00 seconds
 ```
 
 ```python
 models_comparison ={
-        'lgbm': lgb.LGBMRegressor(verbosity=-1)
-    }
+    'lgbm': lgb.LGBMRegressor(verbosity=-1)
+}
 
 mlf_comparison = MLForecast(
     models = models_comparison, 
@@ -660,8 +651,8 @@ mlf_comparison = MLForecast(
     target_transforms=[Differences([24, 24*7])],
     lags=[1,12,24],
     lag_transforms={  
-        1: [expanding_mean],
-        24: [(rolling_mean, 48)],
+        1: [ExpandingMean()],
+        24: [RollingMean(window_size=48)],
     },
     date_features=['month', 'hour', 'dayofweek']
 )
@@ -692,7 +683,7 @@ print(f'LGBM Time: {time_lgbm:.2f} seconds')
 ```
 
 ``` text
-LGBM Time: 1.34 seconds
+LGBM Time: 0.86 seconds
 ```
 
 ```python
@@ -708,10 +699,10 @@ metrics_comparison.reset_index(drop=True).style.background_gradient(cmap='RdYlGn
 
 |     | unique_id       | metric | Prophet     | lgbm        |
 |-----|-----------------|--------|-------------|-------------|
-| 0   | PJM_Load_hourly | mae    | 2282.966977 | 1092.050817 |
-| 1   | PJM_Load_hourly | rmse   | 2721.817203 | 1340.422762 |
-| 2   | PJM_Load_hourly | mape   | 0.073750    | 0.033600    |
-| 3   | PJM_Load_hourly | smape  | 0.038633    | 0.017137    |
+| 0   | PJM_Load_hourly | mae    | 2266.561642 | 1092.050817 |
+| 1   | PJM_Load_hourly | rmse   | 2701.302779 | 1340.422762 |
+| 2   | PJM_Load_hourly | mape   | 0.073226    | 0.033600    |
+| 3   | PJM_Load_hourly | smape  | 0.038320    | 0.017137    |
 
 As we can see `lgbm` had consistently better metrics than `prophet`.
 
@@ -724,17 +715,17 @@ metrics_comparison.set_index('metric')[['improvement']]
 |        | improvement |
 |--------|-------------|
 | metric |             |
-| mae    | 2.09        |
-| rmse   | 2.03        |
-| mape   | 2.19        |
-| smape  | 2.25        |
+| mae    | 2.08        |
+| rmse   | 2.02        |
+| mape   | 2.18        |
+| smape  | 2.24        |
 
 ```python
 print(f'lgbm with MLForecast has a speedup of {time_prophet/time_lgbm:.2f} compared with prophet')
 ```
 
 ``` text
-lgbm with MLForecast has a speedup of 27.62 compared with prophet
+lgbm with MLForecast has a speedup of 20.95 compared with prophet
 ```
 
 We can see that `lgbm` with

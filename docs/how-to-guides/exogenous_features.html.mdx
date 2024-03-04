@@ -9,9 +9,8 @@ title: Exogenous features
 import lightgbm as lgb
 import pandas as pd
 from mlforecast import MLForecast
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import generate_daily_series, generate_prices_for_series
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
 ```
 
 ## Data setup
@@ -93,8 +92,8 @@ fcst = MLForecast(
     freq='D',
     lags=[7],
     lag_transforms={
-        1: [expanding_mean],
-        7: [(rolling_mean, 14)]
+        1: [ExpandingMean()],
+        7: [RollingMean(window_size=14)],
     },
     date_features=['dayofweek', 'month'],
     num_threads=2,

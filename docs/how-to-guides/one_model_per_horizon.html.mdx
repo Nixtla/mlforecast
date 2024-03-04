@@ -30,10 +30,9 @@ import pandas as pd
 from datasetsforecast.m4 import M4, M4Info
 from utilsforecast.evaluation import evaluate
 from utilsforecast.losses import smape
-from window_ops.ewm import ewm_mean
-from window_ops.rolling import rolling_mean
 
 from mlforecast import MLForecast
+from mlforecast.lag_transforms import ExponentiallyWeightedMean, RollingMean
 from mlforecast.target_transforms import Differences
 ```
 
@@ -77,9 +76,9 @@ fcst = MLForecast(
     freq=1,
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        1: [(rolling_mean, 24)],
-        24: [(rolling_mean, 24)],
-        48: [(ewm_mean, 0.3)],
+        1: [RollingMean(window_size=24)],
+        24: [RollingMean(window_size=24)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
     },
     num_threads=1,
     target_transforms=[Differences([24])],

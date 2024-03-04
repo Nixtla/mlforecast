@@ -334,17 +334,11 @@ from utilsforecast.plotting import plot_series
 
 
 ```python
-from mlforecast import MLForecast
 import xgboost as xgb
 
-# 
-# ==============================================================================
-from numba import njit
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
-from window_ops.ewm import ewm_mean
+from mlforecast import MLForecast
+from mlforecast.lag_transforms import ExpandingMean, ExponentiallyWeightedMean, RollingMean
 from mlforecast.target_transforms import Differences
-
 from mlforecast.utils import PredictionIntervals
 ```
 
@@ -770,33 +764,18 @@ lag24    0.155366
 Name: y, dtype: float64
 ```
 
-## Lag transforms
+### Lag transforms
 
 Lag transforms are defined as a dictionary where the keys are the lags
-and the values are lists of functions that transform an array. These
-must be [numba](http://numba.pydata.org) jitted functions (so that
-computing the features doesn’t become a bottleneck). There are some
-implemented in the [window-ops
-package](https://github.com/jmoralez/window_ops) but you can also
-implement your own.
-
-If the function takes two or more arguments you can either:
-
--   supply a tuple (tfm_func, arg1, arg2, …)
--   define a new function fixing the arguments
-
-```python
-from numba import njit
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
-```
-
+and the values are lists of the transformations that we want to apply to
+that lag. You can refer to the [lag transformations
+guide](../how-to-guides/lag_transforms_guide.html) for more details.
 
 ```python
 mlf = MLForecast(models=model1,
                  freq='30min',  
                  lags=[1,24],
-                 lag_transforms={1: [expanding_mean],24: [(rolling_mean, 7)] },
+                 lag_transforms={1: [ExpandingMean()], 24: [RollingMean(window_size=7)]},
                  target_transforms=[Differences([1])],
                  )
 ```
@@ -836,7 +815,7 @@ here.
 mlf = MLForecast(models=model1,
                  freq='30min', 
                  lags=[1,24],
-                 lag_transforms={1: [expanding_mean],24: [(rolling_mean, 7)] },
+                 lag_transforms={1: [ExpandingMean()], 24: [RollingMean(window_size=7)]},
                  target_transforms=[Differences([1])],
                  date_features=["year", "month", "day", "hour"]) # Seasonal data
 ```
@@ -871,7 +850,7 @@ prediction_intervals=PredictionIntervals(n_windows=5, h=30, method="conformal_di
 ```
 
 ``` text
-MLForecast(models=[XGBRegressor], freq=<30 * Minutes>, lag_features=['lag1', 'lag24', 'expanding_mean_lag1', 'rolling_mean_lag24_window_size7'], date_features=['year', 'month', 'day', 'hour'], num_threads=1)
+MLForecast(models=[XGBRegressor], freq=30min, lag_features=['lag1', 'lag24', 'expanding_mean_lag1', 'rolling_mean_lag24_window_size7'], date_features=['year', 'month', 'day', 'hour'], num_threads=1)
 ```
 
 Let’s see the results of our model in this case the `XGBoost model`. We
@@ -880,25 +859,25 @@ can observe it with the following instruction:
 Let us now visualize the fitted values of our models.
 
 ```python
-result=mlf.forecast_fitted_values()
-result=result.set_index("unique_id")
+result = mlf.forecast_fitted_values()
+result = result.set_index("unique_id")
 result
 ```
 
 |           | ds                  | y       | XGBRegressor |
 |-----------|---------------------|---------|--------------|
 | unique_id |                     |         |              |
-| 1         | 2014-07-01 15:30:00 | 18544.0 | 18243.291016 |
-| 1         | 2014-07-01 16:00:00 | 16228.0 | 16489.828125 |
-| 1         | 2014-07-01 16:30:00 | 15013.0 | 15105.728516 |
-| 1         | 2014-07-01 17:00:00 | 17203.0 | 17362.349609 |
-| 1         | 2014-07-01 17:30:00 | 19525.0 | 19678.052734 |
+| 1         | 2014-07-01 15:30:00 | 18544.0 | 18441.443359 |
+| 1         | 2014-07-01 16:00:00 | 16228.0 | 16391.152344 |
+| 1         | 2014-07-01 16:30:00 | 15013.0 | 15260.714844 |
+| 1         | 2014-07-01 17:00:00 | 17203.0 | 17066.148438 |
+| 1         | 2014-07-01 17:30:00 | 19525.0 | 19714.404297 |
 | ...       | ...                 | ...     | ...          |
-| 1         | 2015-01-31 21:30:00 | 24670.0 | 24801.906250 |
-| 1         | 2015-01-31 22:00:00 | 25721.0 | 25812.089844 |
-| 1         | 2015-01-31 22:30:00 | 27309.0 | 27192.630859 |
-| 1         | 2015-01-31 23:00:00 | 26591.0 | 27066.931641 |
-| 1         | 2015-01-31 23:30:00 | 26288.0 | 25945.341797 |
+| 1         | 2015-01-31 21:30:00 | 24670.0 | 24488.646484 |
+| 1         | 2015-01-31 22:00:00 | 25721.0 | 25868.865234 |
+| 1         | 2015-01-31 22:30:00 | 27309.0 | 27290.125000 |
+| 1         | 2015-01-31 23:00:00 | 26591.0 | 27123.226562 |
+| 1         | 2015-01-31 23:30:00 | 26288.0 | 26241.205078 |
 
 ```python
 from statsmodels.stats.diagnostic import normal_ad
@@ -974,11 +953,11 @@ forecast_df.head()
 
 |     | unique_id | ds                  | XGBRegressor | XGBRegressor-lo-95 | XGBRegressor-lo-80 | XGBRegressor-hi-80 | XGBRegressor-hi-95 |
 |-----|-----------|---------------------|--------------|--------------------|--------------------|--------------------|--------------------|
-| 0   | 1         | 2015-02-01 00:00:00 | 24608.865234 | 24016.475873       | 24085.588062       | 25132.142407       | 25201.254596       |
-| 1   | 1         | 2015-02-01 00:30:00 | 23323.097656 | 20511.105615       | 21901.008398       | 24745.186914       | 26135.089697       |
-| 2   | 1         | 2015-02-01 01:00:00 | 22223.435547 | 20161.902002       | 20995.971289       | 23450.899805       | 24284.969092       |
-| 3   | 1         | 2015-02-01 01:30:00 | 20405.228516 | 17227.147949       | 17822.294922       | 22988.162109       | 23583.309082       |
-| 4   | 1         | 2015-02-01 02:00:00 | 20014.324219 | 17422.155518       | 17923.692383       | 22104.956055       | 22606.492920       |
+| 0   | 1         | 2015-02-01 00:00:00 | 26320.298828 | 25559.884241       | 25680.228369       | 26960.369287       | 27080.713416       |
+| 1   | 1         | 2015-02-01 00:30:00 | 26446.472656 | 24130.429614       | 25195.461621       | 27697.483691       | 28762.515698       |
+| 2   | 1         | 2015-02-01 01:00:00 | 24909.970703 | 23094.950537       | 23579.583398       | 26240.358008       | 26724.990869       |
+| 3   | 1         | 2015-02-01 01:30:00 | 24405.402344 | 21548.628296       | 22006.662598       | 26804.142090       | 27262.176392       |
+| 4   | 1         | 2015-02-01 02:00:00 | 22292.390625 | 20666.736963       | 21130.215430       | 23454.565820       | 23918.044287       |
 
 ## Plot prediction intervals
 

@@ -42,14 +42,14 @@ through `X_df`. Consider the following example.
 ## Computing the transformations
 
 ```python
-from window_ops.expanding import expanding_mean
+from mlforecast.lag_transforms import ExpandingMean
 
 from mlforecast.feature_engineering import transform_exog
 ```
 
 
 ```python
-transformed_prices = transform_exog(prices, lags=[7], lag_transforms={1: [expanding_mean]})
+transformed_prices = transform_exog(prices, lags=[7], lag_transforms={1: [ExpandingMean()]})
 transformed_prices.head(10)
 ```
 
@@ -139,7 +139,7 @@ fcst.fit(series_with_prices2, static_features=[])
 ```
 
 ``` text
-MLForecast(models=[LinearRegression], freq=<Day>, lag_features=['lag1'], date_features=['dayofweek'], num_threads=1)
+MLForecast(models=[LinearRegression], freq=D, lag_features=['lag1'], date_features=['dayofweek'], num_threads=1)
 ```
 
 And predict using the prices. Note that you can provide the dataframe
