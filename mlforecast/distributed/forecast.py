@@ -717,7 +717,7 @@ class DistributedMLForecast:
         return fcst
 
     @staticmethod
-    def _update(items: List[List[Any]], new_df) -> List[List[Any]]:
+    def _update(items: List[List[Any]], new_df) -> Iterable[List[Any]]:
         for serialized_ts, serialized_transformed, serialized_valid in items:
             ts = cloudpickle.loads(serialized_ts)
             partition_mask = ufp.is_in(new_df[ts.id_col], ts.uids)
