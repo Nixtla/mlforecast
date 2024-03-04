@@ -78,8 +78,6 @@ class Lag(_BaseLagTransform):
         return self
 
     def _get_name(self, lag: int) -> str:
-        if hasattr(self, "name"):
-            return self.name
         return f"lag{lag}"
 
     def __eq__(self, other):
