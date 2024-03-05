@@ -430,7 +430,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
 After you’ve trained a forecast object you can save and load it with the
 previous methods. If by the time you want to use it you already know the
-following values of the target you can use the `MLForecast.ts.update`
+following values of the target you can use the
+[`MLForecast.update`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.update)
 method to incorporate these, which will allow you to use these new
 values when computing predictions.
 
@@ -461,7 +462,7 @@ new_values = pd.DataFrame({
     'ds': [1009, 1009],
     'y': [17.0, 14.0],
 })
-fcst.ts.update(new_values)
+fcst.update(new_values)
 preds = fcst.predict(1)
 preds
 ```
