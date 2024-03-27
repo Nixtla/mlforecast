@@ -126,7 +126,7 @@ def _as_tuple(x):
     return (x,)
 
 # %% ../nbs/core.ipynb 19
-Freq = Union[int, str, pd.offsets.BaseOffset]
+Freq = Union[int, str]
 Lags = Iterable[int]
 LagTransform = Union[Callable, Tuple[Callable, Any]]
 LagTransforms = Dict[int, List[LagTransform]]
