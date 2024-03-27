@@ -24,12 +24,22 @@ statuses = [ '1 - Planning', '2 - Pre-Alpha', '3 - Alpha',
     '4 - Beta', '5 - Production/Stable', '6 - Mature', '7 - Inactive' ]
 py_versions = '3.8 3.9 3.10 3.11'.split()
 
-requirements = cfg.get('requirements','').split()
-dask_requirements = cfg.get('dask_requirements', '').split()
-ray_requirements = cfg.get('ray_requirements', '').split()
-spark_requirements = cfg.get('spark_requirements', '').split()
-lag_tfms_requirements = cfg.get('lag_tfms_requirements', '').split()
-dev_requirements = requirements + cfg.get('dev_requirements', '').split()
+requirements = cfg['requirements'].split()
+dask_requirements = cfg['dask_requirements'].split()
+ray_requirements = cfg['ray_requirements'].split()
+spark_requirements = cfg['spark_requirements'].split()
+aws_requirements = cfg['aws_requirements'].split()
+azure_requirements = cfg['azure_requirements'].split()
+gcp_requirements = cfg['gcp_requirements'].split()
+all_extras = [
+    dask_requirements,
+    ray_requirements,
+    spark_requirements,
+    aws_requirements,
+    azure_requirements,
+    gcp_requirements,
+]
+dev_requirements = sorted(set(sum([cfg['dev_requirements'].split()] + all_extras, [])))
 min_python = cfg['min_python']
 lic = licenses.get(cfg['license'].lower(), (cfg['license'], None))
 
@@ -49,7 +59,10 @@ setuptools.setup(
         'dask': dask_requirements,
         'ray': ray_requirements,
         'spark': spark_requirements,
-        'lag_transforms': lag_tfms_requirements,
+        'lag_transforms': [],
+        'aws': aws_requirements,
+        'azure': azure_requirements,
+        'gcp': gcp_requirements,
         'dev': dev_requirements,
     },
     dependency_links = cfg.get('dep_links','').split(),

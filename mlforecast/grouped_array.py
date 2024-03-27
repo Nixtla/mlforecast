@@ -5,13 +5,14 @@ __all__ = ['GroupedArray']
 
 # %% ../nbs/grouped_array.ipynb 1
 import concurrent.futures
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Mapping, Tuple, Union
 
+from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 import numpy as np
-from numba import njit
-from window_ops.shift import shift_array
+from utilsforecast.compat import njit
 
-from .compat import BaseLagTransform, CoreGroupedArray
+from .compat import shift_array
+from .lag_transforms import _BaseLagTransform
 
 # %% ../nbs/grouped_array.ipynb 2
 @njit(nogil=True)
@@ -32,39 +33,6 @@ def _transform_series(data, indptr, updates_only, lag, func, *args) -> np.ndarra
             lagged = shift_array(data[indptr[i] : indptr[i + 1]], lag)
             out[indptr[i] : indptr[i + 1]] = func(lagged, *args)
     return out
-
-
-@njit
-def _diff(x, lag):
-    y = x.copy()
-    for i in range(lag):
-        y[i] = np.nan
-    for i in range(lag, x.size):
-        y[i] = x[i] - x[i - lag]
-    return y
-
-
-@njit
-def _apply_difference(data, indptr, new_data, new_indptr, d):
-    n_series = len(indptr) - 1
-    for i in range(n_series):
-        new_data[new_indptr[i] : new_indptr[i + 1]] = data[
-            indptr[i + 1] - d : indptr[i + 1]
-        ]
-        sl = slice(indptr[i], indptr[i + 1])
-        data[sl] = _diff(data[sl], d)
-
-
-@njit
-def _restore_difference(preds, data, indptr, d):
-    n_series = len(indptr) - 1
-    h = len(preds) // n_series
-    for i in range(n_series):
-        s = data[indptr[i] : indptr[i + 1]]
-        for j in range(min(h, d)):
-            preds[i * h + j] += s[j]
-        for j in range(d, h):
-            preds[i * h + j] += preds[i * h + j - d]
 
 
 @njit
@@ -94,23 +62,6 @@ def _expand_target(data, indptr, max_horizon):
                 out[n, k] = np.nan
             n += 1
     return out
-
-
-@njit
-def _append_one(
-    data: np.ndarray, indptr: np.ndarray, new: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Append each value of new to each group in data formed by indptr."""
-    n_series = len(indptr) - 1
-    new_data = np.empty(data.size + new.size, dtype=data.dtype)
-    new_indptr = indptr.copy()
-    new_indptr[1:] += np.arange(1, n_series + 1)
-    for i in range(n_series):
-        prev_slice = slice(indptr[i], indptr[i + 1])
-        new_slice = slice(new_indptr[i], new_indptr[i + 1] - 1)
-        new_data[new_slice] = data[prev_slice]
-        new_data[new_indptr[i + 1] - 1] = new[i]
-    return new_data, new_indptr
 
 
 @njit
@@ -180,7 +131,7 @@ class GroupedArray:
 
     def apply_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], BaseLagTransform]],
+        transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:
         """Apply the transformations using the main process.
@@ -189,10 +140,10 @@ class GroupedArray:
         """
         results = {}
         offset = 1 if updates_only else 0
-        if any(isinstance(tfm, BaseLagTransform) for tfm in transforms.values()):
+        if any(isinstance(tfm, _BaseLagTransform) for tfm in transforms.values()):
             core_ga = CoreGroupedArray(self.data, self.indptr)
         for tfm_name, tfm in transforms.items():
-            if isinstance(tfm, BaseLagTransform):
+            if isinstance(tfm, _BaseLagTransform):
                 if updates_only:
                     results[tfm_name] = tfm.update(core_ga)
                 else:
@@ -206,7 +157,7 @@ class GroupedArray:
 
     def apply_multithreaded_transforms(
         self,
-        transforms: Dict[str, Union[Tuple[Any, ...], BaseLagTransform]],
+        transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
         num_threads: int,
         updates_only: bool = False,
     ) -> Dict[str, np.ndarray]:
@@ -220,7 +171,7 @@ class GroupedArray:
         numba_tfms = {}
         core_tfms = {}
         for name, tfm in transforms.items():
-            if isinstance(tfm, BaseLagTransform):
+            if isinstance(tfm, _BaseLagTransform):
                 core_tfms[name] = tfm
             else:
                 numba_tfms[name] = tfm
@@ -247,9 +198,6 @@ class GroupedArray:
                 else:
                     results[name] = tfm.transform(core_ga)
         return results
-
-    def restore_difference(self, preds: np.ndarray, d: int) -> None:
-        _restore_difference(preds, self.data, self.indptr, d)
 
     def restore_fitted_difference(
         self, series_data: np.ndarray, series_indptr: np.ndarray, d: int
@@ -278,12 +226,16 @@ class GroupedArray:
         indptr = np.append(0, sizes.cumsum())
         return GroupedArray(data, indptr)
 
-    def append(self, new: np.ndarray) -> "GroupedArray":
-        """Appends each element of `new` to each existing group. Returns a copy."""
-        if new.size != self.n_groups:
-            raise ValueError(f"new must be of size {self.n_groups}")
-        new_data, new_indptr = _append_one(self.data, self.indptr, new)
-        return GroupedArray(new_data, new_indptr)
+    def append(self, new_data: np.ndarray) -> "GroupedArray":
+        """Appends each element of `new_data` to each existing group. Returns a copy."""
+        if new_data.size != self.n_groups:
+            raise ValueError(f"`new_data` must be of size {self.n_groups:,}")
+        core_ga = CoreGroupedArray(self.data, self.indptr)
+        new_data = new_data.astype(self.data.dtype, copy=False)
+        new_indptr = np.arange(self.n_groups + 1, dtype=np.int32)
+        new_ga = CoreGroupedArray(new_data, new_indptr)
+        combined = core_ga._append(new_ga)
+        return GroupedArray(combined.data, combined.indptr)
 
     def append_several(
         self, new_sizes: np.ndarray, new_values: np.ndarray, new_groups: np.ndarray

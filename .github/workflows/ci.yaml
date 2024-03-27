@@ -45,6 +45,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.8', '3.9', '3.10']
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_NIXTLA_TMP }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_NIXTLA_TMP }}
     steps:
       - name: Clone repo
         uses: actions/checkout@v3
@@ -105,6 +108,22 @@ jobs:
       - name: Run forecast notebook
         run: nbdev_test --path nbs/forecast.ipynb
 
+  efficiency-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install . pytest pytest-benchmark
+
+      - name: Run efficiency tests
+        run: pytest tests/test_pipeline.py --benchmark-group-by=func --benchmark-sort=fullname
+
   performance-tests:
     runs-on: ubuntu-latest
     steps:
@@ -116,7 +135,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install ".[lag_transforms]" pytest pytest-benchmark
+        run: pip install . datasetsforecast lightgbm pytest
 
-      - name: Run performance tests
-        run: pytest --benchmark-group-by=func --benchmark-sort=fullname
+      - name: Run m4 performance tests
+        run: pytest tests/test_m4.py
