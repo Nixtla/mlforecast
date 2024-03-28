@@ -10,6 +10,7 @@ from typing import Callable, List, Optional
 import numpy as np
 import optuna
 import utilsforecast.processing as ufp
+from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DataFrame
 from utilsforecast.losses import smape
 
@@ -21,7 +22,7 @@ def mlforecast_objective(
     df: DataFrame,
     config_fn: Callable,
     eval_fn: Callable,
-    model_constructor: Callable,
+    model: BaseEstimator,
     freq: Freq,
     n_windows: int,
     h: int,
@@ -40,10 +41,12 @@ def mlforecast_objective(
             time_col=time_col,
             freq=freq,
         )
+        model_copy = clone(model)
+        model_copy.set_params(**config["model_params"])
         metrics = []
         for i, (_, train, valid) in enumerate(splits):
             mlf = MLForecast(
-                models={"model": model_constructor(**config["model_params"])},
+                models={"model": model_copy},
                 freq=freq,
                 **config["mlf_init_params"],
             )
