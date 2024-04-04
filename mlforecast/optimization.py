@@ -15,6 +15,7 @@ from utilsforecast.compat import DataFrame
 from utilsforecast.losses import smape
 
 from . import MLForecast
+from .compat import CatBoostRegressor
 from .core import Freq
 
 # %% ../nbs/optimization.ipynb 3
@@ -33,6 +34,12 @@ def mlforecast_objective(
     def objective(trial: optuna.Trial) -> float:
         config = config_fn(trial)
         trial.set_user_attr("config", copy.deepcopy(config))
+        if all(
+            config["mlf_init_params"].get(k, None) is None
+            for k in ["lags", "lag_transforms", "date_features"]
+        ):
+            # no features
+            return np.inf
         splits = ufp.backtest_splits(
             df,
             n_windows=n_windows,
@@ -42,6 +49,13 @@ def mlforecast_objective(
             freq=freq,
         )
         model_copy = clone(model)
+        model_params = config["model_params"]
+        if config["mlf_fit_params"].get("static_features", []) and isinstance(
+            model, CatBoostRegressor
+        ):
+            # catboost needs the categorical features in the init signature
+            # we assume all statics are categoricals
+            model_params["cat_features"] = config["mlf_fit_params"]["static_features"]
         model_copy.set_params(**config["model_params"])
         metrics = []
         for i, (_, train, valid) in enumerate(splits):
@@ -70,14 +84,18 @@ def mlforecast_objective(
             else:
                 X_df = None
             preds = mlf.predict(h=h, X_df=X_df)
-            full = valid.merge(preds, on=[id_col, time_col], how="left")
-            if full.shape[0] < valid.shape[0]:
+            result = ufp.join(
+                valid[[id_col, time_col, target_col]],
+                preds,
+                on=[id_col, time_col],
+            )
+            if result.shape[0] < valid.shape[0]:
                 raise ValueError(
                     "Cross validation result produced less results than expected. "
                     "Please verify that the passed frequency (freq) matches your series' "
                     "and that there aren't any missing periods."
                 )
-            metric = eval_fn(full)
+            metric = eval_fn(result, train_df=train)
             metrics.append(metric)
             trial.report(metric, step=i)
             if trial.should_prune():
