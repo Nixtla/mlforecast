@@ -5,24 +5,26 @@ __all__ = ['mlforecast_objective']
 
 # %% ../nbs/optimization.ipynb 2
 import copy
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import optuna
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DataFrame
-from utilsforecast.losses import smape
 
 from . import MLForecast
 from .compat import CatBoostRegressor
 from .core import Freq
 
 # %% ../nbs/optimization.ipynb 3
+_TrialToConfig = Callable[[optuna.Trial], Dict[str, Any]]
+
+# %% ../nbs/optimization.ipynb 4
 def mlforecast_objective(
     df: DataFrame,
-    config_fn: Callable,
-    eval_fn: Callable,
+    config_fn: _TrialToConfig,
+    loss: Callable[[DataFrame, DataFrame], float],
     model: BaseEstimator,
     freq: Freq,
     n_windows: int,
@@ -30,7 +32,35 @@ def mlforecast_objective(
     id_col: str = "unique_id",
     time_col: str = "ds",
     target_col: str = "y",
-) -> Callable:
+) -> _TrialToConfig:
+    """optuna objective function for the MLForecast class
+
+    Parameters
+    ----------
+    config_fn : callable
+        Function that takes an optuna trial and produces a configuration with the following keys:
+        - model_params
+        - mlf_init_params
+        - mlf_fit_params
+    loss : callable
+        Function that takes the validation and train dataframes and produces a float.
+    model : BaseEstimator
+        scikit-learn compatible model to be trained
+    freq : str or int
+        pandas' or polars' offset alias or integer denoting the frequency of the series.
+    n_windows : int
+        Number of windows to evaluate.
+    h : int
+        Forecast horizon.
+    id_col : str (default='unique_id')
+        Column that identifies each serie.
+    time_col : str (default='ds')
+        Column that identifies each timestep, its values can be timestamps or integers.
+    target_col : str (default='y')
+        Column that contains the target.
+    study_kwargs : dict, optional (default=None)
+    """
+
     def objective(trial: optuna.Trial) -> float:
         config = config_fn(trial)
         trial.set_user_attr("config", copy.deepcopy(config))
@@ -95,7 +125,7 @@ def mlforecast_objective(
                     "Please verify that the passed frequency (freq) matches your series' "
                     "and that there aren't any missing periods."
                 )
-            metric = eval_fn(result, train_df=train)
+            metric = loss(result, train_df=train)
             metrics.append(metric)
             trial.report(metric, step=i)
             if trial.should_prune():

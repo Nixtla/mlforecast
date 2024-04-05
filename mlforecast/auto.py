@@ -2,31 +2,26 @@
 
 # %% auto 0
 __all__ = ['lightgbm_space', 'xgboost_space', 'catboost_space', 'linear_regression_space', 'ridge_space', 'lasso_space',
-           'elasticnet_space', 'random_forest_space', 'AutoMLForecast']
+           'elastic_net_space', 'random_forest_space', 'AutoModel', 'AutoLightGBM', 'AutoXGBoost', 'AutoCatboost',
+           'AutoLinearRegression', 'AutoRidge', 'AutoLasso', 'AutoElasticNet', 'AutoRandomForest', 'AutoMLForecast']
 
 # %% ../nbs/auto.ipynb 2
-from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import optuna
-import pandas as pd
 from sklearn.base import BaseEstimator, clone
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 from utilsforecast.compat import DataFrame
-from utilsforecast.losses import mase, smape
+from utilsforecast.losses import smape
 from utilsforecast.processing import counts_by_id
 from utilsforecast.validation import validate_freq
 
 from . import MLForecast
-from .core import Freq, Models, _get_model_name, _name_models
-from mlforecast.lag_transforms import (
-    ExpandingMean,
-    ExponentiallyWeightedMean,
-    RollingMean,
-)
-from .optimization import mlforecast_objective
+from .core import Freq, _get_model_name, _name_models
+from .lag_transforms import ExponentiallyWeightedMean, RollingMean
+from .optimization import _TrialToConfig, mlforecast_objective
 from mlforecast.target_transforms import (
     Differences,
     LocalStandardScaler,
@@ -34,7 +29,7 @@ from mlforecast.target_transforms import (
 )
 
 # %% ../nbs/auto.ipynb 3
-def lightgbm_space(trial):
+def lightgbm_space(trial: optuna.Trial):
     return {
         "bagging_freq": 1,
         "learning_rate": 0.05,
@@ -49,7 +44,7 @@ def lightgbm_space(trial):
     }
 
 
-def xgboost_space(trial):
+def xgboost_space(trial: optuna.Trial):
     return {
         "n_estimators": trial.suggest_int("n_estimators", 20, 1000),
         "max_depth": trial.suggest_int("max_depth", 1, 10),
@@ -64,8 +59,9 @@ def xgboost_space(trial):
     }
 
 
-def catboost_space(trial):
+def catboost_space(trial: optuna.Trial):
     return {
+        "silent": True,
         "n_estimators": trial.suggest_int("n_estimators", 50, 1000),
         "depth": trial.suggest_int("depth", 1, 10),
         "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.2, log=True),
@@ -75,25 +71,25 @@ def catboost_space(trial):
     }
 
 
-def linear_regression_space(trial):
+def linear_regression_space(trial: optuna.Trial):
     return {"fit_intercept": trial.suggest_categorical("fit_intercept", [True, False])}
 
 
-def ridge_space(trial):
+def ridge_space(trial: optuna.Trial):
     return {
         "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
         "alpha": trial.suggest_float("alpha", 0.001, 10.0),
     }
 
 
-def lasso_space(trial):
+def lasso_space(trial: optuna.Trial):
     return {
         "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
         "alpha": trial.suggest_float("alpha", 0.001, 10.0),
     }
 
 
-def elasticnet_space(trial):
+def elastic_net_space(trial: optuna.Trial):
     return {
         "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
         "alpha": trial.suggest_float("alpha", 0.001, 10.0),
@@ -101,7 +97,7 @@ def elasticnet_space(trial):
     }
 
 
-def random_forest_space(trial):
+def random_forest_space(trial: optuna.Trial):
     return {
         "n_estimators": trial.suggest_int("n_estimators", 50, 1000),
         "max_depth": trial.suggest_int("max_depth", 1, 10),
@@ -112,56 +108,171 @@ def random_forest_space(trial):
         ),
     }
 
-# %% ../nbs/auto.ipynb 4
-_default_model_spaces = {
-    "LGBMRegressor": lightgbm_space,
-    "XGBRegressor": xgboost_space,
-    "CatBoostRegressor": catboost_space,
-    "LinearRegression": linear_regression_space,
-    "Ridge": ridge_space,
-    "Lasso": lasso_space,
-    "ElasticNet": elasticnet_space,
-    "RandomForest": random_forest_space,
-}
 
-_ModelWithConfig = Tuple[BaseEstimator, Optional[Dict[str, Callable]]]
+class AutoModel:
+    """Structure to hold a model and its search space
 
-# %% ../nbs/auto.ipynb 5
-class AutoMLForecast:
+    Parameters
+    ----------
+    model : BaseEstimator
+        scikit-learn compatible regressor
+    config : callable
+        function that takes an optuna trial and produces a configuration
+    """
 
     def __init__(
         self,
-        models_with_configs: Union[List[_ModelWithConfig], Dict[str, _ModelWithConfig]],
+        model: BaseEstimator,
+        config: _TrialToConfig,
+    ):
+        self.model = model
+        self.config = config
+
+    def __repr__(self):
+        return f"AutoModel(model={_get_model_name(self.model)})"
+
+
+class AutoLightGBM(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from mlforecast.compat import LGBMRegressor
+
+        super().__init__(
+            LGBMRegressor(),
+            config if config is not None else lightgbm_space,
+        )
+
+
+class AutoXGBoost(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from mlforecast.compat import XGBRegressor
+
+        super().__init__(
+            XGBRegressor(),
+            config if config is not None else xgboost_space,
+        )
+
+
+class AutoCatboost(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from mlforecast.compat import CatBoostRegressor
+
+        super().__init__(
+            CatBoostRegressor(),
+            config if config is not None else catboost_space,
+        )
+
+
+class AutoLinearRegression(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from sklearn.linear_model import LinearRegression
+
+        super().__init__(
+            LinearRegression(),
+            config if config is not None else linear_regression_space,
+        )
+
+
+class AutoRidge(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from sklearn.linear_model import Ridge
+
+        super().__init__(
+            Ridge(),
+            config if config is not None else ridge_space,
+        )
+
+
+class AutoLasso(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from sklearn.linear_model import Lasso
+
+        super().__init__(
+            Lasso(),
+            config if config is not None else lasso_space,
+        )
+
+
+class AutoElasticNet(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from sklearn.linear_model import ElasticNet
+
+        super().__init__(
+            ElasticNet(),
+            config if config is not None else elastic_net_space,
+        )
+
+
+class AutoRandomForest(AutoModel):
+    def __init__(
+        self,
+        config: Optional[_TrialToConfig] = None,
+    ):
+        from sklearn.ensemble import RandomForestRegressor
+
+        super().__init__(
+            RandomForestRegressor(),
+            config if config is not None else random_forest_space,
+        )
+
+# %% ../nbs/auto.ipynb 6
+class AutoMLForecast:
+    """Hyperparameter optimization helper
+
+    Parameters
+    ----------
+    models : list or dict
+        Auto models to be optimized.
+    freq : str or int
+        pandas' or polars' offset alias or integer denoting the frequency of the series.
+    season_length : int
+        Length of the seasonal period. This is used for producing the feature space.
+    init_config : callable, optional (default=None)
+        Function that takes an optuna trial and produces a configuration passed to the MLForecast constructor.
+    fit_config : callable, optional (default=None)
+        Function that takes an optuna trial and produces a configuration passed to the MLForecast fit method.
+    num_threads : int (default=1)
+        Number of threads to use when computing the features.
+    """
+
+    def __init__(
+        self,
+        models: Union[List[AutoModel], Dict[str, AutoModel]],
         freq: Freq,
         season_length: int,
-        init_config: Optional[Callable] = None,
-        fit_config: Optional[Callable] = None,
+        init_config: Optional[_TrialToConfig] = None,
+        fit_config: Optional[_TrialToConfig] = None,
         num_threads: int = 1,
     ):
         self.freq = freq
         self.season_length = season_length
         self.num_threads = num_threads
-        if isinstance(models_with_configs, list):
-            names = _name_models([_get_model_name(m) for m, _ in models_with_configs])
-            self.models_with_configs = {
-                name: (model, config)
-                for name, (model, config) in zip(names, models_with_configs)
-            }
-        elif isinstance(models_with_configs, dict):
-            self.models_with_configs = models_with_configs
+        if isinstance(models, list):
+            model_names = _name_models([_get_model_name(m) for m in models])
+            models_with_names = dict(zip(model_names, models))
         else:
-            raise ValueError(
-                "`models_with_configs` should be a list of tuples "
-                "or a dict from str to tuple."
-            )
-        for name, (model, config) in self.models_with_configs.items():
-            if config is not None:
-                continue
-            if name not in _default_model_spaces:
-                raise NotImplementedError(
-                    f"{name} does not have a default config. Please provide one."
-                )
-            self.models_with_configs[name] = (model, _default_model_spaces[name])
+            models_with_names = models
+        self.models = models_with_names
         self.init_config = init_config
         if fit_config is not None:
             self.fit_config = fit_config
@@ -173,7 +284,7 @@ class AutoMLForecast:
         h: int,
         min_samples: int,
         min_value: float,
-    ) -> Callable:
+    ) -> _TrialToConfig:
         # target transforms
         candidate_targ_tfms = [
             None,
@@ -205,9 +316,7 @@ class AutoMLForecast:
                 )
 
         # lags
-        candidate_lags = [None]
-        if self.season_length > 1:
-            candidate_lags.append([self.season_length])
+        candidate_lags = [None, [self.season_length]]
         seasonality2extra_candidate_lags = {
             7: [
                 [7, 14],
@@ -217,6 +326,9 @@ class AutoMLForecast:
             24: [
                 range(1, 25),
                 range(24, 24 * 7 + 1, 24),
+            ],
+            52: [
+                range(4, 53, 4),
             ],
         }
         candidate_lags.extend(
@@ -265,13 +377,9 @@ class AutoMLForecast:
             52: ["week", "year"],
             60: ["weekday", "hour", "second"],
         }
-        date_features = seasonality2date_features.get(self.season_length, None)
+        candidate_date_features = seasonality2date_features.get(self.season_length, [])
         if isinstance(self.freq, int):
-            date_features = None
-        if date_features is not None:
-            use_date_features = trial.suggest_int("use_date_features", 0, 1)
-            if not use_date_features:
-                date_features = None
+            candidate_date_features = []
 
         def config(trial):
             # target transforms
@@ -293,6 +401,16 @@ class AutoMLForecast:
             else:
                 lag_transforms = None
 
+            # date features
+            if candidate_date_features:
+                use_date_features = trial.suggest_int("use_date_features", 0, 1)
+                if use_date_features:
+                    date_features = candidate_date_features
+                else:
+                    date_features = None
+            else:
+                date_features = None
+
             return {
                 "lags": lags,
                 "target_transforms": target_transforms,
@@ -308,13 +426,45 @@ class AutoMLForecast:
         n_windows: int,
         h: int,
         num_samples: int,
-        loss: Optional[Callable] = None,
+        loss: Optional[Callable[[DataFrame, DataFrame], float]] = None,
         id_col: str = "unique_id",
         time_col: str = "ds",
         target_col: str = "y",
         study_kwargs: Optional[Dict[str, Any]] = None,
         optimize_kwargs: Optional[Dict[str, Any]] = None,
     ) -> "AutoMLForecast":
+        """Carry out the optimization process.
+        Each model is optimized independently and the best one is trained on all data
+
+        Parameters
+        ----------
+        df : pandas or polars DataFrame
+            Series data in long format.
+        n_windows : int
+            Number of windows to evaluate.
+        h : int
+            Forecast horizon.
+        num_samples : int
+            Number of trials to run
+        loss : callable, optional (default=None)
+            Function that takes the validation and train dataframes and produces a float.
+            If `None` will use the average SMAPE across series.
+        id_col : str (default='unique_id')
+            Column that identifies each serie.
+        time_col : str (default='ds')
+            Column that identifies each timestep, its values can be timestamps or integers.
+        target_col : str (default='y')
+            Column that contains the target.
+        study_kwargs : dict, optional (default=None)
+            Keyword arguments to be passed to the optuna.Study constructor.
+        optimize_kwargs : dict, optional (default=None)
+            Keyword arguments to be passed to the Study.optimize method.
+
+        Returns
+        -------
+        AutoMLForecast
+            object with best models and optimization results
+        """
         validate_freq(df[time_col], self.freq)
         if self.init_config is not None:
             init_config = self.init_config
@@ -337,18 +487,14 @@ class AutoMLForecast:
         if "sampler" not in study_kwargs:
             # for reproducibility
             study_kwargs["sampler"] = optuna.samplers.TPESampler(seed=0)
-        if optimize_kwargs is None:
-            optimize_kwargs = {}
-        if "n_jobs" not in optimize_kwargs:
-            optimize_kwargs["n_jobs"] = 1
 
         self.results_ = []
         self.models_ = {}
-        for name, (model, model_config) in self.models_with_configs.items():
+        for name, auto_model in self.models.items():
 
             def config_fn(trial: optuna.Trial) -> float:
                 return {
-                    "model_params": model_config(trial),
+                    "model_params": auto_model.config(trial),
                     "mlf_init_params": {
                         **init_config(trial),
                         "num_threads": self.num_threads,
@@ -359,8 +505,8 @@ class AutoMLForecast:
             objective = mlforecast_objective(
                 df=df,
                 config_fn=config_fn,
-                eval_fn=loss,
-                model=model,
+                loss=loss,
+                model=auto_model.model,
                 freq=self.freq,
                 n_windows=n_windows,
                 h=h,
@@ -372,7 +518,7 @@ class AutoMLForecast:
             study.optimize(objective, n_trials=num_samples, **optimize_kwargs)
             self.results_.append(study)
             best_config = study.best_trial.user_attrs["config"]
-            best_model = clone(model)
+            best_model = clone(auto_model.model)
             best_model.set_params(**best_config["model_params"])
             self.models_[name] = MLForecast(
                 models={name: best_model},
@@ -387,6 +533,20 @@ class AutoMLForecast:
         h: int,
         X_df: Optional[DataFrame] = None,
     ) -> DataFrame:
+        """ "Compute forecasts
+
+        Parameters
+        ----------
+        h : int
+            Number of periods to predict.
+        X_df : pandas or polars DataFrame, optional (default=None)
+            Dataframe with the future exogenous features. Should have the id column and the time column.
+
+        Returns
+        -------
+        pandas or polars DataFrame
+            Predictions for each serie and timestep, with one column per model.
+        """
         all_preds = None
         for name, model in self.models_.items():
             preds = model.predict(h=h, X_df=X_df)
@@ -396,6 +556,12 @@ class AutoMLForecast:
                 all_preds[name] = preds[name]
         return all_preds
 
-    def save(self, path: str) -> None:
+    def save(self, path: Union[str, Path]) -> None:
+        """Save MLForecast objects
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Directory where artifacts will be stored."""
         for name, model in self.models_.items():
             model.save(f"{path}/{name}")
