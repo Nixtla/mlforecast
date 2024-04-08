@@ -24,7 +24,7 @@ _TrialToConfig = Callable[[optuna.Trial], Dict[str, Any]]
 def mlforecast_objective(
     df: DataFrame,
     config_fn: _TrialToConfig,
-    loss: Callable[[DataFrame, DataFrame], float],
+    loss: Callable,
     model: BaseEstimator,
     freq: Freq,
     n_windows: int,
@@ -32,7 +32,7 @@ def mlforecast_objective(
     id_col: str = "unique_id",
     time_col: str = "ds",
     target_col: str = "y",
-) -> _TrialToConfig:
+) -> Callable[[optuna.Trial], float]:
     """optuna objective function for the MLForecast class
 
     Parameters
@@ -130,6 +130,6 @@ def mlforecast_objective(
             trial.report(metric, step=i)
             if trial.should_prune():
                 raise optuna.TrialPruned()
-        return np.mean(metrics)
+        return np.mean(metrics).item()
 
     return objective

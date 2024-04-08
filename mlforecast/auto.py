@@ -293,7 +293,7 @@ class AutoMLForecast:
         min_value: float,
     ) -> _TrialToConfig:
         # target transforms
-        candidate_targ_tfms = [
+        candidate_targ_tfms: List[Any] = [
             None,
             [LocalStandardScaler()],
             [Differences([1]), LocalStandardScaler()],
@@ -338,13 +338,14 @@ class AutoMLForecast:
                 range(4, 53, 4),
             ],
         }
-        candidate_lags.extend(
-            seasonality2extra_candidate_lags.get(self.season_length, [])
-        )
+        if self.season_length in seasonality2extra_candidate_lags:
+            candidate_lags.extend(
+                seasonality2extra_candidate_lags[self.season_length]  # type: ignore
+            )
         if h >= 2 * self.season_length:
             candidate_lags.extend(
                 [
-                    range(self.season_length, h + 1, self.season_length),
+                    range(self.season_length, h + 1, self.season_length),  # type: ignore
                     [h],
                     [self.season_length, h],
                 ]
@@ -501,7 +502,7 @@ class AutoMLForecast:
         self.models_ = {}
         for name, auto_model in self.models.items():
 
-            def config_fn(trial: optuna.Trial) -> float:
+            def config_fn(trial: optuna.Trial) -> Dict[str, Any]:
                 return {
                     "model_params": auto_model.config(trial),
                     "mlf_init_params": {
