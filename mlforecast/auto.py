@@ -281,7 +281,7 @@ class AutoMLForecast:
                 raise ValueError("`fit_config` must be a function.")
             self.fit_config = fit_config
         else:
-            self.fit_config = lambda trial: {}
+            self.fit_config = lambda trial: {}  # noqa: ARG005
 
     def __repr__(self):
         return f"AutoMLForecast(models={self.models})"
@@ -486,7 +486,7 @@ class AutoMLForecast:
 
         if loss is None:
 
-            def loss(df, train_df):
+            def loss(df, train_df):  # noqa: ARG001
                 return smape(df, models=["model"])["model"].mean()
 
         if study_kwargs is None:
