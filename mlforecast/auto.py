@@ -5,7 +5,7 @@ __all__ = ['lightgbm_space', 'xgboost_space', 'catboost_space', 'linear_regressi
            'elastic_net_space', 'random_forest_space', 'AutoModel', 'AutoLightGBM', 'AutoXGBoost', 'AutoCatboost',
            'AutoLinearRegression', 'AutoRidge', 'AutoLasso', 'AutoElasticNet', 'AutoRandomForest', 'AutoMLForecast']
 
-# %% ../nbs/auto.ipynb 2
+# %% ../nbs/auto.ipynb 3
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -28,7 +28,7 @@ from mlforecast.target_transforms import (
     GlobalSklearnTransformer,
 )
 
-# %% ../nbs/auto.ipynb 3
+# %% ../nbs/auto.ipynb 4
 def lightgbm_space(trial: optuna.Trial):
     return {
         "bagging_freq": 1,
@@ -235,7 +235,7 @@ class AutoRandomForest(AutoModel):
             config if config is not None else random_forest_space,
         )
 
-# %% ../nbs/auto.ipynb 6
+# %% ../nbs/auto.ipynb 7
 class AutoMLForecast:
     """Hyperparameter optimization helper
 
@@ -273,11 +273,18 @@ class AutoMLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        if init_config is not None and not callable(init_config):
+            raise ValueError("`init_config` must be a function.")
         self.init_config = init_config
         if fit_config is not None:
+            if not callable(fit_config):
+                raise ValueError("`fit_config` must be a function.")
             self.fit_config = fit_config
         else:
             self.fit_config = lambda trial: {}
+
+    def __repr__(self):
+        return f"AutoMLForecast(models={self.models})"
 
     def _seasonality_based_config(
         self,
@@ -487,6 +494,8 @@ class AutoMLForecast:
         if "sampler" not in study_kwargs:
             # for reproducibility
             study_kwargs["sampler"] = optuna.samplers.TPESampler(seed=0)
+        if optimize_kwargs is None:
+            optimize_kwargs = {}
 
         self.results_ = []
         self.models_ = {}
@@ -557,7 +566,7 @@ class AutoMLForecast:
         return all_preds
 
     def save(self, path: Union[str, Path]) -> None:
-        """Save MLForecast objects
+        """Save AutoMLForecast objects
 
         Parameters
         ----------

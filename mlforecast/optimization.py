@@ -3,7 +3,7 @@
 # %% auto 0
 __all__ = ['mlforecast_objective']
 
-# %% ../nbs/optimization.ipynb 2
+# %% ../nbs/optimization.ipynb 3
 import copy
 from typing import Any, Callable, Dict, Optional
 
@@ -17,10 +17,10 @@ from . import MLForecast
 from .compat import CatBoostRegressor
 from .core import Freq
 
-# %% ../nbs/optimization.ipynb 3
+# %% ../nbs/optimization.ipynb 4
 _TrialToConfig = Callable[[optuna.Trial], Dict[str, Any]]
 
-# %% ../nbs/optimization.ipynb 4
+# %% ../nbs/optimization.ipynb 5
 def mlforecast_objective(
     df: DataFrame,
     config_fn: _TrialToConfig,
