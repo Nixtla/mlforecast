@@ -73,7 +73,7 @@ train.shape, valid.shape
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L126"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L127"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast
@@ -81,9 +81,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 > ``` text
 >  MLForecast (models:Union[sklearn.base.BaseEstimator,List[sklearn.base.Bas
 >              eEstimator],Dict[str,sklearn.base.BaseEstimator]],
->              freq:Union[int,str,pandas._libs.tslibs.offsets.BaseOffset],
->              lags:Optional[Iterable[int]]=None, lag_transforms:Optional[Di
->              ct[int,List[Union[Callable,Tuple[Callable,Any]]]]]=None,
+>              freq:Union[int,str], lags:Optional[Iterable[int]]=None, lag_t
+>              ransforms:Optional[Dict[int,List[Union[Callable,Tuple[Callabl
+>              e,Any]]]]]=None,
 >              date_features:Optional[Iterable[Union[str,Callable]]]=None,
 >              num_threads:int=1, target_transforms:Optional[List[Union[mlfo
 >              recast.target_transforms.BaseTargetTransform,mlforecast.targe
@@ -130,7 +130,7 @@ Once we have this setup we can compute the features and fit the model.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L438"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L439"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
@@ -185,7 +185,7 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L951"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L952"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.save
@@ -204,7 +204,7 @@ Save forecast object
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L963"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L964"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.load
@@ -223,7 +223,7 @@ Load forecast object
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L978"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L979"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.update
@@ -244,7 +244,7 @@ Update the values of the stored series.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L567"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L568"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.make_future_dataframe
@@ -276,7 +276,7 @@ expected_future
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L591"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L592"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.get_missing_future
@@ -306,7 +306,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L539"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L540"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.forecast_fitted_values
@@ -365,7 +365,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L610"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L611"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -521,7 +521,7 @@ models you can call `Forecast.preprocess`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L205"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L206"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.preprocess
@@ -578,7 +578,7 @@ only stores the series information.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L261"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L262"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit_models
@@ -616,7 +616,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L754"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L755"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
@@ -826,7 +826,7 @@ fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutof
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L191"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L192"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.from_cv

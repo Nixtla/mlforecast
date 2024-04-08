@@ -14,10 +14,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ### LightGBMCV
 
 > ``` text
->  LightGBMCV (freq:Union[int,str,pandas._libs.tslibs.offsets.BaseOffset,Non
->              eType]=None, lags:Optional[Iterable[int]]=None, lag_transform
->              s:Optional[Dict[int,List[Union[Callable,Tuple[Callable,Any]]]
->              ]]=None,
+>  LightGBMCV (freq:Union[int,str], lags:Optional[Iterable[int]]=None, lag_t
+>              ransforms:Optional[Dict[int,List[Union[Callable,Tuple[Callabl
+>              e,Any]]]]]=None,
 >              date_features:Optional[Iterable[Union[str,Callable]]]=None,
 >              num_threads:int=1, target_transforms:Optional[List[Union[mlfo
 >              recast.target_transforms.BaseTargetTransform,mlforecast.targe
@@ -28,7 +27,7 @@ Create LightGBM CV object.
 
 |                   | **Type** | **Default** | **Details**                                                                                                               |
 |------|------------------|-------------------------|-------------------------|
-| freq              | Union    | None        | Pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                                   |
+| freq              | Union    |             | Pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                                   |
 | lags              | Optional | None        | Lags of the target to use as features.                                                                                    |
 | lag_transforms    | Optional | None        | Mapping of target lags to their transformations.                                                                          |
 | date_features     | Optional | None        | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.           |

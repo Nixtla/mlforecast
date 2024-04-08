@@ -14,16 +14,15 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ### DistributedMLForecast
 
 > ``` text
->  DistributedMLForecast (models,
->                         freq:Union[int,str,pandas._libs.tslibs.offsets.Bas
->                         eOffset], lags:Optional[Iterable[int]]=None, lag_t
->                         ransforms:Optional[Dict[int,List[Union[Callable,Tu
->                         ple[Callable,Any]]]]]=None, date_features:Optional
->                         [Iterable[Union[str,Callable]]]=None,
->                         num_threads:int=1, target_transforms:Optional[List
->                         [Union[mlforecast.target_transforms.BaseTargetTran
->                         sform,mlforecast.target_transforms._BaseGroupedArr
->                         ayTargetTransform]]]=None, engine=None,
+>  DistributedMLForecast (models, freq:Union[int,str],
+>                         lags:Optional[Iterable[int]]=None, lag_transforms:
+>                         Optional[Dict[int,List[Union[Callable,Tuple[Callab
+>                         le,Any]]]]]=None, date_features:Optional[Iterable[
+>                         Union[str,Callable]]]=None, num_threads:int=1, tar
+>                         get_transforms:Optional[List[Union[mlforecast.targ
+>                         et_transforms.BaseTargetTransform,mlforecast.targe
+>                         t_transforms._BaseGroupedArrayTargetTransform]]]=N
+>                         one, engine=None,
 >                         num_partitions:Optional[int]=None)
 > ```
 

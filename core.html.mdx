@@ -74,15 +74,15 @@ serie
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L162"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L169"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### TimeSeries
 
 > ``` text
->  TimeSeries (freq:Union[int,str,pandas._libs.tslibs.offsets.BaseOffset],
->              lags:Optional[Iterable[int]]=None, lag_transforms:Optional[Di
->              ct[int,List[Union[Callable,Tuple[Callable,Any]]]]]=None,
+>  TimeSeries (freq:Union[int,str], lags:Optional[Iterable[int]]=None, lag_t
+>              ransforms:Optional[Dict[int,List[Union[Callable,Tuple[Callabl
+>              e,Any]]]]]=None,
 >              date_features:Optional[Iterable[Union[str,Callable]]]=None,
 >              num_threads:int=1, target_transforms:Optional[List[Union[mlfo
 >              recast.target_transforms.BaseTargetTransform,mlforecast.targe
@@ -158,7 +158,7 @@ transformation.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L448"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L455"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.fit_transform
@@ -296,7 +296,7 @@ test_fail(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L693"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L700"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.predict
@@ -369,7 +369,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L799"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L806"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.update
