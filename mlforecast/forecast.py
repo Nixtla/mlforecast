@@ -27,6 +27,7 @@ from mlforecast.core import (
     TargetTransform,
     TimeSeries,
     _name_models,
+    _get_model_name,
 )
 from .grouped_array import GroupedArray
 
@@ -159,7 +160,7 @@ class MLForecast:
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
         if isinstance(models, list):
-            model_names = _name_models([m.__class__.__name__ for m in models])
+            model_names = _name_models([_get_model_name(m) for m in models])
             models_with_names = dict(zip(model_names, models))
         else:
             models_with_names = models
@@ -830,7 +831,8 @@ class MLForecast:
             Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
         results = []
-        self.cv_models_ = []
+        cv_models = []
+        cv_fitted_values = []
         splits = ufp.backtest_splits(
             df,
             n_windows=n_windows,
@@ -841,7 +843,6 @@ class MLForecast:
             step_size=step_size,
             input_size=input_size,
         )
-        self.cv_fitted_values_ = []
         for i_window, (cutoffs, train, valid) in enumerate(splits):
             should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
             if should_fit:
@@ -858,9 +859,9 @@ class MLForecast:
                     fitted=fitted,
                     as_numpy=as_numpy,
                 )
-                self.cv_models_.append(self.models_)
+                cv_models.append(self.models_)
                 if fitted:
-                    self.cv_fitted_values_.append(
+                    cv_fitted_values.append(
                         ufp.assign_columns(self.fcst_fitted_values_, "fold", i_window)
                     )
             if fitted and not should_fit:
@@ -895,7 +896,7 @@ class MLForecast:
                     max_horizon=max_horizon,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
-                self.cv_fitted_values_.append(fitted_values)
+                cv_fitted_values.append(fitted_values)
             static = [c for c in self.ts.static_features_.columns if c != id_col]
             dynamic = [
                 c
@@ -933,6 +934,8 @@ class MLForecast:
                 )
             results.append(result)
         del self.models_
+        self.cv_models_ = cv_models
+        self.cv_fitted_values_ = cv_fitted_values
         out = ufp.vertical_concat(results, match_categories=False)
         out = ufp.drop_index_if_pandas(out)
         first_out_cols = [id_col, time_col, "cutoff", target_col]
