@@ -343,12 +343,35 @@ class TimeSeries:
                 feat_vals = getattr(dates, feature)
             else:
                 feat_vals = getattr(dates.dt, feature)()
-        if not isinstance(feat_vals, pl_Series):
+        if isinstance(feat_vals, (pd.Index, pd.Series)):
             feat_vals = np.asarray(feat_vals)
             feat_dtype = date_features_dtypes.get(feature)
             if feat_dtype is not None:
                 feat_vals = feat_vals.astype(feat_dtype)
         return feat_name, feat_vals
+
+    def _add_date_features(self, df):
+        names = [f.__name__ if callable(f) else f for f in self.date_features]
+        features = [f for f, name in zip(self.date_features, names) if name not in df]
+        if not features:
+            return df
+        unique_dates = df[self.time_col].unique()
+        if isinstance(df, pd.DataFrame):
+            # all kinds of trickery to make this fast
+            unique_dates = pd.Index(unique_dates)
+            date2pos = {date: i for i, date in enumerate(unique_dates)}
+            restore_idxs = df[self.time_col].map(date2pos)
+            for feature in features:
+                feat_name, feat_vals = self._compute_date_feature(unique_dates, feature)
+                df[feat_name] = feat_vals[restore_idxs]
+        elif isinstance(df, pl_DataFrame):
+            exprs = []
+            for feat in features:
+                name, vals = self._compute_date_feature(pl.col(self.time_col), feat)
+                exprs.append(vals.alias(name))
+            feats = unique_dates.to_frame().with_columns(*exprs)
+            df = df.join(feats, on=self.time_col, how="left")
+        return df
 
     def _transform(
         self,
@@ -421,18 +444,7 @@ class TimeSeries:
             df = ufp.assign_columns(df, feat, features[feat])
 
         # date features
-        if self.date_features:
-            dates = df[self.time_col]
-            if isinstance(dates, pd.Series) and not np.issubdtype(
-                dates.dtype.type, np.integer
-            ):
-                dates = pd.DatetimeIndex(dates)
-            for feature in self.date_features:
-                feat_name = feature.__name__ if callable(feature) else feature
-                if feat_name in df:
-                    continue
-                _, feat_vals = self._compute_date_feature(dates, feature)
-                df = ufp.assign_columns(df, feat_name, feat_vals)
+        df = self._add_date_features(df)
 
         # assemble return
         if return_X_y:
@@ -506,18 +518,15 @@ class TimeSeries:
             self.curr_dates, self.freq, 1
         )
         self.test_dates.append(self.curr_dates)
-
         features = self._compute_transforms(self.transforms, updates_only=True)
-
-        for feature in self.date_features:
-            feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
-            features[feat_name] = feat_vals
-
+        features[self.time_col] = self.curr_dates
         if isinstance(self.last_dates, pl_Series):
             df_constructor = pl_DataFrame
         else:
             df_constructor = pd.DataFrame
-        features_df = df_constructor(features)[self.features]
+        features_df = df_constructor(features)
+        features_df = self._add_date_features(features_df)
+        features_df = features_df[self.features]
         return ufp.horizontal_concat([self.static_features_, features_df])
 
     def _get_raw_predictions(self) -> np.ndarray:
