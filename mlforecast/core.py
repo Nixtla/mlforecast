@@ -425,7 +425,7 @@ class TimeSeries:
         date_features = [
             f for f, name in zip(self.date_features, names) if name not in df
         ]
-        if features:
+        if date_features:
             unique_dates = df[self.time_col].unique()
             if isinstance(df, pd.DataFrame):
                 # all kinds of trickery to make this fast
