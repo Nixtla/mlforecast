@@ -439,7 +439,7 @@ class TimeSeries:
                     df[feat_name] = feat_vals[restore_idxs]
             elif isinstance(df, pl_DataFrame):
                 exprs = []
-                for feat in date_features:
+                for feat in date_features:  # type: ignore
                     name, vals = self._compute_date_feature(pl.col(self.time_col), feat)
                     exprs.append(vals.alias(name))
                 feats = unique_dates.to_frame().with_columns(*exprs)
