@@ -422,7 +422,9 @@ class TimeSeries:
 
         # date features
         names = [f.__name__ if callable(f) else f for f in self.date_features]
-        features = [f for f, name in zip(self.date_features, names) if name not in df]
+        date_features = [
+            f for f, name in zip(self.date_features, names) if name not in df
+        ]
         if features:
             unique_dates = df[self.time_col].unique()
             if isinstance(df, pd.DataFrame):
@@ -430,14 +432,14 @@ class TimeSeries:
                 unique_dates = pd.Index(unique_dates)
                 date2pos = {date: i for i, date in enumerate(unique_dates)}
                 restore_idxs = df[self.time_col].map(date2pos)
-                for feature in features:
+                for feature in date_features:
                     feat_name, feat_vals = self._compute_date_feature(
                         unique_dates, feature
                     )
                     df[feat_name] = feat_vals[restore_idxs]
             elif isinstance(df, pl_DataFrame):
                 exprs = []
-                for feat in features:
+                for feat in date_features:
                     name, vals = self._compute_date_feature(pl.col(self.time_col), feat)
                     exprs.append(vals.alias(name))
                 feats = unique_dates.to_frame().with_columns(*exprs)
