@@ -26,7 +26,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                         num_partitions:Optional[int]=None)
 > ```
 
-Multi backend distributed pipeline
+*Multi backend distributed pipeline*
 
 ------------------------------------------------------------------------
 
@@ -44,7 +44,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                             keep_last_n:Optional[int]=None)
 > ```
 
-Apply the feature engineering and train the models.
+*Apply the feature engineering and train the models.*
 
 |                 | **Type**                  | **Default** | **Details**                                                                                                                |
 |------|------------------|-------------------------|-------------------------|
@@ -74,7 +74,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                 new_df:Optional[~AnyDataFrame]=None)
 > ```
 
-Compute the predictions for the next `horizon` steps.
+*Compute the predictions for the next `horizon` steps.*
 
 |                         | **Type**         | **Default** | **Details**                                                                                                                                                                                                                                                                                         |
 |------|------------------|-------------------------|-------------------------|
@@ -97,7 +97,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  DistributedMLForecast.save (path:str)
 > ```
 
-Save forecast object
+*Save forecast object*
 
 |             | **Type** | **Details**                               |
 |-------------|----------|-------------------------------------------|
@@ -116,7 +116,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  DistributedMLForecast.load (path:str, engine)
 > ```
 
-Load forecast object
+*Load forecast object*
 
 |             | **Type**                  | **Details**                                                             |
 |--------|---------------------------|-------------------------------------|
@@ -136,7 +136,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  DistributedMLForecast.update (df:pandas.core.frame.DataFrame)
 > ```
 
-Update the values of the stored series.
+*Update the values of the stored series.*
 
 |             | **Type**  | **Details**                      |
 |-------------|-----------|----------------------------------|
@@ -155,11 +155,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  DistributedMLForecast.to_local ()
 > ```
 
-Convert this distributed forecast object into a local one
+\*Convert this distributed forecast object into a local one
 
 This pulls all the data from the remote machines, so you have to be sure
 that it fits in the scheduler/driver. If you’re not sure use the save
-method instead.
+method instead.\*
 
 ------------------------------------------------------------------------
 
@@ -178,7 +178,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                    keep_last_n:Optional[int]=None)
 > ```
 
-Add the features to `data`.
+*Add the features to `data`.*
 
 |                 | **Type**         | **Default** | **Details**                                                                                                                |
 |------|------------------|-------------------------|-------------------------|
@@ -215,9 +215,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                          input_size:Optional[int]=None)
 > ```
 
-Perform time series cross validation. Creates `n_windows` splits where
+*Perform time series cross validation. Creates `n_windows` splits where
 each window has `h` test periods, trains the models, computes the
-predictions and merges the actuals.
+predictions and merges the actuals.*
 
 |                         | **Type**         | **Default** | **Details**                                                                                                                                                                                                                                                          |
 |------|------------------|-------------------------|-------------------------|

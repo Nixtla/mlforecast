@@ -10,9 +10,7 @@ Wrapper of `xgboost.spark.SparkXGBRegressor` that adds an
 and broadcast it to the workers.
 
 ``` text
-/opt/hostedtoolcache/Python/3.10.14/x64/lib/python3.10/site-packages/fastcore/docscrape.py:225: UserWarning: Unknown section Note
-  else: warn(msg)
-/opt/hostedtoolcache/Python/3.10.14/x64/lib/python3.10/site-packages/fastcore/docscrape.py:225: UserWarning: Unknown section Examples
+/opt/hostedtoolcache/Python/3.10.14/x64/lib/python3.10/site-packages/fastcore/docscrape.py:230: UserWarning: Unknown section Note
   else: warn(msg)
 ```
 
@@ -37,7 +35,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                    enable_sparse_data_optim:bool=False, **kwargs:Any)
 > ```
 
-SparkXGBRegressor is a PySpark ML estimator. It implements the XGBoost
+\*SparkXGBRegressor is a PySpark ML estimator. It implements the XGBoost
 regression algorithm based on XGBoost python library, and it can be used
 in PySpark Pipeline and PySpark ML meta algorithms like -
 :py:class:`~pyspark.ml.tuning.CrossValidator`/ -
@@ -60,5 +58,5 @@ SparkXGBRegressor doesn’t support `validate_features` and
 
 SparkXGBRegressor doesn’t support setting `nthread` xgboost param,
 instead, the `nthread` param for each xgboost worker will be set equal
-to `spark.task.cpus` config value.
+to `spark.task.cpus` config value.\*
 

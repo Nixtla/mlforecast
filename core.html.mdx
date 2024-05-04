@@ -90,7 +90,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >              lag_transforms_namer:Optional[Callable]=None)
 > ```
 
-Utility class for storing and transforming time series data.
+*Utility class for storing and transforming time series data.*
 
 The
 [`TimeSeries`](https://Nixtla.github.io/mlforecast/core.html#timeseries)
@@ -158,7 +158,7 @@ transformation.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L455"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L466"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.fit_transform
@@ -174,13 +174,13 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                            return_X_y:bool=False, as_numpy:bool=False)
 > ```
 
-Add the features to `data` and save the required information for the
+\*Add the features to `data` and save the required information for the
 predictions step.
 
 If not all features are static, specify which ones are in
 `static_features`. If you don’t want to drop rows with null values after
 the transformations set `dropna=False` If `keep_last_n` is not None then
-that number of observations is kept across all series for updates.
+that number of observations is kept across all series for updates.\*
 
 ```python
 flow_config = dict(
@@ -296,7 +296,7 @@ test_fail(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L700"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L711"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.predict
@@ -369,7 +369,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L806"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L817"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.update
@@ -380,5 +380,5 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                     .frame.DataFrame])
 > ```
 
-Update the values of the stored series.
+*Update the values of the stored series.*
 

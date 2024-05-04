@@ -91,7 +91,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >              lag_transforms_namer:Optional[Callable]=None)
 > ```
 
-Forecasting pipeline
+*Forecasting pipeline*
 
 |                      | **Type** | **Default** | **Details**                                                                                                               |
 |------|------------------|-------------------------|-------------------------|
@@ -147,7 +147,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                  fitted:bool=False, as_numpy:bool=False)
 > ```
 
-Apply the feature engineering and train the models.
+*Apply the feature engineering and train the models.*
 
 |                      | **Type**       | **Default** | **Details**                                                                                                                                                   |
 |------|------------------|-------------------------|-------------------------|
@@ -194,7 +194,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  MLForecast.save (path:Union[str,pathlib.Path])
 > ```
 
-Save forecast object
+*Save forecast object*
 
 |             | **Type** | **Details**                               |
 |-------------|----------|-------------------------------------------|
@@ -213,7 +213,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  MLForecast.load (path:Union[str,pathlib.Path])
 > ```
 
-Load forecast object
+*Load forecast object*
 
 |             | **Type**       | **Details**                     |
 |-------------|----------------|---------------------------------|
@@ -234,7 +234,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                     .frame.DataFrame])
 > ```
 
-Update the values of the stored series.
+*Update the values of the stored series.*
 
 |             | **Type** | **Details**                      |
 |-------------|----------|----------------------------------|
@@ -253,8 +253,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  MLForecast.make_future_dataframe (h:int)
 > ```
 
-Create a dataframe with all ids and future times in the forecasting
-horizon.
+*Create a dataframe with all ids and future times in the forecasting
+horizon.*
 
 |             | **Type**  | **Details**                                      |
 |-------------|-----------|--------------------------------------------------|
@@ -287,7 +287,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                 ars.dataframe.frame.DataFrame])
 > ```
 
-Get the missing id and time combinations in `X_df`.
+*Get the missing id and time combinations in `X_df`.*
 
 |             | **Type**  | **Details**                                                                                  |
 |--------|---------------------------|-------------------------------------|
@@ -317,7 +317,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                     ]=None)
 > ```
 
-Access in-sample predictions.
+*Access in-sample predictions.*
 
 |             | **Type**  | **Default** | **Details**                                                   |
 |------|------------------|-------------------------|-------------------------|
@@ -382,7 +382,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                      ids:Optional[List[str]]=None)
 > ```
 
-Compute the predictions for the next `h` steps.
+*Compute the predictions for the next `h` steps.*
 
 |                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                                                           |
 |------|------------------|-------------------------|-------------------------|
@@ -537,7 +537,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                         return_X_y:bool=False, as_numpy:bool=False)
 > ```
 
-Add the features to `data`.
+*Add the features to `data`.*
 
 |                 | **Type**  | **Default** | **Details**                                                                                                                |
 |------|------------------|-------------------------|-------------------------|
@@ -589,9 +589,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                         y:numpy.ndarray)
 > ```
 
-Manually train models. Use this if you called
+*Manually train models. Use this if you called
 [`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
-beforehand.
+beforehand.*
 
 |             | **Type**       | **Details**                              |
 |-------------|----------------|------------------------------------------|
@@ -642,9 +642,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                               fitted:bool=False, as_numpy:bool=False)
 > ```
 
-Perform time series cross validation. Creates `n_windows` splits where
+*Perform time series cross validation. Creates `n_windows` splits where
 each window has `h` test periods, trains the models, computes the
-predictions and merges the actuals.
+predictions and merges the actuals.*
 
 |                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                          |
 |------|------------------|-------------------------|-------------------------|

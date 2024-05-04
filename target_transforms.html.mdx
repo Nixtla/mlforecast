@@ -27,7 +27,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  BaseTargetTransform ()
 > ```
 
-Base class used for target transformations.
+*Base class used for target transformations.*
 
 ------------------------------------------------------------------------
 
@@ -41,8 +41,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  Differences (differences:Iterable[int])
 > ```
 
-Subtracts previous values of the serie. Can be used to remove trend or
-seasonalities.
+*Subtracts previous values of the serie. Can be used to remove trend or
+seasonalities.*
 
 ```python
 series = generate_daily_series(10, min_length=50, max_length=100)
@@ -118,7 +118,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  AutoDifferences (max_diffs:int)
 > ```
 
-Find and apply the optimal number of differences to each serie.
+*Find and apply the optimal number of differences to each serie.*
 
 ------------------------------------------------------------------------
 
@@ -133,7 +133,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                           n_seasons:Optional[int]=10)
 > ```
 
-Find and apply the optimal number of seasonal differences to each group.
+*Find and apply the optimal number of seasonal differences to each
+group.*
 
 |               | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                  |
 |------|------------------|-------------------------|-------------------------|
@@ -154,8 +155,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                 n_seasons:Optional[int]=10)
 > ```
 
-Find the length of the seasonal period and apply the optimal number of
-differences to each group.
+*Find the length of the seasonal period and apply the optimal number of
+differences to each group.*
 
 |                   | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                      |
 |------|------------------|-------------------------|-------------------------|
@@ -205,8 +206,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  LocalStandardScaler ()
 > ```
 
-Standardizes each serie by subtracting its mean and dividing by its
-standard deviation.
+*Standardizes each serie by subtracting its mean and dividing by its
+standard deviation.*
 
 ```python
 test_scaler(LocalStandardScaler(), series)
@@ -224,7 +225,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  LocalMinMaxScaler ()
 > ```
 
-Scales each serie to be in the \[0, 1\] interval.
+*Scales each serie to be in the \[0, 1\] interval.*
 
 ```python
 test_scaler(LocalMinMaxScaler(), series)
@@ -242,7 +243,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  LocalRobustScaler (scale:str)
 > ```
 
-Scaler robust to outliers.
+*Scaler robust to outliers.*
 
 |       | **Type** | **Details**                                                                                                   |
 |--------|---------------------------|-------------------------------------|
@@ -269,8 +270,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  LocalBoxCox ()
 > ```
 
-Finds the optimum lambda for each serie and applies the Box-Cox
-transformation
+*Finds the optimum lambda for each serie and applies the Box-Cox
+transformation*
 
 ```python
 test_scaler(LocalBoxCox(), series)
@@ -288,7 +289,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  GlobalSklearnTransformer (transformer:sklearn.base.TransformerMixin)
 > ```
 
-Applies the same scikit-learn transformer to all series.
+*Applies the same scikit-learn transformer to all series.*
 
 ```python
 # need this import in order for isinstance to work
