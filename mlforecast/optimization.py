@@ -29,7 +29,7 @@ def mlforecast_objective(
     freq: Freq,
     n_windows: int,
     h: int,
-    refit: Union[bool, int],
+    refit: Union[bool, int] = False,
     id_col: str = "unique_id",
     time_col: str = "ds",
     target_col: str = "y",
@@ -53,7 +53,7 @@ def mlforecast_objective(
         Number of windows to evaluate.
     h : int
         Forecast horizon.
-    refit : bool or int
+    refit : bool or int (default=False)
         Retrain model for each cross validation window.
         If False, the models are trained at the beginning and then used to predict each window.
         If positive int, the models are retrained every `refit` windows.
