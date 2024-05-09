@@ -313,11 +313,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  AutoMLForecast.fit
 >                      (df:Union[pandas.core.frame.DataFrame,polars.datafram
 >                      e.frame.DataFrame], n_windows:int, h:int,
->                      num_samples:int, loss:Optional[Callable[[Union[pandas
->                      .core.frame.DataFrame,polars.dataframe.frame.DataFram
->                      e],Union[pandas.core.frame.DataFrame,polars.dataframe
->                      .frame.DataFrame]],float]]=None,
->                      id_col:str='unique_id', time_col:str='ds',
+>                      num_samples:int, refit:Union[bool,int]=False, loss:Op
+>                      tional[Callable[[Union[pandas.core.frame.DataFrame,po
+>                      lars.dataframe.frame.DataFrame],Union[pandas.core.fra
+>                      me.DataFrame,polars.dataframe.frame.DataFrame]],float
+>                      ]]=None, id_col:str='unique_id', time_col:str='ds',
 >                      target_col:str='y',
 >                      study_kwargs:Optional[Dict[str,Any]]=None,
 >                      optimize_kwargs:Optional[Dict[str,Any]]=None)
@@ -326,24 +326,25 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 *Carry out the optimization process. Each model is optimized
 independently and the best one is trained on all data*
 
-|                 | **Type**           | **Default** | **Details**                                                                                                                          |
+|                 | **Type**           | **Default** | **Details**                                                                                                                                                                                                    |
 |------|------------------|-------------------------|-------------------------|
-| df              | Union              |             | Series data in long format.                                                                                                          |
-| n_windows       | int                |             | Number of windows to evaluate.                                                                                                       |
-| h               | int                |             | Forecast horizon.                                                                                                                    |
-| num_samples     | int                |             | Number of trials to run                                                                                                              |
-| loss            | Optional           | None        | Function that takes the validation and train dataframes and produces a float.<br/>If `None` will use the average SMAPE across series. |
-| id_col          | str                | unique_id   | Column that identifies each serie.                                                                                                   |
-| time_col        | str                | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                      |
-| target_col      | str                | y           | Column that contains the target.                                                                                                     |
-| study_kwargs    | Optional           | None        | Keyword arguments to be passed to the optuna.Study constructor.                                                                      |
-| optimize_kwargs | Optional           | None        | Keyword arguments to be passed to the Study.optimize method.                                                                         |
-| **Returns**     | **AutoMLForecast** |             | **object with best models and optimization results**                                                                                 |
+| df              | Union              |             | Series data in long format.                                                                                                                                                                                    |
+| n_windows       | int                |             | Number of windows to evaluate.                                                                                                                                                                                 |
+| h               | int                |             | Forecast horizon.                                                                                                                                                                                              |
+| num_samples     | int                |             | Number of trials to run                                                                                                                                                                                        |
+| refit           | Union              | False       | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
+| loss            | Optional           | None        | Function that takes the validation and train dataframes and produces a float.<br/>If `None` will use the average SMAPE across series.                                                                           |
+| id_col          | str                | unique_id   | Column that identifies each serie.                                                                                                                                                                             |
+| time_col        | str                | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                                                                                |
+| target_col      | str                | y           | Column that contains the target.                                                                                                                                                                               |
+| study_kwargs    | Optional           | None        | Keyword arguments to be passed to the optuna.Study constructor.                                                                                                                                                |
+| optimize_kwargs | Optional           | None        | Keyword arguments to be passed to the optuna.Study.optimize method.                                                                                                                                            |
+| **Returns**     | **AutoMLForecast** |             | **object with best models and optimization results**                                                                                                                                                           |
 
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L541"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L547"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.predict
@@ -364,7 +365,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L569"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L575"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.save
