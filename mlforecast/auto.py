@@ -11,7 +11,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import optuna
-import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from sklearn.preprocessing import FunctionTransformer
