@@ -320,7 +320,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                      ]]=None, id_col:str='unique_id', time_col:str='ds',
 >                      target_col:str='y',
 >                      study_kwargs:Optional[Dict[str,Any]]=None,
->                      optimize_kwargs:Optional[Dict[str,Any]]=None)
+>                      optimize_kwargs:Optional[Dict[str,Any]]=None,
+>                      fitted:bool=False)
 > ```
 
 *Carry out the optimization process. Each model is optimized
@@ -339,12 +340,13 @@ independently and the best one is trained on all data*
 | target_col      | str                | y           | Column that contains the target.                                                                                                                                                                               |
 | study_kwargs    | Optional           | None        | Keyword arguments to be passed to the optuna.Study constructor.                                                                                                                                                |
 | optimize_kwargs | Optional           | None        | Keyword arguments to be passed to the optuna.Study.optimize method.                                                                                                                                            |
+| fitted          | bool               | False       | Whether to compute the fitted values when retraining the best model.                                                                                                                                           |
 | **Returns**     | **AutoMLForecast** |             | **object with best models and optimization results**                                                                                                                                                           |
 
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L547"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L555"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.predict
@@ -365,7 +367,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L575"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L583"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.save
@@ -380,6 +382,27 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 |-------------|----------|-------------------------------------------|
 | path        | Union    | Directory where artifacts will be stored. |
 | **Returns** | **None** |                                           |
+
+------------------------------------------------------------------------
+
+<a
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L593"
+target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+
+### AutoMLForecast.forecast_fitted_values
+
+> ``` text
+>  AutoMLForecast.forecast_fitted_values
+>                                         (level:Optional[List[Union[int,flo
+>                                         at]]]=None)
+> ```
+
+*Access in-sample predictions.*
+
+|             | **Type**  | **Default** | **Details**                                                   |
+|------|------------------|-------------------------|-------------------------|
+| level       | Optional  | None        | Confidence levels between 0 and 100 for prediction intervals. |
+| **Returns** | **Union** |             | **Dataframe with predictions for the training set**           |
 
 ```python
 from datasetsforecast.m4 import M4, M4Evaluation, M4Info
@@ -438,6 +461,7 @@ auto_mlf.fit(
     h=h,
     num_samples=2,
     optimize_kwargs={'timeout': 60},
+    fitted=True,
 )
 auto_mlf.predict(h)
 ```
@@ -455,4 +479,22 @@ auto_mlf.predict(h)
 | 4664 | W99       | 2294 | 15042.493434 | 15271.744712 |
 | 4665 | W99       | 2295 | 15042.144846 | 15250.070504 |
 | 4666 | W99       | 2296 | 15038.729044 | 15232.127800 |
+
+```python
+auto_mlf.forecast_fitted_values(level=[95])
+```
+
+|        | unique_id | ds   | y        | lgb          | lgb-lo-95    | lgb-hi-95    | ridge        | ridge-lo-95  | ridge-hi-95  |
+|--------|-----------|------|----------|--------------|--------------|--------------|--------------|--------------|--------------|
+| 0      | W1        | 15   | 1071.06  | 1060.584344  | 599.618355   | 1521.550334  | 1076.990151  | 556.535492   | 1597.444810  |
+| 1      | W1        | 16   | 1073.73  | 1072.669242  | 611.703252   | 1533.635232  | 1083.633276  | 563.178617   | 1604.087936  |
+| 2      | W1        | 17   | 1066.97  | 1072.452128  | 611.486139   | 1533.418118  | 1084.724311  | 564.269652   | 1605.178970  |
+| 3      | W1        | 18   | 1066.17  | 1065.837828  | 604.871838   | 1526.803818  | 1080.127197  | 559.672538   | 1600.581856  |
+| 4      | W1        | 19   | 1064.43  | 1065.214681  | 604.248691   | 1526.180671  | 1080.636826  | 560.182167   | 1601.091485  |
+| ...    | ...       | ...  | ...      | ...          | ...          | ...          | ...          | ...          | ...          |
+| 361881 | W99       | 2279 | 15738.54 | 15887.661228 | 15721.237195 | 16054.085261 | 15927.918181 | 15723.222760 | 16132.613603 |
+| 361882 | W99       | 2280 | 15388.13 | 15755.943789 | 15589.519756 | 15922.367823 | 15841.599064 | 15636.903642 | 16046.294485 |
+| 361883 | W99       | 2281 | 15187.62 | 15432.224701 | 15265.800668 | 15598.648735 | 15584.462232 | 15379.766811 | 15789.157654 |
+| 361884 | W99       | 2282 | 15172.27 | 15177.040831 | 15010.616797 | 15343.464864 | 15396.243223 | 15191.547801 | 15600.938644 |
+| 361885 | W99       | 2283 | 15101.03 | 15162.090803 | 14995.666770 | 15328.514836 | 15335.982465 | 15131.287044 | 15540.677887 |
 
