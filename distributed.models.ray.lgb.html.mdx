@@ -33,10 +33,10 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                   min_child_samples:int=20, subsample:float=1.0,
 >                   subsample_freq:int=0, colsample_bytree:float=1.0,
 >                   reg_alpha:float=0.0, reg_lambda:float=0.0, random_state:
->                   Union[int,numpy.random.mtrand.RandomState,ForwardRef('np
->                   .random.Generator'),NoneType]=None,
+>                   Union[int,numpy.random.mtrand.RandomState,numpy.random._
+>                   generator.Generator,NoneType]=None,
 >                   n_jobs:Optional[int]=None, importance_type:str='split',
->                   **kwargs)
+>                   **kwargs:Any)
 > ```
 
 ***PublicAPI (beta):** This API is in beta and may change before
