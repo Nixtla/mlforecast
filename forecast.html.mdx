@@ -93,16 +93,16 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Forecasting pipeline*
 
-|                      | **Type** | **Default** | **Details**                                                                                                               |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| models               | Union    |             | Models that will be trained and used to compute the forecasts.                                                            |
-| freq                 | Union    |             | Pandas offset, pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                    |
-| lags                 | Optional | None        | Lags of the target to use as features.                                                                                    |
-| lag_transforms       | Optional | None        | Mapping of target lags to their transformations.                                                                          |
-| date_features        | Optional | None        | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.           |
-| num_threads          | int      | 1           | Number of threads to use when computing the features.                                                                     |
-| target_transforms    | Optional | None        | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
-| lag_transforms_namer | Optional | None        | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name.           |
+| models | Union |  | Models that will be trained and used to compute the forecasts. |
+| freq | Union |  | Pandas offset, pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series. |
+| lags | Optional | None | Lags of the target to use as features. |
+| lag_transforms | Optional | None | Mapping of target lags to their transformations. |
+| date_features | Optional | None | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. |
+| num_threads | int | 1 | Number of threads to use when computing the features. |
+| target_transforms | Optional | None | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
+| lag_transforms_namer | Optional | None | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. |
 
 The MLForecast object encapsulates the feature engineering + training
 the models + forecasting
@@ -149,20 +149,20 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Apply the feature engineering and train the models.*
 
-|                      | **Type**       | **Default** | **Details**                                                                                                                                                   |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df                   | Union          |             | Series data in long format.                                                                                                                                   |
-| id_col               | str            | unique_id   | Column that identifies each serie.                                                                                                                            |
-| time_col             | str            | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                               |
-| target_col           | str            | y           | Column that contains the target.                                                                                                                              |
-| static_features      | Optional       | None        | Names of the features that are static and will be repeated when forecasting.<br/> If `None`, will consider all columns (except id_col and time_col) as static. |
-| dropna               | bool           | True        | Drop rows with missing values produced by the transformations.                                                                                                |
-| keep_last_n          | Optional       | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.                                    |
-| max_horizon          | Optional       | None        | Train this many models, where each model will predict a specific horizon.                                                                                     |
-| prediction_intervals | Optional       | None        | Configuration to calibrate prediction intervals (Conformal Prediction).                                                                                       |
-| fitted               | bool           | False       | Save in-sample predictions.                                                                                                                                   |
-| as_numpy             | bool           | False       | Cast features to numpy array.                                                                                                                                 |
-| **Returns**          | **MLForecast** |             | **Forecast object with series values and trained models.**                                                                                                    |
+| df | Union |  | Series data in long format. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting.<br/> If `None`, will consider all columns (except id_col and time_col) as static. |
+| dropna | bool | True | Drop rows with missing values produced by the transformations. |
+| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| max_horizon | Optional | None | Train this many models, where each model will predict a specific horizon. |
+| prediction_intervals | Optional | None | Configuration to calibrate prediction intervals (Conformal Prediction). |
+| fitted | bool | False | Save in-sample predictions. |
+| as_numpy | bool | False | Cast features to numpy array. |
+| **Returns** | **MLForecast** |  | **Forecast object with series values and trained models.** |
 
 ```python
 fcst = MLForecast(
@@ -289,11 +289,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Get the missing id and time combinations in `X_df`.*
 
-|             | **Type**  | **Details**                                                                                  |
+|  | **Type** | **Details** |
 |--------|---------------------------|-------------------------------------|
-| h           | int       | Number of periods to predict.                                                                |
-| X_df        | Union     | Dataframe with the future exogenous features. Should have the id column and the time column. |
-| **Returns** | **Union** | **DataFrame with expected ids and future times missing in `X_df`**                           |
+| h | int | Number of periods to predict. |
+| X_df | Union | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| **Returns** | **Union** | **DataFrame with expected ids and future times missing in `X_df`** |
 
 ```python
 missing_future = fcst.get_missing_future(h=1, X_df=expected_future.head(2))
@@ -319,10 +319,10 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Access in-sample predictions.*
 
-|             | **Type**  | **Default** | **Details**                                                   |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| level       | Optional  | None        | Confidence levels between 0 and 100 for prediction intervals. |
-| **Returns** | **Union** |             | **Dataframe with predictions for the training set**           |
+| level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
+| **Returns** | **Union** |  | **Dataframe with predictions for the training set** |
 
 ```python
 fcst.forecast_fitted_values()
@@ -384,16 +384,16 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Compute the predictions for the next `h` steps.*
 
-|                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                                                           |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| h                       | int       |             | Number of periods to predict.                                                                                                                                                                                                                                                                         |
-| before_predict_callback | Optional  | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index.                                  |
-| after_predict_callback  | Optional  | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                                                   |
-| new_df                  | Union     | None        | Series data of new observations for which forecasts are to be generated. <br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data. <br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
-| level                   | Optional  | None        | Confidence levels between 0 and 100 for prediction intervals.                                                                                                                                                                                                                                         |
-| X_df                    | Union     | None        | Dataframe with the future exogenous features. Should have the id column and the time column.                                                                                                                                                                                                          |
-| ids                     | Optional  | None        | List with subset of ids seen during training for which the forecasts should be computed.                                                                                                                                                                                                              |
-| **Returns**             | **Union** |             | **Predictions for each serie and timestep, with one column per model.**                                                                                                                                                                                                                               |
+| h | int |  | Number of periods to predict. |
+| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
+| new_df | Union | None | Series data of new observations for which forecasts are to be generated. <br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data. <br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
+| level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
+| X_df | Union | None | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| ids | Optional | None | List with subset of ids seen during training for which the forecasts should be computed. |
+| **Returns** | **Union** |  | **Predictions for each serie and timestep, with one column per model.** |
 
 ```python
 predictions = fcst.predict(horizon)
@@ -446,13 +446,13 @@ predictions_w_intervals = fcst.predict(48, level=[50, 80, 95])
 predictions_w_intervals.head()
 ```
 
-|     | unique_id | ds  | LGBMRegressor | LGBMRegressor-lo-95 | LGBMRegressor-lo-80 | LGBMRegressor-lo-50 | LGBMRegressor-hi-50 | LGBMRegressor-hi-80 | LGBMRegressor-hi-95 |
-|-----|-----------|-----|---------------|---------------------|---------------------|---------------------|---------------------|---------------------|---------------------|
-| 0   | H196      | 961 | 16.071271     | 15.958042           | 15.971271           | 16.005091           | 16.137452           | 16.171271           | 16.184501           |
-| 1   | H196      | 962 | 15.671271     | 15.553632           | 15.553632           | 15.578632           | 15.763911           | 15.788911           | 15.788911           |
-| 2   | H196      | 963 | 15.271271     | 15.153632           | 15.153632           | 15.162452           | 15.380091           | 15.388911           | 15.388911           |
-| 3   | H196      | 964 | 14.971271     | 14.858042           | 14.871271           | 14.905091           | 15.037452           | 15.071271           | 15.084501           |
-| 4   | H196      | 965 | 14.671271     | 14.553632           | 14.553632           | 14.562452           | 14.780091           | 14.788911           | 14.788911           |
+|  | unique_id | ds | LGBMRegressor | LGBMRegressor-lo-95 | LGBMRegressor-lo-80 | LGBMRegressor-lo-50 | LGBMRegressor-hi-50 | LGBMRegressor-hi-80 | LGBMRegressor-hi-95 |
+|----|----|----|----|----|----|----|----|----|----|
+| 0 | H196 | 961 | 16.071271 | 15.958042 | 15.971271 | 16.005091 | 16.137452 | 16.171271 | 16.184501 |
+| 1 | H196 | 962 | 15.671271 | 15.553632 | 15.553632 | 15.578632 | 15.763911 | 15.788911 | 15.788911 |
+| 2 | H196 | 963 | 15.271271 | 15.153632 | 15.153632 | 15.162452 | 15.380091 | 15.388911 | 15.388911 |
+| 3 | H196 | 964 | 14.971271 | 14.858042 | 14.871271 | 14.905091 | 15.037452 | 15.071271 | 15.084501 |
+| 4 | H196 | 965 | 14.671271 | 14.553632 | 14.553632 | 14.562452 | 14.780091 | 14.788911 | 14.788911 |
 
 Let’s explore the generated intervals.
 
@@ -539,38 +539,38 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Add the features to `data`.*
 
-|                 | **Type**  | **Default** | **Details**                                                                                                                |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df              | Union     |             | Series data in long format.                                                                                                |
-| id_col          | str       | unique_id   | Column that identifies each serie.                                                                                         |
-| time_col        | str       | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                            |
-| target_col      | str       | y           | Column that contains the target.                                                                                           |
-| static_features | Optional  | None        | Names of the features that are static and will be repeated when forecasting.                                               |
-| dropna          | bool      | True        | Drop rows with missing values produced by the transformations.                                                             |
-| keep_last_n     | Optional  | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| max_horizon     | Optional  | None        | Train this many models, where each model will predict a specific horizon.                                                  |
-| return_X_y      | bool      | False       | Return a tuple with the features and the target. If False will return a single dataframe.                                  |
-| as_numpy        | bool      | False       | Cast features to numpy array. Only works for `return_X_y=True`.                                                            |
-| **Returns**     | **Union** |             | **`df` plus added features and target(s).**                                                                                |
+| df | Union |  | Series data in long format. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
+| dropna | bool | True | Drop rows with missing values produced by the transformations. |
+| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| max_horizon | Optional | None | Train this many models, where each model will predict a specific horizon. |
+| return_X_y | bool | False | Return a tuple with the features and the target. If False will return a single dataframe. |
+| as_numpy | bool | False | Cast features to numpy array. Only works for `return_X_y=True`. |
+| **Returns** | **Union** |  | **`df` plus added features and target(s).** |
 
 ```python
 prep_df = fcst.preprocess(train)
 prep_df
 ```
 
-|        | unique_id | ds  | y    | lag24 | lag48 | lag72 | lag96 | lag120 | lag144 | lag168 | exponentially_weighted_mean_lag48_alpha0.3 |
-|--------|-----------|-----|------|-------|-------|-------|-------|--------|--------|--------|--------------------------------------------|
-| 86988  | H196      | 193 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.002810                                   |
-| 86989  | H196      | 194 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.1    | 0.3    | 0.031967                                   |
-| 86990  | H196      | 195 | 0.1  | -0.1  | 0.1   | 0.0   | 0.3   | 0.1    | 0.2    | 0.1    | 0.052377                                   |
-| 86991  | H196      | 196 | 0.1  | 0.0   | 0.0   | 0.0   | 0.3   | 0.2    | 0.1    | 0.2    | 0.036664                                   |
-| 86992  | H196      | 197 | 0.0  | 0.0   | 0.0   | 0.1   | 0.2   | 0.2    | 0.1    | 0.2    | 0.025665                                   |
-| ...    | ...       | ... | ...  | ...   | ...   | ...   | ...   | ...    | ...    | ...    | ...                                        |
-| 325187 | H413      | 956 | 0.0  | 10.0  | 1.0   | 6.0   | -53.0 | 44.0   | -21.0  | 21.0   | 7.963225                                   |
-| 325188 | H413      | 957 | 9.0  | 10.0  | 10.0  | -7.0  | -46.0 | 27.0   | -19.0  | 24.0   | 8.574257                                   |
-| 325189 | H413      | 958 | 16.0 | 8.0   | 5.0   | -9.0  | -36.0 | 32.0   | -13.0  | 8.0    | 7.501980                                   |
-| 325190 | H413      | 959 | -3.0 | 17.0  | -7.0  | 2.0   | -31.0 | 22.0   | 5.0    | -2.0   | 3.151386                                   |
-| 325191 | H413      | 960 | 15.0 | 11.0  | -6.0  | -5.0  | -17.0 | 22.0   | -18.0  | 10.0   | 0.405970                                   |
+|  | unique_id | ds | y | lag24 | lag48 | lag72 | lag96 | lag120 | lag144 | lag168 | exponentially_weighted_mean_lag48_alpha0.3 |
+|----|----|----|----|----|----|----|----|----|----|----|----|
+| 86988 | H196 | 193 | 0.1 | 0.0 | 0.0 | 0.0 | 0.3 | 0.1 | 0.1 | 0.3 | 0.002810 |
+| 86989 | H196 | 194 | 0.1 | -0.1 | 0.1 | 0.0 | 0.3 | 0.1 | 0.1 | 0.3 | 0.031967 |
+| 86990 | H196 | 195 | 0.1 | -0.1 | 0.1 | 0.0 | 0.3 | 0.1 | 0.2 | 0.1 | 0.052377 |
+| 86991 | H196 | 196 | 0.1 | 0.0 | 0.0 | 0.0 | 0.3 | 0.2 | 0.1 | 0.2 | 0.036664 |
+| 86992 | H196 | 197 | 0.0 | 0.0 | 0.0 | 0.1 | 0.2 | 0.2 | 0.1 | 0.2 | 0.025665 |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| 325187 | H413 | 956 | 0.0 | 10.0 | 1.0 | 6.0 | -53.0 | 44.0 | -21.0 | 21.0 | 7.963225 |
+| 325188 | H413 | 957 | 9.0 | 10.0 | 10.0 | -7.0 | -46.0 | 27.0 | -19.0 | 24.0 | 8.574257 |
+| 325189 | H413 | 958 | 16.0 | 8.0 | 5.0 | -9.0 | -36.0 | 32.0 | -13.0 | 8.0 | 7.501980 |
+| 325190 | H413 | 959 | -3.0 | 17.0 | -7.0 | 2.0 | -31.0 | 22.0 | 5.0 | -2.0 | 3.151386 |
+| 325191 | H413 | 960 | 15.0 | 11.0 | -6.0 | -5.0 | -17.0 | 22.0 | -18.0 | 10.0 | 0.405970 |
 
 If we do this we then have to call `Forecast.fit_models`, since this
 only stores the series information.
@@ -646,28 +646,28 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 each window has `h` test periods, trains the models, computes the
 predictions and merges the actuals.*
 
-|                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                          |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df                      | Union     |             | Series data in long format.                                                                                                                                                                                                                                          |
-| n_windows               | int       |             | Number of windows to evaluate.                                                                                                                                                                                                                                       |
-| h                       | int       |             | Forecast horizon.                                                                                                                                                                                                                                                    |
-| id_col                  | str       | unique_id   | Column that identifies each serie.                                                                                                                                                                                                                                   |
-| time_col                | str       | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                                                                                                                                      |
-| target_col              | str       | y           | Column that contains the target.                                                                                                                                                                                                                                     |
-| step_size               | Optional  | None        | Step size between each cross validation window. If None it will be equal to `h`.                                                                                                                                                                                     |
-| static_features         | Optional  | None        | Names of the features that are static and will be repeated when forecasting.                                                                                                                                                                                         |
-| dropna                  | bool      | True        | Drop rows with missing values produced by the transformations.                                                                                                                                                                                                       |
-| keep_last_n             | Optional  | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.                                                                                                                                           |
-| refit                   | Union     | True        | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows.                                                       |
-| max_horizon             | Optional  | None        |                                                                                                                                                                                                                                                                      |
-| before_predict_callback | Optional  | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback  | Optional  | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                  |
-| prediction_intervals    | Optional  | None        | Configuration to calibrate prediction intervals (Conformal Prediction).                                                                                                                                                                                              |
-| level                   | Optional  | None        | Confidence levels between 0 and 100 for prediction intervals.                                                                                                                                                                                                        |
-| input_size              | Optional  | None        | Maximum training samples per serie in each window. If None, will use an expanding window.                                                                                                                                                                            |
-| fitted                  | bool      | False       | Store the in-sample predictions.                                                                                                                                                                                                                                     |
-| as_numpy                | bool      | False       | Cast features to numpy array.                                                                                                                                                                                                                                        |
-| **Returns**             | **Union** |             | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.**                                                                                                                                        |
+| df | Union |  | Series data in long format. |
+| n_windows | int |  | Number of windows to evaluate. |
+| h | int |  | Forecast horizon. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
+| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
+| dropna | bool | True | Drop rows with missing values produced by the transformations. |
+| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| refit | Union | True | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
+| max_horizon | Optional | None |  |
+| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
+| prediction_intervals | Optional | None | Configuration to calibrate prediction intervals (Conformal Prediction). |
+| level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
+| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
+| fitted | bool | False | Store the in-sample predictions. |
+| as_numpy | bool | False | Cast features to numpy array. |
+| **Returns** | **Union** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
 
 If we would like to know how good our forecast will be for a specific
 model and set of features then we can perform cross validation. What
@@ -772,19 +772,19 @@ cv_results_intervals = fcst.cross_validation(
 cv_results_intervals
 ```
 
-|     | unique_id | ds  | cutoff | y    | LGBMRegressor | LGBMRegressor-lo-90 | LGBMRegressor-lo-80 | LGBMRegressor-hi-80 | LGBMRegressor-hi-90 |
-|-----|-----------|-----|--------|------|---------------|---------------------|---------------------|---------------------|---------------------|
-| 0   | H196      | 865 | 864    | 15.5 | 15.373393     | 15.311379           | 15.316528           | 15.430258           | 15.435407           |
-| 1   | H196      | 866 | 864    | 15.1 | 14.973393     | 14.940556           | 14.940556           | 15.006230           | 15.006230           |
-| 2   | H196      | 867 | 864    | 14.8 | 14.673393     | 14.606230           | 14.606230           | 14.740556           | 14.740556           |
-| 3   | H196      | 868 | 864    | 14.4 | 14.373393     | 14.306230           | 14.306230           | 14.440556           | 14.440556           |
-| 4   | H196      | 869 | 864    | 14.2 | 14.073393     | 14.006230           | 14.006230           | 14.140556           | 14.140556           |
-| ... | ...       | ... | ...    | ...  | ...           | ...                 | ...                 | ...                 | ...                 |
-| 379 | H413      | 956 | 912    | 59.0 | 64.284167     | 29.890099           | 34.371545           | 94.196788           | 98.678234           |
-| 380 | H413      | 957 | 912    | 58.0 | 64.830429     | 56.874572           | 57.827689           | 71.833169           | 72.786285           |
-| 381 | H413      | 958 | 912    | 53.0 | 40.726851     | 35.296195           | 35.846206           | 45.607495           | 46.157506           |
-| 382 | H413      | 959 | 912    | 38.0 | 42.739657     | 35.292153           | 35.807640           | 49.671674           | 50.187161           |
-| 383 | H413      | 960 | 912    | 46.0 | 52.802769     | 42.465597           | 43.895670           | 61.709869           | 63.139941           |
+|  | unique_id | ds | cutoff | y | LGBMRegressor | LGBMRegressor-lo-90 | LGBMRegressor-lo-80 | LGBMRegressor-hi-80 | LGBMRegressor-hi-90 |
+|----|----|----|----|----|----|----|----|----|----|
+| 0 | H196 | 865 | 864 | 15.5 | 15.373393 | 15.311379 | 15.316528 | 15.430258 | 15.435407 |
+| 1 | H196 | 866 | 864 | 15.1 | 14.973393 | 14.940556 | 14.940556 | 15.006230 | 15.006230 |
+| 2 | H196 | 867 | 864 | 14.8 | 14.673393 | 14.606230 | 14.606230 | 14.740556 | 14.740556 |
+| 3 | H196 | 868 | 864 | 14.4 | 14.373393 | 14.306230 | 14.306230 | 14.440556 | 14.440556 |
+| 4 | H196 | 869 | 864 | 14.2 | 14.073393 | 14.006230 | 14.006230 | 14.140556 | 14.140556 |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| 379 | H413 | 956 | 912 | 59.0 | 64.284167 | 29.890099 | 34.371545 | 94.196788 | 98.678234 |
+| 380 | H413 | 957 | 912 | 58.0 | 64.830429 | 56.874572 | 57.827689 | 71.833169 | 72.786285 |
+| 381 | H413 | 958 | 912 | 53.0 | 40.726851 | 35.296195 | 35.846206 | 45.607495 | 46.157506 |
+| 382 | H413 | 959 | 912 | 38.0 | 42.739657 | 35.292153 | 35.807640 | 49.671674 | 50.187161 |
+| 383 | H413 | 960 | 912 | 46.0 | 52.802769 | 42.465597 | 43.895670 | 61.709869 | 63.139941 |
 
 The `refit` argument allows us to control if we want to retrain the
 models in every window. It can either be:

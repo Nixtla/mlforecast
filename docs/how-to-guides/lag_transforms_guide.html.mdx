@@ -53,10 +53,10 @@ with
 fcst.preprocess(data).head(2)
 ```
 
-|     | unique_id | ds         | y        | expanding_std_lag1 | rolling_mean_lag7_window_size7_min_samples1 | rolling_mean_lag7_window_size14 |
-|-----|-----------|------------|----------|--------------------|---------------------------------------------|---------------------------------|
-| 20  | id_0      | 2000-01-21 | 6.319961 | 1.956363           | 3.234486                                    | 3.283064                        |
-| 21  | id_0      | 2000-01-22 | 0.071677 | 2.028545           | 3.256055                                    | 3.291068                        |
+|  | unique_id | ds | y | expanding_std_lag1 | rolling_mean_lag7_window_size7_min_samples1 | rolling_mean_lag7_window_size14 |
+|----|----|----|----|----|----|----|
+| 20 | id_0 | 2000-01-21 | 6.319961 | 1.956363 | 3.234486 | 3.283064 |
+| 21 | id_0 | 2000-01-22 | 0.071677 | 2.028545 | 3.256055 | 3.291068 |
 
 ### Extending the built-in transformations
 
@@ -91,10 +91,10 @@ prep = fcst.preprocess(data)
 prep.head(2)
 ```
 
-|     | unique_id | ds         | y        | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size14 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag1_window_size14 |
-|-----|-----------|------------|----------|--------------------------------|---------------------------------|------------------------------------------------------------------------|
-| 14  | id_0      | 2000-01-15 | 0.435006 | 3.234486                       | 3.283064                        | 0.985204                                                               |
-| 15  | id_0      | 2000-01-16 | 1.489309 | 3.256055                       | 3.291068                        | 0.989361                                                               |
+|  | unique_id | ds | y | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size14 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag1_window_size14 |
+|----|----|----|----|----|----|----|
+| 14 | id_0 | 2000-01-15 | 0.435006 | 3.234486 | 3.283064 | 0.985204 |
+| 15 | id_0 | 2000-01-16 | 1.489309 | 3.256055 | 3.291068 | 0.989361 |
 
 ```python
 np.testing.assert_allclose(
@@ -134,10 +134,10 @@ prep = fcst.preprocess(data)
 prep.head(2)
 ```
 
-|     | unique_id | ds         | y        | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag2_window_size7 | rolling_mean_lag2_window_size7 |
-|-----|-----------|------------|----------|--------------------------------|-----------------------------------------------------------------------|--------------------------------|
-| 8   | id_0      | 2000-01-09 | 1.462798 | 3.326081                       | 0.998331                                                              | 3.331641                       |
-| 9   | id_0      | 2000-01-10 | 2.035518 | 3.360938                       | 1.010480                                                              | 3.326081                       |
+|  | unique_id | ds | y | rolling_mean_lag1_window_size7 | rolling_mean_lag1_window_size7_truediv_rolling_mean_lag2_window_size7 | rolling_mean_lag2_window_size7 |
+|----|----|----|----|----|----|----|
+| 8 | id_0 | 2000-01-09 | 1.462798 | 3.326081 | 0.998331 | 3.331641 |
+| 9 | id_0 | 2000-01-10 | 2.035518 | 3.360938 | 1.010480 | 3.326081 |
 
 ```python
 np.testing.assert_allclose(
@@ -203,10 +203,10 @@ prep = fcst.preprocess(data)
 prep.head(2)
 ```
 
-|     | unique_id | ds         | y        | lag1     | lag2     | lag3     | expanding_mean_lag1 | ratio_over_previous_lag1 | ratio_over_previous_lag1_offset2 | diff_over_previous_lag2 |
-|-----|-----------|------------|----------|----------|----------|----------|---------------------|--------------------------|----------------------------------|-------------------------|
-| 3   | id_0      | 2000-01-04 | 3.481831 | 2.445887 | 1.218794 | 0.322947 | 1.329209            | 2.006809                 | 7.573645                         | 0.895847                |
-| 4   | id_0      | 2000-01-05 | 4.191721 | 3.481831 | 2.445887 | 1.218794 | 1.867365            | 1.423546                 | 2.856785                         | 1.227093                |
+|  | unique_id | ds | y | lag1 | lag2 | lag3 | expanding_mean_lag1 | ratio_over_previous_lag1 | ratio_over_previous_lag1_offset2 | diff_over_previous_lag2 |
+|----|----|----|----|----|----|----|----|----|----|----|
+| 3 | id_0 | 2000-01-04 | 3.481831 | 2.445887 | 1.218794 | 0.322947 | 1.329209 | 2.006809 | 7.573645 | 0.895847 |
+| 4 | id_0 | 2000-01-05 | 4.191721 | 3.481831 | 2.445887 | 1.218794 | 1.867365 | 1.423546 | 2.856785 | 1.227093 |
 
 As you can see the name of the function is used as the transformation
 name plus the `_lag` suffix. If the function has other arguments and

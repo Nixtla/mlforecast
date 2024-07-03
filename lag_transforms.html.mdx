@@ -253,10 +253,10 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Shift series before computing transformation*
 
-|     | **Type**           | **Details**                                                                  |
+|  | **Type** | **Details** |
 |--------|---------------------------|-------------------------------------|
-| tfm | \_BaseLagTransform | Transformation to be applied                                                 |
-| n   | int                | Number of positions to shift (lag) series before applying the transformation |
+| tfm | \_BaseLagTransform | Transformation to be applied |
+| n | int | Number of positions to shift (lag) series before applying the transformation |
 
 ------------------------------------------------------------------------
 
@@ -273,9 +273,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Combine two lag transformations using an operator*
 
-|          | **Type**           | **Details**                                                          |
+|  | **Type** | **Details** |
 |--------|---------------------------|-------------------------------------|
-| tfm1     | \_BaseLagTransform | First transformation.                                                |
-| tfm2     | \_BaseLagTransform | Second transformation.                                               |
-| operator | Callable           | Binary operator that defines how to combine the two transformations. |
+| tfm1 | \_BaseLagTransform | First transformation. |
+| tfm2 | \_BaseLagTransform | Second transformation. |
+| operator | Callable | Binary operator that defines how to combine the two transformations. |
 

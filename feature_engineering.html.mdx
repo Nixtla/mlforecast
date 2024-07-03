@@ -58,15 +58,15 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Compute lag features for dynamic exogenous regressors.*
 
-|                | **Type**  | **Default** | **Details**                                                                     |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df             | Union     |             | Dataframe with ids, times and values for the exogenous regressors.              |
-| lags           | Optional  | None        | Lags of the target to use as features.                                          |
-| lag_transforms | Optional  | None        | Mapping of target lags to their transformations.                                |
-| id_col         | str       | unique_id   | Column that identifies each serie.                                              |
-| time_col       | str       | ds          | Column that identifies each timestep, its values can be timestamps or integers. |
-| num_threads    | int       | 1           | Number of threads to use when computing the features.                           |
-| **Returns**    | **Union** |             | **Original DataFrame with the computed features**                               |
+| df | Union |  | Dataframe with ids, times and values for the exogenous regressors. |
+| lags | Optional | None | Lags of the target to use as features. |
+| lag_transforms | Optional | None | Mapping of target lags to their transformations. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| num_threads | int | 1 | Number of threads to use when computing the features. |
+| **Returns** | **Union** |  | **Original DataFrame with the computed features** |
 
 ```python
 transformed = transform_exog(
@@ -77,13 +77,13 @@ transformed = transform_exog(
 transformed.head()
 ```
 
-|     | ds         | price    | unique_id | price2   | price_lag1 | price_lag2 | price_expanding_mean_lag1 | price2_lag1 | price2_lag2 | price2_expanding_mean_lag1 |
-|-----|------------|----------|-----------|----------|------------|------------|---------------------------|-------------|-------------|----------------------------|
-| 0   | 2000-10-05 | 0.548814 | id_00     | 0.345011 | NaN        | NaN        | NaN                       | NaN         | NaN         | NaN                        |
-| 1   | 2000-10-06 | 0.715189 | id_00     | 0.445598 | 0.548814   | NaN        | 0.548814                  | 0.345011    | NaN         | 0.345011                   |
-| 2   | 2000-10-07 | 0.602763 | id_00     | 0.165147 | 0.715189   | 0.548814   | 0.632001                  | 0.445598    | 0.345011    | 0.395304                   |
-| 3   | 2000-10-08 | 0.544883 | id_00     | 0.041373 | 0.602763   | 0.715189   | 0.622255                  | 0.165147    | 0.445598    | 0.318585                   |
-| 4   | 2000-10-09 | 0.423655 | id_00     | 0.391577 | 0.544883   | 0.602763   | 0.602912                  | 0.041373    | 0.165147    | 0.249282                   |
+|  | ds | price | unique_id | price2 | price_lag1 | price_lag2 | price_expanding_mean_lag1 | price2_lag1 | price2_lag2 | price2_expanding_mean_lag1 |
+|----|----|----|----|----|----|----|----|----|----|----|
+| 0 | 2000-10-05 | 0.548814 | id_00 | 0.345011 | NaN | NaN | NaN | NaN | NaN | NaN |
+| 1 | 2000-10-06 | 0.715189 | id_00 | 0.445598 | 0.548814 | NaN | 0.548814 | 0.345011 | NaN | 0.345011 |
+| 2 | 2000-10-07 | 0.602763 | id_00 | 0.165147 | 0.715189 | 0.548814 | 0.632001 | 0.445598 | 0.345011 | 0.395304 |
+| 3 | 2000-10-08 | 0.544883 | id_00 | 0.041373 | 0.602763 | 0.715189 | 0.622255 | 0.165147 | 0.445598 | 0.318585 |
+| 4 | 2000-10-09 | 0.423655 | id_00 | 0.391577 | 0.544883 | 0.602763 | 0.602912 | 0.041373 | 0.165147 | 0.249282 |
 
 ```python
 import polars as pl
@@ -101,12 +101,12 @@ transformed_pl = transform_exog(
 transformed_pl.head()
 ```
 
-| ds                  | price    | unique_id | price2   | price_lag1 | price_lag2 | price_expanding_mean_lag1 | price2_lag1 | price2_lag2 | price2_expanding_mean_lag1 |
-|---------------------|----------|-----------|----------|------------|------------|---------------------------|-------------|-------------|----------------------------|
-| datetime\[ns\]      | f64      | str       | f64      | f64        | f64        | f64                       | f64         | f64         | f64                        |
-| 2000-10-05 00:00:00 | 0.548814 | "id_00"   | 0.345011 | NaN        | NaN        | NaN                       | NaN         | NaN         | NaN                        |
-| 2000-10-06 00:00:00 | 0.715189 | "id_00"   | 0.445598 | 0.548814   | NaN        | 0.548814                  | 0.345011    | NaN         | 0.345011                   |
-| 2000-10-07 00:00:00 | 0.602763 | "id_00"   | 0.165147 | 0.715189   | 0.548814   | 0.632001                  | 0.445598    | 0.345011    | 0.395304                   |
-| 2000-10-08 00:00:00 | 0.544883 | "id_00"   | 0.041373 | 0.602763   | 0.715189   | 0.622255                  | 0.165147    | 0.445598    | 0.318585                   |
-| 2000-10-09 00:00:00 | 0.423655 | "id_00"   | 0.391577 | 0.544883   | 0.602763   | 0.602912                  | 0.041373    | 0.165147    | 0.249282                   |
+| ds | price | unique_id | price2 | price_lag1 | price_lag2 | price_expanding_mean_lag1 | price2_lag1 | price2_lag2 | price2_expanding_mean_lag1 |
+|----|----|----|----|----|----|----|----|----|----|
+| datetime\[ns\] | f64 | str | f64 | f64 | f64 | f64 | f64 | f64 | f64 |
+| 2000-10-05 00:00:00 | 0.548814 | "id_00" | 0.345011 | NaN | NaN | NaN | NaN | NaN | NaN |
+| 2000-10-06 00:00:00 | 0.715189 | "id_00" | 0.445598 | 0.548814 | NaN | 0.548814 | 0.345011 | NaN | 0.345011 |
+| 2000-10-07 00:00:00 | 0.602763 | "id_00" | 0.165147 | 0.715189 | 0.548814 | 0.632001 | 0.445598 | 0.345011 | 0.395304 |
+| 2000-10-08 00:00:00 | 0.544883 | "id_00" | 0.041373 | 0.602763 | 0.715189 | 0.622255 | 0.165147 | 0.445598 | 0.318585 |
+| 2000-10-09 00:00:00 | 0.423655 | "id_00" | 0.391577 | 0.544883 | 0.602763 | 0.602912 | 0.041373 | 0.165147 | 0.249282 |
 

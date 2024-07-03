@@ -28,18 +28,18 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Generate Synthetic Panel Series.*
 
-|                       | **Type**  | **Default** | **Details**                                                                         |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| n_series              | int       |             | Number of series for synthetic panel.                                               |
-| min_length            | int       | 50          | Minimum length of synthetic panel’s series.                                         |
-| max_length            | int       | 500         | Maximum length of synthetic panel’s series.                                         |
-| n_static_features     | int       | 0           | Number of static exogenous variables for synthetic panel’s series.                  |
-| equal_ends            | bool      | False       | Series should end in the same date stamp `ds`.                                      |
-| static_as_categorical | bool      | True        | Static features should have a categorical data type.                                |
-| with_trend            | bool      | False       | Series should have a (positive) trend.                                              |
-| seed                  | int       | 0           | Random seed used for generating the data.                                           |
-| engine                | str       | pandas      | Output Dataframe type.                                                              |
-| **Returns**           | **Union** |             | **Synthetic panel with columns \[`unique_id`, `ds`, `y`\] and exogenous features.** |
+| n_series | int |  | Number of series for synthetic panel. |
+| min_length | int | 50 | Minimum length of synthetic panel’s series. |
+| max_length | int | 500 | Maximum length of synthetic panel’s series. |
+| n_static_features | int | 0 | Number of static exogenous variables for synthetic panel’s series. |
+| equal_ends | bool | False | Series should end in the same date stamp `ds`. |
+| static_as_categorical | bool | True | Static features should have a categorical data type. |
+| with_trend | bool | False | Series should have a (positive) trend. |
+| seed | int | 0 | Random seed used for generating the data. |
+| engine | str | pandas | Output Dataframe type. |
+| **Returns** | **Union** |  | **Synthetic panel with columns \[`unique_id`, `ds`, `y`\] and exogenous features.** |
 
 Generate 20 series with lengths between 100 and 1,000.
 

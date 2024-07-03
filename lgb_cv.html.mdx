@@ -25,14 +25,14 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Create LightGBM CV object.*
 
-|                   | **Type** | **Default** | **Details**                                                                                                               |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| freq              | Union    |             | Pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series.                                   |
-| lags              | Optional | None        | Lags of the target to use as features.                                                                                    |
-| lag_transforms    | Optional | None        | Mapping of target lags to their transformations.                                                                          |
-| date_features     | Optional | None        | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.           |
-| num_threads       | int      | 1           | Number of threads to use when computing the features.                                                                     |
-| target_transforms | Optional | None        | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
+| freq | Union |  | Pandas offset alias, e.g. ‘D’, ‘W-THU’ or integer denoting the frequency of the series. |
+| lags | Optional | None | Lags of the target to use as features. |
+| lag_transforms | Optional | None | Mapping of target lags to their transformations. |
+| date_features | Optional | None | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. |
+| num_threads | int | 1 | Number of threads to use when computing the features. |
+| target_transforms | Optional | None | Transformations that will be applied to the target before computing the features and restored after the forecasting step. |
 
 ## Example
 
@@ -161,31 +161,31 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 *Train boosters simultaneously and assess their performance on the
 complete forecasting window.*
 
-|                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                          |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df                      | DataFrame |             | Series data in long format.                                                                                                                                                                                                                                          |
-| n_windows               | int       |             | Number of windows to evaluate.                                                                                                                                                                                                                                       |
-| h                       | int       |             | Forecast horizon.                                                                                                                                                                                                                                                    |
-| id_col                  | str       | unique_id   | Column that identifies each serie.                                                                                                                                                                                                                                   |
-| time_col                | str       | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                                                                                                                                      |
-| target_col              | str       | y           | Column that contains the target.                                                                                                                                                                                                                                     |
-| step_size               | Optional  | None        | Step size between each cross validation window. If None it will be equal to `h`.                                                                                                                                                                                     |
-| num_iterations          | int       | 100         | Maximum number of boosting iterations to run.                                                                                                                                                                                                                        |
-| params                  | Optional  | None        | Parameters to be passed to the LightGBM Boosters.                                                                                                                                                                                                                    |
-| static_features         | Optional  | None        | Names of the features that are static and will be repeated when forecasting.                                                                                                                                                                                         |
-| dropna                  | bool      | True        | Drop rows with missing values produced by the transformations.                                                                                                                                                                                                       |
-| keep_last_n             | Optional  | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.                                                                                                                                           |
-| eval_every              | int       | 10          | Number of boosting iterations to train before evaluating on the whole forecast window.                                                                                                                                                                               |
-| weights                 | Optional  | None        | Weights to multiply the metric of each window. If None, all windows have the same weight.                                                                                                                                                                            |
-| metric                  | Union     | mape        | Metric used to assess the performance of the models and perform early stopping.                                                                                                                                                                                      |
-| verbose_eval            | bool      | True        | Print the metrics of each evaluation.                                                                                                                                                                                                                                |
-| early_stopping_evals    | int       | 2           | Maximum number of evaluations to run without improvement.                                                                                                                                                                                                            |
-| early_stopping_pct      | float     | 0.01        | Minimum percentage improvement in metric value in `early_stopping_evals` evaluations.                                                                                                                                                                                |
-| compute_cv_preds        | bool      | False       | Compute predictions for each window after finding the best iteration.                                                                                                                                                                                                |
-| before_predict_callback | Optional  | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback  | Optional  | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                  |
-| input_size              | Optional  | None        | Maximum training samples per serie in each window. If None, will use an expanding window.                                                                                                                                                                            |
-| **Returns**             | **List**  |             | **List of (boosting rounds, metric value) tuples.**                                                                                                                                                                                                                  |
+| df | DataFrame |  | Series data in long format. |
+| n_windows | int |  | Number of windows to evaluate. |
+| h | int |  | Forecast horizon. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
+| num_iterations | int | 100 | Maximum number of boosting iterations to run. |
+| params | Optional | None | Parameters to be passed to the LightGBM Boosters. |
+| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
+| dropna | bool | True | Drop rows with missing values produced by the transformations. |
+| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| eval_every | int | 10 | Number of boosting iterations to train before evaluating on the whole forecast window. |
+| weights | Optional | None | Weights to multiply the metric of each window. If None, all windows have the same weight. |
+| metric | Union | mape | Metric used to assess the performance of the models and perform early stopping. |
+| verbose_eval | bool | True | Print the metrics of each evaluation. |
+| early_stopping_evals | int | 2 | Maximum number of evaluations to run without improvement. |
+| early_stopping_pct | float | 0.01 | Minimum percentage improvement in metric value in `early_stopping_evals` evaluations. |
+| compute_cv_preds | bool | False | Compute predictions for each window after finding the best iteration. |
+| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
+| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
+| **Returns** | **List** |  | **List of (boosting rounds, metric value) tuples.** |
 
 ```python
 hist = cv.fit(train, **static_fit_config)
@@ -247,13 +247,13 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Compute predictions with each of the trained boosters.*
 
-|                         | **Type**      | **Default** | **Details**                                                                                                                                                                                                                                                          |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| h                       | int           |             | Forecast horizon.                                                                                                                                                                                                                                                    |
-| before_predict_callback | Optional      | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback  | Optional      | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                  |
-| X_df                    | Optional      | None        | Dataframe with the future exogenous features. Should have the id column and the time column.                                                                                                                                                                         |
-| **Returns**             | **DataFrame** |             | **Predictions for each serie and timestep, with one column per window.**                                                                                                                                                                                             |
+| h | int |  | Forecast horizon. |
+| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
+| X_df | Optional | None | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| **Returns** | **DataFrame** |  | **Predictions for each serie and timestep, with one column per window.** |
 
 ```python
 preds = cv.predict(horizon)
@@ -423,23 +423,23 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 *Initialize internal data structures to iteratively train the boosters.
 Use this before calling partial_fit.*
 
-|                 | **Type**       | **Default** | **Details**                                                                                                                |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df              | DataFrame      |             | Series data in long format.                                                                                                |
-| n_windows       | int            |             | Number of windows to evaluate.                                                                                             |
-| h               | int            |             | Forecast horizon.                                                                                                          |
-| id_col          | str            | unique_id   | Column that identifies each serie.                                                                                         |
-| time_col        | str            | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                            |
-| target_col      | str            | y           | Column that contains the target.                                                                                           |
-| step_size       | Optional       | None        | Step size between each cross validation window. If None it will be equal to `h`.                                           |
-| params          | Optional       | None        | Parameters to be passed to the LightGBM Boosters.                                                                          |
-| static_features | Optional       | None        | Names of the features that are static and will be repeated when forecasting.                                               |
-| dropna          | bool           | True        | Drop rows with missing values produced by the transformations.                                                             |
-| keep_last_n     | Optional       | None        | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| weights         | Optional       | None        | Weights to multiply the metric of each window. If None, all windows have the same weight.                                  |
-| metric          | Union          | mape        | Metric used to assess the performance of the models and perform early stopping.                                            |
-| input_size      | Optional       | None        | Maximum training samples per serie in each window. If None, will use an expanding window.                                  |
-| **Returns**     | **LightGBMCV** |             | **CV object with internal data structures for partial_fit.**                                                               |
+| df | DataFrame |  | Series data in long format. |
+| n_windows | int |  | Number of windows to evaluate. |
+| h | int |  | Forecast horizon. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
+| params | Optional | None | Parameters to be passed to the LightGBM Boosters. |
+| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
+| dropna | bool | True | Drop rows with missing values produced by the transformations. |
+| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
+| weights | Optional | None | Weights to multiply the metric of each window. If None, all windows have the same weight. |
+| metric | Union | mape | Metric used to assess the performance of the models and perform early stopping. |
+| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
+| **Returns** | **LightGBMCV** |  | **CV object with internal data structures for partial_fit.** |
 
 ```python
 cv4 = LightGBMCV(
@@ -477,12 +477,12 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Train the boosters for some iterations.*
 
-|                         | **Type**  | **Default** | **Details**                                                                                                                                                                                                                                                          |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| num_iterations          | int       |             | Number of boosting iterations to run                                                                                                                                                                                                                                 |
-| before_predict_callback | Optional  | None        | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback  | Optional  | None        | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index.                                  |
-| **Returns**             | **float** |             | **Weighted metric after training for num_iterations.**                                                                                                                                                                                                               |
+| num_iterations | int |  | Number of boosting iterations to run |
+| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
+| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
+| **Returns** | **float** |  | **Weighted metric after training for num_iterations.** |
 
 ```python
 score = cv4.partial_fit(10)

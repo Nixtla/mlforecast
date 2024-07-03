@@ -26,20 +26,20 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *optuna objective function for the MLForecast class*
 
-|             | **Type**      | **Default** | **Details**                                                                                                                                                                                                    |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df          | Union         |             |                                                                                                                                                                                                                |
-| config_fn   | Callable      |             | Function that takes an optuna trial and produces a configuration with the following keys:<br/>- model_params<br/>- mlf_init_params<br/>- mlf_fit_params                                                           |
-| loss        | Callable      |             | Function that takes the validation and train dataframes and produces a float.                                                                                                                                  |
-| model       | BaseEstimator |             | scikit-learn compatible model to be trained                                                                                                                                                                    |
-| freq        | Union         |             | pandas’ or polars’ offset alias or integer denoting the frequency of the series.                                                                                                                               |
-| n_windows   | int           |             | Number of windows to evaluate.                                                                                                                                                                                 |
-| h           | int           |             | Forecast horizon.                                                                                                                                                                                              |
-| refit       | Union         | False       | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
-| id_col      | str           | unique_id   | Column that identifies each serie.                                                                                                                                                                             |
-| time_col    | str           | ds          | Column that identifies each timestep, its values can be timestamps or integers.                                                                                                                                |
-| target_col  | str           | y           | Column that contains the target.                                                                                                                                                                               |
-| **Returns** | **Callable**  |             |                                                                                                                                                                                                                |
+| df | Union |  |  |
+| config_fn | Callable |  | Function that takes an optuna trial and produces a configuration with the following keys:<br/>- model_params<br/>- mlf_init_params<br/>- mlf_fit_params |
+| loss | Callable |  | Function that takes the validation and train dataframes and produces a float. |
+| model | BaseEstimator |  | scikit-learn compatible model to be trained |
+| freq | Union |  | pandas’ or polars’ offset alias or integer denoting the frequency of the series. |
+| n_windows | int |  | Number of windows to evaluate. |
+| h | int |  | Forecast horizon. |
+| refit | Union | False | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
+| id_col | str | unique_id | Column that identifies each serie. |
+| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
+| target_col | str | y | Column that contains the target. |
+| **Returns** | **Callable** |  |  |
 
 ```python
 import lightgbm as lgb

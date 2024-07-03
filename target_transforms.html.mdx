@@ -136,11 +136,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 *Find and apply the optimal number of seasonal differences to each
 group.*
 
-|               | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                  |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| season_length | int      |             | Length of the seasonal period.                                                                                                                                                                                                                               |
-| max_diffs     | int      |             | Maximum number of differences to apply.                                                                                                                                                                                                                      |
-| n_seasons     | Optional | 10          | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
+| season_length | int |  | Length of the seasonal period. |
+| max_diffs | int |  | Maximum number of differences to apply. |
+| n_seasons | Optional | 10 | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
 
 ------------------------------------------------------------------------
 
@@ -158,11 +158,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 *Find the length of the seasonal period and apply the optimal number of
 differences to each group.*
 
-|                   | **Type** | **Default** | **Details**                                                                                                                                                                                                                                                      |
+|  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| max_season_length | int      |             | Maximum length of the seasonal period.                                                                                                                                                                                                                           |
-| max_diffs         | int      |             | Maximum number of differences to apply.                                                                                                                                                                                                                          |
-| n_seasons         | Optional | 10          | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `max_season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
+| max_season_length | int |  | Maximum length of the seasonal period. |
+| max_diffs | int |  | Maximum number of differences to apply. |
+| n_seasons | Optional | 10 | Number of seasons to use to determine the number of differences. Defaults to 10.<br/>If `None` will use all samples, otherwise `max_season_length` \* `n_seasons samples` will be used for the test.<br/>Smaller values will be faster but could be less accurate. |
 
 ```python
 def test_scaler(sc, series):
@@ -245,9 +245,9 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 *Scaler robust to outliers.*
 
-|       | **Type** | **Details**                                                                                                   |
+|  | **Type** | **Details** |
 |--------|---------------------------|-------------------------------------|
-| scale | str      | Statistic to use for scaling. Can be either ‘iqr’ (Inter Quartile Range) or ‘mad’ (Median Asbolute Deviation) |
+| scale | str | Statistic to use for scaling. Can be either ‘iqr’ (Inter Quartile Range) or ‘mad’ (Median Asbolute Deviation) |
 
 ```python
 test_scaler(LocalRobustScaler(scale='iqr'), series)
