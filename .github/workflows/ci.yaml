@@ -65,7 +65,7 @@ jobs:
         run: pip install ./
 
       - name: Run local tests
-        run: nbdev_test --n_workers 0 --do_print --timing --skip_file_glob "(distributed|electricity)" --flags 'polars'
+        run: nbdev_test --n_workers 0 --do_print --timing --skip_file_glob "*(distributed|electricity)*" --flags 'polars'
 
   run-windows-tests:
     runs-on: windows-latest
