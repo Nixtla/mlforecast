@@ -59,7 +59,9 @@ jobs:
 
       - name: Install OpenMP
         if: startsWith(matrix.os, 'macos')
-        run: brew install libomp
+        run: |
+          brew install libomp
+          uv pip install --system git+https://github.com/Nixtla/coreforecast
 
       - name: Run local tests
         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re "(distributed|electricity)" --flags 'polars'
