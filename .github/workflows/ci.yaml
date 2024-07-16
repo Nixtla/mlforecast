@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-13, macos-14, windows-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11"]
     steps:
       - name: Clone repo
@@ -56,6 +56,10 @@ jobs:
 
       - name: Install the library
         run: pip install uv && uv pip install --system ".[dev]"
+
+      - name: Install OpenMP
+        if: startsWith(matrix.os, 'macos')
+        run: brew install libomp
 
       - name: Run local tests
         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re "(distributed|electricity)" --flags 'polars'
