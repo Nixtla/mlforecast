@@ -7,10 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-defaults:
-  run:
-    shell: bash -l {0}
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -36,7 +32,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install the library
-        run: pip install uv && uv pip install ".[all]" --system
+        run: pip install uv && uv pip install --system ".[all]"
 
       - name: Run all tests
         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re 'electricity' --flags 'polars'
@@ -59,7 +55,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install the library
-        run: pip install uv && uv pip install ".[dev]" --system
+        run: pip install uv && uv pip install --system ".[dev]"
 
       - name: Run local tests
         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re "(distributed|electricity)" --flags 'polars'
@@ -91,7 +87,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install uv && uv pip install . pytest pytest-benchmark
+        run: pip install uv && uv pip install --system . pytest pytest-benchmark
 
       - name: Run efficiency tests
         run: pytest tests/test_pipeline.py --benchmark-group-by=func --benchmark-sort=fullname
@@ -106,7 +102,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install uv && uv pip install . datasetsforecast lightgbm pytest
+        run: pip install uv && uv pip install --system . datasetsforecast lightgbm pytest
 
       - name: Run m4 performance tests
         run: pytest tests/test_m4.py
