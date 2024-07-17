@@ -63,7 +63,7 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: |
           brew install libomp
-          uv pip install --index-url https://test.pypi.org/simple/ --system coreforecast
+          uv pip install --index-url https://test.pypi.org/simple/ --system --reinstall coreforecast
 
       - name: Run local tests
         run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re "(distributed|electricity)" --flags 'polars'
