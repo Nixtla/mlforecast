@@ -8,7 +8,7 @@ title: Distributed Forecast
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L60"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L61"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast
@@ -23,7 +23,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                         et_transforms.BaseTargetTransform,mlforecast.targe
 >                         t_transforms._BaseGroupedArrayTargetTransform]]]=N
 >                         one, engine=None,
->                         num_partitions:Optional[int]=None)
+>                         num_partitions:Optional[int]=None,
+>                         lag_transforms_namer:Optional[Callable]=None)
 > ```
 
 *Multi backend distributed pipeline*
@@ -31,7 +32,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L390"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L402"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.fit
@@ -60,7 +61,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L466"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L478"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.predict
@@ -88,7 +89,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L649"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L661"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.save
@@ -107,7 +108,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L682"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L694"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.load
@@ -127,7 +128,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L728"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L740"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.update
@@ -146,7 +147,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L747"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L759"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.to_local
@@ -164,7 +165,7 @@ method instead.\*
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L294"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L306"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.preprocess
@@ -194,7 +195,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L531"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L543"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.cross_validation
