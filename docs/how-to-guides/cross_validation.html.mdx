@@ -143,7 +143,7 @@ method](../../forecast.html#mlforecast.cross_validation).
 For this particular example, we’ll use 3 windows of 24 hours.
 
 ```python
-crossvalidation_df = mlf.cross_validation(
+cv_df = mlf.cross_validation(
     df=Y_df,
     h=24,
     n_windows=3,
@@ -160,7 +160,7 @@ following columns:
 -   `"model"`: columns with the model’s name and fitted value.
 
 ```python
-crossvalidation_df.head()
+cv_df.head()
 ```
 
 |     | unique_id | ds  | cutoff | y     | LGBMRegressor |
@@ -191,7 +191,7 @@ def plot_cv(df, df_cv, uid, fname, last_n=24 * 14):
 
 
 ```python
-plot_cv(Y_df, crossvalidation_df, 'H1', '../../figs/cross_validation__predictions.png')
+plot_cv(Y_df, cv_df, 'H1', '../../figs/cross_validation__predictions.png')
 ```
 
 ![](/mlforecast/docs/how-to-guides/../../figs/cross_validation__predictions.png)
@@ -208,21 +208,22 @@ this, we can use `utilsforecast`, a Python library developed by Nixtla
 that includes a function to compute the RMSE.
 
 ```python
+from utilsforecast.evaluation import evaluate
 from utilsforecast.losses import rmse
 ```
 
-We’ll compute the `rmse` per time series and cutoff. To do this we’ll
-concatenate the id and the cutoff columns, then we will take the mean of
-the results.
 
 ```python
-crossvalidation_df['id_cutoff'] = crossvalidation_df['unique_id'] + '_' + crossvalidation_df['cutoff'].astype(str)
-cv_rmse = rmse(crossvalidation_df, models=['LGBMRegressor'], id_col='id_cutoff')['LGBMRegressor'].mean()
-print("RMSE using cross-validation: ", cv_rmse)
+cv_rmse = evaluate(
+    cv_df.drop(columns='cutoff'),
+    metrics=[rmse],
+    agg_fn='mean',
+)
+print(f"RMSE using cross-validation: {cv_rmse['LGBMRegressor'].item():.1f}")
 ```
 
 ``` text
-RMSE using cross-validation:  249.90517171185527
+RMSE using cross-validation: 269.0
 ```
 
 This measure should better reflect the predictive abilities of our

@@ -523,7 +523,7 @@ cv_result
 | 767 | H413      | 1008 | 960    | 34.0 | 54.902634     |
 
 ```python
-fig = plot_series(cv_result, cv_result.drop(columns='cutoff'), max_insample_length=0)
+fig = plot_series(forecasts_df=cv_result.drop(columns='cutoff'))
 ```
 
 ![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__cv.png)
@@ -675,7 +675,7 @@ cv.cv_preds_
 | 191 | H413      | 1008 | 34.0 | 44.720562 | 3      |
 
 ```python
-fig = plot_series(cv.cv_preds_, cv.cv_preds_.drop(columns='window'), max_insample_length=0)
+fig = plot_series(forecasts_df=cv.cv_preds_.drop(columns='window'))
 ```
 
 ![](/mlforecast/docs/getting-started/../../figs/end_to_end_walkthrough__lgbcv.png)

@@ -403,7 +403,7 @@ We can see at a couple of results.
 
 ```python
 results = valid.merge(predictions, on=['unique_id', 'ds'])
-fig = plot_series(train, results, max_insample_length=0)
+fig = plot_series(forecasts_df=results)
 ```
 
 ![](/mlforecast/figs/forecast__predict.png)
@@ -458,7 +458,7 @@ Let’s explore the generated intervals.
 
 ```python
 results = valid.merge(predictions_w_intervals, on=['unique_id', 'ds'])
-fig = plot_series(train, results, max_insample_length=0, level=[50, 80, 95])
+fig = plot_series(forecasts_df=results, level=[50, 80, 95])
 ```
 
 ![](/mlforecast/figs/forecast__predict_intervals.png)
@@ -486,7 +486,7 @@ Let’s explore the generated intervals.
 
 ```python
 results = valid.merge(predictions_w_intervals_ws_1, on=['unique_id', 'ds'])
-fig = plot_series(train, results, max_insample_length=0, level=[90])
+fig = plot_series(forecasts_df=results, level=[90])
 ```
 
 ![](/mlforecast/figs/forecast__predict_intervals_window_size_1.png)
@@ -812,13 +812,13 @@ for refit, expected_models in zip([True, False, 2], [4, 1, 2]):
 
 
 ```python
-fig = plot_series(cv_results, cv_results.drop(columns='cutoff'), max_insample_length=0)
+fig = plot_series(forecasts_df=cv_results.drop(columns='cutoff'))
 ```
 
 ![](/mlforecast/figs/forecast__cross_validation.png)
 
 ```python
-fig = plot_series(cv_results_intervals, cv_results_intervals.drop(columns='cutoff'), level=[90], max_insample_length=0)
+fig = plot_series(forecasts_df=cv_results_intervals.drop(columns='cutoff'), level=[90])
 ```
 
 ![](/mlforecast/figs/forecast__cross_validation_intervals.png)
