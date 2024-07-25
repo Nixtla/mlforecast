@@ -103,7 +103,7 @@ fcst = MLForecast(
     lags=[1],
     date_features=['dayofweek'],
 )
-fcst.preprocess(series_with_prices, dropna=True).head()
+fcst.preprocess(series_with_prices, static_features=[], dropna=True).head()
 ```
 
 |  | unique_id | ds | y | price | price_lag7 | price_expanding_mean_lag1 | lag1 | dayofweek |
