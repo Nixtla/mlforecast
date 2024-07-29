@@ -27,11 +27,13 @@ are:
 ```python
 import platform
 import sys
+import tempfile
 
 import matplotlib.pyplot as plt
 import git
 import numpy as np
 import pandas as pd
+from botocore.exceptions import NoCredentialsError
 from sklearn.base import BaseEstimator
 
 from mlforecast.distributed import DistributedMLForecast
@@ -181,7 +183,12 @@ def build_unique_name(engine):
 ```python
 save_dir = build_unique_name('dask')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
-fcst.save(save_path)
+tmpdir = tempfile.TemporaryDirectory()
+try:
+    fcst.save(save_path)
+except NoCredentialsError:
+    save_path = f'{tmpdir.name}/{save_dir}'
+    fcst.save(save_path)
 ```
 
 Once you’ve saved your forecast object you can then load it back by
@@ -364,7 +371,11 @@ saving to S3. If you’re using conda you’ll have to manually install them
 ```python
 save_dir = build_unique_name('spark')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
-fcst.save(save_path)
+try:
+    fcst.save(save_path)
+except NoCredentialsError:
+    save_path = f'{tmpdir.name}/{save_dir}'
+    fcst.save(save_path)
 ```
 
 ``` text
@@ -564,7 +575,11 @@ saving to S3. If you’re using conda you’ll have to manually install them
 ```python
 save_dir = build_unique_name('ray')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
-fcst.save(save_path)
+try:
+    fcst.save(save_path)
+except NoCredentialsError:
+    save_path = f'{tmpdir.name}/{save_dir}'
+    fcst.save(save_path)
 ```
 
 Once you’ve saved your forecast object you can then load it back by
