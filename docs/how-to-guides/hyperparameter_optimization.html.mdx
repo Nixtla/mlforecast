@@ -280,9 +280,10 @@ evaluate(preds, group)
 ## Accessing the optimization results
 
 After the process has finished the results are available under the
-`results_` attribute of the `AutoMLForecast` object. There will be one
-result per model and the best configuration can be found under the
-`config` user attribute.
+`results_` attribute of the
+[`AutoMLForecast`](https://Nixtla.github.io/mlforecast/auto.html#automlforecast)
+object. There will be one result per model and the best configuration
+can be found under the `config` user attribute.
 
 ```python
 len(auto_mlf.results_)
@@ -334,8 +335,10 @@ auto_mlf.models_
 
 ## Saving
 
-You can use the `AutoMLForecast.save` method to save the best models
-found. This produces one directory per model.
+You can use the
+[`AutoMLForecast.save`](https://Nixtla.github.io/mlforecast/auto.html#automlforecast.save)
+method to save the best models found. This produces one directory per
+model.
 
 ```python
 with tempfile.TemporaryDirectory() as tmpdir:
