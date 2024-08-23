@@ -1,4 +1,5 @@
 import os
+from typing import Any, Dict, Optional
 
 import mlflow
 import pandas as pd
@@ -74,14 +75,14 @@ def save_model(
     pip_requirements=None,
     extra_pip_requirements=None,
 ):
-    """Save an ``mlforecast`` model to a local or remote path
+    """Save an ``MLForecast`` model to a local path
 
     Parameters
     ----------
     model : MLForecast
-        Fitted ``mlforecast`` model object.
+        Fitted ``MLForecast`` model object.
     path : str
-        Local or remote path where the model is to be saved.
+        Local path where the model is to be saved.
     conda_env : Union[dict, str], optional (default=None)
         Either a dictionary representation of a Conda environment or the path to a
         conda environment yaml file.
@@ -198,12 +199,12 @@ def log_model(
     **kwargs,
 ):
     """
-    Log an ``mlforecast`` model as an MLflow artifact for the current run.
+    Log an ``MLForecast`` model as an MLflow artifact for the current run.
 
     Parameters
     ----------
-    model : fitted ``mlforecast`` model
-        Fitted ``mlforecast`` model object.
+    model : MLForecast
+        Fitted ``MLForecast`` model object.
     artifact_path : str
         Run-relative artifact path to save the model to.
     conda_env : Union[dict, str], optional (default=None)
@@ -277,7 +278,7 @@ def log_model(
 
 def load_model(model_uri, dst_path=None):
     """
-    Load an ``mlforecast`` model from a local file or a run.
+    Load an ``MLForecast`` model from a local file or a run.
 
     Parameters
     ----------
@@ -300,7 +301,7 @@ def load_model(model_uri, dst_path=None):
 
     Returns
     -------
-    An ``mlforecast`` model instance.
+    An ``MLForecast`` model instance.
     """
     local_model_path = _download_artifact_from_uri(artifact_uri=model_uri, output_path=dst_path)
     flavor_conf = _get_flavor_configuration(model_path=local_model_path, flavor_name=FLAVOR_NAME)
@@ -320,14 +321,14 @@ def _load_pyfunc(path):
     """
     pyfunc_flavor_conf = _get_flavor_configuration(model_path=path, flavor_name=pyfunc.FLAVOR_NAME)
     path = os.path.join(path, pyfunc_flavor_conf["model_path"])
-    return _MLForecastWrapper(MLForecast.load(path))
+    return _MLForecastModelWrapper(MLForecast.load(path))
 
 
-class _MLForecastWrapper:
-    def __init__(self, model):
+class _MLForecastModelWrapper:
+    def __init__(self, model: MLForecast):
         self.model = model
 
-    def predict(self, config_df) -> pd.DataFrame:
+    def predict(self, config_df: pd.DataFrame, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         n_rows = config_df.shape[0]
 
         if n_rows > 1:
@@ -337,15 +338,30 @@ class _MLForecastWrapper:
                 error_code=INVALID_PARAMETER_VALUE,
             )
 
-        attrs = config_df.to_dict(orient="index").get(0)
+        attrs = config_df.iloc[0].to_dict()
         h = attrs.get("h")
         if h is None:
             raise MlflowException(
                 f"The `h` parameter is required to make forecasts.",
                 error_code=INVALID_PARAMETER_VALUE,
             )
-        new_df = attrs.get("new_df")
+        ts = self.model.ts
+        col_types = {
+            ts.id_col: ts.uids.dtype,
+            ts.time_col: ts.last_dates.dtype,
+        }
         level = attrs.get("level")
+        new_df = attrs.get("new_df")
+        if new_df is not None:
+            if level is not None:
+                raise MlflowException(
+                    f"Prediction intervals are not supported in transfer learning. "
+                    "Please provide either `level` or `new_df`, but not both.",
+                    error_code=INVALID_PARAMETER_VALUE,
+                )
+            new_df = pd.DataFrame(new_df).astype(col_types)
         X_df = attrs.get("X_df")
+        if X_df is not None:
+            X_df = pd.DataFrame(X_df).astype(col_types)
         ids = attrs.get("ids")
         return self.model.predict(h=h, new_df=new_df, level=level, X_df=X_df, ids=ids)
