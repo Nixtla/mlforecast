@@ -328,7 +328,11 @@ class _MLForecastModelWrapper:
     def __init__(self, model: MLForecast):
         self.model = model
 
-    def predict(self, config_df: pd.DataFrame, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    def predict(
+        self,
+        config_df: pd.DataFrame,
+        params: Optional[Dict[str, Any]] = None,  # noqa
+    ) -> pd.DataFrame:
         n_rows = config_df.shape[0]
 
         if n_rows > 1:
@@ -342,7 +346,7 @@ class _MLForecastModelWrapper:
         h = attrs.get("h")
         if h is None:
             raise MlflowException(
-                f"The `h` parameter is required to make forecasts.",
+                "The `h` parameter is required to make forecasts.",
                 error_code=INVALID_PARAMETER_VALUE,
             )
         ts = self.model.ts
@@ -355,7 +359,7 @@ class _MLForecastModelWrapper:
         if new_df is not None:
             if level is not None:
                 raise MlflowException(
-                    f"Prediction intervals are not supported in transfer learning. "
+                    "Prediction intervals are not supported in transfer learning. "
                     "Please provide either `level` or `new_df`, but not both.",
                     error_code=INVALID_PARAMETER_VALUE,
                 )
