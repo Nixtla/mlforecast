@@ -74,7 +74,7 @@ serie
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L169"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L170"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### TimeSeries
@@ -158,15 +158,14 @@ transformation.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L481"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L482"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.fit_transform
 
 > ``` text
->  TimeSeries.fit_transform (data:Union[pandas.core.frame.DataFrame,polars.d
->                            ataframe.frame.DataFrame], id_col:str,
->                            time_col:str, target_col:str,
+>  TimeSeries.fit_transform (data:~DFType, id_col:str, time_col:str,
+>                            target_col:str,
 >                            static_features:Optional[List[str]]=None,
 >                            dropna:bool=True,
 >                            keep_last_n:Optional[int]=None,
@@ -296,7 +295,7 @@ test_fail(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L726"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L727"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.predict
@@ -305,9 +304,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  TimeSeries.predict (models:Dict[str,Union[sklearn.base.BaseEstimator,List
 >                      [sklearn.base.BaseEstimator]]], horizon:int,
 >                      before_predict_callback:Optional[Callable]=None,
->                      after_predict_callback:Optional[Callable]=None, X_df:
->                      Union[pandas.core.frame.DataFrame,polars.dataframe.fr
->                      ame.DataFrame,NoneType]=None,
+>                      after_predict_callback:Optional[Callable]=None,
+>                      X_df:Optional[~DFType]=None,
 >                      ids:Optional[List[str]]=None)
 > ```
 
@@ -369,7 +367,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L831"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L832"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.update

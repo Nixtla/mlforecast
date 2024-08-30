@@ -73,7 +73,7 @@ train.shape, valid.shape
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L127"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L126"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast
@@ -130,7 +130,7 @@ Once we have this setup we can compute the features and fit the model.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L447"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L446"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
@@ -185,7 +185,7 @@ fcst.fit(train, fitted=True);
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L966"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L965"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.save
@@ -204,7 +204,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L983"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L982"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.load
@@ -223,7 +223,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1006"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1005"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.update
@@ -244,7 +244,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L576"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L575"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.make_future_dataframe
@@ -276,15 +276,13 @@ expected_future
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L600"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L599"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.get_missing_future
 
 > ``` text
->  MLForecast.get_missing_future (h:int,
->                                 X_df:Union[pandas.core.frame.DataFrame,pol
->                                 ars.dataframe.frame.DataFrame])
+>  MLForecast.get_missing_future (h:int, X_df:~DFType)
 > ```
 
 *Get the missing id and time combinations in `X_df`.*
@@ -292,8 +290,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 |  | **Type** | **Details** |
 |--------|---------------------------|-------------------------------------|
 | h | int | Number of periods to predict. |
-| X_df | Union | Dataframe with the future exogenous features. Should have the id column and the time column. |
-| **Returns** | **Union** | **DataFrame with expected ids and future times missing in `X_df`** |
+| X_df | DFType | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| **Returns** | **DFType** | **DataFrame with expected ids and future times missing in `X_df`** |
 
 ```python
 missing_future = fcst.get_missing_future(h=1, X_df=expected_future.head(2))
@@ -306,7 +304,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L548"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L547"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.forecast_fitted_values
@@ -365,7 +363,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L619"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L618"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -373,12 +371,10 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 > ``` text
 >  MLForecast.predict (h:int,
 >                      before_predict_callback:Optional[Callable]=None,
->                      after_predict_callback:Optional[Callable]=None, new_d
->                      f:Union[pandas.core.frame.DataFrame,polars.dataframe.
->                      frame.DataFrame,NoneType]=None,
->                      level:Optional[List[Union[int,float]]]=None, X_df:Uni
->                      on[pandas.core.frame.DataFrame,polars.dataframe.frame
->                      .DataFrame,NoneType]=None,
+>                      after_predict_callback:Optional[Callable]=None,
+>                      new_df:Optional[~DFType]=None,
+>                      level:Optional[List[Union[int,float]]]=None,
+>                      X_df:Optional[~DFType]=None,
 >                      ids:Optional[List[str]]=None)
 > ```
 
@@ -389,11 +385,11 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | h | int |  | Number of periods to predict. |
 | before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
 | after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
-| new_df | Union | None | Series data of new observations for which forecasts are to be generated. <br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data. <br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
+| new_df | Optional | None | Series data of new observations for which forecasts are to be generated. <br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data. <br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
 | level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
-| X_df | Union | None | Dataframe with the future exogenous features. Should have the id column and the time column. |
+| X_df | Optional | None | Dataframe with the future exogenous features. Should have the id column and the time column. |
 | ids | Optional | None | List with subset of ids seen during training for which the forecasts should be computed. |
-| **Returns** | **Union** |  | **Predictions for each serie and timestep, with one column per model.** |
+| **Returns** | **DFType** |  | **Predictions for each serie and timestep, with one column per model.** |
 
 ```python
 predictions = fcst.predict(horizon)
@@ -521,15 +517,13 @@ models you can call `Forecast.preprocess`.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L206"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L205"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.preprocess
 
 > ``` text
->  MLForecast.preprocess
->                         (df:Union[pandas.core.frame.DataFrame,polars.dataf
->                         rame.frame.DataFrame], id_col:str='unique_id',
+>  MLForecast.preprocess (df:~DFType, id_col:str='unique_id',
 >                         time_col:str='ds', target_col:str='y',
 >                         static_features:Optional[List[str]]=None,
 >                         dropna:bool=True, keep_last_n:Optional[int]=None,
@@ -541,7 +535,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 |  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df | Union |  | Series data in long format. |
+| df | DFType |  | Series data in long format. |
 | id_col | str | unique_id | Column that identifies each serie. |
 | time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
 | target_col | str | y | Column that contains the target. |
@@ -578,7 +572,7 @@ only stores the series information.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L262"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L261"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit_models
@@ -616,17 +610,15 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L767"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L766"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
 
 > ``` text
->  MLForecast.cross_validation
->                               (df:Union[pandas.core.frame.DataFrame,polars
->                               .dataframe.frame.DataFrame], n_windows:int,
->                               h:int, id_col:str='unique_id',
->                               time_col:str='ds', target_col:str='y',
+>  MLForecast.cross_validation (df:~DFType, n_windows:int, h:int,
+>                               id_col:str='unique_id', time_col:str='ds',
+>                               target_col:str='y',
 >                               step_size:Optional[int]=None,
 >                               static_features:Optional[List[str]]=None,
 >                               dropna:bool=True,
@@ -648,7 +640,7 @@ predictions and merges the actuals.*
 
 |  | **Type** | **Default** | **Details** |
 |------|------------------|-------------------------|-------------------------|
-| df | Union |  | Series data in long format. |
+| df | DFType |  | Series data in long format. |
 | n_windows | int |  | Number of windows to evaluate. |
 | h | int |  | Forecast horizon. |
 | id_col | str | unique_id | Column that identifies each serie. |
@@ -667,7 +659,7 @@ predictions and merges the actuals.*
 | input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
 | fitted | bool | False | Store the in-sample predictions. |
 | as_numpy | bool | False | Cast features to numpy array. |
-| **Returns** | **Union** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
+| **Returns** | **DFType** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
 
 If we would like to know how good our forecast will be for a specific
 model and set of features then we can perform cross validation. What
@@ -826,7 +818,7 @@ fig = plot_series(forecasts_df=cv_results_intervals.drop(columns='cutoff'), leve
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L192"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L191"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.from_cv
