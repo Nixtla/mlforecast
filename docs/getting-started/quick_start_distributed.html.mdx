@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 import git
 import numpy as np
 import pandas as pd
-from botocore.exceptions import NoCredentialsError
+import s3fs
 from sklearn.base import BaseEstimator
 
 from mlforecast.distributed import DistributedMLForecast
@@ -185,8 +185,10 @@ save_dir = build_unique_name('dask')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
 tmpdir = tempfile.TemporaryDirectory()
 try:
+    s3fs.S3FileSystem().ls('s3://nixtla-tmp/')
     fcst.save(save_path)
-except NoCredentialsError:
+except Exception as e:
+    print(e)
     save_path = f'{tmpdir.name}/{save_dir}'
     fcst.save(save_path)
 ```
@@ -372,8 +374,10 @@ saving to S3. If you’re using conda you’ll have to manually install them
 save_dir = build_unique_name('spark')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
 try:
+    s3fs.S3FileSystem().ls('s3://nixtla-tmp/')
     fcst.save(save_path)
-except NoCredentialsError:
+except Exception as e:
+    print(e)
     save_path = f'{tmpdir.name}/{save_dir}'
     fcst.save(save_path)
 ```
@@ -576,8 +580,10 @@ saving to S3. If you’re using conda you’ll have to manually install them
 save_dir = build_unique_name('ray')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
 try:
+    s3fs.S3FileSystem().ls('s3://nixtla-tmp/')
     fcst.save(save_path)
-except NoCredentialsError:
+except Exception as e:
+    print(e)
     save_path = f'{tmpdir.name}/{save_dir}'
     fcst.save(save_path)
 ```
