@@ -150,10 +150,10 @@ np.testing.assert_allclose(
 
 The [window-ops package](https://github.com/jmoralez/window_ops)
 provides transformations defined as [numba](https://numba.pydata.org/)
-[JIT compiled](https://en.wikipedia.org/wiki/just-in-time_compilation)
+[JIT compiled](https://en.wikipedia.org/wiki/Just-in-time_compilation)
 functions. We use numba because it makes them really fast and can also
 bypass [python’s
-GIL](https://wiki.python.org/moin/globalinterpreterlock), which allows
+GIL](https://wiki.python.org/moin/GlobalInterpreterLock), which allows
 running them concurrently with multithreading.
 
 The main benefit of using these transformations is that they’re very
