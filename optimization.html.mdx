@@ -19,6 +19,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                        ial._trial.Trial],Dict[str,Any]], loss:Callable,
 >                        model:sklearn.base.BaseEstimator,
 >                        freq:Union[int,str], n_windows:int, h:int,
+>                        step_size:Optional[int]=None,
 >                        refit:Union[bool,int]=False,
 >                        id_col:str='unique_id', time_col:str='ds',
 >                        target_col:str='y')
@@ -35,6 +36,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | freq | Union |  | pandas’ or polars’ offset alias or integer denoting the frequency of the series. |
 | n_windows | int |  | Number of windows to evaluate. |
 | h | int |  | Forecast horizon. |
+| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
 | refit | Union | False | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
 | id_col | str | unique_id | Column that identifies each serie. |
 | time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
