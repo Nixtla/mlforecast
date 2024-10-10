@@ -313,11 +313,12 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >  AutoMLForecast.fit
 >                      (df:Union[pandas.core.frame.DataFrame,polars.datafram
 >                      e.frame.DataFrame], n_windows:int, h:int,
->                      num_samples:int, refit:Union[bool,int]=False, loss:Op
->                      tional[Callable[[Union[pandas.core.frame.DataFrame,po
->                      lars.dataframe.frame.DataFrame],Union[pandas.core.fra
->                      me.DataFrame,polars.dataframe.frame.DataFrame]],float
->                      ]]=None, id_col:str='unique_id', time_col:str='ds',
+>                      num_samples:int, step_size:Optional[int]=None,
+>                      refit:Union[bool,int]=False, loss:Optional[Callable[[
+>                      Union[pandas.core.frame.DataFrame,polars.dataframe.fr
+>                      ame.DataFrame],Union[pandas.core.frame.DataFrame,pola
+>                      rs.dataframe.frame.DataFrame]],float]]=None,
+>                      id_col:str='unique_id', time_col:str='ds',
 >                      target_col:str='y',
 >                      study_kwargs:Optional[Dict[str,Any]]=None,
 >                      optimize_kwargs:Optional[Dict[str,Any]]=None,
@@ -334,6 +335,7 @@ independently and the best one is trained on all data*
 | n_windows | int |  | Number of windows to evaluate. |
 | h | int |  | Forecast horizon. |
 | num_samples | int |  | Number of trials to run |
+| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
 | refit | Union | False | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
 | loss | Optional | None | Function that takes the validation and train dataframes and produces a float.<br/>If `None` will use the average SMAPE across series. |
 | id_col | str | unique_id | Column that identifies each serie. |
@@ -348,7 +350,7 @@ independently and the best one is trained on all data*
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L570"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L574"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.predict
@@ -371,7 +373,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L602"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L606"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.save
@@ -390,7 +392,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L612"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L616"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.forecast_fitted_values
