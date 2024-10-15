@@ -86,7 +86,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
         self.differences = list(differences)
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        self.fitted_: List[GroupedArray] = []
+        self.fitted_: List[np.ndarray] = []
         original_sizes = np.diff(ga.indptr)
         total_diffs = sum(self.differences)
         small_series = original_sizes < total_diffs
@@ -98,9 +98,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
             if self.store_fitted:
                 # these are saved in order to be able to perform a correct
                 # inverse transform when trying to retrieve the fitted values.
-                self.fitted_.append(
-                    GroupedArray(core_ga.data.copy(), core_ga.indptr.copy())
-                )
+                self.fitted_.append(core_ga.data.copy())
             scaler = core_scalers.Difference(d)
             transformed = scaler.fit_transform(core_ga)
             self.scalers_.append(scaler)
@@ -122,9 +120,9 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
-        ga = copy.copy(ga)
         for d, fitted in zip(reversed(self.differences), reversed(self.fitted_)):
-            fitted.restore_fitted_difference(ga.data, ga.indptr, d)
+            transformed = ga.restore_fitted_difference(fitted, d)
+            ga = GroupedArray(transformed, ga.indptr)
         return ga
 
     def take(self, idxs: np.ndarray) -> "Differences":
