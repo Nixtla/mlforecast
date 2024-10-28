@@ -437,8 +437,9 @@ class TimeSeries:
         del self._restore_idxs, self._sort_idxs
 
         # lag transforms
-        for feat, feat_vals in features.items():
-            df = ufp.assign_columns(df, feat, feat_vals)
+        for feat in self.transforms.keys():
+            if feat in features:
+                df = ufp.assign_columns(df, feat, features[feat])
 
         # date features
         names = [f.__name__ if callable(f) else f for f in self.date_features]
