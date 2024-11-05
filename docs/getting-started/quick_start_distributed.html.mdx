@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 import s3fs
 from sklearn.base import BaseEstimator
+from utilsforecast.feature_engineering import fourier
 
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.lag_transforms import ExpandingMean, ExponentiallyWeightedMean, RollingMean
@@ -74,21 +75,22 @@ except that it’s a `dask.dataframe.DataFrame` instead of a
 
 ```python
 series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False, min_length=500, max_length=1_000)
+train, future = fourier(series, freq='d', season_length=7, k=2, h=7)
 npartitions = 10
-partitioned_series = dd.from_pandas(series.set_index('unique_id'), npartitions=npartitions)  # make sure we split by the id_col
+partitioned_series = dd.from_pandas(train.set_index('unique_id'), npartitions=npartitions)  # make sure we split by the id_col
 partitioned_series = partitioned_series.map_partitions(lambda df: df.reset_index())
 partitioned_series['unique_id'] = partitioned_series['unique_id'].astype(str)  # can't handle categoricals atm
 partitioned_series
 ```
 
-|                | unique_id | ds               | y       | static_0 | static_1 |
-|----------------|-----------|------------------|---------|----------|----------|
-| npartitions=10 |           |                  |         |          |          |
-| id_00          | object    | datetime64\[ns\] | float64 | int64    | int64    |
-| id_10          | ...       | ...              | ...     | ...      | ...      |
-| ...            | ...       | ...              | ...     | ...      | ...      |
-| id_90          | ...       | ...              | ...     | ...      | ...      |
-| id_99          | ...       | ...              | ...     | ...      | ...      |
+|  | unique_id | ds | y | static_0 | static_1 | sin1_7 | sin2_7 | cos1_7 | cos2_7 |
+|----|----|----|----|----|----|----|----|----|----|
+| npartitions=10 |  |  |  |  |  |  |  |  |  |
+| id_00 | object | datetime64\[ns\] | float64 | int64 | int64 | float32 | float32 | float32 | float32 |
+| id_10 | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| id_90 | ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| id_99 | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 
 ### Models
 
@@ -107,7 +109,10 @@ from mlforecast.distributed.models.dask.xgb import DaskXGBForecast
 
 
 ```python
-models = [DaskXGBForecast(random_state=0), DaskLGBMForecast(random_state=0)]
+models = [
+    DaskXGBForecast(random_state=0),
+    DaskLGBMForecast(random_state=0, verbosity=-1),
+]
 ```
 
 ### Training
@@ -131,7 +136,7 @@ fcst = DistributedMLForecast(
     num_threads=1,
     engine=client,
 )
-fcst.fit(partitioned_series)
+fcst.fit(partitioned_series, static_features=['static_0', 'static_1'])
 ```
 
 Once we have our fitted models we can compute the predictions for the
@@ -140,17 +145,17 @@ next 7 timesteps.
 ### Forecasting
 
 ```python
-preds = fcst.predict(7).compute()
+preds = fcst.predict(7, X_df=future).compute()
 preds.head()
 ```
 
 |     | unique_id | ds                  | DaskXGBForecast | DaskLGBMForecast |
 |-----|-----------|---------------------|-----------------|------------------|
-| 0   | id_00     | 2002-09-27 00:00:00 | 22.489947       | 21.679944        |
-| 1   | id_00     | 2002-09-28 00:00:00 | 81.806826       | 84.151205        |
-| 2   | id_00     | 2002-09-29 00:00:00 | 162.705641      | 164.024508       |
-| 3   | id_00     | 2002-09-30 00:00:00 | 246.990386      | 246.099977       |
-| 4   | id_00     | 2002-10-01 00:00:00 | 314.741463      | 315.261537       |
+| 0   | id_00     | 2002-09-27 00:00:00 | 21.609526       | 22.114111        |
+| 1   | id_00     | 2002-09-28 00:00:00 | 85.623013       | 84.309696        |
+| 2   | id_00     | 2002-09-29 00:00:00 | 163.107685      | 163.20679        |
+| 3   | id_00     | 2002-09-30 00:00:00 | 246.96872       | 245.510858       |
+| 4   | id_00     | 2002-10-01 00:00:00 | 318.521367      | 314.479718       |
 
 ### Saving and loading
 
@@ -205,8 +210,8 @@ fcst2 = DistributedMLForecast.load(save_path, engine=client)
 We can verify that this object produces the same results.
 
 ```python
-preds = fa.as_pandas(fcst.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds = fa.as_pandas(fcst.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds2 = fa.as_pandas(fcst2.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
 ```
 
@@ -222,7 +227,7 @@ further by using the `keep_last_n` argument in the `fit` method).
 
 ```python
 local_fcst = fcst.to_local()
-local_preds = local_fcst.predict(10)
+local_preds = local_fcst.predict(7, X_df=future)
 # we don't check the dtype because sometimes these are arrow dtypes
 # or different precisions of float
 pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
@@ -235,6 +240,7 @@ cv_res = fcst.cross_validation(
     partitioned_series,
     n_windows=3,
     h=14,
+    static_features=['static_0', 'static_1'],
 )
 ```
 
@@ -245,11 +251,11 @@ cv_res.compute().head()
 
 |  | unique_id | ds | DaskXGBForecast | DaskLGBMForecast | cutoff | y |
 |----|----|----|----|----|----|----|
-| 17 | id_01 | 2002-08-19 00:00:00 | 224.458336 | 222.742605 | 2002-08-15 00:00:00 | 210.723139 |
-| 43 | id_03 | 2002-08-17 00:00:00 | 2.235601 | 2.210624 | 2002-08-15 00:00:00 | 2.416967 |
-| 44 | id_03 | 2002-08-18 00:00:00 | 3.276747 | 3.239702 | 2002-08-15 00:00:00 | 3.060194 |
-| 119 | id_08 | 2002-08-23 00:00:00 | 131.261689 | 131.180289 | 2002-08-15 00:00:00 | 138.668463 |
-| 131 | id_09 | 2002-08-21 00:00:00 | 27.716417 | 28.263963 | 2002-08-15 00:00:00 | 22.88374 |
+| 0 | id_00 | 2002-08-16 00:00:00 | 23.192749 | 21.986437 | 2002-08-15 00:00:00 | 11.878591 |
+| 30 | id_02 | 2002-08-18 00:00:00 | 96.59974 | 96.568057 | 2002-08-15 00:00:00 | 94.706551 |
+| 80 | id_05 | 2002-08-26 00:00:00 | 257.210466 | 255.908309 | 2002-08-15 00:00:00 | 246.051086 |
+| 36 | id_12 | 2002-08-24 00:00:00 | 401.081335 | 401.697836 | 2002-08-15 00:00:00 | 424.296882 |
+| 91 | id_16 | 2002-08-23 00:00:00 | 315.036479 | 315.368377 | 2002-08-15 00:00:00 | 300.419406 |
 
 ```python
 client.close()
@@ -289,9 +295,11 @@ i.e. it should have at least an id column, a time column and a target
 column.
 
 ```python
+series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False, min_length=500, max_length=1_000)
+series['unique_id'] = series['unique_id'].astype(str)  # can't handle categoricals atm
+train, future = fourier(series, freq='d', season_length=7, k=2, h=7)
 numPartitions = 4
-series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False)
-spark_series = spark.createDataFrame(series).repartitionByRange(numPartitions, 'unique_id')
+spark_series = spark.createDataFrame(train).repartitionByRange(numPartitions, 'unique_id')
 ```
 
 ### Models
@@ -311,7 +319,10 @@ from mlforecast.distributed.models.spark.xgb import SparkXGBForecast
 
 
 ```python
-models = [SparkLGBMForecast(seed=0), SparkXGBForecast(random_state=0)]
+models = [
+    SparkLGBMForecast(seed=0, verbosity=-1),
+    SparkXGBForecast(random_state=0),
+]
 ```
 
 ### Training
@@ -336,7 +347,7 @@ fcst.fit(
 ### Forecasting
 
 ```python
-preds = fcst.predict(14).toPandas()
+preds = fcst.predict(7, X_df=future).toPandas()
 ```
 
 
@@ -346,11 +357,11 @@ preds.head()
 
 |     | unique_id | ds         | SparkLGBMForecast | SparkXGBForecast |
 |-----|-----------|------------|-------------------|------------------|
-| 0   | id_00     | 2001-05-15 | 430.964632        | 431.202969       |
-| 1   | id_00     | 2001-05-16 | 505.411960        | 504.030227       |
-| 2   | id_00     | 2001-05-17 | 9.889056          | 9.706636         |
-| 3   | id_00     | 2001-05-18 | 99.359694         | 96.258271        |
-| 4   | id_00     | 2001-05-19 | 196.307731        | 197.443618       |
+| 0   | id_00     | 2002-09-27 | 15.102403         | 18.631477        |
+| 1   | id_00     | 2002-09-28 | 92.980261         | 93.796269        |
+| 2   | id_00     | 2002-09-29 | 160.090375        | 159.582315       |
+| 3   | id_00     | 2002-09-30 | 250.416113        | 250.861651       |
+| 4   | id_00     | 2002-10-01 | 323.306184        | 321.564089       |
 
 ### Saving and loading
 
@@ -402,8 +413,8 @@ fcst2 = DistributedMLForecast.load(save_path, engine=spark)
 We can verify that this object produces the same results.
 
 ```python
-preds = fa.as_pandas(fcst.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds = fa.as_pandas(fcst.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds2 = fa.as_pandas(fcst2.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
 ```
 
@@ -423,7 +434,7 @@ further by using the `keep_last_n` argument in the `fit` method).
 
 ```python
 local_fcst = fcst.to_local()
-local_preds = local_fcst.predict(10)
+local_preds = local_fcst.predict(7, X_df=future)
 # we don't check the dtype because sometimes these are arrow dtypes
 # or different precisions of float
 pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
@@ -436,6 +447,7 @@ cv_res = fcst.cross_validation(
     spark_series,
     n_windows=3,
     h=14,
+    static_features=['static_0', 'static_1'],
 ).toPandas()
 ```
 
@@ -446,11 +458,11 @@ cv_res.head()
 
 |  | unique_id | ds | SparkLGBMForecast | SparkXGBForecast | cutoff | y |
 |----|----|----|----|----|----|----|
-| 0 | id_15 | 2001-04-04 | 88.438691 | 86.105463 | 2001-04-02 | 92.468763 |
-| 1 | id_25 | 2001-04-12 | 355.712493 | 354.525400 | 2001-04-02 | 320.701359 |
-| 2 | id_03 | 2001-04-08 | 257.243845 | 253.834157 | 2001-04-02 | 274.420045 |
-| 3 | id_14 | 2001-04-07 | 24.925278 | 23.833504 | 2001-04-02 | 26.906679 |
-| 4 | id_01 | 2001-04-16 | 89.180665 | 90.743194 | 2001-04-02 | 93.807725 |
+| 0 | id_03 | 2002-08-18 | 3.272922 | 3.348874 | 2002-08-15 | 3.060194 |
+| 1 | id_09 | 2002-08-20 | 402.718091 | 402.622501 | 2002-08-15 | 398.784459 |
+| 2 | id_25 | 2002-08-22 | 87.189811 | 86.891632 | 2002-08-15 | 82.731377 |
+| 3 | id_06 | 2002-08-21 | 20.416790 | 20.478502 | 2002-08-15 | 19.196394 |
+| 4 | id_22 | 2002-08-23 | 357.718513 | 360.502024 | 2002-08-15 | 394.770699 |
 
 ```python
 spark.stop()
@@ -489,10 +501,10 @@ i.e. it should have at least an id column, a time column and a target
 column.
 
 ```python
-series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False)
-# we need noncategory unique_id
-series['unique_id'] = series['unique_id'].astype(str)
-ray_series = ray.data.from_pandas(series)
+series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False, min_length=500, max_length=1_000)
+series['unique_id'] = series['unique_id'].astype(str)  # can't handle categoricals atm
+train, future = fourier(series, freq='d', season_length=7, k=2, h=7)
+ray_series = ray.data.from_pandas(train)
 ```
 
 ### Models
@@ -507,7 +519,10 @@ from mlforecast.distributed.models.ray.xgb import RayXGBForecast
 
 
 ```python
-models = [RayLGBMForecast(random_state=0), RayXGBForecast(random_state=0)]
+models = [
+    RayLGBMForecast(random_state=0, verbosity=-1),
+    RayXGBForecast(random_state=0),
+]
 ```
 
 ### Training
@@ -542,7 +557,7 @@ fcst.fit(
 ### Forecasting
 
 ```python
-preds = fcst.predict(14).to_pandas()
+preds = fcst.predict(7, X_df=future).to_pandas()
 ```
 
 
@@ -552,11 +567,11 @@ preds.head()
 
 |     | unique_id | ds         | RayLGBMForecast | RayXGBForecast |
 |-----|-----------|------------|-----------------|----------------|
-| 0   | id_01     | 2001-05-15 | 118.505341      | 118.32222      |
-| 1   | id_01     | 2001-05-16 | 152.321457      | 152.265915     |
-| 2   | id_01     | 2001-05-17 | 181.979599      | 181.945618     |
-| 3   | id_01     | 2001-05-18 | 9.530758        | 9.543224       |
-| 4   | id_01     | 2001-05-19 | 40.503441       | 40.661186      |
+| 0   | id_00     | 2002-09-27 | 15.232455       | 10.38301       |
+| 1   | id_00     | 2002-09-28 | 92.288994       | 92.531502      |
+| 2   | id_00     | 2002-09-29 | 160.043472      | 160.722885     |
+| 3   | id_00     | 2002-09-30 | 250.03212       | 252.821899     |
+| 4   | id_00     | 2002-10-01 | 322.905182      | 324.387695     |
 
 ### Saving and loading
 
@@ -600,8 +615,8 @@ fcst2 = DistributedMLForecast.load(save_path, engine='ray')
 We can verify that this object produces the same results.
 
 ```python
-preds = fa.as_pandas(fcst.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds2 = fa.as_pandas(fcst2.predict(10)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds = fa.as_pandas(fcst.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
+preds2 = fa.as_pandas(fcst2.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
 ```
 
@@ -617,7 +632,7 @@ further by using the `keep_last_n` argument in the `fit` method).
 
 ```python
 local_fcst = fcst.to_local()
-local_preds = local_fcst.predict(10)
+local_preds = local_fcst.predict(7, X_df=future)
 # we don't check the dtype because sometimes these are arrow dtypes
 # or different precisions of float
 pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
@@ -630,6 +645,7 @@ cv_res = fcst.cross_validation(
     ray_series,
     n_windows=3,
     h=14,
+    static_features=['static_0', 'static_1'],
 ).to_pandas()
 ```
 
@@ -640,11 +656,11 @@ cv_res.head()
 
 |     | unique_id | ds         | RayLGBMForecast | RayXGBForecast | cutoff     | y          |
 |-----|-----------|------------|-----------------|----------------|------------|------------|
-| 0   | id_10     | 2001-05-01 | 24.767561       | 24.528799      | 2001-04-30 | 31.878545  |
-| 1   | id_10     | 2001-05-07 | 1.916985        | 2.323445       | 2001-04-30 | 7.365955   |
-| 2   | id_13     | 2001-05-01 | 210.900330      | 212.959320     | 2001-04-30 | 190.485236 |
-| 3   | id_14     | 2001-05-01 | 196.620819      | 196.253036     | 2001-04-30 | 213.631212 |
-| 4   | id_14     | 2001-05-03 | 323.323334      | 322.372894     | 2001-04-30 | 338.234837 |
+| 0   | id_04     | 2002-09-20 | 118.982094      | 117.577477     | 2002-09-12 | 118.603489 |
+| 1   | id_04     | 2002-09-24 | 51.461491       | 50.120552      | 2002-09-12 | 52.668389  |
+| 2   | id_05     | 2002-09-20 | 27.594826       | 24.421537      | 2002-09-12 | 20.120710  |
+| 3   | id_05     | 2002-09-25 | 411.615204      | 412.093384     | 2002-09-12 | 419.621422 |
+| 4   | id_08     | 2002-09-25 | 83.210945       | 83.842705      | 2002-09-12 | 86.344885  |
 
 ```python
 ray.shutdown()
