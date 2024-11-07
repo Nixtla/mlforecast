@@ -299,10 +299,7 @@ class MLForecast:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
                     keep = ~np.isnan(y[:, col])
-                    if isinstance(X, np.ndarray):
-                        Xh = X[keep]
-                    else:
-                        Xh = ufp.filter_with_mask(X, keep)
+                    Xh = ufp.filter_with_mask(X, keep)
                     yh = y[keep, col]
                     self.models_[name].append(
                         fit_model(model, Xh, yh, self.ts.weight_col)
@@ -397,8 +394,12 @@ class MLForecast:
         self,
         prep: DFType,
         target_col: str,
+        weight_col: Optional[str],
     ) -> Tuple[Union[DFType, np.ndarray], np.ndarray]:
-        X = prep[self.ts.features_order_]
+        x_cols = self.ts.features_order_
+        if weight_col is not None:
+            x_cols = [weight_col, *x_cols]
+        X = prep[x_cols]
         targets = [c for c in prep.columns if re.match(rf"^{target_col}\d*$", c)]
         if len(targets) == 1:
             targets = targets[0]
@@ -417,7 +418,10 @@ class MLForecast:
         weight_col: Optional[str],
     ) -> DFType:
         if weight_col is not None:
-            X = ufp.drop_columns(X, weight_col)
+            if isinstance(X, np.ndarray):
+                X = X[:, 1:]
+            else:
+                X = ufp.drop_columns(X, weight_col)
         base = ufp.copy_if_pandas(base, deep=False)
         sort_idxs = ufp.maybe_compute_sort_indices(base, id_col, time_col)
         if sort_idxs is not None:
@@ -549,7 +553,7 @@ class MLForecast:
             X, y = prep
         else:
             base = prep[[id_col, time_col]]
-            X, y = self._extract_X_y(prep, target_col)
+            X, y = self._extract_X_y(prep, target_col, weight_col)
             if as_numpy:
                 X = ufp.to_numpy(X)
             del prep
@@ -923,7 +927,7 @@ class MLForecast:
                 )
                 assert not isinstance(prep, tuple)
                 base = prep[[id_col, time_col]]
-                train_X, train_y = self._extract_X_y(prep, target_col)
+                train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
                 if as_numpy:
                     train_X = ufp.to_numpy(train_X)
                 del prep
@@ -935,6 +939,7 @@ class MLForecast:
                     time_col=time_col,
                     target_col=target_col,
                     max_horizon=max_horizon,
+                    weight_col=weight_col,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
