@@ -94,7 +94,7 @@ class Lag(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        return self._lag
+        return self.lag
 
 # %% ../nbs/lag_transforms.ipynb 7
 class _RollingBase(_BaseLagTransform):
