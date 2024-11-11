@@ -438,7 +438,7 @@ class TimeSeries:
         if (
             self.keep_last_n is None
             and update_samples
-            and all(samples > -1 for samples in update_samples)
+            and all(samples > 0 for samples in update_samples)
         ):
             # user didn't set keep_last_n and we can infer it from the transforms
             self.keep_last_n = max(update_samples)
