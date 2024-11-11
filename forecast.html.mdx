@@ -130,7 +130,7 @@ Once we have this setup we can compute the features and fit the model.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L446"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L470"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit
@@ -144,7 +144,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                  dropna:bool=True, keep_last_n:Optional[int]=None,
 >                  max_horizon:Optional[int]=None, prediction_intervals:Opti
 >                  onal[mlforecast.utils.PredictionIntervals]=None,
->                  fitted:bool=False, as_numpy:bool=False)
+>                  fitted:bool=False, as_numpy:bool=False,
+>                  weight_col:Optional[str]=None)
 > ```
 
 *Apply the feature engineering and train the models.*
@@ -162,6 +163,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | prediction_intervals | Optional | None | Configuration to calibrate prediction intervals (Conformal Prediction). |
 | fitted | bool | False | Save in-sample predictions. |
 | as_numpy | bool | False | Cast features to numpy array. |
+| weight_col | Optional | None | Column that contains the sample weights. |
 | **Returns** | **MLForecast** |  | **Forecast object with series values and trained models.** |
 
 ```python
@@ -179,13 +181,90 @@ fcst = MLForecast(
 
 
 ```python
+train2 = train.copy()
+train2['weight'] = np.random.rand(train2.shape[0])
+# train2['weight'] = np.ones(train.shape[0])
+fcst.fit(train2, weight_col='weight', as_numpy=True).predict(5)
+```
+
+|     | unique_id | ds  | LGBMRegressor |
+|-----|-----------|-----|---------------|
+| 0   | H196      | 961 | 16.067907     |
+| 1   | H196      | 962 | 15.667907     |
+| 2   | H196      | 963 | 15.267907     |
+| 3   | H196      | 964 | 14.967907     |
+| 4   | H196      | 965 | 14.667907     |
+| 5   | H256      | 961 | 13.267907     |
+| 6   | H256      | 962 | 12.667907     |
+| 7   | H256      | 963 | 12.367907     |
+| 8   | H256      | 964 | 12.067907     |
+| 9   | H256      | 965 | 11.867907     |
+| 10  | H381      | 961 | 57.786053     |
+| 11  | H381      | 962 | 34.563712     |
+| 12  | H381      | 963 | 34.093324     |
+| 13  | H381      | 964 | 14.028197     |
+| 14  | H381      | 965 | 29.925360     |
+| 15  | H413      | 961 | 26.351542     |
+| 16  | H413      | 962 | 18.476677     |
+| 17  | H413      | 963 | 19.947657     |
+| 18  | H413      | 964 | 22.287800     |
+| 19  | H413      | 965 | 16.458991     |
+
+```python
+fcst.cross_validation(train2, n_windows=2, h=5, weight_col='weight', as_numpy=True)
+```
+
+|     | unique_id | ds  | cutoff | y     | LGBMRegressor |
+|-----|-----------|-----|--------|-------|---------------|
+| 0   | H196      | 951 | 950    | 24.4  | 24.284508     |
+| 1   | H196      | 952 | 950    | 24.3  | 24.184508     |
+| 2   | H196      | 953 | 950    | 23.8  | 23.684508     |
+| 3   | H196      | 954 | 950    | 22.8  | 22.684508     |
+| 4   | H196      | 955 | 950    | 21.2  | 21.084508     |
+| 5   | H256      | 951 | 950    | 19.5  | 19.684508     |
+| 6   | H256      | 952 | 950    | 19.4  | 19.484508     |
+| 7   | H256      | 953 | 950    | 18.9  | 19.084508     |
+| 8   | H256      | 954 | 950    | 18.3  | 18.384508     |
+| 9   | H256      | 955 | 950    | 17.0  | 17.084508     |
+| 10  | H381      | 951 | 950    | 182.0 | 183.690023    |
+| 11  | H381      | 952 | 950    | 222.0 | 240.636599    |
+| 12  | H381      | 953 | 950    | 288.0 | 289.609776    |
+| 13  | H381      | 954 | 950    | 264.0 | 312.935070    |
+| 14  | H381      | 955 | 950    | 191.0 | 220.711736    |
+| 15  | H413      | 951 | 950    | 77.0  | 63.058071     |
+| 16  | H413      | 952 | 950    | 91.0  | 55.965923     |
+| 17  | H413      | 953 | 950    | 76.0  | 63.742204     |
+| 18  | H413      | 954 | 950    | 68.0  | 58.993659     |
+| 19  | H413      | 955 | 950    | 68.0  | 78.434237     |
+| 20  | H196      | 956 | 955    | 19.3  | 19.289245     |
+| 21  | H196      | 957 | 955    | 18.2  | 18.189245     |
+| 22  | H196      | 958 | 955    | 17.5  | 17.489245     |
+| 23  | H196      | 959 | 955    | 16.9  | 16.889245     |
+| 24  | H196      | 960 | 955    | 16.5  | 16.489245     |
+| 25  | H256      | 956 | 955    | 15.5  | 15.689245     |
+| 26  | H256      | 957 | 955    | 14.7  | 14.789245     |
+| 27  | H256      | 958 | 955    | 14.1  | 14.289245     |
+| 28  | H256      | 959 | 955    | 13.6  | 13.789245     |
+| 29  | H256      | 960 | 955    | 13.2  | 13.389245     |
+| 30  | H381      | 956 | 955    | 130.0 | 100.397588    |
+| 31  | H381      | 957 | 955    | 113.0 | 122.478620    |
+| 32  | H381      | 958 | 955    | 94.0  | 119.608739    |
+| 33  | H381      | 959 | 955    | 192.0 | 114.323949    |
+| 34  | H381      | 960 | 955    | 87.0  | 96.609912     |
+| 35  | H413      | 956 | 955    | 59.0  | 81.721708     |
+| 36  | H413      | 957 | 955    | 58.0  | 69.453475     |
+| 37  | H413      | 958 | 955    | 53.0  | 41.784503     |
+| 38  | H413      | 959 | 955    | 38.0  | 44.825351     |
+| 39  | H413      | 960 | 955    | 46.0  | 45.590796     |
+
+```python
 fcst.fit(train, fitted=True);
 ```
 
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L965"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1000"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.save
@@ -204,7 +283,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L982"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1017"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.load
@@ -223,7 +302,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1005"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L1040"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.update
@@ -244,7 +323,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L575"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L604"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.make_future_dataframe
@@ -276,7 +355,7 @@ expected_future
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L599"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L628"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.get_missing_future
@@ -304,7 +383,7 @@ pd.testing.assert_frame_equal(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L547"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L576"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.forecast_fitted_values
@@ -363,7 +442,7 @@ Once we’ve run this we’re ready to compute our predictions.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L618"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L647"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.predict
@@ -528,7 +607,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                         static_features:Optional[List[str]]=None,
 >                         dropna:bool=True, keep_last_n:Optional[int]=None,
 >                         max_horizon:Optional[int]=None,
->                         return_X_y:bool=False, as_numpy:bool=False)
+>                         return_X_y:bool=False, as_numpy:bool=False,
+>                         weight_col:Optional[str]=None)
 > ```
 
 *Add the features to `data`.*
@@ -545,6 +625,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | max_horizon | Optional | None | Train this many models, where each model will predict a specific horizon. |
 | return_X_y | bool | False | Return a tuple with the features and the target. If False will return a single dataframe. |
 | as_numpy | bool | False | Cast features to numpy array. Only works for `return_X_y=True`. |
+| weight_col | Optional | None | Column that contains the sample weights. |
 | **Returns** | **Union** |  | **`df` plus added features and target(s).** |
 
 ```python
@@ -572,7 +653,7 @@ only stores the series information.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L261"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L265"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.fit_models
@@ -610,7 +691,7 @@ pd.testing.assert_frame_equal(predictions, predictions2)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L766"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L795"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### MLForecast.cross_validation
@@ -631,7 +712,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                               PredictionIntervals]=None,
 >                               level:Optional[List[Union[int,float]]]=None,
 >                               input_size:Optional[int]=None,
->                               fitted:bool=False, as_numpy:bool=False)
+>                               fitted:bool=False, as_numpy:bool=False,
+>                               weight_col:Optional[str]=None)
 > ```
 
 *Perform time series cross validation. Creates `n_windows` splits where
@@ -659,6 +741,7 @@ predictions and merges the actuals.*
 | input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
 | fitted | bool | False | Store the in-sample predictions. |
 | as_numpy | bool | False | Cast features to numpy array. |
+| weight_col | Optional | None | Column that contains the sample weights. |
 | **Returns** | **DFType** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
 
 If we would like to know how good our forecast will be for a specific

@@ -25,8 +25,8 @@ series = generate_daily_series(5)
 ## Creating forecast object
 
 ```python
+import lightgbm as lgb
 import numpy as np
-from lightgbm import LGBMRegressor
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
@@ -38,6 +38,7 @@ Suppose we want to train a linear regression with the default settings.
 fcst = MLForecast(
     models={'lr': LinearRegression()},
     freq='D',
+    lags=[1],
     date_features=['dayofweek'],
 )
 ```
@@ -53,13 +54,13 @@ prep = fcst.preprocess(series)
 prep.head()
 ```
 
-|     | unique_id | ds         | y        | dayofweek |
-|-----|-----------|------------|----------|-----------|
-| 0   | id_0      | 2000-01-01 | 0.428973 | 5         |
-| 1   | id_0      | 2000-01-02 | 1.423626 | 6         |
-| 2   | id_0      | 2000-01-03 | 2.311782 | 0         |
-| 3   | id_0      | 2000-01-04 | 3.192191 | 1         |
-| 4   | id_0      | 2000-01-05 | 4.148767 | 2         |
+|     | unique_id | ds         | y        | lag1     | dayofweek |
+|-----|-----------|------------|----------|----------|-----------|
+| 1   | id_0      | 2000-01-02 | 1.423626 | 0.428973 | 6         |
+| 2   | id_0      | 2000-01-03 | 2.311782 | 1.423626 | 0         |
+| 3   | id_0      | 2000-01-04 | 3.192191 | 2.311782 | 1         |
+| 4   | id_0      | 2000-01-05 | 4.148767 | 3.192191 | 2         |
+| 5   | id_0      | 2000-01-06 | 5.028356 | 4.148767 | 3         |
 
 ```python
 X = prep.drop(columns=['unique_id', 'ds', 'y'])
@@ -77,7 +78,7 @@ fcst.fit_models(X, y)
 ```
 
 ``` text
-MLForecast(models=[lr], freq=<Day>, lag_features=[], date_features=['dayofweek'], num_threads=1)
+MLForecast(models=[lr], freq=D, lag_features=['lag1'], date_features=['dayofweek'], num_threads=1)
 ```
 
 This has trained the linear regression model and is now available in the
@@ -94,18 +95,26 @@ fcst.models_
 ## Custom training
 
 Now suppose you also want to train a LightGBM model on the same data,
-but specifying sample weights.
+but treating the day of the week as a categorical feature and logging
+the train loss.
 
 ```python
-rng = np.random.RandomState(0)
-weights = rng.rand(y.size)
+model = lgb.LGBMRegressor(n_estimators=100, verbosity=-1)
+model.fit(
+    X,
+    y,
+    eval_set=[(X, y)],
+    categorical_feature=['dayofweek'],
+    callbacks=[lgb.log_evaluation(20)],
+);
 ```
 
-We train the model as we normally would and provide the weights through
-the `sample_weight` argument.
-
-```python
-model = LGBMRegressor(verbosity=-1).fit(X, y, sample_weight=weights)
+``` text
+[20]    training's l2: 0.0823528
+[40]    training's l2: 0.0230292
+[60]    training's l2: 0.0207829
+[80]    training's l2: 0.019675
+[100]   training's l2: 0.018778
 ```
 
 ## Computing forecasts
@@ -132,9 +141,9 @@ fcst.predict(1)
 
 |     | unique_id | ds         | lr       | lgbm     |
 |-----|-----------|------------|----------|----------|
-| 0   | id_0      | 2000-08-10 | 3.247803 | 3.642456 |
-| 1   | id_1      | 2000-04-07 | 3.182126 | 4.808618 |
-| 2   | id_2      | 2000-06-16 | 3.182126 | 4.808618 |
-| 3   | id_3      | 2000-08-30 | 3.313480 | 2.777129 |
-| 4   | id_4      | 2001-01-08 | 3.444834 | 3.404631 |
+| 0   | id_0      | 2000-08-10 | 3.549124 | 5.166797 |
+| 1   | id_1      | 2000-04-07 | 3.154285 | 4.252490 |
+| 2   | id_2      | 2000-06-16 | 2.880933 | 3.224506 |
+| 3   | id_3      | 2000-08-30 | 4.061801 | 0.245443 |
+| 4   | id_4      | 2001-01-08 | 2.904872 | 2.225106 |
 
