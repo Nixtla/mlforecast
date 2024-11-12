@@ -314,6 +314,7 @@ expected = (
         sk_boxcox.fit_transform(series[['y']])[:, 0], index=series['unique_id']
     ).groupby('unique_id', observed=True)
     .diff()
+    .dropna()
     .values
 )
 np.testing.assert_allclose(prep['y'].values, expected)
