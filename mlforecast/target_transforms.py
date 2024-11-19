@@ -87,11 +87,12 @@ class Differences(_BaseGroupedArrayTargetTransform):
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         self.fitted_: List[np.ndarray] = []
+        self.fitted_indptr_: Optional[np.ndarray] = None
         original_sizes = np.diff(ga.indptr)
         total_diffs = sum(self.differences)
         small_series = original_sizes < total_diffs
         if small_series.any():
-            raise _ShortSeriesException(np.arange(ga.n_groups)[small_series])
+            raise _ShortSeriesException(np.where(small_series)[0])
         self.scalers_ = []
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         for d in self.differences:
@@ -99,6 +100,8 @@ class Differences(_BaseGroupedArrayTargetTransform):
                 # these are saved in order to be able to perform a correct
                 # inverse transform when trying to retrieve the fitted values.
                 self.fitted_.append(core_ga.data.copy())
+                if self.fitted_indptr_ is None:
+                    self.fitted_indptr_ = core_ga.indptr.copy()
             scaler = core_scalers.Difference(d)
             transformed = scaler.fit_transform(core_ga)
             self.scalers_.append(scaler)
@@ -120,8 +123,15 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
+        # import pdb; pdb.set_trace()
+        if self.fitted_[0].size < ga.data.size:
+            raise ValueError("fitted differences are smaller than provided target.")
         for d, fitted in zip(reversed(self.differences), reversed(self.fitted_)):
-            transformed = ga.restore_fitted_difference(fitted, d)
+            fitted_ga = CoreGroupedArray(fitted, self.fitted_indptr_)
+            additions = fitted_ga._lag(d)
+            if additions.size > ga.data.size:
+                additions = CoreGroupedArray(additions, self.fitted_indptr_)._tails(ga.indptr)
+            transformed = ga.data + additions
             ga = GroupedArray(transformed, ga.indptr)
         return ga
 

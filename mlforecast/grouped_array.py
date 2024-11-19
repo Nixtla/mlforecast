@@ -139,10 +139,6 @@ class GroupedArray:
                     results[name] = tfm.transform(core_ga)
         return results
 
-    def restore_fitted_difference(self, fitted: np.ndarray, d: int) -> np.ndarray:
-        fitted_ga = CoreGroupedArray(fitted, self.indptr)
-        return self.data + fitted_ga._lag_transform(d)
-
     def expand_target(self, max_horizon: int) -> np.ndarray:
         out = np.full_like(
             self.data, np.nan, shape=(self.data.size, max_horizon), order="F"
