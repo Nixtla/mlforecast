@@ -314,6 +314,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                      (df:Union[pandas.core.frame.DataFrame,polars.datafram
 >                      e.frame.DataFrame], n_windows:int, h:int,
 >                      num_samples:int, step_size:Optional[int]=None,
+>                      input_size:Optional[int]=None,
 >                      refit:Union[bool,int]=False, loss:Optional[Callable[[
 >                      Union[pandas.core.frame.DataFrame,polars.dataframe.fr
 >                      ame.DataFrame],Union[pandas.core.frame.DataFrame,pola
@@ -336,6 +337,7 @@ independently and the best one is trained on all data*
 | h | int |  | Forecast horizon. |
 | num_samples | int |  | Number of trials to run |
 | step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
+| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
 | refit | Union | False | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
 | loss | Optional | None | Function that takes the validation and train dataframes and produces a float.<br/>If `None` will use the average SMAPE across series. |
 | id_col | str | unique_id | Column that identifies each serie. |
@@ -350,7 +352,7 @@ independently and the best one is trained on all data*
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L588"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L592"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.predict
@@ -373,7 +375,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L620"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L624"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.save
@@ -392,7 +394,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L630"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/auto.py#L634"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoMLForecast.forecast_fitted_values
@@ -411,6 +413,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | **Returns** | **Union** |  | **Dataframe with predictions for the training set** |
 
 ```python
+import time
+
 import pandas as pd
 from datasetsforecast.m4 import M4, M4Evaluation, M4Info
 from sklearn.linear_model import Ridge
