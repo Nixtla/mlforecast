@@ -47,8 +47,8 @@ from datasetsforecast.m4 import M4, M4Info
 from fastcore.test import test_eq, test_fail
 from mlforecast.target_transforms import Differences
 from nbdev import show_doc
-from window_ops.ewm import ewm_mean
-from window_ops.rolling import rolling_mean, seasonal_rolling_mean
+
+from mlforecast.lag_transforms import SeasonalRollingMean
 ```
 
 
@@ -351,7 +351,7 @@ cv3 = LightGBMCV(
     target_transforms=[Differences([24 * 7])],
     lags=[24 * (i+1) for i in range(7)],
     lag_transforms={
-        48: [(seasonal_rolling_mean, 24, 7)],
+        48: [SeasonalRollingMean(season_length=24, window_size=7)],
     },
 )
 hist3 = cv3.fit(train, **static_fit_config)

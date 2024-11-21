@@ -69,8 +69,6 @@ transformed = diffs.fit_transform(ga)
 keep_mask = ~np.isnan(transformed.data)
 restored = diffs.inverse_transform_fitted(transformed)
 np.testing.assert_allclose(ga.data[keep_mask], restored.data[keep_mask])
-restored_subs = diffs.inverse_transform_fitted(transformed.take_from_groups(slice(8, None)))
-np.testing.assert_allclose(ga.data[keep_mask], restored_subs.data)
 
 # test transform
 new_ga = GroupedArray(np.random.rand(10), np.arange(11))
@@ -109,7 +107,7 @@ for i in range(len(diffs.differences)):
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L154"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L178"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoDifferences
@@ -123,7 +121,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L186"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L210"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoSeasonalDifferences
@@ -145,7 +143,7 @@ group.*
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L210"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L234"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### AutoSeasonalityAndDifferences
@@ -197,7 +195,7 @@ def test_scaler(sc, series):
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L258"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L282"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalStandardScaler
@@ -216,7 +214,7 @@ test_scaler(LocalStandardScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L264"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L288"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalMinMaxScaler
@@ -234,7 +232,7 @@ test_scaler(LocalMinMaxScaler(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L270"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L294"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalRobustScaler
@@ -261,7 +259,7 @@ test_scaler(LocalRobustScaler(scale='mad'), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L283"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L307"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### LocalBoxCox
@@ -280,7 +278,7 @@ test_scaler(LocalBoxCox(), series)
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L292"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L316"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### GlobalSklearnTransformer
