@@ -13,10 +13,9 @@ from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Tupl
 import cloudpickle
 import fsspec
 import numpy as np
-import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame
+from utilsforecast.compat import DFType, DataFrame
 
 from mlforecast.core import (
     DateFeature,
@@ -38,15 +37,15 @@ from .utils import PredictionIntervals
 
 # %% ../nbs/forecast.ipynb 6
 def _add_conformal_distribution_intervals(
-    fcst_df: DataFrame,
-    cs_df: DataFrame,
+    fcst_df: DFType,
+    cs_df: DFType,
     model_names: List[str],
     level: List[Union[int, float]],
     cs_n_windows: int,
     cs_h: int,
     n_series: int,
     horizon: int,
-) -> DataFrame:
+) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
     `level` should be already sorted. This strategy creates forecasts paths
@@ -76,15 +75,15 @@ def _add_conformal_distribution_intervals(
 
 # %% ../nbs/forecast.ipynb 7
 def _add_conformal_error_intervals(
-    fcst_df: DataFrame,
-    cs_df: DataFrame,
+    fcst_df: DFType,
+    cs_df: DFType,
     model_names: List[str],
     level: List[Union[int, float]],
     cs_n_windows: int,
     cs_h: int,
     n_series: int,
     horizon: int,
-) -> DataFrame:
+) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
     `level` should be already sorted. This startegy creates prediction intervals
@@ -205,7 +204,7 @@ class MLForecast:
 
     def preprocess(
         self,
-        df: DataFrame,
+        df: DFType,
         id_col: str = "unique_id",
         time_col: str = "ds",
         target_col: str = "y",
@@ -215,7 +214,8 @@ class MLForecast:
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
         as_numpy: bool = False,
-    ) -> Union[DataFrame, Tuple[DataFrame, np.ndarray]]:
+        weight_col: Optional[str] = None,
+    ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
         Parameters
@@ -240,6 +240,8 @@ class MLForecast:
             Return a tuple with the features and the target. If False will return a single dataframe.
         as_numpy : bool (default = False)
             Cast features to numpy array. Only works for `return_X_y=True`.
+        weight_col : str, optional (default=None)
+            Column that contains the sample weights.
 
         Returns
         -------
@@ -257,6 +259,7 @@ class MLForecast:
             max_horizon=max_horizon,
             return_X_y=return_X_y,
             as_numpy=as_numpy,
+            weight_col=weight_col,
         )
 
     def fit_models(
@@ -278,26 +281,36 @@ class MLForecast:
         self : MLForecast
             Forecast object with trained models.
         """
+
+        def fit_model(model, X, y, weight_col):
+            fit_kwargs = {}
+            if weight_col is not None:
+                if isinstance(X, np.ndarray):
+                    fit_kwargs["sample_weight"] = X[:, 0]
+                    X = X[:, 1:]
+                else:
+                    fit_kwargs["sample_weight"] = X[weight_col]
+                    X = ufp.drop_columns(X, weight_col)
+            return clone(model).fit(X, y, **fit_kwargs)
+
         self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator]]] = {}
         for name, model in self.models.items():
             if y.ndim == 2 and y.shape[1] > 1:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
                     keep = ~np.isnan(y[:, col])
-                    if isinstance(X, np.ndarray):
-                        # TODO: migrate to utils
-                        Xh = X[keep]
-                    else:
-                        Xh = ufp.filter_with_mask(X, keep)
+                    Xh = ufp.filter_with_mask(X, keep)
                     yh = y[keep, col]
-                    self.models_[name].append(clone(model).fit(Xh, yh))
+                    self.models_[name].append(
+                        fit_model(model, Xh, yh, self.ts.weight_col)
+                    )
             else:
-                self.models_[name] = clone(model).fit(X, y)
+                self.models_[name] = fit_model(model, X, y, self.ts.weight_col)
         return self
 
     def _conformity_scores(
         self,
-        df: DataFrame,
+        df: DFType,
         id_col: str,
         time_col: str,
         target_col: str,
@@ -308,7 +321,7 @@ class MLForecast:
         n_windows: int = 2,
         h: int = 1,
         as_numpy: bool = False,
-    ):
+    ) -> DFType:
         """Compute conformity scores.
 
         We need at least two cross validation errors to compute
@@ -349,7 +362,7 @@ class MLForecast:
             cv_results = ufp.assign_columns(cv_results, model, abs_err)
         return ufp.drop_columns(cv_results, target_col)
 
-    def _invert_transforms_fitted(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _invert_transforms_fitted(self, df: DFType) -> DFType:
         if self.ts.target_transforms is None:
             return df
         if any(
@@ -379,10 +392,14 @@ class MLForecast:
 
     def _extract_X_y(
         self,
-        prep: DataFrame,
+        prep: DFType,
         target_col: str,
-    ) -> Tuple[Union[DataFrame, np.ndarray], np.ndarray]:
-        X = prep[self.ts.features_order_]
+        weight_col: Optional[str],
+    ) -> Tuple[Union[DFType, np.ndarray], np.ndarray]:
+        x_cols = self.ts.features_order_
+        if weight_col is not None:
+            x_cols = [weight_col, *x_cols]
+        X = prep[x_cols]
         targets = [c for c in prep.columns if re.match(rf"^{target_col}\d*$", c)]
         if len(targets) == 1:
             targets = targets[0]
@@ -391,14 +408,20 @@ class MLForecast:
 
     def _compute_fitted_values(
         self,
-        base: DataFrame,
-        X: Union[DataFrame, np.ndarray],
+        base: DFType,
+        X: Union[DFType, np.ndarray],
         y: np.ndarray,
         id_col: str,
         time_col: str,
         target_col: str,
         max_horizon: Optional[int],
-    ) -> DataFrame:
+        weight_col: Optional[str],
+    ) -> DFType:
+        if weight_col is not None:
+            if isinstance(X, np.ndarray):
+                X = X[:, 1:]
+            else:
+                X = ufp.drop_columns(X, weight_col)
         base = ufp.copy_if_pandas(base, deep=False)
         sort_idxs = ufp.maybe_compute_sort_indices(base, id_col, time_col)
         if sort_idxs is not None:
@@ -457,6 +480,7 @@ class MLForecast:
         prediction_intervals: Optional[PredictionIntervals] = None,
         fitted: bool = False,
         as_numpy: bool = False,
+        weight_col: Optional[str] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -485,6 +509,8 @@ class MLForecast:
             Save in-sample predictions.
         as_numpy : bool (default = False)
             Cast features to numpy array.
+        weight_col : str, optional (default=None)
+            Column that contains the sample weights.
 
         Returns
         -------
@@ -521,12 +547,13 @@ class MLForecast:
             max_horizon=max_horizon,
             return_X_y=not fitted,
             as_numpy=as_numpy,
+            weight_col=weight_col,
         )
         if isinstance(prep, tuple):
             X, y = prep
         else:
             base = prep[[id_col, time_col]]
-            X, y = self._extract_X_y(prep, target_col)
+            X, y = self._extract_X_y(prep, target_col, weight_col)
             if as_numpy:
                 X = ufp.to_numpy(X)
             del prep
@@ -540,6 +567,7 @@ class MLForecast:
                 time_col=time_col,
                 target_col=target_col,
                 max_horizon=max_horizon,
+                weight_col=self.ts.weight_col,
             )
             fitted_values = ufp.drop_index_if_pandas(fitted_values)
             self.fcst_fitted_values_ = fitted_values
@@ -597,7 +625,7 @@ class MLForecast:
             time_col=self.ts.time_col,
         )
 
-    def get_missing_future(self, h: int, X_df: DataFrame) -> DataFrame:
+    def get_missing_future(self, h: int, X_df: DFType) -> DFType:
         """Get the missing id and time combinations in `X_df`.
 
         Parameters
@@ -621,11 +649,11 @@ class MLForecast:
         h: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        new_df: Optional[DataFrame] = None,
+        new_df: Optional[DFType] = None,
         level: Optional[List[Union[int, float]]] = None,
-        X_df: Optional[DataFrame] = None,
+        X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
-    ) -> DataFrame:
+    ) -> DFType:
         """Compute the predictions for the next `h` steps.
 
         Parameters
@@ -766,7 +794,7 @@ class MLForecast:
 
     def cross_validation(
         self,
-        df: DataFrame,
+        df: DFType,
         n_windows: int,
         h: int,
         id_col: str = "unique_id",
@@ -785,7 +813,8 @@ class MLForecast:
         input_size: Optional[int] = None,
         fitted: bool = False,
         as_numpy: bool = False,
-    ) -> DataFrame:
+        weight_col: Optional[str] = None,
+    ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
         trains the models, computes the predictions and merges the actuals.
@@ -836,6 +865,8 @@ class MLForecast:
             Store the in-sample predictions.
         as_numpy : bool (default = False)
             Cast features to numpy array.
+        weight_col : str, optional (default=None)
+            Column that contains the sample weights.
 
         Returns
         -------
@@ -870,6 +901,7 @@ class MLForecast:
                     prediction_intervals=prediction_intervals,
                     fitted=fitted,
                     as_numpy=as_numpy,
+                    weight_col=weight_col,
                 )
                 cv_models.append(self.models_)
                 if fitted:
@@ -891,10 +923,11 @@ class MLForecast:
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
                     return_X_y=False,
+                    weight_col=weight_col,
                 )
                 assert not isinstance(prep, tuple)
                 base = prep[[id_col, time_col]]
-                train_X, train_y = self._extract_X_y(prep, target_col)
+                train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
                 if as_numpy:
                     train_X = ufp.to_numpy(train_X)
                 del prep
@@ -906,6 +939,7 @@ class MLForecast:
                     time_col=time_col,
                     target_col=target_col,
                     max_horizon=max_horizon,
+                    weight_col=weight_col,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)

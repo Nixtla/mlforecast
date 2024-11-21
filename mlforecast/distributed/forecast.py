@@ -195,7 +195,7 @@ class DistributedMLForecast:
             train = part[train_mask]
             valid_keep_cols = part.columns
             if static_features is not None:
-                valid_keep_cols.drop(static_features)
+                valid_keep_cols = valid_keep_cols.drop(static_features)
             valid = part.loc[valid_mask, valid_keep_cols].merge(cutoffs, on=id_col)
         transformed = ts.fit_transform(
             train,
@@ -293,12 +293,14 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             window_info=window_info,
         )
-        base_schema = str(fa.get_schema(data))
-        features_schema = ",".join(f"{feat}:double" for feat in self._base_ts.features)
+        base_schema = fa.get_schema(data)
+        features_schema = {
+            f: "double" for f in self._base_ts.features if f not in base_schema
+        }
         res = fa.transform(
             self._partition_results,
             DistributedMLForecast._retrieve_df,
-            schema=f"{base_schema},{features_schema}",
+            schema=base_schema + features_schema,
             engine=self.engine,
         )
         return fa.get_native_as_df(res)
@@ -375,7 +377,9 @@ class DistributedMLForecast:
         ]
         self.models_ = {}
         if SPARK_INSTALLED and isinstance(data, SparkDataFrame):
-            featurizer = VectorAssembler(inputCols=features, outputCol="features")
+            featurizer = VectorAssembler(
+                inputCols=features, outputCol="features", handleInvalid="keep"
+            )
             train_data = featurizer.transform(prep)[target_col, "features"]
             for name, model in self.models.items():
                 trained_model = model._pre_fit(target_col).fit(train_data)
@@ -454,6 +458,8 @@ class DistributedMLForecast:
     ) -> Iterable[pd.DataFrame]:
         for serialized_ts, _, serialized_valid in items:
             valid = cloudpickle.loads(serialized_valid)
+            if valid is not None:
+                X_df = valid
             ts = cloudpickle.loads(serialized_ts)
             res = ts.predict(
                 models=models,
@@ -647,7 +653,11 @@ class DistributedMLForecast:
                 engine=self.engine,
             )
             results.append(fa.get_native_as_df(preds))
-        return fa.union(*results)
+        if len(results) == 1:
+            res = results[0]
+        else:
+            res = fa.union(*results)
+        return res
 
     @staticmethod
     def _save_ts(items: List[List[Any]], path: str) -> Iterable[pd.DataFrame]:

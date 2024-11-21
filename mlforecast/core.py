@@ -32,6 +32,7 @@ import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from sklearn.pipeline import Pipeline
 from utilsforecast.compat import (
+    DFType,
     DataFrame,
     pl,
     pl_DataFrame,
@@ -250,6 +251,7 @@ class TimeSeries:
         target_col: str,
         static_features: Optional[List[str]] = None,
         keep_last_n: Optional[int] = None,
+        weight_col: Optional[str] = None,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
         validate_format(df, id_col, time_col, target_col)
@@ -259,6 +261,7 @@ class TimeSeries:
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
+        self.weight_col = weight_col
         self.keep_last_n = keep_last_n
         self.static_features = static_features
         sorted_df = df[[id_col, time_col, target_col]]
@@ -306,9 +309,12 @@ class TimeSeries:
         if static_features is None:
             static_features = [c for c in df.columns if c not in [time_col, target_col]]
         elif id_col not in static_features:
-            static_features = [id_col] + static_features
+            static_features = [id_col, *static_features]
         else:  # static_features defined and contain id_col
             to_drop = [time_col, target_col]
+        if weight_col is not None:
+            to_drop.append(weight_col)
+            static_features = [f for f in static_features if f != weight_col]
         self.ga = ga
         series_starts = ga.indptr[:-1]
         series_ends = ga.indptr[1:] - 1
@@ -330,9 +336,9 @@ class TimeSeries:
                     "are dynamic please set `static_features=[]`."
                 )
         self.static_features_ = statics_on_ends
-        self.features_order_ = [
-            c for c in df.columns if c not in to_drop
-        ] + self.features
+        self.features_order_ = [c for c in df.columns if c not in to_drop] + [
+            f for f in self.features if f not in df.columns
+        ]
         return self
 
     def _compute_transforms(
@@ -376,17 +382,21 @@ class TimeSeries:
 
     def _transform(
         self,
-        df: DataFrame,
+        df: DFType,
         dropna: bool = True,
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
         as_numpy: bool = False,
-    ) -> pd.DataFrame:
+    ) -> DFType:
         """Add the features to `df`.
 
         if `dropna=True` then all the null rows are dropped."""
-        transforms = {k: v for k, v in self.transforms.items() if k not in df}
-        features = self._compute_transforms(transforms=transforms, updates_only=False)
+        # we need to compute all transformations in case they save state
+        features = self._compute_transforms(
+            transforms=self.transforms, updates_only=False
+        )
+        # filter out the features that already exist in df to avoid overwriting them
+        features = {k: v for k, v in features.items() if k not in df}
         if self._restore_idxs is not None:
             for k, v in features.items():
                 features[k] = v[self._restore_idxs]
@@ -401,16 +411,23 @@ class TimeSeries:
             target = target[self._restore_idxs]
 
         # determine rows to keep
+        target_nulls = np.isnan(target)
+        if target_nulls.ndim == 2:
+            # target nulls for each horizon are dropped in MLForecast.fit_models
+            # we just drop rows here for which all the target values are null
+            target_nulls = target_nulls.all(axis=1)
         if dropna:
             feature_nulls = np.full(df.shape[0], False)
             for feature_vals in features.values():
                 feature_nulls |= np.isnan(feature_vals)
-            target_nulls = np.isnan(target)
-            if target_nulls.ndim == 2:
-                # target nulls for each horizon are dropped in MLForecast.fit_models
-                # we just drop rows here for which all the target values are null
-                target_nulls = target_nulls.all(axis=1)
             keep_rows = ~(feature_nulls | target_nulls)
+        else:
+            # we always want to drop rows with nulls in the target
+            keep_rows = ~target_nulls
+
+        self._dropped_series: Optional[np.ndarray] = None
+        if not keep_rows.all():
+            # remove rows with nulls
             for k, v in features.items():
                 features[k] = v[keep_rows]
             target = target[keep_rows]
@@ -421,7 +438,7 @@ class TimeSeries:
                 last_idxs = self._sort_idxs[last_idxs]
             last_vals_nan = ~keep_rows[last_idxs]
             if last_vals_nan.any():
-                self._dropped_series: Optional[np.ndarray] = np.where(last_vals_nan)[0]
+                self._dropped_series = np.where(last_vals_nan)[0]
                 dropped_ids = reprlib.repr(list(self.uids[self._dropped_series]))
                 warnings.warn(
                     "The following series were dropped completely "
@@ -429,20 +446,29 @@ class TimeSeries:
                     "These series won't show up if you use `MLForecast.forecast_fitted_values()`.\n"
                     "You can set `dropna=False` or use transformations that require less samples to mitigate this"
                 )
-            else:
-                self._dropped_series = None
         elif isinstance(df, pd.DataFrame):
+            # we'll be assigning columns below, so we need to copy
             df = df.copy(deep=False)
-            self._dropped_series = None
 
         # once we've computed the features and target we can slice the series
+        update_samples = [
+            getattr(tfm, "update_samples", -1) for tfm in self.transforms.values()
+        ]
+        if (
+            self.keep_last_n is None
+            and update_samples
+            and all(samples > 0 for samples in update_samples)
+        ):
+            # user didn't set keep_last_n and we can infer it from the transforms
+            self.keep_last_n = max(update_samples)
         if self.keep_last_n is not None:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
         del self._restore_idxs, self._sort_idxs
 
         # lag transforms
-        for feat in transforms.keys():
-            df = ufp.assign_columns(df, feat, features[feat])
+        for feat in self.transforms.keys():
+            if feat in features:
+                df = ufp.assign_columns(df, feat, features[feat])
 
         # date features
         names = [f.__name__ if callable(f) else f for f in self.date_features]
@@ -471,7 +497,11 @@ class TimeSeries:
 
         # assemble return
         if return_X_y:
-            X = df[self.features_order_]
+            if self.weight_col is not None:
+                x_cols = [self.weight_col, *self.features_order_]
+            else:
+                x_cols = self.features_order_
+            X = df[x_cols]
             if as_numpy:
                 X = ufp.to_numpy(X)
             return X, target
@@ -489,7 +519,7 @@ class TimeSeries:
 
     def fit_transform(
         self,
-        data: DataFrame,
+        data: DFType,
         id_col: str,
         time_col: str,
         target_col: str,
@@ -499,7 +529,8 @@ class TimeSeries:
         max_horizon: Optional[int] = None,
         return_X_y: bool = False,
         as_numpy: bool = False,
-    ) -> Union[DataFrame, Tuple[DataFrame, np.ndarray]]:
+        weight_col: Optional[str] = None,
+    ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
         If not all features are static, specify which ones are in `static_features`.
@@ -515,6 +546,7 @@ class TimeSeries:
             target_col=target_col,
             static_features=static_features,
             keep_last_n=keep_last_n,
+            weight_col=weight_col,
         )
         return self._transform(
             df=data,
@@ -635,8 +667,8 @@ class TimeSeries:
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        X_df: Optional[DataFrame] = None,
-    ) -> DataFrame:
+        X_df: Optional[DFType] = None,
+    ) -> DFType:
         """Use `model` to predict the next `horizon` timesteps."""
         for i, (name, model) in enumerate(models.items()):
             with self._backup():
@@ -663,8 +695,8 @@ class TimeSeries:
         models: Dict[str, BaseEstimator],
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
-        X_df: Optional[DataFrame] = None,
-    ) -> DataFrame:
+        X_df: Optional[DFType] = None,
+    ) -> DFType:
         assert self.max_horizon is not None
         if horizon > self.max_horizon:
             raise ValueError(
@@ -738,9 +770,9 @@ class TimeSeries:
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        X_df: Optional[DataFrame] = None,
+        X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
-    ) -> DataFrame:
+    ) -> DFType:
         if ids is not None:
             unseen = set(ids) - set(self.uids)
             if unseen:

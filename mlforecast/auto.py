@@ -444,6 +444,8 @@ class AutoMLForecast:
         n_windows: int,
         h: int,
         num_samples: int,
+        step_size: Optional[int] = None,
+        input_size: Optional[int] = None,
         refit: Union[bool, int] = False,
         loss: Optional[Callable[[DataFrame, DataFrame], float]] = None,
         id_col: str = "unique_id",
@@ -467,6 +469,10 @@ class AutoMLForecast:
             Forecast horizon.
         num_samples : int
             Number of trials to run
+        step_size : int, optional (default=None)
+            Step size between each cross validation window. If None it will be equal to `h`.
+        input_size : int, optional (default=None)
+            Maximum training samples per serie in each window. If None, will use an expanding window.
         refit : bool or int (default=False)
             Retrain model for each cross validation window.
             If False, the models are trained at the beginning and then used to predict each window.
@@ -509,7 +515,12 @@ class AutoMLForecast:
         if loss is None:
 
             def loss(df, train_df):  # noqa: ARG001
-                return smape(df, models=["model"])["model"].mean()
+                return smape(
+                    df,
+                    models=["model"],
+                    id_col=id_col,
+                    target_col=target_col,
+                )["model"].mean()
 
         if study_kwargs is None:
             study_kwargs = {}
@@ -541,6 +552,8 @@ class AutoMLForecast:
                 freq=self.freq,
                 n_windows=n_windows,
                 h=h,
+                step_size=step_size,
+                input_size=input_size,
                 refit=refit,
                 id_col=id_col,
                 time_col=time_col,
@@ -550,8 +563,14 @@ class AutoMLForecast:
             study.optimize(objective, n_trials=num_samples, **optimize_kwargs)
             self.results_[name] = study
             best_config = study.best_trial.user_attrs["config"]
-            best_config["mlf_fit_params"].pop("fitted", None)
-            best_config["mlf_fit_params"].pop("prediction_intervals", None)
+            for arg in (
+                "fitted",
+                "prediction_intervals",
+                "id_col",
+                "time_col",
+                "target_col",
+            ):
+                best_config["mlf_fit_params"].pop(arg, None)
             best_model = clone(auto_model.model)
             best_model.set_params(**best_config["model_params"])
             self.models_[name] = MLForecast(
@@ -563,6 +582,9 @@ class AutoMLForecast:
                 df,
                 fitted=fitted,
                 prediction_intervals=prediction_intervals,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
                 **best_config["mlf_fit_params"],
             )
         return self
