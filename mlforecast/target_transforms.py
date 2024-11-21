@@ -123,21 +123,34 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
-        # import pdb; pdb.set_trace()
         if self.fitted_[0].size < ga.data.size:
             raise ValueError("fitted differences are smaller than provided target.")
         for d, fitted in zip(reversed(self.differences), reversed(self.fitted_)):
             fitted_ga = CoreGroupedArray(fitted, self.fitted_indptr_)
-            additions = fitted_ga._lag(d)
-            if additions.size > ga.data.size:
-                additions = CoreGroupedArray(additions, self.fitted_indptr_)._tails(ga.indptr)
-            transformed = ga.data + additions
+            adds = fitted_ga._lag(d)
+            if adds.size > ga.data.size:
+                adds = CoreGroupedArray(adds, self.fitted_indptr_)._tails(ga.indptr)
+            transformed = ga.data + adds
             ga = GroupedArray(transformed, ga.indptr)
         return ga
 
     def take(self, idxs: np.ndarray) -> "Differences":
         out = Differences(self.differences)
-        out.fitted_ = [ga.take(idxs) for ga in self.fitted_]
+        if self.fitted_indptr_ is None:
+            out.fitted_ = []
+            out.fitted_indptr_ = None
+        else:
+            out.fitted_ = [
+                np.hstack(
+                    [
+                        data[self.fitted_indptr_[i] : self.fitted_indptr_[i + 1]]
+                        for i in idxs
+                    ]
+                )
+                for data in self.fitted_
+            ]
+            sizes = np.diff(self.fitted_indptr_)[idxs]
+            out.fitted_indptr_ = np.append(0, sizes.cumsum())
         out.scalers_ = [scaler.take(idxs) for scaler in self.scalers_]
         return out
 
@@ -149,9 +162,10 @@ class Differences(_BaseGroupedArrayTargetTransform):
         out = Differences(diffs)
         out.fitted_ = []
         for i in range(len(scalers[0].fitted_)):
-            data = np.hstack([sc.fitted_[i].data for sc in scalers])
-            sizes = np.hstack([np.diff(sc.fitted_[i].indptr) for sc in scalers])
-            out.fitted_.append(GroupedArray(data, np.append(0, sizes.cumsum())))
+            out.fitted_.append(np.hstack([sc.fitted_[i] for sc in scalers]))
+        if first_scaler.fitted_indptr_ is not None:
+            sizes = np.hstack([np.diff(sc.fitted_indptr_) for sc in scalers])
+            out.fitted_indptr_ = np.append(0, sizes.cumsum())
         out.scalers_ = [
             core_scaler.stack([sc.scalers_[i] for sc in scalers])
             for i in range(len(diffs))

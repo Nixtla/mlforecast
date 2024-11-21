@@ -115,21 +115,22 @@ class GroupedArray:
                 core_tfms[name] = tfm
             else:
                 numba_tfms[name] = tfm
-        with concurrent.futures.ThreadPoolExecutor(num_threads) as executor:
-            for tfm_name, (lag, tfm, *args) in numba_tfms.items():
-                future = executor.submit(
-                    _transform_series,
-                    self.data,
-                    self.indptr,
-                    updates_only,
-                    lag - offset,
-                    tfm,
-                    *args,
-                )
-                future_to_result[future] = tfm_name
-            for future in concurrent.futures.as_completed(future_to_result):
-                tfm_name = future_to_result[future]
-                results[tfm_name] = future.result()
+        if numba_tfms:
+            with concurrent.futures.ThreadPoolExecutor(num_threads) as executor:
+                for tfm_name, (lag, tfm, *args) in numba_tfms.items():
+                    future = executor.submit(
+                        _transform_series,
+                        self.data,
+                        self.indptr,
+                        updates_only,
+                        lag - offset,
+                        tfm,
+                        *args,
+                    )
+                    future_to_result[future] = tfm_name
+                for future in concurrent.futures.as_completed(future_to_result):
+                    tfm_name = future_to_result[future]
+                    results[tfm_name] = future.result()
         if core_tfms:
             core_ga = CoreGroupedArray(self.data, self.indptr, num_threads)
             for name, tfm in core_tfms.items():
