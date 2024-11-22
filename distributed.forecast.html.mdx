@@ -8,7 +8,7 @@ title: Distributed Forecast
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L61"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L62"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast
@@ -32,7 +32,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L406"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L407"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.fit
@@ -61,7 +61,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L484"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L497"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.predict
@@ -72,7 +72,8 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 >                                 =None, after_predict_callback:Optional[Cal
 >                                 lable]=None, X_df:Optional[pandas.core.fra
 >                                 me.DataFrame]=None,
->                                 new_df:Optional[~AnyDataFrame]=None)
+>                                 new_df:Optional[~AnyDataFrame]=None,
+>                                 ids:Optional[List[str]]=None)
 > ```
 
 *Compute the predictions for the next `horizon` steps.*
@@ -84,12 +85,13 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 | after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
 | X_df | Optional | None | Dataframe with the future exogenous features. Should have the id column and the time column. |
 | new_df | Optional | None | Series data of new observations for which forecasts are to be generated.<br/> This dataframe should have the same structure as the one used to fit the model, including any features and time series data.<br/> If `new_df` is not None, the method will generate forecasts for the new observations. |
+| ids | Optional | None | List with subset of ids seen during training for which the forecasts should be computed. |
 | **Returns** | **AnyDataFrame** |  | **Predictions for each serie and timestep, with one column per model.** |
 
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L671"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L688"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.save
@@ -108,7 +110,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L704"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L721"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.load
@@ -128,7 +130,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L750"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L767"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.update
@@ -147,7 +149,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L769"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L786"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.to_local
@@ -165,7 +167,7 @@ method instead.\*
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L308"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L309"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.preprocess
@@ -195,7 +197,7 @@ target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L549"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/distributed/forecast.py#L567"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### DistributedMLForecast.cross_validation
