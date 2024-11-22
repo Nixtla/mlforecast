@@ -654,9 +654,8 @@ class DistributedMLForecast:
                     keep_last_n=keep_last_n,
                     window_info=window_info,
                 )
-            schema = (
-                self._get_predict_schema()
-                + f",cutoff:datetime,{self._base_ts.target_col}:double"
+            schema = self._get_predict_schema() + Schema(
+                ("cutoff", "datetime"), (self._base_ts.target_col, "double")
             )
             preds = fa.transform(
                 partition_results,
