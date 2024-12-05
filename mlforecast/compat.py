@@ -25,9 +25,10 @@ except ImportError:
 try:
     from window_ops.shift import shift_array
 except ImportError:
+    import numpy as np
 
-    def shift_array(*_args, **_kwargs):  # noqa: ARG002
-        raise Exception
+    def shift_array(x, offset):  # noqa: ARG002
+        return np.hstack([np.full(offset, np.nan), x[:-offset]])
 
 
 try:
