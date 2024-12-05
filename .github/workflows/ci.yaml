@@ -76,7 +76,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install forecast notebook dependencies
-        run: pip install uv && uv pip install --system . datasetsforecast lightgbm matplotlib nbdev xgboost
+        run: pip install uv && uv pip install --system . lightgbm matplotlib nbdev xgboost
 
       - name: Run forecast notebook
         run: nbdev_test --path nbs/forecast.ipynb

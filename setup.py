@@ -62,7 +62,6 @@ setuptools.setup(
         'dask': dask_requirements,
         'ray': ray_requirements,
         'spark': spark_requirements,
-        'lag_transforms': [],
         'aws': aws_requirements,
         'azure': azure_requirements,
         'gcp': gcp_requirements,
