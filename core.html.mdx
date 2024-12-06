@@ -10,9 +10,6 @@ import datetime
 import tempfile
 from nbdev import show_doc
 from fastcore.test import test_eq, test_fail, test_warns
-from window_ops.expanding import expanding_mean
-from window_ops.rolling import rolling_mean
-from window_ops.shift import shift_array
 
 from mlforecast.callbacks import SaveFeatures
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
@@ -74,7 +71,7 @@ serie
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L179"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L170"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ### TimeSeries
@@ -106,19 +103,13 @@ flow_config = dict(
     freq='W-THU',
     lags=[7],
     lag_transforms={
-        1: [expanding_mean, (rolling_mean, 7)]
+        1: [ExpandingMean(), RollingMean(7)]
     },
     date_features=['dayofweek', 'week', month_start_or_end]
 )
 
 ts = TimeSeries(**flow_config)
 ts
-```
-
-``` text
-/tmp/ipykernel_59897/2458559600.py:25: FutureWarning: The `window_ops` package (and thus `numba`) will no longer be a dependency in a future version.
-Please make sure to add it to your requirements to ensure compatibility.
-  warnings.warn(
 ```
 
 ``` text
@@ -145,13 +136,8 @@ then the function and then the function arguments.
 
 ```python
 test_eq(
-    ts.transforms, 
-    {
-        'lag7': Lag(7),
-        'expanding_mean_lag1': (1, expanding_mean), 
-        'rolling_mean_lag1_window_size7': (1, rolling_mean, 7)
-        
-    }
+    ts.transforms.keys(),
+    ['lag7', 'expanding_mean_lag1', 'rolling_mean_lag1_window_size7'],
 )
 ```
 
@@ -164,7 +150,7 @@ transformation.
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L520"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L510"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.fit_transform
@@ -194,8 +180,8 @@ flow_config = dict(
     lags=[7, 14],
     lag_transforms={
         2: [
-            (rolling_mean, 7),
-            (rolling_mean, 14),
+            RollingMean(7),
+            RollingMean(14),
         ]
     },
     date_features=['dayofweek', 'month', 'year'],
@@ -206,19 +192,16 @@ ts = TimeSeries(**flow_config)
 _ = ts.fit_transform(series, id_col='unique_id', time_col='ds', target_col='y')
 ```
 
-``` text
-/tmp/ipykernel_59897/2458559600.py:25: FutureWarning: The `window_ops` package (and thus `numba`) will no longer be a dependency in a future version.
-Please make sure to add it to your requirements to ensure compatibility.
-  warnings.warn(
-```
-
 The series values are stored as a GroupedArray in an attribute `ga`. If
 the data type of the series values is an int then it is converted to
 `np.float32`, this is because lags generate `np.nan`s so we need a float
 data type for them.
 
 ```python
-np.testing.assert_equal(ts.ga.data, series.y.values)
+np.testing.assert_equal(
+    ts.ga.data,
+    series.groupby('unique_id', observed=True).tail(ts.keep_last_n)['y'],
+)
 ```
 
 The series ids are stored in an `uids` attribute.
@@ -291,12 +274,6 @@ test_eq(df.shape[0], series.shape[0] - (2 + 13) * ts.ga.n_groups)
 test_eq(ts.ga.data.size, ts.ga.n_groups * keep_last_n)
 ```
 
-``` text
-/tmp/ipykernel_59897/2458559600.py:25: FutureWarning: The `window_ops` package (and thus `numba`) will no longer be a dependency in a future version.
-Please make sure to add it to your requirements to ensure compatibility.
-  warnings.warn(
-```
-
 [`TimeSeries.fit_transform`](https://Nixtla.github.io/mlforecast/core.html#timeseries.fit_transform)
 requires that the *y* column doesn’t have any null values. This is
 because the transformations could propagate them forward, so if you have
@@ -314,7 +291,7 @@ test_fail(
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L767"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L757"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.predict
@@ -355,12 +332,6 @@ pd.testing.assert_series_equal(grouped_preds['ds'].min(), expected_dsmin)
 pd.testing.assert_series_equal(grouped_preds['ds'].max(), expected_dsmax)
 ```
 
-``` text
-/tmp/ipykernel_59897/2458559600.py:25: FutureWarning: The `window_ops` package (and thus `numba`) will no longer be a dependency in a future version.
-Please make sure to add it to your requirements to ensure compatibility.
-  warnings.warn(
-```
-
 If we have dynamic features we can pass them to `X_df`.
 
 ```python
@@ -389,16 +360,10 @@ pd.testing.assert_frame_equal(
 )
 ```
 
-``` text
-/tmp/ipykernel_59897/2458559600.py:25: FutureWarning: The `window_ops` package (and thus `numba`) will no longer be a dependency in a future version.
-Please make sure to add it to your requirements to ensure compatibility.
-  warnings.warn(
-```
-
 ------------------------------------------------------------------------
 
 <a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L872"
+href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/core.py#L862"
 target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
 
 ## TimeSeries.update
