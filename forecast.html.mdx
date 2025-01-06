@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xgboost as xgb
 from sklearn.linear_model import LinearRegression
+from utilsforecast.feature_engineering import time_features
 from utilsforecast.plotting import plot_series
 
 from mlforecast.lag_transforms import ExpandingMean, ExponentiallyWeightedMean, RollingMean
