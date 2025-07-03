@@ -5,7 +5,7 @@ from sklearn.linear_model import LinearRegression
 from utilsforecast.losses import smape
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import RollingMean, RollingMax, RollingMin
+from mlforecast.lag_transforms import RollingMax, RollingMean, RollingMin
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import generate_daily_series
 
