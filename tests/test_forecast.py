@@ -289,7 +289,7 @@ def test_indexed_data_datetime_ds():
 # prep_df = fcst.preprocess(train)
 # prep_df
 # transforms namer
-def namer(tfm, lag, *args):
+def namer(tfm, lag, *args): # noqa
     return f'hello_from_{tfm.__class__.__name__.lower()}'
 
 def test_transform_name(setup_forecast_data, fcst, predictions):
@@ -488,7 +488,7 @@ def test_cv_no_refit(setup_forecast_data):
     # assert cv_results_no_refit.drop(columns='LGBMRegressor').values.all() == cv_results.drop(columns='LGBMRegressor').values.all()
     pd.testing.assert_frame_equal(cv_results_no_refit.drop(columns='LGBMRegressor'), cv_results.drop(columns='LGBMRegressor'))
     # test the first window has the same forecasts
-    first_cutoff = cv_results['cutoff'].iloc[0]
+    first_cutoff = cv_results['cutoff'].iloc[0] # noqa
     pd.testing.assert_frame_equal(cv_results_no_refit.query('cutoff == @first_cutoff'), cv_results.query('cutoff == @first_cutoff'))
 
     # test next windows have different forecasts
