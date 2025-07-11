@@ -606,12 +606,16 @@ class TimeSeries:
         )
         return df
 
-    def _get_features_for_next_step(self, X_df=None):
+    def _get_features_for_next_step(self, X_df=None, horizon: Optional[int] = None):
         new_x = self._update_features()
+
         if X_df is not None:
             n_series = len(self.uids)
-            h = X_df.shape[0] // n_series
-            rows = np.arange(self._h, X_df.shape[0], h)
+            if horizon is not None:
+                rows = np.arange((horizon - 1) * n_series, horizon * n_series)
+            else:
+                h = X_df.shape[0] // n_series
+                rows = np.arange(self._h, X_df.shape[0], h)
             X = ufp.take_rows(X_df, rows)
             X = ufp.drop_index_if_pandas(X)
             new_x = ufp.horizontal_concat([new_x, X])
@@ -623,11 +627,14 @@ class TimeSeries:
             cols_with_nulls = [k for k, v in nulls.to_dicts()[0].items() if v]
         if cols_with_nulls:
             warnings.warn(f'Found null values in {", ".join(cols_with_nulls)}.')
-        self._h += 1
+        if horizon is None:
+            self._h += 1  # Recursive counter
         new_x = new_x[self.features_order_]
         if self.as_numpy:
             new_x = ufp.to_numpy(new_x)
+
         return new_x
+
 
     @contextmanager
     def _backup(self) -> Iterator[None]:
@@ -704,13 +711,15 @@ class TimeSeries:
         for name, model in models.items():
             with self._backup():
                 self._predict_setup()
-                new_x = self._get_features_for_next_step(X_df)
-                if before_predict_callback is not None:
-                    new_x = before_predict_callback(new_x)
-                predictions = np.empty((new_x.shape[0], horizon))
+                n_series = len(self.uids)
+                predictions = np.empty((n_series, horizon))
                 for i in range(horizon):
-                    predictions[:, i] = model[i].predict(new_x)
-                raw_preds = predictions.ravel()
+                    new_x = self._get_features_for_next_step(X_df, horizon=i + 1)
+                    if before_predict_callback is not None:
+                        new_x = before_predict_callback(new_x)
+                    preds = model[i].predict(new_x)
+                    predictions[:, i] = preds
+                raw_preds = predictions.ravel(order="F")
                 result = ufp.assign_columns(result, name, raw_preds)
         return result
 
@@ -793,13 +802,8 @@ class TimeSeries:
                         "If all your features are dynamic please provide an empty list (static_features=[])."
                     )
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
-                if getattr(self, "max_horizon", None) is None:
-                    ends = ufp.offset_times(self.last_dates, self.freq, horizon)
-                    expected_rows_X = len(self.uids) * horizon
-                else:
-                    # direct approach uses only the immediate next timestamp
-                    ends = starts
-                    expected_rows_X = len(self.uids)
+                ends = ufp.offset_times(self.last_dates, self.freq, horizon)
+                expected_rows_X = len(self.uids) * horizon
                 dates_validation = type(X_df)(
                     {
                         self.id_col: self.uids,
