@@ -608,11 +608,10 @@ class TimeSeries:
 
     def _get_features_for_next_step(self, X_df=None, horizon: Optional[int] = None):
         new_x = self._update_features()
-
         if X_df is not None:
             n_series = len(self.uids)
             if horizon is not None:
-                rows = np.arange((horizon - 1) * n_series, horizon * n_series)
+                rows = np.arange(horizon, len(X_df), n_series)
             else:
                 h = X_df.shape[0] // n_series
                 rows = np.arange(self._h, X_df.shape[0], h)
@@ -714,12 +713,15 @@ class TimeSeries:
                 n_series = len(self.uids)
                 predictions = np.empty((n_series, horizon))
                 for i in range(horizon):
-                    new_x = self._get_features_for_next_step(X_df, horizon=i + 1)
+                    new_x = self._get_features_for_next_step(X_df, horizon=i)
+                    print(new_x)
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
                     preds = model[i].predict(new_x)
                     predictions[:, i] = preds
-                raw_preds = predictions.ravel(order="F")
+                print(predictions)
+                raw_preds = predictions.flatten()
+                print(raw_preds)
                 result = ufp.assign_columns(result, name, raw_preds)
         return result
 
