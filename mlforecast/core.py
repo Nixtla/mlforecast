@@ -714,14 +714,11 @@ class TimeSeries:
                 predictions = np.empty((n_series, horizon))
                 for i in range(horizon):
                     new_x = self._get_features_for_next_step(X_df, horizon=i)
-                    print(new_x)
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
                     preds = model[i].predict(new_x)
                     predictions[:, i] = preds
-                print(predictions)
                 raw_preds = predictions.flatten()
-                print(raw_preds)
                 result = ufp.assign_columns(result, name, raw_preds)
         return result
 
