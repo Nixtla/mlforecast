@@ -1,7 +1,9 @@
+import sys
 import warnings
 
 import dask.dataframe as dd
 import pandas as pd
+import pytest
 
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
@@ -10,7 +12,8 @@ from mlforecast.utils import generate_daily_series
 
 warnings.simplefilter("ignore", FutureWarning)
 
-
+@pytest.mark.skipif(sys.platform == "win32", reason="Distributed tests are not supported on Windows")
+@pytest.mark.skipif(sys.version_info <= (3, 9), reason="Distributed tests are not supported on Python < 3.10")
 def test_distributed_forecast():
     series = generate_daily_series(
         100, equal_ends=True, min_length=500, max_length=1_000
