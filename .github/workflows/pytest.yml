@@ -31,11 +31,12 @@ jobs:
         run: |
           pip install uv pytest && uv pip install --system ".[dev]" fugue[dask,spark]>=0.8.1 "dask<=2024.12.1"
 
-          if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            # install brew first
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            brew install lightgbm
-          fi
+      - name: Install lightgbm on macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          # install brew first
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          brew install lightgbm
 
       - name: Run pytest
         run: pytest tests
