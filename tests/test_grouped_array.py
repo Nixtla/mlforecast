@@ -1,8 +1,7 @@
 import copy
 
 import numpy as np
-from fastcore.test import test_eq as _test_eq
-from fastcore.test import test_fail as _test_fail
+from conftest import assert_raises_with_message
 
 from mlforecast.grouped_array import GroupedArray
 
@@ -28,8 +27,8 @@ def test_grouped_array():
     data = np.arange(10, dtype=np.float32)
     indptr = np.array([0, 2, 10])  # group 1: [0, 1], group 2: [2..9]
     ga = GroupedArray(data, indptr)
-    _test_eq(len(ga), 2)
-    _test_eq(str(ga), "GroupedArray(ndata=10, n_groups=2)")
+    assert len(ga) == 2
+    assert str(ga) == "GroupedArray(ndata=10, n_groups=2)"
 
 # Iterate through the groups
 def test_grouped_array_iter():
@@ -82,9 +81,9 @@ def test_grouped_array_iter():
         np.hstack([ga.data[:2], np.array([-1]), ga.data[2:], np.array([-2])]),
     )
     # try to append new values that don't match the number of groups
-    _test_fail(
+    assert_raises_with_message(
         lambda: ga.append(np.array([1.0, 2.0, 3.0])),
-        contains="`new_data` must be of size 2",
+        "`new_data` must be of size 2",
     )
     # __setitem__
     new_vals = np.array([10, 11])

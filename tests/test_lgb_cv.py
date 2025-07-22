@@ -2,7 +2,6 @@ import random
 
 import pytest
 from datasetsforecast.m4 import M4, M4Info
-from fastcore.test import test_eq as _test_eq
 
 from mlforecast.lag_transforms import SeasonalRollingMean
 from mlforecast.lgb_cv import LightGBMCV
@@ -75,9 +74,9 @@ def test_lightgbm_cv_pipeline(m4_data):
     # preds3 = cv3.predict(horizon)
     # eval3 = evaluate_on_valid(preds3, valid)
 
-    _test_eq(cv.find_best_iter([(0, 1), (1, 0.5)], 1), 1)
-    _test_eq(cv.find_best_iter([(0, 1), (1, 0.5), (2, 0.6)], 1), 1)
-    _test_eq(cv.find_best_iter([(0, 1), (1, 0.5), (2, 0.6), (3, 0.4)], 2), 3)
+    assert cv.find_best_iter([(0, 1), (1, 0.5)], 1) == 1
+    assert cv.find_best_iter([(0, 1), (1, 0.5), (2, 0.6)], 1) == 1
+    assert cv.find_best_iter([(0, 1), (1, 0.5), (2, 0.6), (3, 0.4)], 2) == 3
 
     cv4 = LightGBMCV(
         freq=1,

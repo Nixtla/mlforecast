@@ -1,6 +1,5 @@
 import pytest
-from fastcore.test import test_eq as _test_eq
-from fastcore.test import test_fail as _test_fail
+from conftest import assert_raises_with_message
 
 from mlforecast.utils import generate_daily_series, generate_prices_for_series
 
@@ -42,5 +41,5 @@ def test_generate_daily_series_equal_ends(setup):
     series_for_prices.rename(columns={"static_1": "product_id"}, inplace=True)
     prices_catalog = generate_prices_for_series(series_for_prices, horizon=7)
 
-    _test_eq(set(prices_catalog["unique_id"]), set(series_for_prices["unique_id"]))
-    _test_fail(lambda: generate_prices_for_series(series), contains="equal ends")
+    assert set(prices_catalog["unique_id"]) == set(series_for_prices["unique_id"])
+    assert_raises_with_message(lambda: generate_prices_for_series(series), "equal ends")
