@@ -289,6 +289,13 @@ class MLForecast:
             Forecast object with trained models.
         """
         models_fit_kwargs = models_fit_kwargs or {}
+        # Check that all keys in models_fit_kwargs match known models
+        unknown_models = set(models_fit_kwargs) - set(self.models)
+        if unknown_models:
+            raise ValueError(
+                f"The following model names in `model_fit_kwargs` are not recognized: {unknown_models}. "
+                f"Valid model names are: {list(self.models)}."
+            )
 
         def fit_model(
             model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
