@@ -536,8 +536,8 @@ class MLForecast:
             -------
             models_kwargs = {
                 'LGBMRegressor': {
-                    'eval_set': [(X_val, y_val)],
-                    'early_stopping_rounds': 10,
+                    'feature_name': ["feature_1", "feature_2", "feature_3"],
+                    'categorical_feature': ["feature_1", "feature_2"],
                 }
             }
 
