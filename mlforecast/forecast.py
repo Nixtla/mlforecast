@@ -271,7 +271,7 @@ class MLForecast:
         self,
         X: Union[DataFrame, np.ndarray],
         y: np.ndarray,
-        models_kwargs: Optional[dict[str, dict[str, Any]]] = None,
+        models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
@@ -281,17 +281,19 @@ class MLForecast:
             Features.
         y : numpy array.
             Target.
-        models_kwargs: dict
+        models_fit_kwargs: dict
             Additional fit arguments for each model
         Returns
         -------
         self : MLForecast
             Forecast object with trained models.
         """
-        models_kwargs = models_kwargs or {}
+        models_fit_kwargs = models_fit_kwargs or {}
 
-        def fit_model(model, X, y, weight_col, model_kwargs: Optional[dict[str, Any]]):
-            fit_kwargs = model_kwargs or {}
+        def fit_model(
+            model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
+        ):
+            fit_kwargs = model_fit_kwargs or {}
             if weight_col is not None:
                 if isinstance(X, np.ndarray):
                     fit_kwargs["sample_weight"] = X[:, 0]
@@ -303,7 +305,7 @@ class MLForecast:
 
         self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator]]] = {}
         for name, model in self.models.items():
-            model_kwargs = models_kwargs.get(name, None)
+            model_fit_kwargs = models_fit_kwargs.get(name, None)
             if y.ndim == 2 and y.shape[1] > 1:
                 self.models_[name] = []
                 for col in range(y.shape[1]):
@@ -316,12 +318,12 @@ class MLForecast:
                             Xh,
                             yh,
                             self.ts.weight_col,
-                            model_kwargs,
+                            model_fit_kwargs,
                         )
                     )
             else:
                 self.models_[name] = fit_model(
-                    model, X, y, self.ts.weight_col, model_kwargs
+                    model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
         return self
 
@@ -529,12 +531,12 @@ class MLForecast:
             Cast features to numpy array.
         weight_col : str, optional (default=None)
             Column that contains the sample weights.
-        models_kwargs: dict, optional (default=None)
+        models_fit_kwargs: dict, optional (default=None)
             Additional keyword arguments to be passed to the `.fit()` method of each model.
 
             Example
             -------
-            models_kwargs = {
+            models_fit_kwargs = {
                 'LGBMRegressor': {
                     'feature_name': ["feature_1", "feature_2", "feature_3"],
                     'categorical_feature': ["feature_1", "feature_2"],
