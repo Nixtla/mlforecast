@@ -88,11 +88,11 @@ def test_automlforecast_errors_and_warnings():
         ),
         "`season_length` is required",
     )
-    with pytest.raises(Warning):
-        lambda: AutoMLForecast(
+    with pytest.warns(Warning, match="`season_length` is not used when `init_config` is provided."):
+        AutoMLForecast(
             freq=1,
             season_length=1,
-            init_config=lambda: {},
+            init_config=lambda trial: {},  # noqa: ARG005
             models=[AutoLightGBM()],
         )
 
