@@ -97,19 +97,7 @@ def predictions(fitted_fcst):
     horizon = 48
     return fitted_fcst.predict(horizon)
 
-# train.shape, valid.shape
 
-# fcst = MLForecast(
-#     models=lgb.LGBMRegressor(random_state=0, verbosity=-1),
-#     freq=1,
-#     lags=[24 * (i+1) for i in range(7)],
-#     lag_transforms={
-#         48: [ExponentiallyWeightedMean(alpha=0.3)],
-#     },
-#     num_threads=1,
-#     target_transforms=[Differences([24])],
-# )
-# fcst
 def test_missing_future(fcst, setup_forecast_data):
     df, train, _ = setup_forecast_data
     train2 = train.copy()
@@ -126,8 +114,6 @@ def test_missing_future(fcst, setup_forecast_data):
         expected_future.tail(2).reset_index(drop=True)
     )
 
-# fcst.forecast_fitted_values()
-# fcst.forecast_fitted_values(level=[90])
 
 # check that the fitted target from the fitted_values matches the original target after applying the transformation
 def test_fitted_target(fcst2, setup_forecast_data):
@@ -242,20 +228,10 @@ def test_prediction_intervals_monotonicity(predictions_w_intervals):
         axis=1
     ).sum()
     assert monotonic_count == len(predictions_w_intervals)
-# results = valid.merge(predictions_w_intervals, on=['unique_id', 'ds'])
-# fig = plot_series(forecasts_df=results, level=[50, 80, 95])
-# fig.savefig('figs/forecast__predict_intervals.png', bbox_inches='tight')
-# fcst.fit(
-#     train,
-#     prediction_intervals=PredictionIntervals(n_windows=3, h=1)
-# );
-# predictions_w_intervals_ws_1 = fcst.predict(48, level=[80, 90, 95])
-# results = valid.merge(predictions_w_intervals_ws_1, on=['unique_id', 'ds'])
-# fig = plot_series(forecasts_df=results, level=[90])
-# fig.savefig('figs/forecast__predict_intervals_window_size_1.png', bbox_inches='tight')
 
-# # test indexed data, datetime ds
+
 def test_indexed_data_datetime_ds():
+    # test indexed data, datetime ds
     fcst_test = MLForecast(
         models=lgb.LGBMRegressor(random_state=0, verbosity=-1),
         freq='D',
@@ -276,20 +252,10 @@ def test_indexed_data_datetime_ds():
             lambda x: x.is_monotonic_increasing,
             axis=1
         ).sum() == len(pred_int_test)
-# ercot_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/ERCOT-clean.csv')
-# # we have to convert the ds column to integers
-# # since MLForecast was trained with that structure
-# ercot_df['ds'] = np.arange(1, len(ercot_df) + 1)
-# # use the `new_df` argument to pass the ercot dataset
-# ercot_fcsts = fcst.predict(horizon, new_df=ercot_df)
-# fig = plot_series(ercot_df, ercot_fcsts, max_insample_length=48 * 2)
-# fig.get_axes()[0].set_title('ERCOT forecasts trained on M4-Hourly dataset')
-# fig.savefig('figs/forecast__ercot.png', bbox_inches='tight')
 
-# prep_df = fcst.preprocess(train)
-# prep_df
-# transforms namer
+
 def namer(tfm, lag, *args): # noqa
+    # transforms namer
     return f'hello_from_{tfm.__class__.__name__.lower()}'
 
 def test_transform_name(setup_forecast_data, fcst, predictions):
@@ -361,27 +327,6 @@ def test_bad_max_horizon(setup_forecast_data):
         fcst.predict(1)
     assert 'Found a single model for all horizons' in str(exec.value)
 
-# fcst = MLForecast(
-#     models=lgb.LGBMRegressor(random_state=0, verbosity=-1),
-#     freq=1,
-#     lags=[24 * (i+1) for i in range(7)],
-#     lag_transforms={
-#         1: [RollingMean(window_size=24)],
-#         24: [RollingMean(window_size=24)],
-#         48: [ExponentiallyWeightedMean(alpha=0.3)],
-#     },
-#     num_threads=1,
-#     target_transforms=[Differences([24])],
-# )
-# cv_results = fcst.cross_validation(
-#     train,
-#     n_windows=2,
-#     h=horizon,
-#     step_size=horizon,
-#     fitted=True,
-# )
-# cv_results
-# fcst.cross_validation_fitted_values()
 
 # test fitted
 def test_fitted_max_horizon(setup_forecast_data):
@@ -425,15 +370,7 @@ def test_fitted_max_horizon(setup_forecast_data):
             .reset_index(drop=True)
         ),
     )
-# cv_results_intervals = fcst.cross_validation(
-#     train,
-#     n_windows=2,
-#     h=horizon,
-#     step_size=horizon,
-#     prediction_intervals=PredictionIntervals(h=horizon),
-#     level=[80, 90]
-# )
-# cv_results_intervals
+
 def test_refit(setup_forecast_data):
     _, train, _ = setup_forecast_data
     fcst = MLForecast(
@@ -590,21 +527,6 @@ def test_wrong_frequency_error():
     with pytest.raises(ValueError) as exec:
         fcst_wrong_freq.cross_validation(df_wrong_freq, n_windows=1, h=1)
     assert 'Cross validation result produced less results than expected' in str(exec.value)
-
-# fig = plot_series(forecasts_df=cv_results.drop(columns='cutoff'))
-# fig.savefig('figs/forecast__cross_validation.png', bbox_inches='tight')
-# fig = plot_series(forecasts_df=cv_results_intervals.drop(columns='cutoff'), level=[90])
-# fig.savefig('figs/forecast__cross_validation_intervals.png', bbox_inches='tight')
-
-# cv = LightGBMCV(
-#     freq=1,
-#     lags=[24 * (i+1) for i in range(7)],
-#     lag_transforms={
-#         48: [ExponentiallyWeightedMean(alpha=0.3)],
-#     },
-#     num_threads=1,
-#     target_transforms=[Differences([24])]
-# )
 
 
 def test_best_iter(setup_forecast_data):
