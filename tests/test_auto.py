@@ -5,8 +5,6 @@ import pandas as pd
 import polars as pl
 import pytest
 from datasetsforecast.m4 import M4, M4Info
-from fastcore.test import test_fail as _test_fail
-from fastcore.test import test_warns as _test_warns
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
@@ -20,6 +18,8 @@ from mlforecast.auto import (
     PredictionIntervals,
     ridge_space,
 )
+
+from .conftest import assert_raises_with_message
 
 optuna.logging.set_verbosity(optuna.logging.ERROR)
 
@@ -79,23 +79,22 @@ def test_automlforecast_pipeline(weekly_data):
 
 
 def test_automlforecast_errors_and_warnings():
-    _test_fail(
+    assert_raises_with_message(
         lambda: AutoMLForecast(
             freq=1,
             season_length=None,
             init_config=None,
             models=[AutoLightGBM()],
         ),
-        contains="`season_length` is required",
+        "`season_length` is required",
     )
-    _test_warns(
+    with pytest.raises(Warning):
         lambda: AutoMLForecast(
             freq=1,
             season_length=1,
             init_config=lambda: {},
             models=[AutoLightGBM()],
         )
-    )
 
 
 def test_polars_input_compatibility(weekly_data):
