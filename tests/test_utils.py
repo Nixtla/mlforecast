@@ -1,7 +1,8 @@
 import pytest
-from conftest import assert_raises_with_message
 
 from mlforecast.utils import generate_daily_series, generate_prices_for_series
+
+from .conftest import assert_raises_with_message
 
 
 @pytest.fixture

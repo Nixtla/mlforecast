@@ -1,9 +1,10 @@
 import copy
 
 import numpy as np
-from conftest import assert_raises_with_message
 
 from mlforecast.grouped_array import GroupedArray
+
+from .conftest import assert_raises_with_message
 
 
 def test_grouped_array_append_several():
