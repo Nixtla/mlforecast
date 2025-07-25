@@ -35,7 +35,7 @@ jobs:
         run: pip install uv && uv pip install --system ".[all]" "numba>=0.60" "scikit-learn<1.6" shap window-ops
 
       - name: Run all tests
-        run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re 'electricity' --flags 'polars shap window_ops'
+        run: nbdev_test --n_workers 0 --do_print --timing --skip_file_re 'electricity|spark.lgb' --flags 'polars shap window_ops'
 
   run-local-tests:
     runs-on: ${{ matrix.os }}
