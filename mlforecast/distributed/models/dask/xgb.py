@@ -5,9 +5,10 @@ __all__ = ['DaskXGBForecast']
 
 # %% ../../../../nbs/distributed.models.dask.xgb.ipynb 3
 import xgboost as xgb
+from xgboost import dask as dxgb
 
 # %% ../../../../nbs/distributed.models.dask.xgb.ipynb 4
-class DaskXGBForecast(xgb.dask.DaskXGBRegressor):
+class DaskXGBForecast(dxgb.XGBRegressorBase):
     @property
     def model_(self):
         model_str = self.get_booster().save_raw("ubj")
