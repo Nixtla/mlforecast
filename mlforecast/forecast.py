@@ -16,6 +16,7 @@ import numpy as np
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DFType, DataFrame
+import pandas as pd
 
 from mlforecast.core import (
     DateFeature,
@@ -536,28 +537,89 @@ class MLForecast:
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
-        prep = self.preprocess(
-            df=df,
-            id_col=id_col,
-            time_col=time_col,
-            target_col=target_col,
-            static_features=static_features,
-            dropna=dropna,
-            keep_last_n=keep_last_n,
-            max_horizon=max_horizon,
-            return_X_y=not fitted,
-            as_numpy=as_numpy,
-            weight_col=weight_col,
-        )
-        if isinstance(prep, tuple):
-            X, y = prep
+        if max_horizon is not None:
+            prep_df = self.preprocess(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                return_X_y=False,
+                as_numpy=False,
+                weight_col=weight_col,
+            )
+            base = prep_df[[id_col, time_col]]
+            ignore = {id_col, time_col, target_col}
+            ignore |= set(self.ts.transforms.keys())
+            ignore |= {f.__name__ if callable(f) else f for f in self.ts.date_features}
+            if static_features is not None:
+                ignore |= set(static_features)
+            if weight_col:
+                ignore.add(weight_col)
+            exog_cols = [c for c in df.columns if c not in ignore]
+            feat_cols = list(self.ts.features_order_)
+            if weight_col:
+                feat_cols = [weight_col] + feat_cols
+            self.models_ = {name: [] for name in self.models}
+            for h in range(1, max_horizon + 1):
+                df_h = prep_df.copy()
+                shifted = df[[id_col, time_col] + exog_cols].copy()
+                shifted[exog_cols] = (
+                    shifted
+                    .groupby(id_col)[exog_cols]
+                    .shift(-h)
+                )
+                df_h = df_h.drop(columns=exog_cols).merge(
+                    shifted, on=[id_col, time_col], how="left"
+                )
+                y_name = f"{target_col}{h-1}"
+                mask = df_h[y_name].notna()
+                df_sub = df_h.loc[mask]
+                Xh_df = df_sub[feat_cols]
+                yh = df_sub[y_name].to_numpy()
+                if as_numpy:
+                    Xh = ufp.to_numpy(Xh_df)
+                else:
+                    Xh = Xh_df
+                for name, model in self.models.items():
+                    m = clone(model)
+                    if weight_col:
+                        if as_numpy:
+                            sw, Xsub = Xh[:, 0], Xh[:, 1:]
+                            m.fit(Xsub, yh, sample_weight=sw)
+                        else:
+                            sw = Xh[weight_col]
+                            Xsub = Xh.drop(columns=weight_col)
+                            m.fit(Xsub, yh, sample_weight=sw)
+                    else:
+                        m.fit(Xh, yh)
+                    self.models_[name].append(m)
         else:
-            base = prep[[id_col, time_col]]
-            X, y = self._extract_X_y(prep, target_col, weight_col)
-            if as_numpy:
-                X = ufp.to_numpy(X)
-            del prep
-        self.fit_models(X, y)
+            prep = self.preprocess(
+                    df=df,
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    static_features=static_features,
+                    dropna=dropna,
+                    keep_last_n=keep_last_n,
+                    max_horizon=max_horizon,
+                    return_X_y=not fitted,
+                    as_numpy=as_numpy,
+                    weight_col=weight_col,
+                )
+            if isinstance(prep, tuple):
+                X, y = prep
+            else:
+                base = prep[[id_col, time_col]]
+                X, y = self._extract_X_y(prep, target_col, weight_col)
+                if as_numpy:
+                    X = ufp.to_numpy(X)
+                del prep
+            self.fit_models(X, y)
         if fitted:
             fitted_values = self._compute_fitted_values(
                 base=base,
