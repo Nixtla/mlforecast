@@ -21,7 +21,6 @@ def test_transform_exog():
         prices.append(df)
     prices = pd.concat(prices)
     prices["price2"] = prices["price"] * rng.rand(prices.shape[0])
-    prices.head()
 
     transformed = transform_exog(prices, lags=[1, 2], lag_transforms={1: [ExpandingMean()]})
 
@@ -32,5 +31,4 @@ def test_transform_exog():
         lag_transforms={1: [ExpandingMean()]},
         num_threads=2,
     )
-    transformed_pl.head()
     pd.testing.assert_frame_equal(transformed, transformed_pl.to_pandas())

@@ -421,8 +421,6 @@ def test_cv_no_refit(setup_forecast_data):
         step_size=horizon,
         fitted=True,
     )
-    # test we recover the same "metadata"
-    # assert cv_results_no_refit.drop(columns='LGBMRegressor').values.all() == cv_results.drop(columns='LGBMRegressor').values.all()
     pd.testing.assert_frame_equal(cv_results_no_refit.drop(columns='LGBMRegressor'), cv_results.drop(columns='LGBMRegressor'))
     # test the first window has the same forecasts
     first_cutoff = cv_results['cutoff'].iloc[0] # noqa
