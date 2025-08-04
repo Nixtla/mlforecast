@@ -7,6 +7,7 @@ __all__ = ['RayLGBMForecast']
 import lightgbm as lgb
 from lightgbm_ray import RayLGBMRegressor
 
+
 # %% ../../../../nbs/distributed.models.ray.lgb.ipynb 4
 class RayLGBMForecast(RayLGBMRegressor):
     @property

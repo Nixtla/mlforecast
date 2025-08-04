@@ -8,6 +8,7 @@ import warnings
 
 import lightgbm as lgb
 
+
 # %% ../../../../nbs/distributed.models.dask.lgb.ipynb 4
 class DaskLGBMForecast(lgb.dask.DaskLGBMRegressor):
     if lgb.__version__ < "3.3.0":

@@ -7,6 +7,7 @@ __all__ = ['DaskXGBForecast']
 import xgboost as xgb
 from xgboost import dask as dxgb
 
+
 # %% ../../../../nbs/distributed.models.dask.xgb.ipynb 4
 class DaskXGBForecast(dxgb.XGBRegressorBase):
     @property

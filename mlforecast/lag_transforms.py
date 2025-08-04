@@ -12,10 +12,11 @@ import inspect
 import re
 from typing import Callable, Optional, Sequence
 
-import numpy as np
 import coreforecast.lag_transforms as core_tfms
+import numpy as np
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator, clone
+
 
 # %% ../nbs/lag_transforms.ipynb 4
 def _pascal2camel(pascal_str: str) -> str:

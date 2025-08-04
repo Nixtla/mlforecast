@@ -7,6 +7,7 @@ __all__ = ['RayXGBForecast']
 import xgboost as xgb
 from xgboost_ray import RayXGBRegressor
 
+
 # %% ../../../../nbs/distributed.models.ray.xgb.ipynb 4
 class RayXGBForecast(RayXGBRegressor):
     @property
