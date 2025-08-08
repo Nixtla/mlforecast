@@ -19,18 +19,16 @@ from utilsforecast.compat import DataFrame
 from utilsforecast.losses import smape
 from utilsforecast.validation import validate_freq
 
-from mlforecast.target_transforms import (
-    Differences,
-    GlobalSklearnTransformer,
-    LocalStandardScaler,
-)
-
 from . import MLForecast
 from .core import Freq, _get_model_name, _name_models
 from .lag_transforms import ExponentiallyWeightedMean, RollingMean
 from .optimization import _TrialToConfig, mlforecast_objective
+from mlforecast.target_transforms import (
+    Differences,
+    LocalStandardScaler,
+    GlobalSklearnTransformer,
+)
 from .utils import PredictionIntervals
-
 
 # %% ../nbs/auto.ipynb 4
 def lightgbm_space(trial: optuna.Trial):

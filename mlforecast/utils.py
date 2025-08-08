@@ -8,9 +8,9 @@ from math import ceil, log10
 
 import numpy as np
 import pandas as pd
+
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
-
 
 # %% ../nbs/utils.ipynb 5
 def generate_daily_series(

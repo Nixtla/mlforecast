@@ -15,27 +15,25 @@ import fsspec
 import numpy as np
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, DFType
+from utilsforecast.compat import DFType, DataFrame
 
 from mlforecast.core import (
     DateFeature,
     Freq,
-    Lags,
     LagTransforms,
+    Lags,
     Models,
     TargetTransform,
     TimeSeries,
-    _get_model_name,
     _name_models,
+    _get_model_name,
 )
-
 from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
 from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals
-
 
 # %% ../nbs/forecast.ipynb 6
 def _add_conformal_distribution_intervals(

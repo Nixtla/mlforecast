@@ -32,21 +32,20 @@ import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from sklearn.pipeline import Pipeline
 from utilsforecast.compat import (
-    DataFrame,
     DFType,
+    DataFrame,
     pl,
     pl_DataFrame,
     pl_Series,
 )
 from utilsforecast.validation import validate_format, validate_freq
 
-from mlforecast.target_transforms import (
-    BaseTargetTransform,
-    _BaseGroupedArrayTargetTransform,
-)
-
 from .grouped_array import GroupedArray
-from .lag_transforms import Lag, _BaseLagTransform
+from .lag_transforms import _BaseLagTransform, Lag
+from mlforecast.target_transforms import (
+    _BaseGroupedArrayTargetTransform,
+    BaseTargetTransform,
+)
 from .utils import _ShortSeriesException
 
 # %% ../nbs/core.ipynb 10
@@ -77,8 +76,6 @@ date_features_dtypes = {
 # %% ../nbs/core.ipynb 11
 def _build_function_transform_name(tfm: Callable, lag: int, *args) -> str:
     """Creates a name for a transformation based on `lag`, the name of the function and its arguments."""
-    if tfm is None:
-        raise ValueError("Transformation function cannot be None")
     tfm_name = f"{tfm.__name__}_lag{lag}"
     func_params = inspect.signature(tfm).parameters
     func_args = list(func_params.items())[1:]  # remove input array argument
@@ -195,7 +192,7 @@ class TimeSeries:
         for lag in self.lag_transforms.keys():
             if lag <= 0 or not isinstance(lag, int):
                 raise ValueError("keys of lag_transforms must be positive integers.")
-        self.date_features = [] if date_features is None else [f for f in date_features if f is not None]
+        self.date_features = [] if date_features is None else list(date_features)
         self.num_threads = num_threads
         self.target_transforms = target_transforms
         if self.target_transforms is not None:
@@ -222,7 +219,7 @@ class TimeSeries:
 
     @property
     def _date_feature_names(self):
-        return [f.__name__ if callable(f) and f is not None else f for f in self.date_features]
+        return [f.__name__ if callable(f) else f for f in self.date_features]
 
     @property
     def features(self) -> List[str]:
@@ -356,8 +353,6 @@ class TimeSeries:
         return out
 
     def _compute_date_feature(self, dates, feature):
-        if feature is None:
-            raise ValueError("Date feature cannot be None")
         if callable(feature):
             feat_name = feature.__name__
             feat_vals = feature(dates)
