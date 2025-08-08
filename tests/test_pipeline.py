@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-from pytest_benchmark.plugin import benchmark
 from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
 from utilsforecast.losses import smape
