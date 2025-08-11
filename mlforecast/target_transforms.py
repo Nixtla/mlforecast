@@ -19,6 +19,7 @@ from utilsforecast.compat import DataFrame
 from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
 
+
 # %% ../nbs/target_transforms.ipynb 5
 class BaseTargetTransform(abc.ABC):
     """Base class used for target transformations."""
@@ -178,10 +179,9 @@ class Differences(_BaseGroupedArrayTargetTransform):
 class AutoDifferences(_BaseGroupedArrayTargetTransform):
     """Find and apply the optimal number of differences to each serie.
 
-    Parameters
-    ----------
-    max_diffs: int
-        Maximum number of differences to apply."""
+    Args:
+        max_diffs (int): Maximum number of differences to apply.
+    """
 
     def __init__(self, max_diffs: int):
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
@@ -210,16 +210,13 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
 class AutoSeasonalDifferences(AutoDifferences):
     """Find and apply the optimal number of seasonal differences to each group.
 
-    Parameters
-    ----------
-    season_length : int
-        Length of the seasonal period.
-    max_diffs : int
-        Maximum number of differences to apply.
-    n_seasons : int, optional (default=10)
-        Number of seasons to use to determine the number of differences. Defaults to 10.
-        If `None` will use all samples, otherwise `season_length` * `n_seasons samples` will be used for the test.
-        Smaller values will be faster but could be less accurate."""
+    Args:
+        season_length (int): Length of the seasonal period.
+        max_diffs (int): Maximum number of differences to apply.
+        n_seasons (int, optional): Number of seasons to use to determine the number of differences. Defaults to 10.
+            If `None` will use all samples, otherwise `season_length` * `n_seasons samples` will be used for the test.
+            Smaller values will be faster but could be less accurate.
+    """
 
     def __init__(
         self, season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
@@ -234,16 +231,13 @@ class AutoSeasonalDifferences(AutoDifferences):
 class AutoSeasonalityAndDifferences(AutoDifferences):
     """Find the length of the seasonal period and apply the optimal number of differences to each group.
 
-    Parameters
-    ----------
-    max_season_length : int
-        Maximum length of the seasonal period.
-    max_diffs : int
-        Maximum number of differences to apply.
-    n_seasons : int, optional (default=10)
-        Number of seasons to use to determine the number of differences. Defaults to 10.
-        If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test.
-        Smaller values will be faster but could be less accurate."""
+    Args:
+        max_season_length (int): Maximum length of the seasonal period.
+        max_diffs (int): Maximum number of differences to apply.
+        n_seasons (int, optional): Number of seasons to use to determine the number of differences. Defaults to 10.
+            If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test.
+            Smaller values will be faster but could be less accurate.
+    """
 
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
@@ -294,10 +288,9 @@ class LocalMinMaxScaler(_BaseLocalScaler):
 class LocalRobustScaler(_BaseLocalScaler):
     """Scaler robust to outliers.
 
-    Parameters
-    ----------
-    scale : str (default='iqr')
-        Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Asbolute Deviation)
+    Args:
+        scale (str): Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Asbolute Deviation).
+            Defaults to 'iqr'.
     """
 
     def __init__(self, scale: str):

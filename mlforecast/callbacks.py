@@ -11,6 +11,7 @@ from utilsforecast.processing import (
     vertical_concat,
 )
 
+
 # %% ../nbs/callbacks.ipynb 4
 class SaveFeatures:
     """Saves the features in every timestamp."""
@@ -25,15 +26,11 @@ class SaveFeatures:
     def get_features(self, with_step: bool = False) -> DataFrame:
         """Retrieves the input features for every timestep
 
-        Parameters
-        ----------
-        with_step : bool
-            Add a column indicating the step
+        Args:
+            with_step (bool): Add a column indicating the step. Defaults to False.
 
-        Returns
-        -------
-        pandas or polars DataFrame
-            DataFrame with input features
+        Returns:
+            (pandas or polars DataFrame): DataFrame with input features
         """
         if not self._inputs:
             raise ValueError(

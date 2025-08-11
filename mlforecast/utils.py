@@ -8,9 +8,9 @@ from math import ceil, log10
 
 import numpy as np
 import pandas as pd
-
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
+
 
 # %% ../nbs/utils.ipynb 5
 def generate_daily_series(
@@ -26,31 +26,19 @@ def generate_daily_series(
 ) -> DataFrame:
     """Generate Synthetic Panel Series.
 
-    Parameters
-    ----------
-    n_series : int
-        Number of series for synthetic panel.
-    min_length : int (default=50)
-        Minimum length of synthetic panel's series.
-    max_length : int (default=500)
-        Maximum length of synthetic panel's series.
-    n_static_features : int (default=0)
-        Number of static exogenous variables for synthetic panel's series.
-    equal_ends : bool (default=False)
-        Series should end in the same date stamp `ds`.
-    static_as_categorical : bool (default=True)
-        Static features should have a categorical data type.
-    with_trend : bool (default=False)
-        Series should have a (positive) trend.
-    seed : int (default=0)
-        Random seed used for generating the data.
-    engine : str (default='pandas')
-        Output Dataframe type.
+    Args:
+        n_series (int): Number of series for synthetic panel.
+        min_length (int, default=50): Minimum length of synthetic panel's series.
+        max_length (int, default=500): Maximum length of synthetic panel's series.
+        n_static_features (int, default=0): Number of static exogenous variables for synthetic panel's series.
+        equal_ends (bool, default=False): Series should end in the same date stamp `ds`.
+        static_as_categorical (bool, default=True): Static features should have a categorical data type.
+        with_trend (bool, default=False): Series should have a (positive) trend.
+        seed (int, default=0): Random seed used for generating the data.
+        engine (str, default='pandas'): Output Dataframe type.
 
-    Returns
-    -------
-    pandas or polars DataFrame
-        Synthetic panel with columns [`unique_id`, `ds`, `y`] and exogenous features.
+    Returns:
+        pandas or polars DataFrame: Synthetic panel with columns [`unique_id`, `ds`, `y`] and exogenous features.
     """
     series = generate_series(
         n_series=n_series,

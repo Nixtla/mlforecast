@@ -12,10 +12,11 @@ import inspect
 import re
 from typing import Callable, Optional, Sequence
 
-import numpy as np
 import coreforecast.lag_transforms as core_tfms
+import numpy as np
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator, clone
+
 
 # %% ../nbs/lag_transforms.ipynb 4
 def _pascal2camel(pascal_str: str) -> str:
@@ -102,13 +103,10 @@ class _RollingBase(_BaseLagTransform):
 
     def __init__(self, window_size: int, min_samples: Optional[int] = None):
         """
-        Parameters
-        ----------
-        window_size : int
-            Number of samples in the window.
-        min_samples: int
-            Minimum samples required to output the statistic.
-            If `None`, will be set to `window_size`.
+        Args:
+            window_size (int): Number of samples in the window.
+            min_samples (int, optional): Minimum samples required to output the statistic.
+                If `None`, will be set to `window_size`. Defaults to None.
         """
         self.window_size = window_size
         self.min_samples = min_samples
@@ -152,15 +150,11 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self, season_length: int, window_size: int, min_samples: Optional[int] = None
     ):
         """
-        Parameters
-        ----------
-        season_length : int
-            Periodicity of the seasonal period.
-        window_size : int
-            Number of samples in the window.
-        min_samples: int
-            Minimum samples required to output the statistic.
-            If `None`, will be set to `window_size`.
+        Args:
+            season_length (int): Periodicity of the seasonal period.
+            window_size (int): Number of samples in the window.
+            min_samples (int, optional): Minimum samples required to output the statistic.
+                If `None`, will be set to `window_size`. Defaults to None.
         """
         self.season_length = season_length
         self.window_size = window_size
@@ -233,10 +227,9 @@ class ExpandingQuantile(_ExpandingBase):
 class ExponentiallyWeightedMean(_BaseLagTransform):
     """Exponentially weighted average
 
-    Parameters
-    ----------
-    alpha : float
-        Smoothing factor."""
+    Args:
+        alpha (float): Smoothing factor.
+    """
 
     def __init__(self, alpha: float):
         self.alpha = alpha
@@ -249,12 +242,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
 class Offset(_BaseLagTransform):
     """Shift series before computing transformation
 
-    Parameters
-    ----------
-    tfm : LagTransform
-        Transformation to be applied
-    n : int
-        Number of positions to shift (lag) series before applying the transformation"""
+    Args:
+        tfm (LagTransform): Transformation to be applied
+        n (int): Number of positions to shift (lag) series before applying the transformation
+    """
 
     def __init__(self, tfm: _BaseLagTransform, n: int):
         self.tfm = tfm
@@ -276,14 +267,11 @@ class Offset(_BaseLagTransform):
 class Combine(_BaseLagTransform):
     """Combine two lag transformations using an operator
 
-    Parameters
-    ----------
-    tfm1 : LagTransform
-        First transformation.
-    tfm2 : LagTransform
-        Second transformation.
-    operator : callable
-        Binary operator that defines how to combine the two transformations."""
+    Args:
+        tfm1 (LagTransform): First transformation.
+        tfm2 (LagTransform): Second transformation.
+        operator (callable): Binary operator that defines how to combine the two transformations.
+    """
 
     def __init__(
         self, tfm1: _BaseLagTransform, tfm2: _BaseLagTransform, operator: Callable
