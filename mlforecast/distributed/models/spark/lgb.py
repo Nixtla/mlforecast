@@ -8,10 +8,13 @@ import lightgbm as lgb
 
 try:
     import pyspark
-    spark = pyspark.sql.SparkSession.builder.appName("MyApp") \
-            .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:1.0.13") \
-            .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven") \
-            .getOrCreate()
+
+    spark = (
+        pyspark.sql.SparkSession.builder.appName("MyApp")
+        .config("spark.jars.packages", "com.microsoft.azure:synapseml_2.12:1.0.13")
+        .config("spark.jars.repositories", "https://mmlspark.azureedge.net/maven")
+        .getOrCreate()
+    )
     import synapse.ml.lightgbm.LightGBMRegressor as LightGBMRegressor
 except ModuleNotFoundError:
     import os
@@ -30,5 +33,6 @@ class SparkLGBMForecast(LightGBMRegressor):
         model_str = trained_model.getNativeModel()
         local_model = lgb.Booster(model_str=model_str)
         return local_model
+
 
 # %%
