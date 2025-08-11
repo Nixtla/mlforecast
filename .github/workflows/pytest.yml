@@ -39,5 +39,5 @@ jobs:
           brew install lightgbm
 
       - name: Run pytest
-        run: pytest tests
+        run: pytest
 

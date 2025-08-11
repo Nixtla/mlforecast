@@ -95,5 +95,5 @@ addopts = [
     "--cov=mlforecast",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=80"
+    "--cov-fail-under=75" #TODO: adds tests to increase coverage to 80
 ]

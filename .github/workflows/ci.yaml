@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install uv && uv pip install --system '.[dev]' pytest-xdist
+        run: pip install uv && uv pip install --system '.[dev]' pytest-xdist pytest-codspeed
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@63ae6025a0ffee97d7736a37c9192dbd6ed4e75f # 3.4.0
