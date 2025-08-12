@@ -16,7 +16,7 @@
 
 ```python
 mlforecast_objective(
-    df: Union[DataFrame, pl_DataFrame],
+    df: Union[DataFrame, DataFrame],
     config_fn: Callable[[Trial], Dict[str, Any]],
     loss: Callable,
     model: BaseEstimator,

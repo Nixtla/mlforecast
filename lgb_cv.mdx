@@ -1,0 +1,262 @@
+
+
+
+
+# <kbd>module</kbd> `mlforecast.lgb_cv`
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `LightGBMCV`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(
+    freq: Union[int, str],
+    lags: Optional[Iterable[int]] = None,
+    lag_transforms: Optional[Dict[int, List[Union[Callable, Tuple[Callable, Any]]]]] = None,
+    date_features: Optional[Iterable[Union[str, Callable]]] = None,
+    num_threads: int = 1,
+    target_transforms: Optional[List[Union[BaseTargetTransform, _BaseGroupedArrayTargetTransform]]] = None
+)
+```
+
+Create LightGBM CV object. 
+
+
+
+**Args:**
+ 
+ - <b>`freq`</b> (str or int):  Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. 
+ - <b>`lags`</b> (list of int, optional):  Lags of the target to use as features. Defaults to None. 
+ - <b>`lag_transforms`</b> (dict of int to list of functions, optional):  Mapping of target lags to their transformations. Defaults to None. 
+ - <b>`date_features`</b> (list of str or callable, optional):  Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.  Defaults to None. 
+ - <b>`num_threads`</b> (int):  Number of threads to use when computing the features. Defaults to 1. 
+ - <b>`target_transforms`</b> (list of transformers, optional):  Transformations that will be applied to the target before computing the features and restored after the forecasting step.  Defaults to None. 
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `find_best_iter`
+
+```python
+find_best_iter(hist, early_stopping_evals) → int
+```
+
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `fit`
+
+```python
+fit(
+    df: DataFrame,
+    n_windows: int,
+    h: int,
+    id_col: str = 'unique_id',
+    time_col: str = 'ds',
+    target_col: str = 'y',
+    step_size: Optional[int] = None,
+    num_iterations: int = 100,
+    params: Optional[Dict[str, Any]] = None,
+    static_features: Optional[List[str]] = None,
+    dropna: bool = True,
+    keep_last_n: Optional[int] = None,
+    eval_every: int = 10,
+    weights: Optional[Sequence[float]] = None,
+    metric: Union[str, Callable] = 'mape',
+    verbose_eval: bool = True,
+    early_stopping_evals: int = 2,
+    early_stopping_pct: float = 0.01,
+    compute_cv_preds: bool = False,
+    before_predict_callback: Optional[Callable] = None,
+    after_predict_callback: Optional[Callable] = None,
+    input_size: Optional[int] = None
+) → List[Tuple[int, float]]
+```
+
+Train boosters simultaneously and assess their performance on the complete forecasting window. 
+
+
+
+**Args:**
+ 
+ - <b>`df`</b> (pandas DataFrame):  Series data in long format. 
+ - <b>`n_windows`</b> (int):  Number of windows to evaluate. 
+ - <b>`h`</b> (int):  Forecast horizon. 
+ - <b>`id_col`</b> (str):  Column that identifies each serie. Defaults to 'unique_id'. 
+ - <b>`time_col`</b> (str):  Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. 
+ - <b>`target_col`</b> (str):  Column that contains the target. Defaults to 'y'. 
+ - <b>`step_size`</b> (int, optional):  Step size between each cross validation window. If None it will be equal to `h`.  Defaults to None. 
+ - <b>`num_iterations`</b> (int):  Maximum number of boosting iterations to run. Defaults to 100. 
+ - <b>`params`</b> (dict, optional):  Parameters to be passed to the LightGBM Boosters. Defaults to None. 
+ - <b>`static_features`</b> (list of str, optional):  Names of the features that are static and will be repeated when forecasting.  Defaults to None. 
+ - <b>`dropna`</b> (bool):  Drop rows with missing values produced by the transformations. Defaults to True. 
+ - <b>`keep_last_n`</b> (int, optional):  Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.  Defaults to None. 
+ - <b>`eval_every`</b> (int):  Number of boosting iterations to train before evaluating on the whole forecast window. Defaults to 10. 
+ - <b>`weights`</b> (sequence of float, optional):  Weights to multiply the metric of each window. If None, all windows have the same weight.  Defaults to None. 
+ - <b>`metric`</b> (str or callable):  Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. 
+ - <b>`verbose_eval`</b> (bool):  Print the metrics of each evaluation. 
+ - <b>`early_stopping_evals`</b> (int):  Maximum number of evaluations to run without improvement. Defaults to 2. 
+ - <b>`early_stopping_pct`</b> (float):  Minimum percentage improvement in metric value in `early_stopping_evals` evaluations. Defaults to 0.01. 
+ - <b>`compute_cv_preds`</b> (bool):  Compute predictions for each window after finding the best iteration. Defaults to False. 
+ - <b>`before_predict_callback`</b> (callable, optional):  Function to call on the features before computing the predictions.  This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.  The series identifier is on the index. Defaults to None. 
+ - <b>`after_predict_callback`</b> (callable, optional):  Function to call on the predictions before updating the targets.  This function will take a pandas Series with the predictions and should return another one with the same structure.  The series identifier is on the index. Defaults to None. 
+ - <b>`input_size`</b> (int, optional):  Maximum training samples per serie in each window. If None, will use an expanding window.  Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(list of tuple)`</b>:  List of (boosting rounds, metric value) tuples. 
+
+---
+
+
+
+### <kbd>method</kbd> `partial_fit`
+
+```python
+partial_fit(
+    num_iterations: int,
+    before_predict_callback: Optional[Callable] = None,
+    after_predict_callback: Optional[Callable] = None
+) → float
+```
+
+Train the boosters for some iterations. 
+
+
+
+**Args:**
+ 
+ - <b>`num_iterations`</b> (int):  Number of boosting iterations to run 
+ - <b>`before_predict_callback`</b> (callable, optional):  Function to call on the features before computing the predictions.  This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.  The series identifier is on the index. Defaults to None. 
+ - <b>`after_predict_callback`</b> (callable, optional):  Function to call on the predictions before updating the targets.  This function will take a pandas Series with the predictions and should return another one with the same structure.  The series identifier is on the index. Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(float)`</b>:  Weighted metric after training for num_iterations. 
+
+---
+
+
+
+### <kbd>method</kbd> `predict`
+
+```python
+predict(
+    h: int,
+    before_predict_callback: Optional[Callable] = None,
+    after_predict_callback: Optional[Callable] = None,
+    X_df: Optional[DataFrame] = None
+) → DataFrame
+```
+
+Compute predictions with each of the trained boosters. 
+
+
+
+**Args:**
+ 
+ - <b>`h`</b> (int):  Forecast horizon. 
+ - <b>`before_predict_callback`</b> (callable, optional):  Function to call on the features before computing the predictions.  This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.  The series identifier is on the index. Defaults to None. 
+ - <b>`after_predict_callback`</b> (callable, optional):  Function to call on the predictions before updating the targets.  This function will take a pandas Series with the predictions and should return another one with the same structure.  The series identifier is on the index. Defaults to None. 
+ - <b>`X_df`</b> (pandas DataFrame, optional):  Dataframe with the future exogenous features. Should have the id column and the time column.  Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(pandas DataFrame)`</b>:  Predictions for each serie and timestep, with one column per window. 
+
+---
+
+
+
+### <kbd>method</kbd> `setup`
+
+```python
+setup(
+    df: DataFrame,
+    n_windows: int,
+    h: int,
+    id_col: str = 'unique_id',
+    time_col: str = 'ds',
+    target_col: str = 'y',
+    step_size: Optional[int] = None,
+    params: Optional[Dict[str, Any]] = None,
+    static_features: Optional[List[str]] = None,
+    dropna: bool = True,
+    keep_last_n: Optional[int] = None,
+    weights: Optional[Sequence[float]] = None,
+    metric: Union[str, Callable] = 'mape',
+    input_size: Optional[int] = None
+)
+```
+
+Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit. 
+
+
+
+**Args:**
+ 
+ - <b>`df`</b> (pandas DataFrame):  Series data in long format. 
+ - <b>`n_windows`</b> (int):  Number of windows to evaluate. 
+ - <b>`h`</b> (int):  Forecast horizon. 
+ - <b>`id_col`</b> (str):  Column that identifies each serie. Defaults to 'unique_id'. 
+ - <b>`time_col`</b> (str):  Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. 
+ - <b>`target_col`</b> (str):  Column that contains the target. Defaults to 'y'. 
+ - <b>`step_size`</b> (int, optional):  Step size between each cross validation window. If None it will be equal to `h`.  Defaults to None. 
+ - <b>`params`</b> (dict, optional):  Parameters to be passed to the LightGBM Boosters. Defaults to None. 
+ - <b>`static_features`</b> (list of str, optional):  Names of the features that are static and will be repeated when forecasting.  Defaults to None. 
+ - <b>`dropna`</b> (bool):  Drop rows with missing values produced by the transformations. Defaults to True. 
+ - <b>`keep_last_n`</b> (int, optional):  Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it.  Defaults to None. 
+ - <b>`weights`</b> (sequence of float, optional):  Weights to multiply the metric of each window. If None, all windows have the same weight.  Defaults to None. 
+ - <b>`metric`</b> (str or callable):  Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. 
+ - <b>`input_size`</b> (int, optional):  Maximum training samples per serie in each window. If None, will use an expanding window.  Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(LightGBMCV)`</b>:  CV object with internal data structures for partial_fit. 
+
+---
+
+
+
+### <kbd>method</kbd> `should_stop`
+
+```python
+should_stop(hist, early_stopping_evals, early_stopping_pct) → bool
+```
+
+
+
+
+
+

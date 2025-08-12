@@ -16,13 +16,13 @@
 
 ```python
 transform_exog(
-    df: DataFrame,
+    df: ~DFType,
     lags: Optional[Iterable[int]] = None,
     lag_transforms: Optional[Dict[int, List[Union[Callable, Tuple[Callable, Any]]]]] = None,
     id_col: str = 'unique_id',
     time_col: str = 'ds',
     num_threads: int = 1
-) → DataFrame
+) → ~DFType
 ```
 
 Compute lag features for dynamic exogenous regressors. 

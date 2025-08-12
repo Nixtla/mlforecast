@@ -72,7 +72,7 @@ Forecasting pipeline
 
 ```python
 cross_validation(
-    df: DataFrame,
+    df: ~DFType,
     n_windows: int,
     h: int,
     id_col: str = 'unique_id',
@@ -92,7 +92,7 @@ cross_validation(
     fitted: bool = False,
     as_numpy: bool = False,
     weight_col: Optional[str] = None
-) → DataFrame
+) → ~DFType
 ```
 
 Perform time series cross validation. Creates `n_windows` splits where each window has `h` test periods, trains the models, computes the predictions and merges the actuals. 
@@ -150,7 +150,7 @@ cross_validation_fitted_values()
 
 ```python
 fit(
-    df: Union[DataFrame, pl_DataFrame],
+    df: Union[DataFrame, DataFrame],
     id_col: str = 'unique_id',
     time_col: str = 'ds',
     target_col: str = 'y',
@@ -197,7 +197,7 @@ Apply the feature engineering and train the models.
 ### <kbd>method</kbd> `fit_models`
 
 ```python
-fit_models(X: Union[DataFrame, pl_DataFrame, ndarray], y: ndarray) → MLForecast
+fit_models(X: Union[DataFrame, DataFrame, ndarray], y: ndarray) → MLForecast
 ```
 
 Manually train models. Use this if you called `MLForecast.preprocess` beforehand. 
@@ -224,7 +224,7 @@ Manually train models. Use this if you called `MLForecast.preprocess` beforehand
 ```python
 forecast_fitted_values(
     level: Optional[List[Union[int, float]]] = None
-) → Union[DataFrame, pl_DataFrame]
+) → Union[DataFrame, DataFrame]
 ```
 
 Access in-sample predictions. 
@@ -262,7 +262,7 @@ from_cv(cv: 'LightGBMCV') → MLForecast
 ### <kbd>method</kbd> `get_missing_future`
 
 ```python
-get_missing_future(h: int, X_df: DataFrame) → DataFrame
+get_missing_future(h: int, X_df: ~DFType) → ~DFType
 ```
 
 Get the missing id and time combinations in `X_df`. 
@@ -305,7 +305,7 @@ Load forecast object
 ### <kbd>method</kbd> `make_future_dataframe`
 
 ```python
-make_future_dataframe(h: int) → Union[DataFrame, pl_DataFrame]
+make_future_dataframe(h: int) → Union[DataFrame, DataFrame]
 ```
 
 Create a dataframe with all ids and future times in the forecasting horizon. 
@@ -333,11 +333,11 @@ predict(
     h: int,
     before_predict_callback: Optional[Callable] = None,
     after_predict_callback: Optional[Callable] = None,
-    new_df: Optional[DataFrame] = None,
+    new_df: Optional[~DFType] = None,
     level: Optional[List[Union[int, float]]] = None,
-    X_df: Optional[DataFrame] = None,
+    X_df: Optional[~DFType] = None,
     ids: Optional[List[str]] = None
-) → DataFrame
+) → ~DFType
 ```
 
 Compute the predictions for the next `h` steps. 
@@ -368,7 +368,7 @@ Compute the predictions for the next `h` steps.
 
 ```python
 preprocess(
-    df: DataFrame,
+    df: ~DFType,
     id_col: str = 'unique_id',
     time_col: str = 'ds',
     target_col: str = 'y',
@@ -379,7 +379,7 @@ preprocess(
     return_X_y: bool = False,
     as_numpy: bool = False,
     weight_col: Optional[str] = None
-) → Union[DataFrame, Tuple[DataFrame, ndarray]]
+) → Union[~DFType, Tuple[~DFType, ndarray]]
 ```
 
 Add the features to `data`. 
@@ -431,7 +431,7 @@ Save forecast object
 ### <kbd>method</kbd> `update`
 
 ```python
-update(df: Union[DataFrame, pl_DataFrame]) → None
+update(df: Union[DataFrame, DataFrame]) → None
 ```
 
 Update the values of the stored series. 

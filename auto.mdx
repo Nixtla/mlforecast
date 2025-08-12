@@ -406,14 +406,14 @@ __init__(
 
 ```python
 fit(
-    df: Union[DataFrame, pl_DataFrame],
+    df: Union[DataFrame, DataFrame],
     n_windows: int,
     h: int,
     num_samples: int,
     step_size: Optional[int] = None,
     input_size: Optional[int] = None,
     refit: Union[bool, int] = False,
-    loss: Optional[Callable[[Union[DataFrame, pl_DataFrame], Union[DataFrame, pl_DataFrame]], float]] = None,
+    loss: Optional[Callable[[Union[DataFrame, DataFrame], Union[DataFrame, DataFrame]], float]] = None,
     id_col: str = 'unique_id',
     time_col: str = 'ds',
     target_col: str = 'y',
@@ -461,7 +461,7 @@ Carry out the optimization process. Each model is optimized independently and th
 ```python
 forecast_fitted_values(
     level: Optional[List[Union[int, float]]] = None
-) → Union[DataFrame, pl_DataFrame]
+) → Union[DataFrame, DataFrame]
 ```
 
 Access in-sample predictions. 
@@ -487,9 +487,9 @@ Access in-sample predictions.
 ```python
 predict(
     h: int,
-    X_df: Optional[DataFrame, pl_DataFrame] = None,
+    X_df: Optional[DataFrame, DataFrame] = None,
     level: Optional[List[Union[int, float]]] = None
-) → Union[DataFrame, pl_DataFrame]
+) → Union[DataFrame, DataFrame]
 ```
 
 "Compute forecasts 

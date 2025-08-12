@@ -9,7 +9,6 @@
 
 **Global Variables**
 ---------------
-- **pl**
 - **date_features_dtypes**
 
 
@@ -57,7 +56,7 @@ Names of all computed features.
 
 ```python
 fit_transform(
-    data: DataFrame,
+    data: ~DFType,
     id_col: str,
     time_col: str,
     target_col: str,
@@ -68,7 +67,7 @@ fit_transform(
     return_X_y: bool = False,
     as_numpy: bool = False,
     weight_col: Optional[str] = None
-) → Union[DataFrame, Tuple[DataFrame, ndarray]]
+) → Union[~DFType, Tuple[~DFType, ndarray]]
 ```
 
 Add the features to `data` and save the required information for the predictions step. 
@@ -101,9 +100,9 @@ predict(
     horizon: int,
     before_predict_callback: Optional[Callable] = None,
     after_predict_callback: Optional[Callable] = None,
-    X_df: Optional[DataFrame] = None,
+    X_df: Optional[~DFType] = None,
     ids: Optional[List[str]] = None
-) → DataFrame
+) → ~DFType
 ```
 
 
@@ -131,7 +130,7 @@ save(path: Union[str, Path]) → None
 ### <kbd>method</kbd> `update`
 
 ```python
-update(df: Union[DataFrame, pl_DataFrame]) → None
+update(df: Union[DataFrame, DataFrame]) → None
 ```
 
 Update the values of the stored series. 
