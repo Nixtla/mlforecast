@@ -1,0 +1,529 @@
+
+
+
+
+# <kbd>module</kbd> `mlforecast.auto`
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `lightgbm_space`
+
+```python
+lightgbm_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `xgboost_space`
+
+```python
+xgboost_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `catboost_space`
+
+```python
+catboost_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `linear_regression_space`
+
+```python
+linear_regression_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `ridge_space`
+
+```python
+ridge_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `lasso_space`
+
+```python
+lasso_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `elastic_net_space`
+
+```python
+elastic_net_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `random_forest_space`
+
+```python
+random_forest_space(trial: Trial)
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoModel`
+Structure to hold a model and its search space 
+
+
+
+**Args:**
+ 
+ - <b>`model`</b> (BaseEstimator):  scikit-learn compatible regressor 
+ - <b>`config`</b> (callable):  function that takes an optuna trial and produces a configuration 
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(model: BaseEstimator, config: Callable[[Trial], Dict[str, Any]])
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoLightGBM`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoXGBoost`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoCatboost`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoLinearRegression`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoRidge`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoLasso`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoElasticNet`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoRandomForest`
+
+
+
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(config: Optional[Callable[[Trial], Dict[str, Any]]] = None)
+```
+
+
+
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `AutoMLForecast`
+Hyperparameter optimization helper 
+
+
+
+**Args:**
+ 
+ - <b>`models`</b> (list or dict):  Auto models to be optimized. 
+ - <b>`freq`</b> (str or int):  pandas' or polars' offset alias or integer denoting the frequency of the series. 
+ - <b>`season_length`</b> (int, optional):  Length of the seasonal period. This is used for producing the feature space.  Only required if `init_config` is None. Defaults to None. 
+ - <b>`init_config`</b> (callable, optional):  Function that takes an optuna trial and produces a configuration passed to the MLForecast constructor.  Defaults to None. 
+ - <b>`fit_config`</b> (callable, optional):  Function that takes an optuna trial and produces a configuration passed to the MLForecast fit method.  Defaults to None. 
+ - <b>`num_threads`</b> (int):  Number of threads to use when computing the features. Defaults to 1. 
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(
+    models: Union[List[AutoModel], Dict[str, AutoModel]],
+    freq: Union[int, str],
+    season_length: Optional[int] = None,
+    init_config: Optional[Callable[[Trial], Dict[str, Any]]] = None,
+    fit_config: Optional[Callable[[Trial], Dict[str, Any]]] = None,
+    num_threads: int = 1
+)
+```
+
+
+
+
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `fit`
+
+```python
+fit(
+    df: Union[DataFrame, pl_DataFrame],
+    n_windows: int,
+    h: int,
+    num_samples: int,
+    step_size: Optional[int] = None,
+    input_size: Optional[int] = None,
+    refit: Union[bool, int] = False,
+    loss: Optional[Callable[[Union[DataFrame, pl_DataFrame], Union[DataFrame, pl_DataFrame]], float]] = None,
+    id_col: str = 'unique_id',
+    time_col: str = 'ds',
+    target_col: str = 'y',
+    study_kwargs: Optional[Dict[str, Any]] = None,
+    optimize_kwargs: Optional[Dict[str, Any]] = None,
+    fitted: bool = False,
+    prediction_intervals: Optional[PredictionIntervals] = None
+) → AutoMLForecast
+```
+
+Carry out the optimization process. Each model is optimized independently and the best one is trained on all data 
+
+
+
+**Args:**
+ 
+ - <b>`df`</b> (pandas or polars DataFrame):  Series data in long format. 
+ - <b>`n_windows`</b> (int):  Number of windows to evaluate. 
+ - <b>`h`</b> (int):  Forecast horizon. 
+ - <b>`num_samples`</b> (int):  Number of trials to run 
+ - <b>`step_size`</b> (int, optional):  Step size between each cross validation window. If None it will be equal to `h`.  Defaults to None. 
+ - <b>`input_size`</b> (int, optional):  Maximum training samples per serie in each window. If None, will use an expanding window.  Defaults to None. 
+ - <b>`refit`</b> (bool or int):  Retrain model for each cross validation window.  If False, the models are trained at the beginning and then used to predict each window.  If positive int, the models are retrained every `refit` windows. Defaults to False. 
+ - <b>`loss`</b> (callable, optional):  Function that takes the validation and train dataframes and produces a float.  If `None` will use the average SMAPE across series. Defaults to None. 
+ - <b>`id_col`</b> (str):  Column that identifies each serie. Defaults to 'unique_id'. 
+ - <b>`time_col`</b> (str):  Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. 
+ - <b>`target_col`</b> (str):  Column that contains the target. Defaults to 'y'. 
+ - <b>`study_kwargs`</b> (dict, optional):  Keyword arguments to be passed to the optuna.Study constructor.  Defaults to None. 
+ - <b>`optimize_kwargs`</b> (dict, optional):  Keyword arguments to be passed to the optuna.Study.optimize method.  Defaults to None. 
+ - <b>`fitted`</b> (bool):  Whether to compute the fitted values when retraining the best model. Defaults to False. 
+ - <b>`prediction_intervals`</b>:  Configuration to calibrate prediction intervals when retraining the best model. 
+
+
+
+**Returns:**
+ 
+ - <b>`(AutoMLForecast)`</b>:  object with best models and optimization results 
+
+---
+
+
+
+### <kbd>method</kbd> `forecast_fitted_values`
+
+```python
+forecast_fitted_values(
+    level: Optional[List[Union[int, float]]] = None
+) → Union[DataFrame, pl_DataFrame]
+```
+
+Access in-sample predictions. 
+
+
+
+**Args:**
+ 
+ - <b>`level`</b> (list of ints or floats, optional):  Confidence levels between 0 and 100 for prediction intervals.  Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(pandas or polars DataFrame)`</b>:  Dataframe with predictions for the training set 
+
+---
+
+
+
+### <kbd>method</kbd> `predict`
+
+```python
+predict(
+    h: int,
+    X_df: Optional[DataFrame, pl_DataFrame] = None,
+    level: Optional[List[Union[int, float]]] = None
+) → Union[DataFrame, pl_DataFrame]
+```
+
+"Compute forecasts 
+
+
+
+**Args:**
+ 
+ - <b>`h`</b> (int):  Number of periods to predict. 
+ - <b>`X_df`</b> (pandas or polars DataFrame, optional):  Dataframe with the future exogenous features. Should have the id column and the time column.  Defaults to None. 
+ - <b>`level`</b> (list of ints or floats, optional):  Confidence levels between 0 and 100 for prediction intervals.  Defaults to None. 
+
+
+
+**Returns:**
+ 
+ - <b>`(pandas or polars DataFrame)`</b>:  Predictions for each serie and timestep, with one column per model. 
+
+---
+
+
+
+### <kbd>method</kbd> `save`
+
+```python
+save(path: Union[str, Path]) → None
+```
+
+Save AutoMLForecast objects 
+
+
+
+**Args:**
+ 
+ - <b>`path`</b> (str or pathlib.Path):  Directory where artifacts will be stored. 
+
+

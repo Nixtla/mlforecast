@@ -1,0 +1,139 @@
+
+
+
+
+# <kbd>module</kbd> `mlforecast.core`
+
+
+
+
+**Global Variables**
+---------------
+- **pl**
+- **date_features_dtypes**
+
+
+---
+
+
+
+## <kbd>class</kbd> `TimeSeries`
+Utility class for storing and transforming time series data. 
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(
+    freq: Union[int, str],
+    lags: Optional[Iterable[int]] = None,
+    lag_transforms: Optional[Dict[int, List[Union[Callable, Tuple[Callable, Any]]]]] = None,
+    date_features: Optional[Iterable[Union[str, Callable]]] = None,
+    num_threads: int = 1,
+    target_transforms: Optional[List[Union[BaseTargetTransform, _BaseGroupedArrayTargetTransform]]] = None,
+    lag_transforms_namer: Optional[Callable] = None
+)
+```
+
+
+
+
+
+
+---
+
+#### <kbd>property</kbd> features
+
+Names of all computed features. 
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `fit_transform`
+
+```python
+fit_transform(
+    data: DataFrame,
+    id_col: str,
+    time_col: str,
+    target_col: str,
+    static_features: Optional[List[str]] = None,
+    dropna: bool = True,
+    keep_last_n: Optional[int] = None,
+    max_horizon: Optional[int] = None,
+    return_X_y: bool = False,
+    as_numpy: bool = False,
+    weight_col: Optional[str] = None
+) → Union[DataFrame, Tuple[DataFrame, ndarray]]
+```
+
+Add the features to `data` and save the required information for the predictions step. 
+
+If not all features are static, specify which ones are in `static_features`. If you don't want to drop rows with null values after the transformations set `dropna=False` If `keep_last_n` is not None then that number of observations is kept across all series for updates. 
+
+---
+
+
+
+### <kbd>method</kbd> `load`
+
+```python
+load(path: Union[str, Path], protocol: Optional[str] = None) → TimeSeries
+```
+
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `predict`
+
+```python
+predict(
+    models: Dict[str, Union[BaseEstimator, List[BaseEstimator]]],
+    horizon: int,
+    before_predict_callback: Optional[Callable] = None,
+    after_predict_callback: Optional[Callable] = None,
+    X_df: Optional[DataFrame] = None,
+    ids: Optional[List[str]] = None
+) → DataFrame
+```
+
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `save`
+
+```python
+save(path: Union[str, Path]) → None
+```
+
+
+
+
+
+---
+
+
+
+### <kbd>method</kbd> `update`
+
+```python
+update(df: Union[DataFrame, pl_DataFrame]) → None
+```
+
+Update the values of the stored series. 
+
+

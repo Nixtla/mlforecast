@@ -1,0 +1,64 @@
+
+
+
+
+# <kbd>module</kbd> `mlforecast.optimization`
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `mlforecast_objective`
+
+```python
+mlforecast_objective(
+    df: Union[DataFrame, pl_DataFrame],
+    config_fn: Callable[[Trial], Dict[str, Any]],
+    loss: Callable,
+    model: BaseEstimator,
+    freq: Union[int, str],
+    n_windows: int,
+    h: int,
+    step_size: Optional[int] = None,
+    input_size: Optional[int] = None,
+    refit: Union[bool, int] = False,
+    id_col: str = 'unique_id',
+    time_col: str = 'ds',
+    target_col: str = 'y'
+) → Callable[[Trial], float]
+```
+
+optuna objective function for the MLForecast class 
+
+
+
+**Args:**
+ 
+ - <b>`df`</b> (DataFrame):  Series data in long format. 
+ - <b>`config_fn`</b> (callable):  Function that takes an optuna trial and produces a configuration with the following keys: 
+        - model_params 
+        - mlf_init_params 
+        - mlf_fit_params 
+ - <b>`loss`</b> (callable):  Function that takes the validation and train dataframes and produces a float. 
+ - <b>`model`</b> (BaseEstimator):  scikit-learn compatible model to be trained 
+ - <b>`freq`</b> (str or int):  pandas' or polars' offset alias or integer denoting the frequency of the series. 
+ - <b>`n_windows`</b> (int):  Number of windows to evaluate. 
+ - <b>`h`</b> (int):  Forecast horizon. 
+ - <b>`step_size`</b> (int, optional):  Step size between each cross validation window. If None it will be equal to `h`.  Defaults to None. 
+ - <b>`input_size`</b> (int, optional):  Maximum training samples per serie in each window. If None, will use an expanding window.  Defaults to None. 
+ - <b>`refit`</b> (bool or int):  Retrain model for each cross validation window.  If False, the models are trained at the beginning and then used to predict each window.  If positive int, the models are retrained every `refit` windows. Defaults to False. 
+ - <b>`id_col`</b> (str):  Column that identifies each serie. Defaults to 'unique_id'. 
+ - <b>`time_col`</b> (str):  Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. 
+ - <b>`target_col`</b> (str):  Column that contains the target. Defaults to 'y'. 
+
+
+
+**Returns:**
+ 
+ - <b>`(Callable[[optuna.Trial], float])`</b>:  optuna objective function 
+
+
