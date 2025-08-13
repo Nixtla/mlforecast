@@ -5,7 +5,6 @@ load_docs_scripts:
 
 api_docs:
 	lazydocs .mlforecast --no-watermark
-	lazydocs .mlforecast.dummy --no-watermark
 	lazydocs .mlforecast.distributed --no-watermark
 	python docs/to_mdx.py
 
