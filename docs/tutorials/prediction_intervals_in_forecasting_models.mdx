@@ -315,13 +315,13 @@ import datetime
 import time
 from datetime import datetime, timedelta
 
-# 
+#
 # ==============================================================================
 from statsmodels.tsa.stattools import adfuller
 import statsmodels.api as sm
 import statsmodels.tsa.api as smt
-from statsmodels.tsa.seasonal import seasonal_decompose 
-# 
+from statsmodels.tsa.seasonal import seasonal_decompose
+#
 # ==============================================================================
 from utilsforecast.plotting import plot_series
 
@@ -676,8 +676,8 @@ For the test data we will use the last 500 hours to test and evaluate
 the performance of our model.
 
 ```python
-train = df[df.ds<='2015-01-21 13:30:00'] 
-test = df[df.ds>'2015-01-21 13:30:00'] 
+train = df[df.ds<='2015-01-21 13:30:00']
+test = df[df.ds>'2015-01-21 13:30:00']
 ```
 
 
@@ -725,9 +725,9 @@ diff function like: `mlforecast.target_transforms.Differences`
 
 ```python
 mlf = MLForecast(models=model1,
-                 freq='30min', 
+                 freq='30min',
                  target_transforms=[Differences([1])],
-                 ) 
+                 )
 ```
 
 It is important to take into account when we use the parameter
@@ -780,10 +780,10 @@ features.
 
 ```python
 mlf = MLForecast(models=model1,
-                 freq='30min',  
+                 freq='30min',
                  lags=[1,24],
                  target_transforms=[Differences([1])],
-                 ) 
+                 )
 ```
 
 
@@ -826,11 +826,11 @@ guide](../how-to-guides/lag_transforms_guide.ipynb) for more details.
 
 ```python
 mlf = MLForecast(models=model1,
-                 freq='30min',  
+                 freq='30min',
                  lags=[1,24],
                  lag_transforms={1: [ExpandingMean()], 24: [RollingMean(window_size=7)]},
                  target_transforms=[Differences([1])],
-                 ) 
+                 )
 ```
 
 
@@ -866,7 +866,7 @@ here.
 
 ```python
 mlf = MLForecast(models=model1,
-                 freq='30min', 
+                 freq='30min',
                  lags=[1,24],
                  lag_transforms={1: [ExpandingMean()], 24: [RollingMean(window_size=7)]},
                  target_transforms=[Differences([1])],
@@ -897,8 +897,8 @@ prep
 
 ```python
 # fit the models
-mlf.fit(df,  
- fitted=True, 
+mlf.fit(df,
+ fitted=True,
 prediction_intervals=PredictionIntervals(n_windows=5, h=30, method="conformal_distribution" )  )
 ```
 
@@ -1057,7 +1057,7 @@ the forecasts and make informed decisions.
     Princeton, New Jersey, 1st Edition,
     1994.](https://press.princeton.edu/books/hardcover/9780691042893/time-series-analysis)
 4.  [Nixtla Parameters for
-    Mlforecast](https://nixtla.github.io/mlforecast/forecast.html).
+    Mlforecast](https://nixtlaverse.nixtla.io/mlforecast/forecast)
 5.  [Pandas available
     frequencies](https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#offset-aliases).
 6.  [Rob J. Hyndman and George Athanasopoulos (2018). “Forecasting

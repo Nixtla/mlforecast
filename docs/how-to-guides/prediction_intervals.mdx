@@ -8,7 +8,7 @@ title: Probabilistic forecasting
 >
 > This tutorial assumes basic familiarity with MLForecast. For a minimal
 > example visit the [Quick
-> Start](https://nixtla.github.io/mlforecast/docs/quick_start_local.html)
+> Start](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/quick_start_local)
 
 ## Introduction
 
@@ -114,7 +114,7 @@ we’ll only use the first 8 series of the dataset to reduce the total
 computational time.
 
 ```python
-n_series = 8 
+n_series = 8
 uids = train['unique_id'].unique()[:n_series] # select first n_series of the dataset
 train = train.query('unique_id in @uids')
 test = test.query('unique_id in @uids')
@@ -177,7 +177,7 @@ from sklearn.neural_network import MLPRegressor
 
 
 ```python
-# Create a list of models and instantiation parameters 
+# Create a list of models and instantiation parameters
 models = [
     KNeighborsRegressor(),
     Lasso(),
@@ -267,11 +267,11 @@ the model and the levels that we want to plot.
 
 ```python
 fig = plot_series(
-    train, 
-    test, 
-    plot_random=False, 
-    models=['KNeighborsRegressor'], 
-    level=levels, 
+    train,
+    test,
+    plot_random=False,
+    models=['KNeighborsRegressor'],
+    level=levels,
     max_insample_length=48
 )
 ```
@@ -288,11 +288,11 @@ fig.savefig('../../figs/prediction_intervals__knn.png', bbox_inches='tight')
 
 ```python
 fig = plot_series(
-    train, 
-    test, 
-    plot_random=False, 
+    train,
+    test,
+    plot_random=False,
     models=['Lasso'],
-    level=levels, 
+    level=levels,
     max_insample_length=48
 )
 ```
@@ -309,11 +309,11 @@ fig.savefig('../../figs/prediction_intervals__lasso.png', bbox_inches='tight')
 
 ```python
 fig = plot_series(
-    train, 
-    test, 
-    plot_random=False, 
+    train,
+    test,
+    plot_random=False,
     models=['LinearRegression'],
-    level=levels, 
+    level=levels,
     max_insample_length=48
 )
 ```
@@ -330,11 +330,11 @@ fig.savefig('../../figs/prediction_intervals__lr.png', bbox_inches='tight')
 
 ```python
 fig = plot_series(
-    train, 
-    test, 
-    plot_random=False, 
+    train,
+    test,
+    plot_random=False,
     models=['MLPRegressor'],
-    level=levels, 
+    level=levels,
     max_insample_length=48
 )
 ```
@@ -351,11 +351,11 @@ fig.savefig('../../figs/prediction_intervals__mlp.png', bbox_inches='tight')
 
 ```python
 fig = plot_series(
-    train, 
-    test, 
-    plot_random=False, 
+    train,
+    test,
+    plot_random=False,
     models=['Ridge'],
-    level=levels, 
+    level=levels,
     max_insample_length=48
 )
 ```

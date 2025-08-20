@@ -103,7 +103,7 @@ The `MLForecast` object has the following parameters:
 
 In this example, we are only using `differences` and `lags` to produce
 features. See [the full
-documentation](https://nixtla.github.io/mlforecast/forecast.html) to see
+documentation](https://nixtlaverse.nixtla.io/mlforecast/forecast) to see
 all available features.
 
 Any settings are passed into the constructor. Then you call its `fit`
@@ -111,7 +111,7 @@ method and pass in the historical data frame `Y_df_M3`.
 
 ```python
 fcst = MLForecast(
-    models=models, 
+    models=models,
     lags=range(1, 13),
     freq='MS',
     target_transforms=[Differences([1, 12])],
@@ -128,7 +128,7 @@ to the `new_data` argument.
 ```python
 Y_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/air-passengers.csv', parse_dates=['ds'])
 
-# We define the train df. 
+# We define the train df.
 Y_train_df = Y_df[Y_df.ds<='1959-12-31'] # 132 train
 Y_test_df = Y_df[Y_df.ds>'1959-12-31']   # 12 test
 ```

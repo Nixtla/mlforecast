@@ -8,7 +8,8 @@ title: Cross validation
 > **Prerequesites**
 >
 > This tutorial assumes basic familiarity with `MLForecast`. For a
-> minimal example visit the [Quick Start](quick_start_local.html)
+> minimal example visit the [Quick
+> Start](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/quick_start_local)
 
 ## Introduction
 
@@ -18,11 +19,11 @@ across the historical data and predicting the period following it.
 
 ![](https://raw.githubusercontent.com/Nixtla/statsforecast/main/nbs/imgs/ChainedWindows.gif)
 
-[MLForecast](https://nixtla.github.io/mlforecast/) has an implementation
-of time series cross-validation that is fast and easy to use. This
-implementation makes cross-validation a efficient operation, which makes
-it less time-consuming. In this notebook, we’ll use it on a subset of
-the [M4
+[MLForecast](https://nixtlaverse.nixtla.io/mlforecast/) has an
+implementation of time series cross-validation that is fast and easy to
+use. This implementation makes cross-validation a efficient operation,
+which makes it less time-consuming. In this notebook, we’ll use it on a
+subset of the [M4
 Competition](https://www.sciencedirect.com/science/article/pii/S0169207019301128)
 hourly dataset.
 
@@ -43,16 +44,16 @@ hourly dataset.
 
 We assume that you have `MLForecast` already installed. If not, check
 this guide for instructions on [how to install
-MLForecast](../getting-started/install.html).
+MLForecast](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/install)
 
 Install the necessary packages with `pip install mlforecast`.
 
 ```python
-import pandas as pd 
+import pandas as pd
 
 from utilsforecast.plotting import plot_series
 
-from mlforecast import MLForecast # required to instantiate MLForecast object and use cross-validation method 
+from mlforecast import MLForecast # required to instantiate MLForecast object and use cross-validation method
 ```
 
 ## Load and explore the data
@@ -61,8 +62,8 @@ As stated in the introduction, we’ll use the M4 Competition hourly
 dataset. We’ll first import the data from an URL using `pandas`.
 
 ```python
-Y_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/m4-hourly.csv') # load the data 
-Y_df.head() 
+Y_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/m4-hourly.csv') # load the data
+Y_df.head()
 ```
 
 |     | unique_id | ds  | y     |
@@ -106,12 +107,13 @@ fig.savefig('../../figs/cross_validation__series.png', bbox_inches='tight')
 
 For this example, we’ll use LightGBM. We first need to import it and
 then we need to instantiate a new
-[MLForecast](../../forecast.html#mlforecast) object.
+[MLForecast](https://nixtlaverse.nixtla.io/mlforecast/forecast#class-mlforecast)
+object.
 
 In this example, we are only using `differences` and `lags` to produce
 features. See [the full
-documentation](https://nixtla.github.io/mlforecast) to see all available
-features.
+documentation](https://nixtlaverse.nixtla.io/mlforecast) to see all
+available features.
 
 Any settings are passed into the constructor. Then you call its `fit`
 method and pass in the historical data frame `df`.
@@ -126,8 +128,8 @@ from mlforecast.target_transforms import Differences
 models = [lgb.LGBMRegressor(verbosity=-1)]
 
 mlf = MLForecast(
-    models=models, 
-    freq=1,# our series have integer timestamps, so we'll just add 1 in every timeste, 
+    models=models,
+    freq=1,# our series have integer timestamps, so we'll just add 1 in every timeste,
     target_transforms=[Differences([24])],
     lags=range(1, 25)
 )
@@ -137,7 +139,7 @@ mlf = MLForecast(
 
 Once the `MLForecast` object has been instantiated, we can use the
 [cross_validation
-method](../../forecast.html#mlforecast.cross_validation).
+method](https://nixtlaverse.nixtla.io/mlforecast/forecast#method-cross-validation)
 
 For this particular example, we’ll use 3 windows of 24 hours.
 
@@ -208,7 +210,7 @@ that includes a function to compute the RMSE.
 
 ```python
 from utilsforecast.evaluation import evaluate
-from utilsforecast.losses import rmse 
+from utilsforecast.losses import rmse
 ```
 
 

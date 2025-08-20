@@ -26,12 +26,12 @@ hourly PJM electricity load data. The original data can be found
 
 In this example we will use the following libraries:
 
--   [`mlforecast`](https://nixtla.github.io/mlforecast/). Accurate and
-    ⚡️ fast forecasting withc lassical machine learning models.
+-   [`mlforecast`](https://nixtlaverse.nixtla.io/mlforecast/). Accurate
+    and ⚡️ fast forecasting withc lassical machine learning models.
 -   [`prophet`](https://github.com/facebook/prophet). Benchmark model
     developed by Facebook.
--   [`utilsforecast`](https://nixtla.github.io/utilsforecast/). Library
-    with different functions for forecasting evaluation.
+-   [`utilsforecast`](https://nixtlaverse.nixtla.io/utilsforecast/).
+    Library with different functions for forecasting evaluation.
 
 If you have already installed the libraries you can skip the next cell,
 if not be sure to run it.
@@ -157,17 +157,17 @@ def plot_differences(df, differences,fname):
     for d in differences:
         fcst = MLForecast(
         models=[],  # we're not interested in modeling yet
-        freq='H',  # our series have hourly frequency 
+        freq='H',  # our series have hourly frequency
         target_transforms=[Differences([d])],
         )
         df_ = fcst.preprocess(df)
         df_['unique_id'] = df_['unique_id'] + f'_{d}'
         prep.append(df_)
-        
+
     # Plot combined Differences
     fcst = MLForecast(
     models=[],  # we're not interested in modeling yet
-    freq='H',  # our series have hourly frequency 
+    freq='H',  # our series have hourly frequency
     target_transforms=[Differences([24, 24*7])],
     )
     df_ = fcst.preprocess(df)
@@ -213,7 +213,7 @@ to include a yearly difference we would need to add the term `24*365`.
 ```python
 fcst = MLForecast(
     models=[],  # we're not interested in modeling yet
-    freq='H',  # our series have hourly frequency 
+    freq='H',  # our series have hourly frequency
     target_transforms=[Differences([24, 24*7])],
 )
 prep = fcst.preprocess(df_train)
@@ -255,7 +255,7 @@ transformations (as the ones we created previously) and historical
 variables.  
 You can see an in-depth tutorial on how to use `MLForecast` [Cross
 Validation methods
-here](https://nixtla.github.io/mlforecast/docs/cross_validation.html)
+here](https://nixtlaverse.nixtla.io/mlforecast/docs/how-to-guides/cross_validation)
 
 ```python
 import lightgbm as lgb
@@ -297,7 +297,7 @@ models ={
         'lin_reg': LinearRegression(),
         'ridge': Ridge(),
         'knn': KNeighborsRegressor(),
-        'mlp': MLPRegressor(), 
+        'mlp': MLPRegressor(),
         'rf': RandomForestRegressor()
     }
 
@@ -318,7 +318,8 @@ lags=[1,12,24]
 Lag transforms are defined as a dictionary where the keys are the lags
 and the values are lists of the transformations that we want to apply to
 that lag. You can refer to the [lag transformations
-guide](../how-to-guides/lag_transforms_guide.ipynb) for more details.
+guide](https://nixtlaverse.nixtla.io/mlforecast/docs/how-to-guides/lag_transforms_guide)
+for more details.
 
 For using the date features you need to be sure that your time column is
 made of timestamps. Then it might make sense to extract features like
@@ -335,11 +336,11 @@ Here we add month, hour and dayofweek features:
 
 ```python
 mlf = MLForecast(
-    models = models, 
-    freq='H',  # our series have hourly frequency 
+    models = models,
+    freq='H',  # our series have hourly frequency
     target_transforms=[Differences([24, 24*7])],
     lags=[1,12,24], # Lags to be used as features
-    lag_transforms={  
+    lag_transforms={
         1: [ExpandingMean()],
         24: [RollingMean(window_size=48)],
     },
@@ -386,7 +387,7 @@ def plot_cv(df, df_cv, uid, fname, last_n=24 * 14, models={}):
         max_date = df_cv.query('unique_id == @uid & cutoff == @cutoff')['ds'].max()
         df[df['ds'] < max_date].query('unique_id == @uid').tail(last_n).set_index('ds').plot(ax=axi, title=uid, y='y')
         for m in models.keys():
-            df_cv.query('unique_id == @uid & cutoff == @cutoff').set_index('ds').plot(ax=axi, title=uid, y=m)          
+            df_cv.query('unique_id == @uid & cutoff == @cutoff').set_index('ds').plot(ax=axi, title=uid, y=m)
     fig.savefig(f'../../figs/{fname}', bbox_inches='tight')
     plt.close()
 ```
@@ -401,8 +402,8 @@ plot_cv(df_train, crossvalidation_df, 'PJM_Load_hourly', 'load_forecasting__pred
 Visually examining the forecasts can give us some idea of how the model
 is behaving, yet in order to asses the performace we need to evaluate
 them trough metrics. For that we use the
-[utilsforecast](https://nixtla.github.io/utilsforecast/) library that
-contains many useful metrics and an evaluate function.
+[utilsforecast](https://nixtlaverse.nixtla.io/utilsforecast/) library
+that contains many useful metrics and an evaluate function.
 
 ```python
 from utilsforecast.losses import mae, mape, rmse, smape
@@ -441,7 +442,7 @@ def evaluate_crossvalidation(crossvalidation_df, metrics, models):
 
 
 ```python
-evaluate_crossvalidation(crossvalidation_df, metrics, models)    
+evaluate_crossvalidation(crossvalidation_df, metrics, models)
 ```
 
 |        | naive       | lgbm        | lasso       | lin_reg     | ridge       | knn         | mlp         | rf          |
@@ -461,10 +462,10 @@ the `naive`.
 Now we are going to evaluate their perfonce in the test set. We can use
 both of them for forecasting the test alongside some prediction
 intervals. For that we can use the
-[`PredictionIntervals`](https://nixtla.github.io/mlforecast/utils.html#predictionintervals)
+[`PredictionIntervals`](https://nixtlaverse.nixtla.io/mlforecast/utils#class-predictionintervals)
 function in `mlforecast.utils`.  
 You can see an in-depth tutotorial of [Probabilistic Forecasting
-here](https://nixtla.github.io/mlforecast/docs/prediction_intervals.html)
+here](https://nixtlaverse.nixtla.io/mlforecast/docs/tutorials/prediction_intervals_in_forecasting_models)
 
 ```python
 from mlforecast.utils import PredictionIntervals
@@ -478,11 +479,11 @@ models_evaluation ={
     }
 
 mlf_evaluation = MLForecast(
-    models = models_evaluation, 
-    freq='H',  # our series have hourly frequency 
+    models = models_evaluation,
+    freq='H',  # our series have hourly frequency
     target_transforms=[Differences([24, 24*7])],
-    lags=[1,12,24], 
-    lag_transforms={  
+    lags=[1,12,24],
+    lag_transforms={
         1: [ExpandingMean()],
         24: [RollingMean(window_size=48)],
     },
@@ -584,11 +585,11 @@ intervals.
 
 ```python
 fig = plot_series(
-    df_train, 
-    test, 
+    df_train,
+    test,
     models=['lasso', 'lgbm'],
-    plot_random=False, 
-    level=levels, 
+    plot_random=False,
+    level=levels,
     max_insample_length=24
 )
 ```
@@ -654,7 +655,7 @@ forecast_prophet.head()
 | 4   | PJM_Load_hourly | 2001-12-31 05:00:00 | 24146.468610 | 19356.171497  | 29006.546759  |
 
 ```python
-time_prophet = (end - init) 
+time_prophet = (end - init)
 print(f'Prophet Time: {time_prophet:.2f} seconds')
 ```
 
@@ -668,11 +669,11 @@ models_comparison ={
 }
 
 mlf_comparison = MLForecast(
-    models = models_comparison, 
-    freq='H',  # our series have hourly frequency 
+    models = models_comparison,
+    freq='H',  # our series have hourly frequency
     target_transforms=[Differences([24, 24*7])],
     lags=[1,12,24],
-    lag_transforms={  
+    lag_transforms={
         1: [ExpandingMean()],
         24: [RollingMean(window_size=48)],
     },
