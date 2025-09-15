@@ -481,7 +481,7 @@ class MLForecast:
         fitted: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
-        models_kwargs: Optional[dict[str, dict[str, Any]]] = None,
+        models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -542,7 +542,7 @@ class MLForecast:
             if as_numpy:
                 X = ufp.to_numpy(X)
             del prep
-        self.fit_models(X, y, models_kwargs)
+        self.fit_models(X, y, models_fit_kwargs)
         if fitted:
             fitted_values = self._compute_fitted_values(
                 base=base,
