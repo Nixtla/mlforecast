@@ -205,11 +205,9 @@ crossvalidation_df.head()
 | 3   | ERCOT     | 2022-09-01 03:00:00 | 2022-08-31 23:00:00 | 41663.156771 | 42091.768192  |
 | 4   | ERCOT     | 2022-09-01 04:00:00 | 2022-08-31 23:00:00 | 41710.621904 | 42481.403168  |
 
-> **Important**
->
-> When using `cross_validation` make sure the forecasts are produced at
-> the desired timestamps. Check the `cutoff` column which specifices the
-> last timestamp before the forecasting window.
+When using `cross_validation` make sure the forecasts are produced at
+the desired timestamps. Check the `cutoff` column which specifices the
+last timestamp before the forecasting window.
 
 ## Peak Detection
 
@@ -259,12 +257,10 @@ plt.close()
 
 ![](../../figs/electricity_peak_forecasting__predicted_peak.png)
 
-> **Important**
->
-> In this example we only include September. However, MLForecast and
-> LightGBM can correctly predict the peaks for the 4 months of 2022. You
-> can try this by increasing the `n_windows` parameter of
-> `cross_validation` or filtering the `Y_df` dataset.
+In this example we only include September. However, MLForecast and
+LightGBM can correctly predict the peaks for the 4 months of 2022. You
+can try this by increasing the `n_windows` parameter of
+`cross_validation` or filtering the `Y_df` dataset.
 
 ## Next steps
 
