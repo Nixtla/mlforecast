@@ -21,7 +21,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e '.[dev,dask,ray,spark]' lazydocs pyyaml
+          pip install -e '.[dev,dask,ray,spark]' griffe2md pyyaml
 
       # setup quarto for rendering example/tutorial nbs
       - uses: quarto-dev/quarto-actions/setup@v2
