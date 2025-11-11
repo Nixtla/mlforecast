@@ -74,16 +74,16 @@
         {
           "group": "Local",
           "pages": [
-            "forecast.html",
-            "auto.html",
-            "lgb_cv.html",
-            "optimization.html",
-            "utils.html",
-            "core.html",
-            "target_transforms.html",
-            "lag_transforms.html",
-            "feature_engineering.html",
-            "callbacks.html"
+            "forecast",
+            "auto",
+            "lgb_cv",
+            "optimization",
+            "utils",
+            "core",
+            "target_transforms",
+            "lag_transforms",
+            "feature_engineering",
+            "callbacks"
           ]
         },
         {
@@ -93,12 +93,12 @@
             {
               "group": "Models",
               "pages": [
-                "distributed.models.dask.lgb.html",
-                "distributed.models.dask.xgb.html",
-                "distributed.models.ray.lgb.html",
-                "distributed.models.ray.xgb.html",
-                "distributed.models.spark.lgb.html",
-                "distributed.models.spark.xgb.html"
+                "distributed.models.dask.lgb",
+                "distributed.models.dask.xgb",
+                "distributed.models.ray.lgb",
+                "distributed.models.ray.xgb",
+                "distributed.models.spark.lgb",
+                "distributed.models.spark.xgb"
               ]
             }
           ]
