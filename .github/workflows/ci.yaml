@@ -15,9 +15,9 @@ jobs:
   efficiency-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # 5.4.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # 6.0.0
         with:
           python-version: "3.12"
 
@@ -25,7 +25,7 @@ jobs:
         run: pip install uv && uv pip install --system '.[dev]' pytest-xdist pytest-codspeed
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@63ae6025a0ffee97d7736a37c9192dbd6ed4e75f # 3.4.0
+        uses: CodSpeedHQ/action@6b43a0cd438f6ca5ad26f9ed03ed159ed2df7da9 # 4.1.1
         with:
           token: ${{ secrets.CODESPEED_TOKEN }}
           run: pytest tests/test_pipeline.py --codspeed -n 2 --no-cov
@@ -33,9 +33,9 @@ jobs:
   performance-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # 5.4.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # 6.0.0
         with:
           python-version: "3.10"
 
