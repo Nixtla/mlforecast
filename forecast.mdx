@@ -161,7 +161,8 @@ fit(
     prediction_intervals: Optional[PredictionIntervals] = None,
     fitted: bool = False,
     as_numpy: bool = False,
-    weight_col: Optional[str] = None
+    weight_col: Optional[str] = None,
+    models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None
 ) → MLForecast
 ```
 
@@ -197,7 +198,11 @@ Apply the feature engineering and train the models.
 ### <kbd>method</kbd> `fit_models`
 
 ```python
-fit_models(X: Union[DataFrame, DataFrame, ndarray], y: ndarray) → MLForecast
+fit_models(
+    X: Union[DataFrame, DataFrame, ndarray],
+    y: ndarray,
+    models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None
+) → MLForecast
 ```
 
 Manually train models. Use this if you called `MLForecast.preprocess` beforehand. 
