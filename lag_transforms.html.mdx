@@ -1,0 +1,394 @@
+---
+description: Built-in lag transformations
+output-file: lag_transforms.html
+title: Lag transforms
+---
+
+##
+
+### `RollingQuantile`
+
+```python
+RollingQuantile(p, window_size, min_samples=None)
+```
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+#### `RollingQuantile.min_samples`
+
+```python
+min_samples = min_samples
+```
+
+#### `RollingQuantile.p`
+
+```python
+p = p
+```
+
+#### `RollingQuantile.stack`
+
+```python
+stack(transforms)
+```
+
+#### `RollingQuantile.take`
+
+```python
+take(idxs)
+```
+
+#### `RollingQuantile.transform`
+
+```python
+transform(ga)
+```
+
+#### `RollingQuantile.update`
+
+```python
+update(ga)
+```
+
+#### `RollingQuantile.update_samples`
+
+```python
+update_samples: int
+```
+
+#### `RollingQuantile.window_size`
+
+```python
+window_size = window_size
+```
+
+### `RollingMax`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+### `RollingMin`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+### `RollingStd`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+### `RollingMean`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+### `SeasonalRollingQuantile`
+
+```python
+SeasonalRollingQuantile(p, season_length, window_size, min_samples=None)
+```
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+#### `SeasonalRollingQuantile.min_samples`
+
+```python
+min_samples = min_samples
+```
+
+#### `SeasonalRollingQuantile.p`
+
+```python
+p = p
+```
+
+#### `SeasonalRollingQuantile.season_length`
+
+```python
+season_length = season_length
+```
+
+#### `SeasonalRollingQuantile.stack`
+
+```python
+stack(transforms)
+```
+
+#### `SeasonalRollingQuantile.take`
+
+```python
+take(idxs)
+```
+
+#### `SeasonalRollingQuantile.transform`
+
+```python
+transform(ga)
+```
+
+#### `SeasonalRollingQuantile.update`
+
+```python
+update(ga)
+```
+
+#### `SeasonalRollingQuantile.update_samples`
+
+```python
+update_samples: int
+```
+
+#### `SeasonalRollingQuantile.window_size`
+
+```python
+window_size = window_size
+```
+
+### `SeasonalRollingMax`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+### `SeasonalRollingMin`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+### `SeasonalRollingStd`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+### `SeasonalRollingMean`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+### `ExpandingQuantile`
+
+```python
+ExpandingQuantile(p)
+```
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+#### `ExpandingQuantile.p`
+
+```python
+p = p
+```
+
+#### `ExpandingQuantile.stack`
+
+```python
+stack(transforms)
+```
+
+#### `ExpandingQuantile.take`
+
+```python
+take(idxs)
+```
+
+#### `ExpandingQuantile.transform`
+
+```python
+transform(ga)
+```
+
+#### `ExpandingQuantile.update`
+
+```python
+update(ga)
+```
+
+#### `ExpandingQuantile.update_samples`
+
+```python
+update_samples: int
+```
+
+### `ExpandingMax`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+### `ExpandingMin`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+### `ExpandingStd`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+### `ExpandingMean`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+### `ExponentiallyWeightedMean`
+
+```python
+ExponentiallyWeightedMean(alpha)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Exponentially weighted average
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
+
+#### `ExponentiallyWeightedMean.alpha`
+
+```python
+alpha = alpha
+```
+
+#### `ExponentiallyWeightedMean.stack`
+
+```python
+stack(transforms)
+```
+
+#### `ExponentiallyWeightedMean.take`
+
+```python
+take(idxs)
+```
+
+#### `ExponentiallyWeightedMean.transform`
+
+```python
+transform(ga)
+```
+
+#### `ExponentiallyWeightedMean.update`
+
+```python
+update(ga)
+```
+
+#### `ExponentiallyWeightedMean.update_samples`
+
+```python
+update_samples: int
+```
+
+### `Offset`
+
+```python
+Offset(tfm, n)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Shift series before computing transformation
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`tfm` | <code>[LagTransform](#LagTransform)</code> | Transformation to be applied | *required*
+`n` | <code>[int](#int)</code> | Number of positions to shift (lag) series before applying the transformation | *required*
+
+#### `Offset.n`
+
+```python
+n = n
+```
+
+#### `Offset.stack`
+
+```python
+stack(transforms)
+```
+
+#### `Offset.take`
+
+```python
+take(idxs)
+```
+
+#### `Offset.tfm`
+
+```python
+tfm = tfm
+```
+
+#### `Offset.transform`
+
+```python
+transform(ga)
+```
+
+#### `Offset.update`
+
+```python
+update(ga)
+```
+
+#### `Offset.update_samples`
+
+```python
+update_samples: int
+```
+
+### `Combine`
+
+```python
+Combine(tfm1, tfm2, operator)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Combine two lag transformations using an operator
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`tfm1` | <code>[LagTransform](#LagTransform)</code> | First transformation. | *required*
+`tfm2` | <code>[LagTransform](#LagTransform)</code> | Second transformation. | *required*
+`operator` | <code>[callable](#callable)</code> | Binary operator that defines how to combine the two transformations. | *required*
+
+#### `Combine.operator`
+
+```python
+operator = operator
+```
+
+#### `Combine.stack`
+
+```python
+stack(transforms)
+```
+
+#### `Combine.take`
+
+```python
+take(idxs)
+```
+
+#### `Combine.tfm1`
+
+```python
+tfm1 = tfm1
+```
+
+#### `Combine.tfm2`
+
+```python
+tfm2 = tfm2
+```
+
+#### `Combine.transform`
+
+```python
+transform(ga)
+```
+
+#### `Combine.update`
+
+```python
+update(ga)
+```
+
+#### `Combine.update_samples`
+
+```python
+update_samples
+```
