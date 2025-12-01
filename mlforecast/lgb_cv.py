@@ -22,14 +22,24 @@ from mlforecast.core import (
 )
 
 
-def _mape(y_true, y_pred, ids, _dates):
+def _mape(y_true, y_pred, ids, _date, weights_col=None):
     abs_pct_err = abs(y_true - y_pred) / y_true
-    return abs_pct_err.groupby(ids, observed=True).mean().mean()
+    grouped_errors = abs_pct_err.groupby(ids, observed=True)
+    if weights_col is not None:
+        return (grouped_errors.mean() * weights_col).sum() / weights_col.sum()
+    else:
+        return grouped_errors.mean().mean()
 
 
-def _rmse(y_true, y_pred, ids, _dates):
+
+def _rmse(y_true, y_pred, ids, _date, weights_col=None):
     sq_err = (y_true - y_pred) ** 2
-    return sq_err.groupby(ids, observed=True).mean().pow(0.5).mean()
+    grouped_errors = sq_err.groupby(ids, observed=True)
+    if weights_col is not None:
+        return (grouped_errors.mean() * weights_col).sum() / weights_col.sum()
+    else:
+        return grouped_errors.mean().pow(0.5).mean()
+
 
 
 _metric2fn = {"mape": _mape, "rmse": _rmse}
@@ -131,6 +141,7 @@ class LightGBMCV:
         weights: Optional[Sequence[float]] = None,
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
+        weight_col: Optional[List] = None,
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -164,6 +175,7 @@ class LightGBMCV:
             raise ValueError("Must specify as many weights as the number of windows")
         else:
             self.weights = np.asarray(weights)
+                 
         if callable(metric):
             self.metric_fn = metric
             self.metric_name = metric.__name__
@@ -190,21 +202,32 @@ class LightGBMCV:
             step_size=step_size,
             input_size=input_size,
         )
+        
         for _, train, valid in splits:
             ts = copy.deepcopy(self.ts)
             prep = ts.fit_transform(
-                train,
-                id_col,
-                time_col,
-                target_col,
-                static_features,
-                dropna,
-                keep_last_n,
+                data=train,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                weight_col=weight_col,
             )
+          
             assert isinstance(prep, pd.DataFrame)
+        
+            if weight_col is not None:
+                current_weights = prep[weight_col].values  # Ensure this references the right rows
+            else:
+                current_weights = None
+            
             ds = lgb.Dataset(
-                prep.drop(columns=[id_col, time_col, target_col]), prep[target_col]
+                prep.drop(columns=[id_col, time_col, target_col]), prep[target_col],
+                weight=current_weights
             ).construct()
+            
             bst = lgb.Booster({**self.params, "num_threads": self.bst_threads}, ds)
             bst.predict = partial(bst.predict, num_threads=self.bst_threads)
             self.items.append((ts, bst, valid))
@@ -216,6 +239,7 @@ class LightGBMCV:
         num_iterations,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        weights_col: Optional[np.ndarray] = None
     ):
         for j, (ts, bst, valid) in enumerate(self.items):
             preds = _update_and_predict(
@@ -227,12 +251,22 @@ class LightGBMCV:
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
             )
-            metric_values[j] = self.metric_fn(
-                preds[self.target_col],
-                preds["Booster"],
-                preds[self.id_col],
-                preds[self.time_col],
-            )
+            
+            if weights_col:
+                metric_values[j] = self.metric_fn(
+                    preds[self.target_col],
+                    preds["Booster"],
+                    preds[self.id_col],
+                    preds[self.time_col],
+                    weight_col=preds[weights_col].values
+                )
+            else:
+                metric_values[j] = self.metric_fn(
+                    preds[self.target_col],
+                    preds["Booster"],
+                    preds[self.id_col],
+                    preds[self.time_col],
+                )
 
     def _multithreaded_partial_fit(
         self,
@@ -240,6 +274,7 @@ class LightGBMCV:
         num_iterations,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        weights_col: Optional[np.ndarray] = None
     ):
         with ThreadPoolExecutor(self.num_threads) as executor:
             futures = []
@@ -256,21 +291,35 @@ class LightGBMCV:
                 )
                 futures.append(future)
             cv_preds = [f.result() for f in futures]
-        metric_values[:] = [
-            self.metric_fn(
-                preds[self.target_col],
-                preds["Booster"],
-                preds[self.id_col],
-                preds[self.time_col],
-            )
-            for preds in cv_preds
-        ]
+        if weights_col:
+            metric_values[:] = [
+                self.metric_fn(
+                    preds[self.target_col],
+                    preds["Booster"],
+                    preds[self.id_col],
+                    preds[self.time_col],
+                    weight_col=preds[weights_col].values
+                )
+                for preds in cv_preds
+            ]
+        else:
+            metric_values[:] = [
+                self.metric_fn(
+                    preds[self.target_col],
+                    preds["Booster"],
+                    preds[self.id_col],
+                    preds[self.time_col]
+                )
+                for preds in cv_preds
+            ]
+            
 
     def partial_fit(
         self,
         num_iterations: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
+        weight_col: Optional[str] = None,
     ) -> float:
         """Train the boosters for some iterations.
 
@@ -287,12 +336,18 @@ class LightGBMCV:
             (float): Weighted metric after training for num_iterations.
         """
         metric_values = np.empty(len(self.items))
+        #if weight_col is not None:
+        #    weights_col = self.df[weight_col].values
+        #else:
+        #    weights_col = None  
+        
         if self.num_threads == 1:
             self._single_threaded_partial_fit(
                 metric_values,
                 num_iterations,
                 before_predict_callback,
                 after_predict_callback,
+                weight_col
             )
         else:
             self._multithreaded_partial_fit(
@@ -300,6 +355,7 @@ class LightGBMCV:
                 num_iterations,
                 before_predict_callback,
                 after_predict_callback,
+                weight_col
             )
         return metric_values @ self.weights
 
@@ -341,6 +397,7 @@ class LightGBMCV:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
+        weight_col: Optional[str] = None,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -395,12 +452,15 @@ class LightGBMCV:
             keep_last_n=keep_last_n,
             weights=weights,
             metric=metric,
+            weight_col=weight_col,
         )
+        print('00')
         hist = []
         for i in range(0, num_iterations, eval_every):
             metric_value = self.partial_fit(
-                eval_every, before_predict_callback, after_predict_callback
+                eval_every, before_predict_callback, after_predict_callback, weight_col=weight_col
             )
+            print('11')
             rounds = eval_every + i
             hist.append((rounds, metric_value))
             if verbose_eval:
