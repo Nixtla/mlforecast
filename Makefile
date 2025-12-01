@@ -26,3 +26,9 @@ clean:
 	find docs/mintlify -name "*.mdx" -exec rm -f {} +
 
 all_docs: load_docs_scripts api_docs examples_docs format_docs
+
+licenses:
+	pip-licenses --format=csv --with-authors --with-urls > third_party_licenses.csv
+	python scripts/filter_licenses.py
+	rm -f third_party_licenses.csv
+	@echo "✓ THIRD_PARTY_LICENSES.md updated"
