@@ -443,6 +443,7 @@ class AutoMLForecast:
         optimize_kwargs: Optional[Dict[str, Any]] = None,
         fitted: bool = False,
         prediction_intervals: Optional[PredictionIntervals] = None,
+        weight_col: Optional[np.ndarray] = None
     ) -> "AutoMLForecast":
         """Carry out the optimization process.
         Each model is optimized independently and the best one is trained on all data
@@ -559,6 +560,7 @@ class AutoMLForecast:
                 id_col=id_col,
                 time_col=time_col,
                 target_col=target_col,
+                weight_col=weight_col,
                 **best_config["mlf_fit_params"],
             )
         return self
