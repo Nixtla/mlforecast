@@ -31,6 +31,7 @@ def mlforecast_objective(
     id_col: str = "unique_id",
     time_col: str = "ds",
     target_col: str = "y",
+    weight_col: Optional[str] = None
 ) -> Callable[[optuna.Trial], float]:
     """optuna objective function for the MLForecast class
 
@@ -55,6 +56,7 @@ def mlforecast_objective(
         id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
         time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
         target_col (str): Column that contains the target. Defaults to 'y'.
+        weight_col (str): Column that contains sample weights. Defaults to None.
 
     Returns:
         (Callable[[optuna.Trial], float]): optuna objective function
@@ -102,24 +104,31 @@ def mlforecast_objective(
                     id_col=id_col,
                     time_col=time_col,
                     target_col=target_col,
+                    weight_col=weight_col,
                     **config["mlf_fit_params"],
                 )
             static = [c for c in mlf.ts.static_features_.columns if c != id_col]
             dynamic = [
                 c
                 for c in valid.columns
-                if c not in static + [id_col, time_col, target_col]
+                if c not in static + [id_col, time_col, target_col, weight_col]
             ]
+            
             if dynamic:
                 X_df: Optional[DataFrame] = ufp.drop_columns(
                     valid, static + [target_col]
                 )
             else:
                 X_df = None
+
+            if weight_col:
+                new_df = None if should_fit else train.drop(columns=[weight_col])
+            else: 
+                new_df = None if should_fit else train
             preds = mlf.predict(
                 h=h,
                 X_df=X_df,
-                new_df=None if should_fit else train,
+                new_df=new_df,
             )
             result = ufp.join(
                 valid[[id_col, time_col, target_col]],
@@ -132,7 +141,10 @@ def mlforecast_objective(
                     "Please verify that the passed frequency (freq) matches your series' "
                     "and that there aren't any missing periods."
                 )
-            metric = loss(result, train_df=train)
+            if weight_col:
+                metric = loss(result, train_df=train, weight_col=weight_col)
+            else: 
+                metric = loss(result, train_df=train)
             metrics.append(metric)
             trial.report(metric, step=i)
             if trial.should_prune():

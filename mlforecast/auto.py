@@ -474,7 +474,7 @@ class AutoMLForecast:
 
         Returns:
             (AutoMLForecast): object with best models and optimization results
-        """
+        """   
         validate_freq(df[time_col], self.freq)
         if self.init_config is not None:
             init_config = self.init_config
@@ -488,7 +488,6 @@ class AutoMLForecast:
             )
 
         if loss is None:
-
             def loss(df, train_df):  # noqa: ARG001
                 return smape(
                     df,
@@ -496,7 +495,7 @@ class AutoMLForecast:
                     id_col=id_col,
                     target_col=target_col,
                 )["model"].mean()
-
+        
         if study_kwargs is None:
             study_kwargs = {}
         if "sampler" not in study_kwargs:
@@ -518,7 +517,6 @@ class AutoMLForecast:
                     },
                     "mlf_fit_params": self.fit_config(trial),
                 }
-
             objective = mlforecast_objective(
                 df=df,
                 config_fn=config_fn,
@@ -533,6 +531,7 @@ class AutoMLForecast:
                 id_col=id_col,
                 time_col=time_col,
                 target_col=target_col,
+                weight_col=weight_col
             )
             study = optuna.create_study(direction="minimize", **study_kwargs)
             study.optimize(objective, n_trials=num_samples, **optimize_kwargs)
@@ -553,6 +552,7 @@ class AutoMLForecast:
                 freq=self.freq,
                 **best_config["mlf_init_params"],
             )
+            
             self.models_[name].fit(
                 df,
                 fitted=fitted,
