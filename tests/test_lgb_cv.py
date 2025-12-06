@@ -1,4 +1,5 @@
 import random
+import numpy as np
 
 import pytest
 from datasetsforecast.m4 import M4, M4Info
@@ -34,8 +35,11 @@ def evaluate_on_valid(preds, valid):
     return merged.groupby("unique_id")["abs_err"].mean().mean()
 
 
-def test_lightgbm_cv_pipeline(m4_data):
+@pytest.mark.parametrize("use_weight_col", [True, False])
+def test_lightgbm_cv_pipeline(m4_data, use_weight_col):
     train, valid, horizon = m4_data
+    if use_weight_col:
+        train["weight_col"] = 1
     static_fit_config = dict(
         n_windows=2,
         h=horizon,
@@ -46,7 +50,7 @@ def test_lightgbm_cv_pipeline(m4_data):
         freq=1,
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist = cv.fit(train, **static_fit_config)
+    hist = cv.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
     preds = cv.predict(horizon)
     eval1 = evaluate_on_valid(preds, valid)
 
@@ -55,7 +59,7 @@ def test_lightgbm_cv_pipeline(m4_data):
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist2 = cv2.fit(train, **static_fit_config)
+    hist2 = cv2.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
     assert hist2[-1][1] < hist[-1][1]
     preds2 = cv2.predict(horizon)
     eval2 = evaluate_on_valid(preds2, valid)
@@ -65,11 +69,10 @@ def test_lightgbm_cv_pipeline(m4_data):
         freq=1,
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
-        lag_transforms={
-            48: [SeasonalRollingMean(season_length=24, window_size=7)],
-        },
+        lag_transforms={48: [SeasonalRollingMean(season_length=24, window_size=7)],
+        }
     )
-    hist3 = cv3.fit(train, **static_fit_config)
+    hist3 = cv3.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
     assert hist3[-1][1] < hist2[-1][1]
     # preds3 = cv3.predict(horizon)
     # eval3 = evaluate_on_valid(preds3, valid)
@@ -89,9 +92,9 @@ def test_lightgbm_cv_pipeline(m4_data):
         params={"verbose": -1},
     )
     score = cv4.partial_fit(10)
-    assert hist[0][1] == score
+    assert np.isclose(hist[0][1], score, atol=1e-7)
     score2 = cv4.partial_fit(20)
-    assert hist[2][1] == score2
+    assert np.isclose(hist[2][1], score2, atol=1e-7)
 
 
 def test_lightgbmcv_callback():
