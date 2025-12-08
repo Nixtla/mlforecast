@@ -2,13 +2,6 @@
 title: Lag transformations
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Compute features based on lags
 
 mlforecast allows you to define transformations on the lags to use as
@@ -147,34 +140,6 @@ np.testing.assert_allclose(
     prep['rolling_mean_lag1_window_size7_truediv_rolling_mean_lag2_window_size7']
 )
 ```
-
-
-```python
-from sklearn.linear_model import LinearRegression
-```
-
-
-
-```python
-fcst = MLForecast(
-    models=[LinearRegression()],
-    freq='D',
-    lag_transforms={
-        1: [
-            RollingMean(window_size=7),
-            RollingMean(window_size=14),
-            Combine(
-                RollingMean(window_size=7),
-                RollingMean(window_size=14),
-                operator.truediv,
-            )
-        ],
-    },
-)
-fcst.fit(data)
-fcst.predict(2);
-```
-
 
 ## numba-based transformations
 

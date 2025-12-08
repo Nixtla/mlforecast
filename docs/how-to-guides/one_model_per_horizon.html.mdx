@@ -2,13 +2,6 @@
 title: One model per step
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Train one model to predict each step of the forecasting horizon
 
 By default mlforecast uses the recursive strategy, i.e. a model is
@@ -116,14 +109,4 @@ Average SMAPE per method and serie
 | H256      | 0.4%       | 0.3%      |
 | H381      | 20.9%      | 9.5%      |
 | H413      | 11.9%      | 13.6%     |
-
-
-```python
-# we get the same prediction for the first timestep
-pd.testing.assert_frame_equal(
-    individual_preds.groupby('unique_id').head(1).astype({'ds': 'int64'}),
-    recursive_preds.groupby('unique_id').head(1).astype({'ds': 'int64'}),    
-)
-```
-
 

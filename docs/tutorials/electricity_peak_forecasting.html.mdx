@@ -96,12 +96,6 @@ Y_df = Y_df.query("ds >= '2022-01-01' & ds <= '2022-10-01'")
 fig = plot_series(Y_df)
 ```
 
-
-```python
-fig.savefig('../../figs/electricity_peak_forecasting__eda.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/electricity_peak_forecasting__eda.png)
 
 We observe that the time series exhibits seasonal patterns. Moreover,

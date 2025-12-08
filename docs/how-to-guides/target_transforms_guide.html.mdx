@@ -2,13 +2,6 @@
 title: Target transformations
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Seamlessly transform target values
 
 Since mlforecast uses a single global model it can be helpful to apply
@@ -143,12 +136,6 @@ fig, ax = plt.subplots()
 pd.concat([serie.tail(24 * 10), preds]).set_index('ds').plot(ax=ax)
 plt.close()
 ```
-
-
-```python
-fig.savefig('../../figs/target_transforms__zeros.png')
-```
-
 
 ![](../../figs/target_transforms__zeros.png)
 

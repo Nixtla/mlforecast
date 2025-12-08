@@ -2,17 +2,7 @@
 title: Quick start (distributed)
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Minimal example of distributed training with MLForecast
-
--   skip_showdoc: true
--   skip_exec: true
 
 The `DistributedMLForecast` class is a high level abstraction that
 encapsulates all the steps in the pipeline (preprocessing, fitting the
@@ -137,66 +127,6 @@ fcst = DistributedMLForecast(
 fcst.fit(partitioned_series, static_features=['static_0', 'static_1'])
 ```
 
-
-```python
-import fugue.api as fa
-from fastcore.test import test_eq
-```
-
-
-
-```python
-# function to test the partition_results data
-# has the right size
-def test_partition_results_size(fcst_object, expected_n_partitions):
-    test_eq(
-        fa.get_num_partitions(fcst_object._partition_results),
-        expected_n_partitions,
-    )
-    test_eq(
-        fa.count(fcst_object._partition_results),
-        expected_n_partitions,
-    )
-```
-
-
-
-```python
-test_partition_results_size(fcst, npartitions)
-```
-
-
-
-```python
-# test num_partitions works properly
-num_partitions_test = 4
-test_dd = dd.from_pandas(series, npartitions=num_partitions_test) # In this case we dont have to specify the column
-test_dd['unique_id'] = test_dd['unique_id'].astype(str)
-fcst_np = DistributedMLForecast(
-    models=models,
-    freq='D',
-    target_transforms=[Differences([7])],    
-    lags=[7],
-    lag_transforms={
-        1: [ExpandingMean()],
-        7: [RollingMean(window_size=14)]
-    },
-    date_features=['dayofweek', 'month'],
-    num_threads=1,
-    engine=client,
-    num_partitions=num_partitions_test
-)
-fcst_np.fit(test_dd)
-test_partition_results_size(fcst_np, num_partitions_test)
-preds_np = fcst_np.predict(7).compute().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds = fcst.predict(7, X_df=future).compute().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-pd.testing.assert_frame_equal(
-    preds[['unique_id', 'ds']], 
-    preds_np[['unique_id', 'ds']], 
-)
-```
-
-
 Once we have our fitted models we can compute the predictions for the
 next 7 timesteps.
 
@@ -217,50 +147,10 @@ preds.head()
 
 
 ```python
-# predict with ids
-ids = np.random.choice(series['unique_id'].unique(), size=10, replace=False)
-preds_ids = fcst.predict(7, X_df=future[future['unique_id'].isin(ids)], ids=ids).compute()
-assert set(preds_ids['unique_id']) == set(ids)
-```
-
-
-
-```python
 preds2 = fcst.predict(7, X_df=future).compute()
 preds3 = fcst.predict(7, new_df=partitioned_series, X_df=future).compute()
 pd.testing.assert_frame_equal(preds, preds2)
 pd.testing.assert_frame_equal(preds, preds3)
-```
-
-
-
-```python
-# test X_df
-prices = generate_prices_for_series(series)
-series_wexog = series.merge(prices, on=['unique_id', 'ds'])
-npartitions = 10
-partitioned_series_exog = dd.from_pandas(series_wexog.set_index('unique_id'), npartitions=npartitions)
-partitioned_series_exog = partitioned_series_exog.map_partitions(lambda df: df.reset_index())
-partitioned_series_exog['unique_id'] = partitioned_series_exog['unique_id'].astype(str)
-fcst_exog = DistributedMLForecast(
-    models=models,
-    freq='D',
-    target_transforms=[Differences([7])],    
-    lags=[7],
-    lag_transforms={
-        1: [ExpandingMean()],
-        7: [RollingMean(window_size=14)]
-    },
-    date_features=['dayofweek', 'month'],
-    num_threads=1,
-    engine=client,
-)
-fcst_exog.fit(partitioned_series_exog, static_features=['static_0', 'static_1'])
-preds_exog = fcst_exog.predict(h=7, X_df=prices).compute()
-full_preds = preds.merge(preds_exog, on=['unique_id', 'ds'], suffixes=('', '_exog'))
-for model in ('DaskXGBForecast', 'DaskLGBMForecast'):
-    pct_diff = abs(1 - full_preds[f'{model}_exog'].div(full_preds[f'{model}']).mean())
-    assert 0 < pct_diff < 0.1
 ```
 
 
@@ -321,43 +211,6 @@ preds2 = fa.as_pandas(fcst2.predict(7, X_df=future)).sort_values(['unique_id', '
 pd.testing.assert_frame_equal(preds, preds2)
 ```
 
-
-```python
-class Lag1Model(BaseEstimator):
-    def fit(self, X, y):
-        return self
-
-    @property
-    def model_(self):
-        return self
-
-    def predict(self, X):
-        return X['lag1']
-
-upd_fcst = DistributedMLForecast(
-    models=[Lag1Model()],
-    freq='D',
-    lags=[1],
-    num_threads=1,
-    engine=client,
-)
-upd_fcst.fit(partitioned_series, static_features=['static_0', 'static_1'])
-
-new_df = (series.groupby('unique_id', observed=True)['ds'].max() + pd.offsets.Day()).reset_index()
-new_df['y'] = -1.0
-upd_fcst.update(new_df)
-expected = new_df.rename(columns={'y': 'Lag1Model'})
-expected = expected.astype({'unique_id': str})
-expected['ds'] += pd.offsets.Day()
-upd_preds = upd_fcst.predict(1, X_df=future).compute()
-pd.testing.assert_frame_equal(
-    upd_preds.reset_index(drop=True),
-    expected.reset_index(drop=True),
-    check_dtype=False,
-)
-```
-
-
 ### Converting to local
 
 Another option to store your distributed forecast object is to first
@@ -375,25 +228,6 @@ local_preds = local_fcst.predict(7, X_df=future)
 # or different precisions of float
 pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
 ```
-
-
-```python
-# test to_local without target transforms
-fcst_no_targ_tfms = DistributedMLForecast(
-    models=[DaskXGBForecast(n_estimators=5, random_state=0)],
-    freq='D',
-    lags=[1],
-    lag_transforms={1: [ExpandingMean()]},
-    date_features=['dayofweek'],
-)
-fcst_no_targ_tfms.fit(
-    partitioned_series,
-    static_features=['static_0', 'static_1'],
-)
-local_fcst = fcst_no_targ_tfms.to_local()
-assert local_fcst.ts.target_transforms is None
-```
-
 
 ### Cross validation
 
@@ -418,68 +252,6 @@ cv_res.compute().head()
 | 103 | id_17     | 2002-08-21 00:00:00 | 156.822598      | 158.018246       | 2002-08-15 00:00:00 | 152.227984 |
 | 61  | id_24     | 2002-08-21 00:00:00 | 136.598356      | 136.576865       | 2002-08-15 00:00:00 | 138.559945 |
 | 36  | id_33     | 2002-08-24 00:00:00 | 95.6072         | 96.249354        | 2002-08-15 00:00:00 | 102.068997 |
-
-
-```python
-# single window CV
-assert fcst.cross_validation(
-    partitioned_series,
-    n_windows=1,
-    h=5,
-    static_features=['static_0', 'static_1'],
-).compute()['cutoff'].nunique() == 1
-```
-
-
-
-```python
-from mlforecast.distributed.forecast import WindowInfo
-```
-
-
-
-```python
-# input_size
-input_size = 100
-reduced_train = fcst._preprocess(
-    partitioned_series,
-    id_col='unique_id',
-    time_col='ds',
-    target_col='y',
-    dropna=False,
-    window_info=WindowInfo(
-        n_windows=1,
-        window_size=10,
-        step_size=None,
-        i_window=0,
-        input_size=input_size,
-    ),
-    static_features=['static_0', 'static_1'],
-)
-dropped_samples = fcst._base_ts.target_transforms[0].differences[0]
-assert reduced_train.groupby('unique_id').size().compute().max() == input_size - dropped_samples
-```
-
-
-
-```python
-cv_res_no_refit = fcst.cross_validation(
-    partitioned_series,
-    n_windows=3,
-    h=14,
-    refit=False,
-    static_features=['static_0', 'static_1'],
-)
-cv_results_df = cv_res.compute().sort_values(['unique_id', 'ds'])
-cv_results_no_refit_df = cv_res_no_refit.compute().sort_values(['unique_id', 'ds'])
-# test we recover the same "metadata"
-models = ['DaskXGBForecast', 'DaskLGBMForecast']
-test_eq(
-    cv_results_no_refit_df.drop(columns=models),
-    cv_results_df.drop(columns=models)
-)
-```
-
 
 
 ```python
@@ -596,40 +368,6 @@ fcst.fit(
     static_features=['static_0', 'static_1'],
 )
 ```
-
-
-```python
-test_partition_results_size(fcst, numPartitions)
-```
-
-
-
-```python
-# test num_partitions works properly
-test_spark_df = spark.createDataFrame(train)
-num_partitions_test = 10
-fcst_np = DistributedMLForecast(
-    models=models,
-    freq='D',    
-    lags=[7],
-    lag_transforms={
-        1: [ExpandingMean()],
-        7: [RollingMean(window_size=14)]
-    },
-    date_features=['dayofweek', 'month'],
-    num_threads=1,
-    num_partitions=num_partitions_test,
-)
-fcst_np.fit(test_spark_df, static_features=['static_0', 'static_1'])
-test_partition_results_size(fcst_np, num_partitions_test)
-preds_np = fcst_np.predict(7, X_df=future).toPandas().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds = fcst.predict(7, X_df=future).toPandas().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-pd.testing.assert_frame_equal(
-    preds[['unique_id', 'ds']], 
-    preds_np[['unique_id', 'ds']], 
-)
-```
-
 
 ### Forecasting
 
@@ -761,15 +499,15 @@ spark.stop()
 
 ### Session setup
 
-
 ```python
+# ray
 import ray
 from ray.cluster_utils import Cluster
 ```
 
 
-
 ```python
+# ray
 ray_cluster = Cluster(
     initialize_head=True,
     head_node_args={"num_cpus": 2}
@@ -778,7 +516,6 @@ ray.init(address=ray_cluster.address, ignore_reinit_error=True)
 # add mock node to simulate a cluster
 mock_node = ray_cluster.add_node(num_cpus=2)
 ```
-
 
 ### Data setup
 
@@ -790,43 +527,41 @@ parallelism.
 The required input format is the same as for `MLForecast`, i.e. it
 should have at least an id column, a time column and a target column.
 
-
 ```python
+# ray
 series = generate_daily_series(100, n_static_features=2, equal_ends=True, static_as_categorical=False, min_length=500, max_length=1_000)
 series['unique_id'] = series['unique_id'].astype(str)  # can't handle categoricals atm
 train, future = fourier(series, freq='d', season_length=7, k=2, h=7)
 ray_series = ray.data.from_pandas(train)
 ```
 
-
 ### Models
 
 The ray integration allows to include `lightgbm` (`RayLGBMRegressor`),
 and `xgboost` (`RayXGBRegressor`).
 
-
 ```python
+# ray
 from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
 from mlforecast.distributed.models.ray.xgb import RayXGBForecast
 ```
 
 
-
 ```python
+# ray
 models = [
     RayLGBMForecast(random_state=0, verbosity=-1),
     RayXGBForecast(random_state=0),
 ]
 ```
 
-
 ### Training
 
 To control the number of partitions to use using Ray, we have to include
 `num_partitions` to `DistributedMLForecast`.
 
-
 ```python
+# ray
 num_partitions = 4
 fcst = DistributedMLForecast(
     models,
@@ -845,53 +580,16 @@ fcst.fit(
 )
 ```
 
-
-
-```python
-test_partition_results_size(fcst, num_partitions)
-```
-
-
-
-```python
-# test num_partitions works properly
-# In this case we test that the default behavior 
-# for ray datasets works as expected
-fcst_np = DistributedMLForecast(
-    models=models,
-    freq='D',
-    lags=[7],
-    lag_transforms={
-        1: [ExpandingMean()],
-        7: [RollingMean(window_size=14)]
-    },
-    date_features=['dayofweek', 'month'],
-    num_threads=1,
-)
-fcst_np.fit(ray_series, static_features=['static_0', 'static_1'])
-# we dont use test_partition_results_size
-# since the number of objects is different 
-# from the number of partitions
-test_eq(fa.count(fcst_np._partition_results), 100) # number of series
-preds_np = fcst_np.predict(7, X_df=future).to_pandas().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-preds = fcst.predict(7, X_df=future).to_pandas().sort_values(['unique_id', 'ds']).reset_index(drop=True)
-pd.testing.assert_frame_equal(
-    preds[['unique_id', 'ds']], 
-    preds_np[['unique_id', 'ds']], 
-)
-```
-
-
 ### Forecasting
 
-
 ```python
+# ray
 preds = fcst.predict(7, X_df=future).to_pandas()
 ```
 
 
-
 ```python
+# ray
 preds.head()
 ```
 
@@ -902,7 +600,6 @@ preds.head()
 | 2   | id_00     | 2002-09-29 | 160.043472      | 160.722885     |
 | 3   | id_00     | 2002-09-30 | 250.03212       | 252.821899     |
 | 4   | id_00     | 2002-10-01 | 322.905182      | 324.387695     |
-
 
 ### Saving and loading
 
@@ -921,8 +618,8 @@ required dependencies to perform distributed training with ray and
 saving to S3. If you’re using conda you’ll have to manually install them
 (`conda install fsspec fugue ray s3fs`).
 
-
 ```python
+# ray
 save_dir = build_unique_name('ray')
 save_path = f's3://nixtla-tmp/mlf/{save_dir}'
 try:
@@ -934,27 +631,24 @@ except Exception as e:
     fcst.save(save_path)
 ```
 
-
 Once you’ve saved your forecast object you can then load it back by
 specifying the path where it was saved along with an engine, which will
 be used to perform the distributed computations (in this case the ‘ray’
 string).
 
-
 ```python
+# ray
 fcst2 = DistributedMLForecast.load(save_path, engine='ray')
 ```
 
-
 We can verify that this object produces the same results.
 
-
 ```python
+# ray
 preds = fa.as_pandas(fcst.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 preds2 = fa.as_pandas(fcst2.predict(7, X_df=future)).sort_values(['unique_id', 'ds']).reset_index(drop=True)
 pd.testing.assert_frame_equal(preds, preds2)
 ```
-
 
 ### Converting to local
 
@@ -966,8 +660,8 @@ etc.), so you have to be sure that it’ll fit in memory, it should
 consume about 2x the size of your target column (you can reduce this
 further by using the `keep_last_n` argument in the `fit` method).
 
-
 ```python
+# ray
 local_fcst = fcst.to_local()
 local_preds = local_fcst.predict(7, X_df=future)
 # we don't check the dtype because sometimes these are arrow dtypes
@@ -975,11 +669,10 @@ local_preds = local_fcst.predict(7, X_df=future)
 pd.testing.assert_frame_equal(preds, local_preds, check_dtype=False)
 ```
 
-
 ### Cross validation
 
-
 ```python
+# ray
 cv_res = fcst.cross_validation(
     ray_series,
     n_windows=3,
@@ -989,8 +682,8 @@ cv_res = fcst.cross_validation(
 ```
 
 
-
 ```python
+# ray
 cv_res.head()
 ```
 
@@ -1002,10 +695,8 @@ cv_res.head()
 | 3   | id_11     | 2002-09-22 | 416.994843      | 417.106506     | 2002-09-12 | 425.434661 |
 | 4   | id_16     | 2002-09-14 | 377.916382      | 375.421600     | 2002-09-12 | 400.361977 |
 
-
-
 ```python
+# ray
 ray.shutdown()
 ```
-
 

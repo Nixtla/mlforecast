@@ -2,13 +2,6 @@
 title: End to end walkthrough
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Detailed description of all the functionalities that MLForecast
 > provides.
 
@@ -63,12 +56,6 @@ features.
 fig = plot_series(df, max_insample_length=24 * 14)
 ```
 
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__eda.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/end_to_end_walkthrough__eda.png)
 
 We can use the `MLForecast.preprocess` method to explore different
@@ -114,12 +101,6 @@ series look like now.
 ```python
 fig = plot_series(prep)
 ```
-
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__differences.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/end_to_end_walkthrough__differences.png)
 
@@ -429,12 +410,6 @@ preds
 fig = plot_series(df, preds, max_insample_length=24 * 7)
 ```
 
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__predictions.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/end_to_end_walkthrough__predictions.png)
 
 ## Saving and loading
@@ -498,19 +473,6 @@ preds
 | 2   | H381      | 1009 | 207.0 |
 | 3   | H413      | 1009 | 34.0  |
 
-
-```python
-new_values_with_offset = new_values.copy()
-new_values_with_offset['ds'] += 1
-previous_values_with_offset = df[~df['unique_id'].isin(new_values['unique_id'])].groupby('unique_id').tail(1).copy()
-previous_values_with_offset['ds'] += 1
-pd.testing.assert_frame_equal(
-    preds,
-    pd.concat([new_values_with_offset, previous_values_with_offset]).reset_index(drop=True).rename(columns={'y': 'Naive'}),
-)
-```
-
-
 ## Estimating model performance
 
 ### Cross validation
@@ -561,12 +523,6 @@ cv_result
 ```python
 fig = plot_series(forecasts_df=cv_result.drop(columns='cutoff'))
 ```
-
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__cv.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/end_to_end_walkthrough__cv.png)
 
@@ -718,12 +674,6 @@ cv.cv_preds_
 fig = plot_series(forecasts_df=cv.cv_preds_.drop(columns='window'))
 ```
 
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__lgbcv.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/end_to_end_walkthrough__lgbcv.png)
 
 You can use this class to quickly try different configurations of
@@ -738,12 +688,6 @@ final_fcst.fit(df)
 preds = final_fcst.predict(48)
 fig = plot_series(df, preds, max_insample_length=24 * 14)
 ```
-
-
-```python
-fig.savefig('../../figs/end_to_end_walkthrough__final_forecast.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/end_to_end_walkthrough__final_forecast.png)
 

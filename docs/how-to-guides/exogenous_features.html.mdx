@@ -2,13 +2,6 @@
 title: Exogenous features
 ---
 
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
-
 > Use exogenous regressors for training and predicting
 
 ```python
@@ -231,47 +224,11 @@ fcst2.predict(h=7, X_df=future_df).head()
 
 
 ```python
-import numpy as np
-
-from mlforecast.callbacks import SaveFeatures
-```
-
-
-
-```python
-# check that the price was passed correctly
-first_pred_date = series_with_prices['ds'].max() + pd.offsets.Day()
-save_feats = SaveFeatures()
-fcst.predict(7, X_df=prices_catalog, before_predict_callback=save_feats)
-for h, actual in enumerate(save_feats._inputs):
-    expected = prices_catalog.loc[prices_catalog['ds'].eq(first_pred_date + h * pd.offsets.Day())]
-    np.testing.assert_allclose(
-        actual['price'].values,
-        expected['price'].values,
-    )
-```
-
-
-
-```python
 preds2 = fcst.predict(7, X_df=prices_catalog)
 preds3 = fcst.predict(7, new_df=series_with_prices, X_df=prices_catalog)
 
 pd.testing.assert_frame_equal(preds, preds2)
 pd.testing.assert_frame_equal(preds, preds3)
-```
-
-
-
-```python
-# test we can compute cross validation with
-# exogenous variables without adding extra information
-fcst.cross_validation(
-    series_with_prices,
-    h=7,
-    n_windows=2,
-    static_features=['static_0', 'product_id'],
-);
 ```
 
 

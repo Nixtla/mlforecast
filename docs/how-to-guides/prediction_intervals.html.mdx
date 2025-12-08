@@ -8,7 +8,7 @@ title: Probabilistic forecasting
 >
 > This tutorial assumes basic familiarity with MLForecast. For a minimal
 > example visit the [Quick
-> Start](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/quick_start_local)
+> Start](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/quick_start_local.html)
 
 ## Introduction
 
@@ -140,12 +140,6 @@ generate the plots in this notebook are explained below.
 fig = plot_series(train, test.rename(columns={'y': 'y_test'}), models=['y_test'], plot_random=False)
 ```
 
-
-```python
-fig.savefig('../../figs/prediction_intervals__eda.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/prediction_intervals__eda.png)
 
 ## Train models
@@ -276,12 +270,6 @@ fig = plot_series(
 )
 ```
 
-
-```python
-fig.savefig('../../figs/prediction_intervals__knn.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/prediction_intervals__knn.png)
 
 ### Lasso
@@ -296,12 +284,6 @@ fig = plot_series(
     max_insample_length=48
 )
 ```
-
-
-```python
-fig.savefig('../../figs/prediction_intervals__lasso.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/prediction_intervals__lasso.png)
 
@@ -318,12 +300,6 @@ fig = plot_series(
 )
 ```
 
-
-```python
-fig.savefig('../../figs/prediction_intervals__lr.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/prediction_intervals__lr.png)
 
 ### MLPRegressor
@@ -339,12 +315,6 @@ fig = plot_series(
 )
 ```
 
-
-```python
-fig.savefig('../../figs/prediction_intervals__mlp.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/prediction_intervals__mlp.png)
 
 ### Ridge
@@ -359,12 +329,6 @@ fig = plot_series(
     max_insample_length=48
 )
 ```
-
-
-```python
-fig.savefig('../../figs/prediction_intervals__ridge.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/prediction_intervals__ridge.png)
 

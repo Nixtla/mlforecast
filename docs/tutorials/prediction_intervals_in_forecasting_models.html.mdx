@@ -346,48 +346,6 @@ import matplotlib.ticker as ticker
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 ```
 
-
-```python
-plt.style.use('grayscale') # fivethirtyeight  grayscale  classic
-plt.rcParams['lines.linewidth'] = 1.5
-dark_style = {
-    'figure.facecolor': '#008080',  # #212946
-    'axes.facecolor': '#008080',
-    'savefig.facecolor': '#008080',
-    'axes.grid': True,
-    'axes.grid.which': 'both',
-    'axes.spines.left': False,
-    'axes.spines.right': False,
-    'axes.spines.top': False,
-    'axes.spines.bottom': False,
-    'grid.color': '#000000',  #2A3459
-    'grid.linewidth': '1',
-    'text.color': '0.9',
-    'axes.labelcolor': '0.9',
-    'xtick.color': '0.9',
-    'ytick.color': '0.9',
-    'font.size': 12 }
-plt.rcParams.update(dark_style)
-# Define the plot size
-# ==============================================================================
-
-plt.rcParams['figure.figsize'] = (18,7)
-```
-
-
-
-```python
-import warnings
-```
-
-
-
-```python
-# Hide warnings
-warnings.filterwarnings("ignore")
-```
-
-
 ## Read Data
 
 ```python
@@ -456,12 +414,6 @@ basic EDA.
 ```python
 fig = plot_series(df)
 ```
-
-
-```python
-fig.savefig('../../figs/prediction_intervals_in_forecasting_models__eda.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/prediction_intervals_in_forecasting_models__eda.png)
 
@@ -695,12 +647,6 @@ Now let’s plot the training data and the test data.
 fig = plot_series(train,test)
 ```
 
-
-```python
-fig.savefig('../../figs/prediction_intervals_in_forecasting_models__train_test.png')
-```
-
-
 ![](../../figs/prediction_intervals_in_forecasting_models__train_test.png)
 
 # Modeling with mlforecast
@@ -762,12 +708,6 @@ look like now.
 ```python
 fig = plot_series(prep)
 ```
-
-
-```python
-fig.savefig('../../figs/prediction_intervals_in_forecasting_models__plot_values.png')
-```
-
 
 ![](../../figs/prediction_intervals_in_forecasting_models__plot_values.png)
 

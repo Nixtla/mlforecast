@@ -102,12 +102,6 @@ Shape of the data (32896, 3)
 fig = plot_series(df)
 ```
 
-
-```python
-fig.savefig('../../figs/load_forecasting__raw.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/load_forecasting__raw.png)
 
 We clearly observe that the time series exhibits seasonal patterns.
@@ -237,12 +231,6 @@ prep
 ```python
 fig = plot_series(prep)
 ```
-
-
-```python
-fig.savefig('../../figs/load_forecasting__transformed.png', bbox_inches='tight')
-```
-
 
 ![](../../figs/load_forecasting__transformed.png)
 
@@ -594,12 +582,6 @@ fig = plot_series(
 )
 ```
 
-
-```python
-fig.savefig(f'../../figs/load_forecasting__prediction_intervals.png', bbox_inches='tight')
-```
-
-
 ![](../../figs/load_forecasting__prediction_intervals.png)
 
 ### Comparison with Prophet
@@ -609,17 +591,6 @@ One of the most widely used models for time series forecasting is
 seasonalities (weekly, daily yearly). We will use this model as a
 benchmark to see if the `lgbm` alongside `MLForecast` adds value for
 this time series.
-
-
-```python
-# Disable cmdstanpy logging
-import logging
-logger = logging.getLogger('cmdstanpy')
-logger.addHandler(logging.NullHandler())
-logger.propagate = False
-logger.setLevel(logging.CRITICAL)
-```
-
 
 ```python
 from prophet import Prophet
