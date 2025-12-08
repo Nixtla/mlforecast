@@ -20,9 +20,11 @@ from mlforecast.utils import generate_daily_series, generate_prices_for_series
 ## Data format
 
 The required input format is a dataframe with at least the following
-columns: \* `unique_id` with a unique identifier for each time serie \*
-`ds` with the datestamp and a column \* `y` with the values of the
-serie.
+columns:
+
+* `unique_id` with a unique identifier for each time serie
+* `ds` with the datestamp and a column
+* `y` with the values of theserie
 
 Every other column is considered a static feature unless stated
 otherwise in `TimeSeries.fit`
