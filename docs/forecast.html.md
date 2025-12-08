@@ -4,6 +4,7 @@ output-file: forecast.html
 title: MLForecast
 ---
 
+##
 
 ### Data
 
@@ -80,10 +81,6 @@ train.shape, valid.shape
         - make_future_dataframe
         - get_missing_future
         - predict
-        - preprocess
-        - fit_models
-        - cross_validation
-        - cv
       heading_level: 3
       show_root_heading: true
       show_source: true
@@ -388,38 +385,11 @@ models you can call `Forecast.preprocess`.
 
 ------------------------------------------------------------------------
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L205"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### MLForecast.preprocess
-
-> ``` text
->  MLForecast.preprocess (df:~DFType, id_col:str='unique_id',
->                         time_col:str='ds', target_col:str='y',
->                         static_features:Optional[List[str]]=None,
->                         dropna:bool=True, keep_last_n:Optional[int]=None,
->                         max_horizon:Optional[int]=None,
->                         return_X_y:bool=False, as_numpy:bool=False,
->                         weight_col:Optional[str]=None)
-> ```
-
-*Add the features to `data`.*
-
-|  | **Type** | **Default** | **Details** |
-|------|------------------|-------------------------|-------------------------|
-| df | DFType |  | Series data in long format. |
-| id_col | str | unique_id | Column that identifies each serie. |
-| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
-| target_col | str | y | Column that contains the target. |
-| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
-| dropna | bool | True | Drop rows with missing values produced by the transformations. |
-| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| max_horizon | Optional | None | Train this many models, where each model will predict a specific horizon. |
-| return_X_y | bool | False | Return a tuple with the features and the target. If False will return a single dataframe. |
-| as_numpy | bool | False | Cast features to numpy array. Only works for `return_X_y=True`. |
-| weight_col | Optional | None | Column that contains the sample weights. |
-| **Returns** | **Union** |  | **`df` plus added features and target(s).** |
+::: mlforecast.forecast.MLForecast
+    options:
+      docstring_style: google
+      members:
+        - preprocess
 
 ```python
 prep_df = fcst.preprocess(train)
@@ -443,29 +413,17 @@ prep_df
 If we do this we then have to call `Forecast.fit_models`, since this
 only stores the series information.
 
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L265"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### MLForecast.fit_models
-
-> ``` text
->  MLForecast.fit_models (X:Union[pandas.core.frame.DataFrame,polars.datafra
->                         me.frame.DataFrame,numpy.ndarray],
->                         y:numpy.ndarray)
-> ```
-
-*Manually train models. Use this if you called
-[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
-beforehand.*
-
-|             | **Type**       | **Details**                              |
-|-------------|----------------|------------------------------------------|
-| X           | Union          | Features.                                |
-| y           | ndarray        | Target.                                  |
-| **Returns** | **MLForecast** | **Forecast object with trained models.** |
+::: mlforecast.forecast.MLForecast
+    handler: python
+    options:
+      docstring_style: google
+      members:
+        - fit_models
+        - cross_validation
+        - cv
+      heading_level: 3
+      show_root_heading: true
+      show_source: true
 
 ```python
 X, y = prep_df.drop(columns=['unique_id', 'ds', 'y']), prep_df['y']
@@ -481,61 +439,16 @@ predictions2 = fcst.predict(horizon)
 pd.testing.assert_frame_equal(predictions, predictions2)
 ```
 
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L795"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### MLForecast.cross_validation
-
-> ``` text
->  MLForecast.cross_validation (df:~DFType, n_windows:int, h:int,
->                               id_col:str='unique_id', time_col:str='ds',
->                               target_col:str='y',
->                               step_size:Optional[int]=None,
->                               static_features:Optional[List[str]]=None,
->                               dropna:bool=True,
->                               keep_last_n:Optional[int]=None,
->                               refit:Union[bool,int]=True,
->                               max_horizon:Optional[int]=None, before_predi
->                               ct_callback:Optional[Callable]=None, after_p
->                               redict_callback:Optional[Callable]=None, pre
->                               diction_intervals:Optional[mlforecast.utils.
->                               PredictionIntervals]=None,
->                               level:Optional[List[Union[int,float]]]=None,
->                               input_size:Optional[int]=None,
->                               fitted:bool=False, as_numpy:bool=False,
->                               weight_col:Optional[str]=None)
-> ```
-
-*Perform time series cross validation. Creates `n_windows` splits where
-each window has `h` test periods, trains the models, computes the
-predictions and merges the actuals.*
-
-|  | **Type** | **Default** | **Details** |
-|------|------------------|-------------------------|-------------------------|
-| df | DFType |  | Series data in long format. |
-| n_windows | int |  | Number of windows to evaluate. |
-| h | int |  | Forecast horizon. |
-| id_col | str | unique_id | Column that identifies each serie. |
-| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
-| target_col | str | y | Column that contains the target. |
-| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
-| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
-| dropna | bool | True | Drop rows with missing values produced by the transformations. |
-| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| refit | Union | True | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
-| max_horizon | Optional | None |  |
-| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
-| prediction_intervals | Optional | None | Configuration to calibrate prediction intervals (Conformal Prediction). |
-| level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
-| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
-| fitted | bool | False | Store the in-sample predictions. |
-| as_numpy | bool | False | Cast features to numpy array. |
-| weight_col | Optional | None | Column that contains the sample weights. |
-| **Returns** | **DFType** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
+::: mlforecast.forecast.MLForecast
+    handler: python
+    options:
+      docstring_style: google
+      members:
+        - cross_validation
+        - from_cv
+      heading_level: 3
+      show_root_heading: true
+      show_source: true
 
 If we would like to know how good our forecast will be for a specific
 model and set of features then we can perform cross validation. What
