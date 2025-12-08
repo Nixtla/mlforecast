@@ -3,6 +3,7 @@ output-file: target_transforms.html
 title: Target transforms
 ---
 
+##
 
 ```python
 import pandas as pd
@@ -16,43 +17,11 @@ from mlforecast import MLForecast
 from mlforecast.utils import generate_daily_series
 ```
 
-------------------------------------------------------------------------
-
 ### `BaseTargetTransform`
 
 Bases: <code>[ABC](#abc.ABC)</code>
 
 Base class used for target transformations.
-
-#### `BaseTargetTransform.fit_transform`
-
-```python
-fit_transform(df)
-```
-
-#### `BaseTargetTransform.inverse_transform`
-
-```python
-inverse_transform(df)
-```
-
-#### `BaseTargetTransform.set_column_names`
-
-```python
-set_column_names(id_col, time_col, target_col)
-```
-
-#### `BaseTargetTransform.stack`
-
-```python
-stack(transforms)
-```
-
-#### `BaseTargetTransform.update`
-
-```python
-update(df)
-```
 
 ### `Differences`
 
@@ -64,80 +33,10 @@ Bases: <code>[\_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._
 
 Subtracts previous values of the serie. Can be used to remove trend or seasonalities.
 
-#### `Differences.differences`
-
-```python
-differences = list(differences)
-```
-
-#### `Differences.fit_transform`
-
-```python
-fit_transform(ga)
-```
-
-#### `Differences.inverse_transform`
-
-```python
-inverse_transform(ga)
-```
-
-#### `Differences.inverse_transform_fitted`
-
-```python
-inverse_transform_fitted(ga)
-```
-
-#### `Differences.num_threads`
-
-```python
-num_threads: int = 1
-```
-
-#### `Differences.scaler_`
-
-```python
-scaler_: core_scalers._BaseLocalScaler
-```
-
-#### `Differences.set_num_threads`
-
-```python
-set_num_threads(num_threads)
-```
-
-#### `Differences.stack`
-
-```python
-stack(scalers)
-```
-
-#### `Differences.store_fitted`
-
-```python
-store_fitted = False
-```
-
-#### `Differences.take`
-
-```python
-take(idxs)
-```
-
-#### `Differences.update`
-
-```python
-update(ga)
-```
-
-*Subtracts previous values of the serie. Can be used to remove trend or
-seasonalities.*
-
 ```python
 series = generate_daily_series(10, min_length=50, max_length=100)
-```
 
-```python
+
 diffs = Differences([1, 2, 5])
 id_counts = counts_by_id(series, 'unique_id')
 indptr = np.append(0, id_counts['counts'].cumsum())
@@ -192,7 +91,6 @@ for i in range(len(diffs.differences)):
     )
 ```
 
-
 ### `AutoDifferences`
 
 ```python
@@ -208,62 +106,6 @@ Find and apply the optimal number of differences to each serie.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
-
-#### `AutoDifferences.fit_transform`
-
-```python
-fit_transform(ga)
-```
-
-#### `AutoDifferences.inverse_transform`
-
-```python
-inverse_transform(ga)
-```
-
-#### `AutoDifferences.inverse_transform_fitted`
-
-```python
-inverse_transform_fitted(ga)
-```
-
-#### `AutoDifferences.num_threads`
-
-```python
-num_threads: int = 1
-```
-
-#### `AutoDifferences.scaler_`
-
-```python
-scaler_ = core_scalers.AutoDifferences(max_diffs)
-```
-
-#### `AutoDifferences.set_num_threads`
-
-```python
-set_num_threads(num_threads)
-```
-
-#### `AutoDifferences.stack`
-
-```python
-stack(scalers)
-```
-
-#### `AutoDifferences.take`
-
-```python
-take(idxs)
-```
-
-#### `AutoDifferences.update`
-
-```python
-update(ga)
-```
-
-*Find and apply the optimal number of differences to each serie.*
 
 ### `AutoSeasonalDifferences`
 
@@ -283,66 +125,6 @@ Name | Type | Description | Default
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
 
-#### `AutoSeasonalDifferences.fit_transform`
-
-```python
-fit_transform(ga)
-```
-
-#### `AutoSeasonalDifferences.inverse_transform`
-
-```python
-inverse_transform(ga)
-```
-
-#### `AutoSeasonalDifferences.inverse_transform_fitted`
-
-```python
-inverse_transform_fitted(ga)
-```
-
-#### `AutoSeasonalDifferences.num_threads`
-
-```python
-num_threads: int = 1
-```
-
-#### `AutoSeasonalDifferences.scaler_`
-
-```python
-scaler_ = core_scalers.AutoSeasonalDifferences(
-    season_length=season_length, max_diffs=max_diffs, n_seasons=n_seasons
-)
-
-```
-
-#### `AutoSeasonalDifferences.set_num_threads`
-
-```python
-set_num_threads(num_threads)
-```
-
-#### `AutoSeasonalDifferences.stack`
-
-```python
-stack(scalers)
-```
-
-#### `AutoSeasonalDifferences.take`
-
-```python
-take(idxs)
-```
-
-#### `AutoSeasonalDifferences.update`
-
-```python
-update(ga)
-```
-
-*Find and apply the optimal number of seasonal differences to each
-group.*
-
 ### `AutoSeasonalityAndDifferences`
 
 ```python
@@ -360,65 +142,6 @@ Name | Type | Description | Default
 `max_season_length` | <code>[int](#int)</code> | Maximum length of the seasonal period. | *required*
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
-
-#### `AutoSeasonalityAndDifferences.fit_transform`
-
-```python
-fit_transform(ga)
-```
-
-#### `AutoSeasonalityAndDifferences.inverse_transform`
-
-```python
-inverse_transform(ga)
-```
-
-#### `AutoSeasonalityAndDifferences.inverse_transform_fitted`
-
-```python
-inverse_transform_fitted(ga)
-```
-
-#### `AutoSeasonalityAndDifferences.num_threads`
-
-```python
-num_threads: int = 1
-```
-
-#### `AutoSeasonalityAndDifferences.scaler_`
-
-```python
-scaler_ = core_scalers.AutoSeasonalityAndDifferences(
-    max_season_length=max_season_length,
-    max_diffs=max_diffs,
-    n_seasons=n_seasons,
-)
-
-```
-
-#### `AutoSeasonalityAndDifferences.set_num_threads`
-
-```python
-set_num_threads(num_threads)
-```
-
-#### `AutoSeasonalityAndDifferences.stack`
-
-```python
-stack(scalers)
-```
-
-#### `AutoSeasonalityAndDifferences.take`
-
-```python
-take(idxs)
-```
-
-#### `AutoSeasonalityAndDifferences.update`
-
-```python
-update(ga)
-```
 
 ```python
 def test_scaler(sc, series):
@@ -450,102 +173,53 @@ def test_scaler(sc, series):
     )
 ```
 
-------------------------------------------------------------------------
+### `LocalStandardScaler`
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L282"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
-### LocalStandardScaler
+Standardizes each serie by subtracting its mean and dividing by its standard deviation.
 
-> ``` text
->  LocalStandardScaler ()
-> ```
+### `LocalMinMaxScaler`
 
-*Standardizes each serie by subtracting its mean and dividing by its
-standard deviation.*
+Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
-```python
-test_scaler(LocalStandardScaler(), series)
-```
+Scales each serie to be in the [0, 1] interval.
 
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L288"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### LocalMinMaxScaler
-
-> ``` text
->  LocalMinMaxScaler ()
-> ```
-
-*Scales each serie to be in the \[0, 1\] interval.*
+### `LocalRobustScaler`
 
 ```python
-test_scaler(LocalMinMaxScaler(), series)
+LocalRobustScaler(scale)
 ```
 
-------------------------------------------------------------------------
+Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L294"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+Scaler robust to outliers.
 
-### LocalRobustScaler
+**Parameters:**
 
-> ``` text
->  LocalRobustScaler (scale:str)
-> ```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`scale` | <code>[str](#str)</code> | Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Asbolute Deviation). Defaults to 'iqr'. | *required*
 
-*Scaler robust to outliers.*
-
-|  | **Type** | **Details** |
-|--------|---------------------------|-------------------------------------|
-| scale | str | Statistic to use for scaling. Can be either ‘iqr’ (Inter Quartile Range) or ‘mad’ (Median Asbolute Deviation) |
+### `LocalBoxCox`
 
 ```python
-test_scaler(LocalRobustScaler(scale='iqr'), series)
+LocalBoxCox()
 ```
 
+Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
+
+Finds the optimum lambda for each serie and applies the Box-Cox transformation
+
+### `GlobalSklearnTransformer`
 
 ```python
-test_scaler(LocalRobustScaler(scale='mad'), series)
+GlobalSklearnTransformer(transformer)
 ```
 
-------------------------------------------------------------------------
+Bases: <code>[BaseTargetTransform](#mlforecast.target_transforms.BaseTargetTransform)</code>
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L307"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### LocalBoxCox
-
-> ``` text
->  LocalBoxCox ()
-> ```
-
-*Finds the optimum lambda for each serie and applies the Box-Cox
-transformation*
-
-```python
-test_scaler(LocalBoxCox(), series)
-```
-
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L316"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### GlobalSklearnTransformer
-
-> ``` text
->  GlobalSklearnTransformer (transformer:sklearn.base.TransformerMixin)
-> ```
-
-*Applies the same scikit-learn transformer to all series.*
+Applies the same scikit-learn transformer to all series.
 
 ```python
 # need this import in order for isinstance to work

@@ -2,28 +2,10 @@
 description: Scalable machine learning for time series forecasting
 title: "Machine Learning 🤖 Forecast"
 ---
-# mlforecast
-
-[![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=Statistical%20Forecasting%20Algorithms%20by%20Nixtla%20&url=https://github.com/Nixtla/statsforecast&via=nixtlainc&hashtags=StatisticalModels,TimeSeries,Forecasting)
-[![Slack](https://img.shields.io/badge/Slack-4A154B?&logo=slack&logoColor=white.png)](https://join.slack.com/t/nixtlacommunity/shared_invite/zt-1pmhan9j5-F54XR20edHk0UtYAPcW4KQ)
-
-
-<div align="center">
-<center><img src="https://raw.githubusercontent.com/Nixtla/mlforecast/main/nbs/figs/logo.png" /></center>
-<h1 align="center">Machine Learning 🤖 Forecast</h1>
-<h3 align="center">Scalable machine learning for time series forecasting</h3>
-
-[![CI](https://github.com/Nixtla/mlforecast/actions/workflows/ci.yaml/badge.svg)](https://github.com/Nixtla/mlforecast/actions/workflows/ci.yaml)
-[![Python](https://img.shields.io/pypi/pyversions/mlforecast.png)](https://pypi.org/project/mlforecast/)
-[![PyPi](https://img.shields.io/pypi/v/mlforecast?color=blue.png)](https://pypi.org/project/mlforecast/)
-[![conda-forge](https://img.shields.io/conda/vn/conda-forge/mlforecast?color=blue.png)](https://anaconda.org/conda-forge/mlforecast)
-[![License](https://img.shields.io/github/license/Nixtla/mlforecast.png)](https://github.com/Nixtla/mlforecast/blob/main/LICENSE)
 
 **mlforecast** is a framework to perform time series forecasting using
 machine learning models, with the option to scale to massive amounts of
 data using remote clusters.
-
-</div>
 
 ## Install
 
@@ -40,11 +22,10 @@ page](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/install).
 
 ## Quick Start
 
-**Get Started with this [quick
-guide](https://nixtlaverse.github.io/mlforecast/docs/getting-started/quick_start_local.html).**
-
-**Follow this [end-to-end
-walkthrough](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/end_to_end_walkthrough)
+1. **Get Started with this [quick
+guide](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/quick_start_local.html).**
+2. **Follow this [end-to-end
+walkthrough](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/end_to_end_walkthrough.html)
 for best practices.**
 
 ### Videos
@@ -65,7 +46,7 @@ for best practices.**
 Current Python alternatives for machine learning models are slow,
 inaccurate and don’t scale well. So we created a library that can be
 used to forecast in production environments.
-[`MLForecast`](https://nixtlaverse.nixtla.io/mlforecast/forecast#class-mlforecast)
+[`MLForecast`](https://nixtlaverse.nixtla.io/mlforecast/forecast.html#mlforecast)
 includes efficient feature engineering to train any machine learning
 model (with `fit` and `predict` methods such as
 [`sklearn`](https://scikit-learn.org/stable/)) to fit millions of time
@@ -204,7 +185,9 @@ To compute the features and train the models call `fit` on your
 fcst.fit(series)
 ```
 
-    MLForecast(models=[LGBMRegressor, LinearRegression], freq=D, lag_features=['lag7', 'lag14', 'expanding_mean_lag1', 'rolling_mean_lag7_window_size28'], date_features=['dayofweek'], num_threads=1)
+```
+MLForecast(models=[LGBMRegressor, LinearRegression], freq=D, lag_features=['lag7', 'lag14', 'expanding_mean_lag1', 'rolling_mean_lag7_window_size28'], date_features=['dayofweek'], num_threads=1)
+```
 
 ### Predicting
 

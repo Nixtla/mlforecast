@@ -13,17 +13,14 @@ AutoRandomForest(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoRandomForest.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoRandomForest.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoElasticNet`
 
@@ -33,17 +30,14 @@ AutoElasticNet(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoElasticNet.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoElasticNet.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoLasso`
 
@@ -53,17 +47,14 @@ AutoLasso(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoLasso.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoLasso.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoRidge`
 
@@ -73,17 +64,14 @@ AutoRidge(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoRidge.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoRidge.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoLinearRegression`
 
@@ -93,17 +81,14 @@ AutoLinearRegression(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoLinearRegression.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoLinearRegression.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoCatboost`
 
@@ -113,17 +98,14 @@ AutoCatboost(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoCatboost.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoCatboost.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoXGBoost`
 
@@ -133,17 +115,14 @@ AutoXGBoost(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoXGBoost.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoXGBoost.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `AutoLightGBM`
 
@@ -153,17 +132,14 @@ AutoLightGBM(config=None)
 
 Bases: <code>[AutoModel](#mlforecast.auto.AutoModel)</code>
 
-#### `AutoLightGBM.config`
+Structure to hold a model and its search space
 
-```python
-config = config
-```
+**Parameters:**
 
-#### `AutoLightGBM.model`
-
-```python
-model = model
-```
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
+`config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
 ### `random_forest_space`
 
@@ -227,18 +203,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `model` | <code>[BaseEstimator](#sklearn.base.BaseEstimator)</code> | scikit-learn compatible regressor | *required*
 `config` | <code>[callable](#callable)</code> | function that takes an optuna trial and produces a configuration | *required*
-
-#### `AutoModel.config`
-
-```python
-config = config
-```
-
-#### `AutoModel.model`
-
-```python
-model = model
-```
 
 ### `AutoMLForecast`
 

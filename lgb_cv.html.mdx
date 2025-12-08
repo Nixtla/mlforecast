@@ -113,13 +113,13 @@ Name | Type | Description | Default
 `h` | <code>[int](#int)</code> | Forecast horizon. | *required*
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`X_df` | <code>pandas DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
+`X_df` | <code>[DataFrame](#pandas.DataFrame)</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
 
 **Returns:**
 
 Type | Description
 ---- | -----------
-<code>pandas DataFrame</code> | Predictions for each serie and timestep, with one column per window.
+<code>[DataFrame](#pandas.DataFrame)</code> | Predictions for each serie and timestep, with one column per window.
 
 #### `LightGBMCV.setup`
 
@@ -483,13 +483,6 @@ should be discarded. We’ll now show how to do that.
 Since the CV requires a bit of setup, like the LightGBM datasets and the
 internal features, we have this `setup` method.
 
-------------------------------------------------------------------------
-
-<a
-href="<https://github.com/Nixtla/mlforecast/blob/main/mlforecast/lgb_cv.py#L126>"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-
 ```python
 cv4 = LightGBMCV(
     freq=1,
@@ -509,13 +502,6 @@ LightGBMCV(freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', '
 
 Once we have this we can call `partial_fit` to only train for some
 iterations and return the score of the forecast window.
-
-------------------------------------------------------------------------
-
-<a
-href="<https://github.com/Nixtla/mlforecast/blob/main/mlforecast/lgb_cv.py#L289>"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
 
 ```python
 score = cv4.partial_fit(10)

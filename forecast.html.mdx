@@ -4,6 +4,7 @@ output-file: forecast.html
 title: MLForecast
 ---
 
+##
 
 ### Data
 
@@ -259,131 +260,6 @@ Name | Type | Description | Default
 Type | Description
 ---- | -----------
 <code>[DFType](#utilsforecast.compat.DFType)</code> | pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
-
-#### `MLForecast.preprocess`
-
-```python
-preprocess(
-    df,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    max_horizon=None,
-    return_X_y=False,
-    as_numpy=False,
-    weight_col=None,
-)
-```
-
-Add the features to `data`.
-
-**Parameters:**
-
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`df` | <code>pandas DataFrame</code> | Series data in long format. | *required*
-`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
-`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
-`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
-`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
-`dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
-`max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
-`return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
-`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
-
-**Returns:**
-
-Type | Description
----- | -----------
-<code>[Union](#typing.Union)\[[DFType](#utilsforecast.compat.DFType), [Tuple](#typing.Tuple)\[[DFType](#utilsforecast.compat.DFType), [ndarray](#numpy.ndarray)\]\]</code> | DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
-
-#### `MLForecast.fit_models`
-
-```python
-fit_models(X, y, models_fit_kwargs=None)
-```
-
-Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
-
-**Parameters:**
-
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`X` | <code>pandas or polars DataFrame or numpy array</code> | Features. | *required*
-`y` | <code>numpy array</code> | Target. | *required*
-
-**Returns:**
-
-Name | Type | Description
----- | ---- | -----------
-`MLForecast` | <code>[MLForecast](#mlforecast.forecast.MLForecast)</code> | Forecast object with trained models.
-
-#### `MLForecast.cross_validation`
-
-```python
-cross_validation(
-    df,
-    n_windows,
-    h,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    step_size=None,
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    refit=True,
-    max_horizon=None,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    prediction_intervals=None,
-    level=None,
-    input_size=None,
-    fitted=False,
-    as_numpy=False,
-    weight_col=None,
-)
-```
-
-Perform time series cross validation.
-Creates `n_windows` splits where each window has `h` test periods,
-trains the models, computes the predictions and merges the actuals.
-
-**Parameters:**
-
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`df` | <code>pandas or polars DataFrame</code> | Series data in long format. | *required*
-`n_windows` | <code>[int](#int)</code> | Number of windows to evaluate. | *required*
-`h` | <code>[int](#int)</code> | Forecast horizon. | *required*
-`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
-`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
-`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
-`step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
-`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
-`dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
-`max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
-`refit` | <code>[bool](#bool) or [int](#int)</code> | Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True. | <code>True</code>
-`before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
-`level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
-`input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
-`fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
-`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
-
-**Returns:**
-
-Type | Description
----- | -----------
-<code>[DFType](#utilsforecast.compat.DFType)</code> | pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
 
 ```python
 fcst = MLForecast(
@@ -685,38 +561,77 @@ models you can call `Forecast.preprocess`.
 
 ------------------------------------------------------------------------
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L205"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+### `MLForecast`
 
-### MLForecast.preprocess
+```python
+MLForecast(
+    models,
+    freq,
+    lags=None,
+    lag_transforms=None,
+    date_features=None,
+    num_threads=1,
+    target_transforms=None,
+    lag_transforms_namer=None,
+)
+```
 
-> ``` text
->  MLForecast.preprocess (df:~DFType, id_col:str='unique_id',
->                         time_col:str='ds', target_col:str='y',
->                         static_features:Optional[List[str]]=None,
->                         dropna:bool=True, keep_last_n:Optional[int]=None,
->                         max_horizon:Optional[int]=None,
->                         return_X_y:bool=False, as_numpy:bool=False,
->                         weight_col:Optional[str]=None)
-> ```
+Forecasting pipeline
 
-*Add the features to `data`.*
+**Parameters:**
 
-|  | **Type** | **Default** | **Details** |
-|------|------------------|-------------------------|-------------------------|
-| df | DFType |  | Series data in long format. |
-| id_col | str | unique_id | Column that identifies each serie. |
-| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
-| target_col | str | y | Column that contains the target. |
-| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
-| dropna | bool | True | Drop rows with missing values produced by the transformations. |
-| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| max_horizon | Optional | None | Train this many models, where each model will predict a specific horizon. |
-| return_X_y | bool | False | Return a tuple with the features and the target. If False will return a single dataframe. |
-| as_numpy | bool | False | Cast features to numpy array. Only works for `return_X_y=True`. |
-| weight_col | Optional | None | Column that contains the sample weights. |
-| **Returns** | **Union** |  | **`df` plus added features and target(s).** |
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`models` | <code>regressor or list of regressors</code> | Models that will be trained and used to compute the forecasts. | *required*
+`freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pd.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
+`lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
+`lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
+`date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
+`lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
+
+#### `MLForecast.preprocess`
+
+```python
+preprocess(
+    df,
+    id_col="unique_id",
+    time_col="ds",
+    target_col="y",
+    static_features=None,
+    dropna=True,
+    keep_last_n=None,
+    max_horizon=None,
+    return_X_y=False,
+    as_numpy=False,
+    weight_col=None,
+)
+```
+
+Add the features to `data`.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>pandas DataFrame</code> | Series data in long format. | *required*
+`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
+`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
+`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
+`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[Union](#typing.Union)\[[DFType](#utilsforecast.compat.DFType), [Tuple](#typing.Tuple)\[[DFType](#utilsforecast.compat.DFType), [ndarray](#numpy.ndarray)\]\]</code> | DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
 
 ```python
 prep_df = fcst.preprocess(train)
@@ -740,29 +655,118 @@ prep_df
 If we do this we then have to call `Forecast.fit_models`, since this
 only stores the series information.
 
-------------------------------------------------------------------------
+### `MLForecast`
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L265"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+```python
+MLForecast(
+    models,
+    freq,
+    lags=None,
+    lag_transforms=None,
+    date_features=None,
+    num_threads=1,
+    target_transforms=None,
+    lag_transforms_namer=None,
+)
+```
 
-### MLForecast.fit_models
+Forecasting pipeline
 
-> ``` text
->  MLForecast.fit_models (X:Union[pandas.core.frame.DataFrame,polars.datafra
->                         me.frame.DataFrame,numpy.ndarray],
->                         y:numpy.ndarray)
-> ```
+**Parameters:**
 
-*Manually train models. Use this if you called
-[`MLForecast.preprocess`](https://Nixtla.github.io/mlforecast/forecast.html#mlforecast.preprocess)
-beforehand.*
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`models` | <code>regressor or list of regressors</code> | Models that will be trained and used to compute the forecasts. | *required*
+`freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pd.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
+`lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
+`lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
+`date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
+`lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 
-|             | **Type**       | **Details**                              |
-|-------------|----------------|------------------------------------------|
-| X           | Union          | Features.                                |
-| y           | ndarray        | Target.                                  |
-| **Returns** | **MLForecast** | **Forecast object with trained models.** |
+#### `MLForecast.fit_models`
+
+```python
+fit_models(X, y, models_fit_kwargs=None)
+```
+
+Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`X` | <code>pandas or polars DataFrame or numpy array</code> | Features. | *required*
+`y` | <code>numpy array</code> | Target. | *required*
+
+**Returns:**
+
+Name | Type | Description
+---- | ---- | -----------
+`MLForecast` | <code>[MLForecast](#mlforecast.forecast.MLForecast)</code> | Forecast object with trained models.
+
+#### `MLForecast.cross_validation`
+
+```python
+cross_validation(
+    df,
+    n_windows,
+    h,
+    id_col="unique_id",
+    time_col="ds",
+    target_col="y",
+    step_size=None,
+    static_features=None,
+    dropna=True,
+    keep_last_n=None,
+    refit=True,
+    max_horizon=None,
+    before_predict_callback=None,
+    after_predict_callback=None,
+    prediction_intervals=None,
+    level=None,
+    input_size=None,
+    fitted=False,
+    as_numpy=False,
+    weight_col=None,
+)
+```
+
+Perform time series cross validation.
+Creates `n_windows` splits where each window has `h` test periods,
+trains the models, computes the predictions and merges the actuals.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>pandas or polars DataFrame</code> | Series data in long format. | *required*
+`n_windows` | <code>[int](#int)</code> | Number of windows to evaluate. | *required*
+`h` | <code>[int](#int)</code> | Forecast horizon. | *required*
+`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
+`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
+`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
+`step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`refit` | <code>[bool](#bool) or [int](#int)</code> | Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True. | <code>True</code>
+`before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
+`after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
+`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
+`level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
+`input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
+`fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[DFType](#utilsforecast.compat.DFType)</code> | pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
 
 ```python
 X, y = prep_df.drop(columns=['unique_id', 'ds', 'y']), prep_df['y']
@@ -778,61 +782,103 @@ predictions2 = fcst.predict(horizon)
 pd.testing.assert_frame_equal(predictions, predictions2)
 ```
 
-------------------------------------------------------------------------
+### `MLForecast`
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/forecast.py#L795"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+```python
+MLForecast(
+    models,
+    freq,
+    lags=None,
+    lag_transforms=None,
+    date_features=None,
+    num_threads=1,
+    target_transforms=None,
+    lag_transforms_namer=None,
+)
+```
 
-### MLForecast.cross_validation
+Forecasting pipeline
 
-> ``` text
->  MLForecast.cross_validation (df:~DFType, n_windows:int, h:int,
->                               id_col:str='unique_id', time_col:str='ds',
->                               target_col:str='y',
->                               step_size:Optional[int]=None,
->                               static_features:Optional[List[str]]=None,
->                               dropna:bool=True,
->                               keep_last_n:Optional[int]=None,
->                               refit:Union[bool,int]=True,
->                               max_horizon:Optional[int]=None, before_predi
->                               ct_callback:Optional[Callable]=None, after_p
->                               redict_callback:Optional[Callable]=None, pre
->                               diction_intervals:Optional[mlforecast.utils.
->                               PredictionIntervals]=None,
->                               level:Optional[List[Union[int,float]]]=None,
->                               input_size:Optional[int]=None,
->                               fitted:bool=False, as_numpy:bool=False,
->                               weight_col:Optional[str]=None)
-> ```
+**Parameters:**
 
-*Perform time series cross validation. Creates `n_windows` splits where
-each window has `h` test periods, trains the models, computes the
-predictions and merges the actuals.*
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`models` | <code>regressor or list of regressors</code> | Models that will be trained and used to compute the forecasts. | *required*
+`freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pd.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
+`lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
+`lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
+`date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
+`lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 
-|  | **Type** | **Default** | **Details** |
-|------|------------------|-------------------------|-------------------------|
-| df | DFType |  | Series data in long format. |
-| n_windows | int |  | Number of windows to evaluate. |
-| h | int |  | Forecast horizon. |
-| id_col | str | unique_id | Column that identifies each serie. |
-| time_col | str | ds | Column that identifies each timestep, its values can be timestamps or integers. |
-| target_col | str | y | Column that contains the target. |
-| step_size | Optional | None | Step size between each cross validation window. If None it will be equal to `h`. |
-| static_features | Optional | None | Names of the features that are static and will be repeated when forecasting. |
-| dropna | bool | True | Drop rows with missing values produced by the transformations. |
-| keep_last_n | Optional | None | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. |
-| refit | Union | True | Retrain model for each cross validation window.<br/>If False, the models are trained at the beginning and then used to predict each window.<br/>If positive int, the models are retrained every `refit` windows. |
-| max_horizon | Optional | None |  |
-| before_predict_callback | Optional | None | Function to call on the features before computing the predictions.<br/> This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure.<br/> The series identifier is on the index. |
-| after_predict_callback | Optional | None | Function to call on the predictions before updating the targets.<br/> This function will take a pandas Series with the predictions and should return another one with the same structure.<br/> The series identifier is on the index. |
-| prediction_intervals | Optional | None | Configuration to calibrate prediction intervals (Conformal Prediction). |
-| level | Optional | None | Confidence levels between 0 and 100 for prediction intervals. |
-| input_size | Optional | None | Maximum training samples per serie in each window. If None, will use an expanding window. |
-| fitted | bool | False | Store the in-sample predictions. |
-| as_numpy | bool | False | Cast features to numpy array. |
-| weight_col | Optional | None | Column that contains the sample weights. |
-| **Returns** | **DFType** |  | **Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.** |
+#### `MLForecast.cross_validation`
+
+```python
+cross_validation(
+    df,
+    n_windows,
+    h,
+    id_col="unique_id",
+    time_col="ds",
+    target_col="y",
+    step_size=None,
+    static_features=None,
+    dropna=True,
+    keep_last_n=None,
+    refit=True,
+    max_horizon=None,
+    before_predict_callback=None,
+    after_predict_callback=None,
+    prediction_intervals=None,
+    level=None,
+    input_size=None,
+    fitted=False,
+    as_numpy=False,
+    weight_col=None,
+)
+```
+
+Perform time series cross validation.
+Creates `n_windows` splits where each window has `h` test periods,
+trains the models, computes the predictions and merges the actuals.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>pandas or polars DataFrame</code> | Series data in long format. | *required*
+`n_windows` | <code>[int](#int)</code> | Number of windows to evaluate. | *required*
+`h` | <code>[int](#int)</code> | Forecast horizon. | *required*
+`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
+`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
+`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
+`step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`refit` | <code>[bool](#bool) or [int](#int)</code> | Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True. | <code>True</code>
+`before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
+`after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
+`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
+`level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
+`input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
+`fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[DFType](#utilsforecast.compat.DFType)</code> | pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
+
+#### `MLForecast.from_cv`
+
+```python
+from_cv(cv)
+```
 
 If we would like to know how good our forecast will be for a specific
 model and set of features then we can perform cross validation. What

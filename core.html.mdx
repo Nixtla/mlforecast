@@ -297,8 +297,6 @@ test_fail(
 )
 ```
 
-------------------------------------------------------------------------
-
 Once we have a trained model we can use
 [`TimeSeries.predict`](https://Nixtla.github.io/mlforecast/core.html#timeseries.predict)
 passing the model and the horizon to get the predictions back.
@@ -353,5 +351,3 @@ pd.testing.assert_frame_equal(
     prices_catalog.merge(predictions[['unique_id', 'ds']])[['unique_id', 'ds', 'price']]
 )
 ```
-
-------------------------------------------------------------------------
