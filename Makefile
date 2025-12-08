@@ -17,12 +17,13 @@ format_docs:
 	sed -i -e 's/_docs/docs/g' ./docs-scripts/docs-final-formatting.bash
 	bash ./docs-scripts/docs-final-formatting.bash
 	find docs/mintlify -name "*.mdx" -exec sed -i.bak '/^:::/d' {} + && find docs/mintlify -name "*.bak" -delete
+	find docs/mintlify/docs -name "*.mdx" ! -name "*.html.mdx" -type f -exec sh -c 'mv "$$1" "$${1%.mdx}.html.mdx"' _ {} \;
+
 
 preview_docs:
 	cd docs/mintlify && mintlify dev
 
 clean:
-# 	rm -f docs/*.md
 	find docs/mintlify -name "*.mdx" -exec rm -f {} +
 
 all_docs: load_docs_scripts api_docs examples_docs format_docs
