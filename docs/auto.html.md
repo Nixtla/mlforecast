@@ -6,38 +6,72 @@ title: Auto
 ##
 
 ::: mlforecast.auto.AutoRandomForest
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoElasticNet
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoLasso
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoRidge
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoLinearRegression
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoCatboost
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoXGBoost
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoLightGBM
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.random_forest_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.elastic_net_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.lasso_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.ridge_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.linear_regression_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.catboost_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.xgboost_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.lightgbm_space
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoModel
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.auto.AutoMLForecast
     handler: python
