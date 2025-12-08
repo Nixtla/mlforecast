@@ -3,6 +3,7 @@ output-file: target_transforms.html
 title: Target transforms
 ---
 
+##
 
 ```python
 import pandas as pd
@@ -19,17 +20,17 @@ from mlforecast.utils import generate_daily_series
 ------------------------------------------------------------------------
 
 ::: mlforecast.target_transforms.BaseTargetTransform
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.target_transforms.Differences
-
-*Subtracts previous values of the serie. Can be used to remove trend or
-seasonalities.*
+    options:
+      show_if_no_docstring: false
 
 ```python
 series = generate_daily_series(10, min_length=50, max_length=100)
-```
 
-```python
+
 diffs = Differences([1, 2, 5])
 id_counts = counts_by_id(series, 'unique_id')
 indptr = np.append(0, id_counts['counts'].cumsum())
@@ -84,17 +85,17 @@ for i in range(len(diffs.differences)):
     )
 ```
 
-
 ::: mlforecast.target_transforms.AutoDifferences
-
-*Find and apply the optimal number of differences to each serie.*
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.target_transforms.AutoSeasonalDifferences
-
-*Find and apply the optimal number of seasonal differences to each
-group.*
+    options:
+      show_if_no_docstring: false
 
 ::: mlforecast.target_transforms.AutoSeasonalityAndDifferences
+    options:
+      show_if_no_docstring: false
 
 ```python
 def test_scaler(sc, series):
@@ -126,102 +127,25 @@ def test_scaler(sc, series):
     )
 ```
 
-------------------------------------------------------------------------
+::: mlforecast.target_transforms.LocalStandardScaler
+    options:
+      show_if_no_docstring: false
 
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L282"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
+::: mlforecast.target_transforms.LocalMinMaxScaler
+    options:
+      show_if_no_docstring: false
 
-### LocalStandardScaler
+::: mlforecast.target_transforms.LocalRobustScaler
+    options:
+      show_if_no_docstring: false
 
-> ``` text
->  LocalStandardScaler ()
-> ```
+::: mlforecast.target_transforms.LocalBoxCox
+    options:
+      show_if_no_docstring: false
 
-*Standardizes each serie by subtracting its mean and dividing by its
-standard deviation.*
-
-```python
-test_scaler(LocalStandardScaler(), series)
-```
-
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L288"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### LocalMinMaxScaler
-
-> ``` text
->  LocalMinMaxScaler ()
-> ```
-
-*Scales each serie to be in the \[0, 1\] interval.*
-
-```python
-test_scaler(LocalMinMaxScaler(), series)
-```
-
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L294"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### LocalRobustScaler
-
-> ``` text
->  LocalRobustScaler (scale:str)
-> ```
-
-*Scaler robust to outliers.*
-
-|  | **Type** | **Details** |
-|--------|---------------------------|-------------------------------------|
-| scale | str | Statistic to use for scaling. Can be either ‘iqr’ (Inter Quartile Range) or ‘mad’ (Median Asbolute Deviation) |
-
-```python
-test_scaler(LocalRobustScaler(scale='iqr'), series)
-```
-
-
-```python
-test_scaler(LocalRobustScaler(scale='mad'), series)
-```
-
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L307"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### LocalBoxCox
-
-> ``` text
->  LocalBoxCox ()
-> ```
-
-*Finds the optimum lambda for each serie and applies the Box-Cox
-transformation*
-
-```python
-test_scaler(LocalBoxCox(), series)
-```
-
-------------------------------------------------------------------------
-
-<a
-href="https://github.com/Nixtla/mlforecast/blob/main/mlforecast/target_transforms.py#L316"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-### GlobalSklearnTransformer
-
-> ``` text
->  GlobalSklearnTransformer (transformer:sklearn.base.TransformerMixin)
-> ```
-
-*Applies the same scikit-learn transformer to all series.*
+::: mlforecast.target_transforms.GlobalSklearnTransformer
+    options:
+      show_if_no_docstring: false
 
 ```python
 # need this import in order for isinstance to work
