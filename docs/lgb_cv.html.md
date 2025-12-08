@@ -309,13 +309,6 @@ should be discarded. We’ll now show how to do that.
 Since the CV requires a bit of setup, like the LightGBM datasets and the
 internal features, we have this `setup` method.
 
-------------------------------------------------------------------------
-
-<a
-href="<https://github.com/Nixtla/mlforecast/blob/main/mlforecast/lgb_cv.py#L126>"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
-
 ```python
 cv4 = LightGBMCV(
     freq=1,
@@ -335,13 +328,6 @@ LightGBMCV(freq=1, lag_features=['lag24', 'lag48', 'lag72', 'lag96', 'lag120', '
 
 Once we have this we can call `partial_fit` to only train for some
 iterations and return the score of the forecast window.
-
-------------------------------------------------------------------------
-
-<a
-href="<https://github.com/Nixtla/mlforecast/blob/main/mlforecast/lgb_cv.py#L289>"
-target="_blank" style={{ float: "right", fontSize: "smaller" }}>source</a>
-
 
 ```python
 score = cv4.partial_fit(10)

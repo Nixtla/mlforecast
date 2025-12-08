@@ -17,8 +17,6 @@ from mlforecast import MLForecast
 from mlforecast.utils import generate_daily_series
 ```
 
-------------------------------------------------------------------------
-
 ::: mlforecast.target_transforms.BaseTargetTransform
     options:
       show_if_no_docstring: false

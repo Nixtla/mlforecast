@@ -115,3 +115,5 @@ test_fail(lambda: generate_prices_for_series(series), contains='equal ends')
 ------------------------------------------------------------------------
 
 ::: mlforecast.utils.PredictionIntervals
+    options:
+      show_if_no_docstring: false
