@@ -862,9 +862,27 @@ class TimeSeries:
         with fsspec.open(path, "rb", protocol=protocol) as f:
             ts = cloudpickle.load(f)
         return ts
+    
+    def _validate_new_df(self, df: pd.DataFrame) -> None:
+        if isinstance(df, pl.DataFrame):
+            max_date_update_observed = df.group_by(self.id_col).agg(pl.col(self.time_col).max()).to_pandas()[self.time_col]
+            min_date_update_observed = df.group_by(self.id_col).agg(pl.col(self.time_col).min()).to_pandas()[self.time_col]
+        else:
+            max_date_update_observed = df.groupby(self.id_col, observed=True)[self.time_col].max()
+            min_date_update_observed = df.groupby(self.id_col, observed=True)[self.time_col].min()
+        last_dates = dict(zip(self.uids, self.last_dates))
+        id_col = df[self.id_col].unique().to_numpy()
+        df_temp = pd.DataFrame({self.id_col: id_col})
+        df_temp['last_date'] = df_temp[self.id_col].map(last_dates)
+        df_temp['expected_next_date'] = df_temp['last_date'] + pd.tseries.frequencies.to_offset(self.freq)
+        min_date_update_expected = df_temp.groupby(self.id_col, observed=True).expected_next_date.min().values
+        
+        assert np.sum((max_date_update_observed - min_date_update_expected).dt.days) == np.sum((max_date_update_observed - min_date_update_observed).dt.days),  \
+            """Expected size mismatch: Each unique_id needs to start from the last
+            day of the previous history and should contain continuous observations."""
 
-    def update(self, df: DataFrame) -> None:
-        """Update the values of the stored series."""
+    def update(self, df: DataFrame, validate_input: str = False) -> None:
+        """Update the values of the stored series."""  
         validate_format(df, self.id_col, self.time_col, self.target_col)
         uids = self.uids
         if isinstance(uids, pd.Index):
@@ -875,6 +893,8 @@ class TimeSeries:
         df = ufp.sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
+        if validate_input:   
+            self._validate_new_df(df=df) 
         id_counts = ufp.counts_by_id(df, self.id_col)
         try:
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
