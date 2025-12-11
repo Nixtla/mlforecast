@@ -962,10 +962,10 @@ class MLForecast:
             fcst._cs_df = intervals["scores"]
         return fcst
 
-    def update(self, df: DataFrame) -> None:
+    def update(self, df: DataFrame, validate_input: str = False) -> None:
         """Update the values of the stored series.
 
         Args:
             df (pandas or polars DataFrame): Dataframe with new observations.
         """
-        self.ts.update(df)
+        self.ts.update(df, validate_input)
