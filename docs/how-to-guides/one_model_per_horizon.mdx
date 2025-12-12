@@ -1,0 +1,129 @@
+---
+title: One model per step
+---
+
+
+```python
+%load_ext autoreload
+%autoreload 2
+```
+
+
+> Train one model to predict each step of the forecasting horizon
+
+By default mlforecast uses the recursive strategy, i.e. a model is
+trained to predict the next value and if we’re predicting several values
+we do it one at a time and then use the model’s predictions as the new
+target, recompute the features and predict the next step.
+
+There’s another approach where if we want to predict 10 steps ahead we
+train 10 different models, where each model is trained to predict the
+value at each specific step, i.e. one model predicts the next value,
+another one predicts the value two steps ahead and so on. This can be
+very time consuming but can also provide better results. If you want to
+use this approach you can specify `max_horizon` in `MLForecast.fit`,
+which will train that many models and each model will predict its
+corresponding horizon when you call `MLForecast.predict`.
+
+## Setup
+
+```python
+import random
+import lightgbm as lgb
+import pandas as pd
+from datasetsforecast.m4 import M4, M4Info
+from utilsforecast.evaluation import evaluate
+from utilsforecast.losses import smape
+
+from mlforecast import MLForecast
+from mlforecast.lag_transforms import ExponentiallyWeightedMean, RollingMean
+from mlforecast.target_transforms import Differences
+```
+
+### Data
+
+We will use four random series from the M4 dataset
+
+```python
+group = 'Hourly'
+await M4.async_download('data', group=group)
+df, *_ = M4.load(directory='data', group=group)
+df['ds'] = df['ds'].astype('int')
+ids = df['unique_id'].unique()
+random.seed(0)
+sample_ids = random.choices(ids, k=4)
+sample_df = df[df['unique_id'].isin(sample_ids)]
+info = M4Info[group]
+horizon = info.horizon
+valid = sample_df.groupby('unique_id').tail(horizon)
+train = sample_df.drop(valid.index)
+```
+
+
+```python
+def avg_smape(df):
+    """Computes the SMAPE by serie and then averages it across all series."""
+    full = df.merge(valid)
+    return (
+        evaluate(full, metrics=[smape])
+        .drop(columns='metric')
+        .set_index('unique_id')
+        .squeeze()
+    )
+```
+
+## Model
+
+```python
+fcst = MLForecast(
+    models=lgb.LGBMRegressor(random_state=0, verbosity=-1),
+    freq=1,
+    lags=[24 * (i+1) for i in range(7)],
+    lag_transforms={
+        1: [RollingMean(window_size=24)],
+        24: [RollingMean(window_size=24)],
+        48: [ExponentiallyWeightedMean(alpha=0.3)],
+    },
+    num_threads=1,
+    target_transforms=[Differences([24])],
+)
+```
+
+
+```python
+horizon = 24
+# the following will train 24 models, one for each horizon
+individual_fcst = fcst.fit(train, max_horizon=horizon)
+individual_preds = individual_fcst.predict(horizon)
+avg_smape_individual = avg_smape(individual_preds).rename('individual')
+# the following will train a single model and use the recursive strategy
+recursive_fcst = fcst.fit(train)
+recursive_preds = recursive_fcst.predict(horizon)
+avg_smape_recursive = avg_smape(recursive_preds).rename('recursive')
+# results
+print('Average SMAPE per method and serie')
+avg_smape_individual.to_frame().join(avg_smape_recursive).applymap('{:.1%}'.format)
+```
+
+``` text
+Average SMAPE per method and serie
+```
+
+|           | individual | recursive |
+|-----------|------------|-----------|
+| unique_id |            |           |
+| H196      | 0.3%       | 0.3%      |
+| H256      | 0.4%       | 0.3%      |
+| H381      | 20.9%      | 9.5%      |
+| H413      | 11.9%      | 13.6%     |
+
+
+```python
+# we get the same prediction for the first timestep
+pd.testing.assert_frame_equal(
+    individual_preds.groupby('unique_id').head(1).astype({'ds': 'int64'}),
+    recursive_preds.groupby('unique_id').head(1).astype({'ds': 'int64'}),    
+)
+```
+
+
