@@ -5,6 +5,7 @@ import copy
 from typing import Any, Callable, Dict, Optional, Union
 
 import numpy as np
+import pandas as pd
 import optuna
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
@@ -108,22 +109,36 @@ def mlforecast_objective(
                     **config["mlf_fit_params"],
                 )
             static = [c for c in mlf.ts.static_features_.columns if c != id_col]
-            dynamic = [
-                c
-                for c in valid.columns
-                if c not in static + [id_col, time_col, target_col, weight_col]
-            ]
-            
+            if weight_col:
+                dynamic = [
+                    c
+                    for c in valid.columns
+                    if c not in static + [id_col, time_col, target_col, weight_col]
+                ]
+            else:
+                dynamic = [
+                    c
+                    for c in valid.columns
+                    if c not in static + [id_col, time_col, target_col]
+                ] 
             if dynamic:
                 X_df: Optional[DataFrame] = ufp.drop_columns(
                     valid, static + [target_col]
                 )
             else:
                 X_df = None
-
             if weight_col:
-                new_df = None if should_fit else train.drop(columns=[weight_col])
-            else: 
+                if isinstance(train, pd.DataFrame):
+                    new_df = None if should_fit else train.drop(columns=[weight_col], errors="ignore")
+                else:
+                    if should_fit:
+                        new_df = None
+                    else:
+                        if weight_col in train.columns:
+                            new_df = train.drop(weight_col)
+                        else:
+                            new_df = train
+            else:
                 new_df = None if should_fit else train
             preds = mlf.predict(
                 h=h,

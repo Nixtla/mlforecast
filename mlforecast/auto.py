@@ -474,7 +474,7 @@ class AutoMLForecast:
 
         Returns:
             (AutoMLForecast): object with best models and optimization results
-        """   
+        """
         validate_freq(df[time_col], self.freq)
         if self.init_config is not None:
             init_config = self.init_config
@@ -486,7 +486,6 @@ class AutoMLForecast:
                 min_samples=min_train_size,
                 min_value=df[target_col].min(),
             )
-
         if loss is None:
             def loss(df, train_df):  # noqa: ARG001
                 return smape(
@@ -495,7 +494,6 @@ class AutoMLForecast:
                     id_col=id_col,
                     target_col=target_col,
                 )["model"].mean()
-        
         if study_kwargs is None:
             study_kwargs = {}
         if "sampler" not in study_kwargs:

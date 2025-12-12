@@ -689,7 +689,8 @@ class MLForecast:
             new_ts.as_numpy = self.ts.as_numpy
             ts = new_ts
         else:
-            ts = self.ts       
+            ts = self.ts  
+
         forecasts = ts.predict(
             models=self.models_,
             horizon=h,
@@ -698,7 +699,6 @@ class MLForecast:
             X_df=X_df,
             ids=ids,
         )
-
         if level is not None:
             if self._cs_df is None:
                 warn_msg = (

@@ -78,7 +78,7 @@ def test_automlforecast_pipeline(weekly_data):
     assert not fitted_vals.empty
     
 def test_automlforecast_weight_col(weekly_data):
-    
+
     def custom_loss(val_df, train_df, weight_col):
         error = (val_df['y'] - val_df['model']).abs()
         indices = val_df.index
@@ -88,11 +88,11 @@ def test_automlforecast_weight_col(weekly_data):
 
         weighted_error = weighted_sum / total_weight if total_weight != 0 else float('inf')
         return weighted_error
-    
+
     train, valid, info = weekly_data
     h = info.horizon
     season_length = info.seasonality
-    
+
     train['weights'] = 1
 
     auto_ridge = AutoModel(
@@ -108,7 +108,7 @@ def test_automlforecast_weight_col(weekly_data):
         models={"ridge": auto_ridge},  
         fit_config=lambda trial: {'static_features': []}
     )
-    
+
     auto_mlf.fit(
         df=train,
         n_windows=2,
@@ -118,7 +118,7 @@ def test_automlforecast_weight_col(weekly_data):
         weight_col='weights',  
         fitted=True
     )
-    
+
     preds = auto_mlf.predict(h)
     assert not preds.empty
     fitted_vals = auto_mlf.forecast_fitted_values(level=[95])
