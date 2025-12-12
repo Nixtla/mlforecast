@@ -1,0 +1,95 @@
+
+
+
+
+# <kbd>module</kbd> `mlforecast.utils`
+
+
+
+
+
+---
+
+
+
+## <kbd>function</kbd> `generate_daily_series`
+
+```python
+generate_daily_series(
+    n_series: int,
+    min_length: int = 50,
+    max_length: int = 500,
+    n_static_features: int = 0,
+    equal_ends: bool = False,
+    static_as_categorical: bool = True,
+    with_trend: bool = False,
+    seed: int = 0,
+    engine: str = 'pandas'
+) → Union[DataFrame, DataFrame]
+```
+
+Generate Synthetic Panel Series. 
+
+
+
+**Args:**
+ 
+ - <b>`n_series`</b> (int):  Number of series for synthetic panel. 
+ - <b>`min_length`</b> (int, default=50):  Minimum length of synthetic panel's series. 
+ - <b>`max_length`</b> (int, default=500):  Maximum length of synthetic panel's series. 
+ - <b>`n_static_features`</b> (int, default=0):  Number of static exogenous variables for synthetic panel's series. 
+ - <b>`equal_ends`</b> (bool, default=False):  Series should end in the same date stamp `ds`. 
+ - <b>`static_as_categorical`</b> (bool, default=True):  Static features should have a categorical data type. 
+ - <b>`with_trend`</b> (bool, default=False):  Series should have a (positive) trend. 
+ - <b>`seed`</b> (int, default=0):  Random seed used for generating the data. 
+ - <b>`engine`</b> (str, default='pandas'):  Output Dataframe type. 
+
+
+
+**Returns:**
+ 
+ - <b>`pandas or polars DataFrame`</b>:  Synthetic panel with columns [`unique_id`, `ds`, `y`] and exogenous features. 
+
+
+---
+
+
+
+## <kbd>function</kbd> `generate_prices_for_series`
+
+```python
+generate_prices_for_series(
+    series: DataFrame,
+    horizon: int = 7,
+    seed: int = 0
+) → DataFrame
+```
+
+
+
+
+
+
+---
+
+
+
+## <kbd>class</kbd> `PredictionIntervals`
+Class for storing prediction intervals metadata information. 
+
+
+
+### <kbd>method</kbd> `__init__`
+
+```python
+__init__(n_windows: int = 2, h: int = 1, method: str = 'conformal_distribution')
+```
+
+
+
+
+
+
+
+
+
