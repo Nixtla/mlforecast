@@ -11,7 +11,7 @@ can’t deal with it out of the box.
 
 ## Data setup
 
-For this example we’ll use a single serie from the M4 dataset.
+For this example we’ll use a single series from the M4 dataset.
 
 ```python
 import matplotlib.pyplot as plt
@@ -35,11 +35,11 @@ serie = df[df['unique_id'].eq('H196')]
 
 ## Local transformations
 
-> Transformations applied per serie
+> Transformations applied per series
 
 ### Differences
 
-We’ll take a look at our serie to see possible differences that would
+We’ll take a look at our series to see possible differences that would
 help our models.
 
 ```python
@@ -91,7 +91,7 @@ plot({'original': serie, 'without trend and seasonality': without_trend_and_seas
 
 ### LocalStandardScaler
 
-We see that our serie is random noise now. Suppose we also want to
+We see that our series is random noise now. Suppose we also want to
 standardize it, i.e. make it have a mean of 0 and variance of 1. We can
 add the LocalStandardScaler transformation after these differences.
 
@@ -114,7 +114,7 @@ Name: y, dtype: float64
 
 ![](../../figs/target_transforms__standardized.png)
 
-Now that we’ve captured the components of the serie (trend +
+Now that we’ve captured the components of the series (trend +
 seasonality), we could try forecasting it with a model that always
 predicts 0, which will basically project the trend and seasonality.
 
@@ -203,7 +203,7 @@ from mlforecast.target_transforms import BaseTargetTransform
 
 ```python
 class LocalMinMaxScaler(BaseTargetTransform):
-    """Scales each serie to be in the [0, 1] interval."""
+    """Scales each series to be in the [0, 1] interval."""
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         self.stats_ = df.groupby(self.id_col)[self.target_col].agg(['min', 'max'])
         df = df.merge(self.stats_, on=self.id_col)

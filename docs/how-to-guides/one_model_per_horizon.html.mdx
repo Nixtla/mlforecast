@@ -55,7 +55,7 @@ train = sample_df.drop(valid.index)
 
 ```python
 def avg_smape(df):
-    """Computes the SMAPE by serie and then averages it across all series."""
+    """Computes the SMAPE by series and then averages it across all series."""
     full = df.merge(valid)
     return (
         evaluate(full, metrics=[smape])
@@ -94,7 +94,7 @@ recursive_fcst = fcst.fit(train)
 recursive_preds = recursive_fcst.predict(horizon)
 avg_smape_recursive = avg_smape(recursive_preds).rename('recursive')
 # results
-print('Average SMAPE per method and serie')
+print('Average SMAPE per method and series')
 avg_smape_individual.to_frame().join(avg_smape_recursive).applymap('{:.1%}'.format)
 ```
 

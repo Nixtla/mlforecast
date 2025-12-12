@@ -291,13 +291,9 @@ Conformal Prediction on all available models.
 
 # Installing mlforecast
 
--   using pip:
+-   using pip: `pip install mlforecast`
 
-    -   `pip install mlforecast`
-
--   using with conda:
-
-    -   `conda install -c conda-forge mlforecast`
+-   using with conda: `conda install -c conda-forge mlforecast`
 
 # Loading libraries and data
 
@@ -521,7 +517,7 @@ Note the following remarks about this definition:
     correlogram.
 
 -   If $\{X_t\}$ is stationary with $E(X_t)=0$ and $\rho_k =0$ for all
-    $k \neq 0$,thatis,itisa white noise series, then the sampling
+    $k \neq 0$, that is, it is a white noise series, then the sampling
     distribution of $r_k$ is asymptotically normal with the mean 0 and
     the variance of $1/n$. Hence, there is about 95% chance that $r_k$
     falls in the interval $[−1.96/√n, 1.96/√n]$.
@@ -586,7 +582,7 @@ visualization, we can say that the time series is additive if the
 increasing or decreasing pattern of the time series is similar
 throughout the series. The mathematical function of any additive time
 series can be represented by:
-$$y(t) = level + Trend + seasonality + noise$$
+$$y(t) = \text{level} + \text{trend} + \text{seasonality} + \text{noise}$$
 
 ## Multiplicative time series
 
@@ -597,7 +593,7 @@ decline with time, then the time series can be considered as the
 multiplicative time series. The mathematical function of the
 multiplicative time series can be represented as.
 
-$$y(t) = Level * Trend * seasonality * Noise$$
+$$y(t) = \text{level} * \text{trend} * \text{seasonality} * \text{noise}$$
 
 ### Additive
 
@@ -702,8 +698,8 @@ prep
 | 10318 | 2015-01-31 23:00:00 | -718.0  | 1         |
 | 10319 | 2015-01-31 23:30:00 | -303.0  | 1         |
 
-This has subtacted the lag 1 from each value, we can see what our series
-look like now.
+This has subtracted the lag 1 from each value, we can see what our
+series look like now.
 
 ```python
 fig = plot_series(prep)
@@ -888,7 +884,7 @@ It’s important to note that we can only use this method if we assume
 that the residuals of our validation predictions are normally
 distributed. To see if this is the case, we will use a PP-plot and test
 its normality with the Anderson-Darling, Kolmogorov-Smirnov, and
-D’Agostino K^2 tests.
+D’Agostino $K^2$ tests.
 
 The PP-plot(Probability-to-Probability) plots the data sample against
 the normal distribution plot in such a way that if normally distributed,

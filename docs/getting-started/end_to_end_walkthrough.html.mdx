@@ -95,7 +95,7 @@ prep
 | 4030 | H413      | 1007 | 3.0  |
 | 4031 | H413      | 1008 | 4.0  |
 
-This has subtacted the lag 24 from each value, we can see what our
+This has subtracted the lag 24 from each value, we can see what our
 series look like now.
 
 ```python
@@ -315,7 +315,7 @@ preds
 | 2   | H381      | 1009 | 207.0 |
 | 3   | H413      | 1009 | 34.0  |
 
-We compare this with the last values of our serie
+We compare this with the last values of our series
 
 ```python
 last_vals = df.groupby('unique_id').tail(1)
@@ -434,7 +434,7 @@ following values of the target you can use the `MLForecast.update`
 method to incorporate these, which will allow you to use these new
 values when computing predictions.
 
--   If no new values are provided for a serie that’s currently stored,
+-   If no new values are provided for a series that’s currently stored,
     only the previous ones are kept.
 -   If new series are included they are added to the existing ones.
 
@@ -478,8 +478,8 @@ preds
 ### Cross validation
 
 In order to get an estimate of how well our model will be when
-predicting future data we can perform cross validation, which consist on
-training a few models independently on different subsets of the data,
+predicting future data we can perform cross validation, which consists
+of training a few models independently on different subsets of the data,
 using them to predict a validation set and measuring their performance.
 
 Since our data depends on time, we make our splits by removing the last

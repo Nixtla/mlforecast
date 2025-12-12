@@ -16,10 +16,10 @@ abstracts away:
 ## Data format
 
 The data is expected to be a pandas dataframe in long format, that is,
-each row represents an observation of a single serie at a given time,
+each row represents an observation of a single series at a given time,
 with at least three columns:
 
--   `id_col`: column that identifies each serie.
+-   `id_col`: column that identifies each series.
 -   `target_col`: column that has the series values at each timestamp.
 -   `time_col`: column that contains the time the series value was
     observed. These are usually timestamps, but can also be consecutive
@@ -27,9 +27,7 @@ with at least three columns:
 
 Here we present an example using the classic Box & Jenkins airline data,
 which measures monthly totals of international airline passengers from
-1949 to 1960. Source: Box, G. E. P., Jenkins, G. M. and Reinsel, G. C.
-(1976) Time Series Analysis, Forecasting and Control. Third Edition.
-Holden-Day. Series G.
+1949 to 1960 \[1\].
 
 ```python
 import pandas as pd
@@ -75,7 +73,7 @@ fig = plot_series(df)
 
 ![](../../figs/quick_start_local__eda.png)
 
-We can see that the serie has a clear trend, so we can take the first
+We can see that the series has a clear trend, so we can take the first
 difference, i.e. take each value and subtract the value at the previous
 month. This can be achieved by passing an
 `mlforecast.target_transforms.Differences([1])` instance to
@@ -95,7 +93,7 @@ from sklearn.linear_model import LinearRegression
 ```python
 fcst = MLForecast(
     models=LinearRegression(),
-    freq='MS',  # our serie has a monthly frequency
+    freq='MS',  # our series has a monthly frequency
     lags=[12],
     target_transforms=[Differences([1])],
 )
@@ -145,4 +143,10 @@ fig = plot_series(df, preds)
 
 And that’s it! You’ve trained a linear regression to predict the air
 passengers for 1961.
+
+## References
+
+\[1\] Box, G. E. P., Jenkins, G. M. and Reinsel, G. C. (1976) Time
+Series Analysis, Forecasting and Control. Third Edition. Holden-Day.
+Series G.
 

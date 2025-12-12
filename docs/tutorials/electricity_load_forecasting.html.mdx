@@ -179,7 +179,7 @@ def plot_differences(df, differences,fname):
 ```
 
 Since the seasonalities are present at `24` hours (daily) and `24*7`
-(weekly) we are going to substract them from the serie using
+(weekly) we are going to subtract them from the serie using
 `Differences([24, 24*7])` and plot them.
 
 ```python
@@ -192,11 +192,11 @@ As we can see when we extract the 24 difference (daily) in
 `PJM_Load_hourly_24` the series seem to stabilize sisnce the peaks seem
 more uniform in comparison with the original series `PJM_Load_hourly`.
 
-When we extrac the 24\*7 (weekly) `PJM_Load_hourly_168` difference we
+When we extract the 24\*7 (weekly) `PJM_Load_hourly_168` difference we
 can see there is more periodicity in the peaks in comparison with the
 original series.
 
-Finally we can see the result from the combined result from substracting
+Finally we can see the result from the combined result from subtracting
 all the differences `PJM_Load_hourly_all_diff`.
 
 For modeling we are going to use both difference for the forecasting,
@@ -441,18 +441,18 @@ evaluate_crossvalidation(crossvalidation_df, metrics, models)
 | rmse   | 1871.398919 | 1129.713256 | 1148.616156 | 1153.262719 | 1153.262664 | 1451.964390 | 2102.098238 | 1154.647164 |
 | smape  | 0.024786    | 0.015886    | 0.016269    | 0.016338    | 0.016338    | 0.019549    | 0.029917    | 0.016563    |
 
-We can se that the model `lgbm` has top performance in most metrics
-folowed by the `lasso regression`. Both models perform way better than
+We can see that the model `lgbm` has top performance in most metrics
+followed by the `lasso regression`. Both models perform way better than
 the `naive`.
 
 ### Test Evaluation
 
-Now we are going to evaluate their perfonce in the test set. We can use
-both of them for forecasting the test alongside some prediction
+Now we are going to evaluate their performance in the test set. We can
+use both of them for forecasting the test alongside some prediction
 intervals. For that we can use the
 [`PredictionIntervals`](https://nixtlaverse.nixtla.io/mlforecast/utils#class-predictionintervals)
 function in `mlforecast.utils`.  
-You can see an in-depth tutotorial of [Probabilistic Forecasting
+You can see an in-depth tutorial of [Probabilistic Forecasting
 here](https://nixtlaverse.nixtla.io/mlforecast/docs/tutorials/prediction_intervals_in_forecasting_models)
 
 ```python
@@ -563,12 +563,12 @@ evaluate(
 | 2   | PJM_Load_hourly | mape   | 0.033600    | 0.027688    |
 | 3   | PJM_Load_hourly | smape  | 0.017137    | 0.013812    |
 
-We can see that the `lasso` regression performed slighty better than the
-`LightGBM` for the test set. Additonally, we can also plot the forecasts
-alongside their prediction intervals. For that we can use the
+We can see that the `lasso` regression performed slightly better than
+the `LightGBM` for the test set. Additionally, we can also plot the
+forecasts alongside their prediction intervals. For that we can use the
 `plot_series` method available in `utilsforecast.plotting`.
 
-We can plot one or many models at once alongside their coinfidence
+We can plot one or many models at once alongside their confidence
 intervals.
 
 ```python
