@@ -32,7 +32,7 @@ data using remote clusters.
 `conda install -c conda-forge mlforecast`
 
 For more detailed instructions you can refer to the [installation
-page](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/install).
+page](https://nixtlaverse.nixtla.io/mlforecast/docs/getting-started/install.html).
 
 ## Quick Start
 
