@@ -94,12 +94,12 @@ recursive_fcst = fcst.fit(train)
 recursive_preds = recursive_fcst.predict(horizon)
 avg_smape_recursive = avg_smape(recursive_preds).rename('recursive')
 # results
-print('Average SMAPE per method and series')
+print('Average SMAPE per method and seriess')
 avg_smape_individual.to_frame().join(avg_smape_recursive).applymap('{:.1%}'.format)
 ```
 
 ``` text
-Average SMAPE per method and serie
+Average SMAPE per method and series
 ```
 
 |           | individual | recursive |

@@ -27,7 +27,7 @@ hourly PJM electricity load data. The original data can be found
 In this example we will use the following libraries:
 
 -   [`mlforecast`](https://nixtlaverse.nixtla.io/mlforecast/). Accurate
-    and ⚡️ fast forecasting withc lassical machine learning models.
+    and ⚡️ fast forecasting with classical machine learning models.
 -   [`prophet`](https://github.com/facebook/prophet). Benchmark model
     developed by Facebook.
 -   [`utilsforecast`](https://nixtlaverse.nixtla.io/utilsforecast/).
@@ -189,7 +189,7 @@ plot_differences(df=df_train, differences=[24, 24*7], fname='load_forecasting__d
 ![](../../figs/load_forecasting__differences.png)
 
 As we can see when we extract the 24 difference (daily) in
-`PJM_Load_hourly_24` the series seem to stabilize sisnce the peaks seem
+`PJM_Load_hourly_24` the series seem to stabilize since the peaks seem
 more uniform in comparison with the original series `PJM_Load_hourly`.
 
 When we extract the 24\*7 (weekly) `PJM_Load_hourly_168` difference we
@@ -236,7 +236,7 @@ fig = plot_series(prep)
 
 ### Model Selection with Cross-Validation
 
-We can test many models simoultaneously using MLForecast
+We can test many models simultaneously using MLForecast
 `cross_validation`. We can import `lightgbm` and `scikit-learn` models
 and try different combinations of them, alongside different target
 transformations (as the ones we created previously) and historical
