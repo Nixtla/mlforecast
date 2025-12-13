@@ -690,7 +690,6 @@ class MLForecast:
             ts = new_ts
         else:
             ts = self.ts  
-
         forecasts = ts.predict(
             models=self.models_,
             horizon=h,
