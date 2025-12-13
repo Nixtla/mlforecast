@@ -1,0 +1,160 @@
+---
+description: Built-in lag transformations
+output-file: lag_transforms.html
+title: Lag transforms
+---
+
+##
+
+### `RollingQuantile`
+
+```python
+RollingQuantile(p, window_size, min_samples=None)
+```
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+Rolling statistic
+
+### `RollingMax`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+Rolling statistic
+
+### `RollingMin`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+Rolling statistic
+
+### `RollingStd`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+Rolling statistic
+
+### `RollingMean`
+
+Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+
+Rolling statistic
+
+### `SeasonalRollingQuantile`
+
+```python
+SeasonalRollingQuantile(p, season_length, window_size, min_samples=None)
+```
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+Rolling statistic over seasonal periods
+
+### `SeasonalRollingMax`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+Rolling statistic over seasonal periods
+
+### `SeasonalRollingMin`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+Rolling statistic over seasonal periods
+
+### `SeasonalRollingStd`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+Rolling statistic over seasonal periods
+
+### `SeasonalRollingMean`
+
+Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+
+Rolling statistic over seasonal periods
+
+### `ExpandingQuantile`
+
+```python
+ExpandingQuantile(p)
+```
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+Expanding statistic
+
+### `ExpandingMax`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+Expanding statistic
+
+### `ExpandingMin`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+Expanding statistic
+
+### `ExpandingStd`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+Expanding statistic
+
+### `ExpandingMean`
+
+Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+
+Expanding statistic
+
+### `ExponentiallyWeightedMean`
+
+```python
+ExponentiallyWeightedMean(alpha)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Exponentially weighted average
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
+
+### `Offset`
+
+```python
+Offset(tfm, n)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Shift series before computing transformation
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`tfm` | <code>[LagTransform](#LagTransform)</code> | Transformation to be applied | *required*
+`n` | <code>[int](#int)</code> | Number of positions to shift (lag) series before applying the transformation | *required*
+
+### `Combine`
+
+```python
+Combine(tfm1, tfm2, operator)
+```
+
+Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+
+Combine two lag transformations using an operator
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`tfm1` | <code>[LagTransform](#LagTransform)</code> | First transformation. | *required*
+`tfm2` | <code>[LagTransform](#LagTransform)</code> | Second transformation. | *required*
+`operator` | <code>[callable](#callable)</code> | Binary operator that defines how to combine the two transformations. | *required*
