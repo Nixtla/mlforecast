@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+import warnings
 
 import lightgbm as lgb
 import numpy as np
@@ -35,7 +36,7 @@ def _mape(y_true, y_pred, ids, _date, weight_col=None):
             weighted_mean = (grouped_errors.mean() * weight_series).sum() / weight_sum
             return weighted_mean
         else:
-            print("Warning: Total weight is zero, cannot compute weighted MAPE.")
+            warnings.warn("Warning: Total weight is zero, cannot compute weighted MAPE.", UserWarning)
             return float('nan')
     else:
         return grouped_errors.mean().mean() 
@@ -53,7 +54,7 @@ def _rmse(y_true, y_pred, ids, _date, weight_col=None):
             weighted_mean = (mean_squared_errors * weight_series).sum() / weight_sum
             return (weighted_mean ** 0.5) 
         else:
-            print("Warning: Total weight is zero, cannot compute weighted RMSE.")
+            warnings.warn("Warning: Total weight is zero, cannot compute weighted RMSE.", UserWarning)
             return float('nan')
     else:
         return (mean_squared_errors.mean() ** 0.5) 
@@ -69,16 +70,11 @@ def _update(bst, n):
 
 def _predict(ts, bst, valid, h, before_predict_callback, after_predict_callback, weight_col):
     static = ts.static_features_.columns.drop(ts.id_col).tolist()
-    if weight_col:
-        dynamic = valid.columns.drop(static + [ts.id_col, ts.time_col, ts.target_col, weight_col])
-    else:
-        dynamic = valid.columns.drop(static + [ts.id_col, ts.time_col, ts.target_col])
-
+    dynamic = valid.columns.drop(static + [ts.id_col, ts.time_col, ts.target_col, weight_col], 
+                errors="ignore") # drops weight_col if present amongst other cols
     if not dynamic.empty:
-        if weight_col:
-            X_df = valid.drop(columns=static + [ts.target_col, weight_col])
-        else:
-            X_df = valid.drop(columns=static + [ts.target_col])
+        X_df = valid.drop(columns=static + [ts.target_col, weight_col],
+                errors="ignore") # drops weight_col if present amongst other cols)
     else:
         X_df = None
     preds = ts.predict(
@@ -199,7 +195,6 @@ class LightGBMCV:
             raise ValueError("Must specify as many weights as the number of windows")
         else:
             self.weights = np.asarray(weights)
-                 
         if callable(metric):
             self.metric_fn = metric
             self.metric_name = metric.__name__
@@ -244,17 +239,9 @@ class LightGBMCV:
             if weight_col is not None:
                 current_weights = prep[weight_col].values 
             else:
-                current_weights = None
-            
-            if weight_col:
-                ds = lgb.Dataset(
-                    prep.drop(columns=[id_col, time_col, target_col, weight_col]), prep[target_col],
-                    weight=current_weights
-                ).construct()
-            else:
-                ds = lgb.Dataset(
-                    prep.drop(columns=[id_col, time_col, target_col]), prep[target_col]
-                ).construct()
+                current_weights = None           
+            ds = lgb.Dataset(prep.drop(columns=[id_col, time_col, target_col, weight_col], errors="ignore"), 
+            prep[target_col], weight=current_weights).construct()
                 
             bst = lgb.Booster({**self.params, "num_threads": self.bst_threads}, ds)
             bst.predict = partial(bst.predict, num_threads=self.bst_threads)
@@ -280,22 +267,16 @@ class LightGBMCV:
                 after_predict_callback=after_predict_callback,
                 weight_col=weight_col
             )
-         
-            if weight_col:
-                metric_values[j] = self.metric_fn(
-                    preds[self.target_col],
-                    preds["Booster"],
-                    preds[self.id_col],
-                    preds[self.time_col],
-                    weight_col=preds[weight_col]
-                )
+            if weight_col is not None:
+                current_weights = preds[weight_col]
             else:
-                metric_values[j] = self.metric_fn(
+                current_weights = None 
+            metric_values[j] = self.metric_fn(
                     preds[self.target_col],
                     preds["Booster"],
                     preds[self.id_col],
                     preds[self.time_col],
-                )
+                    weight_col=current_weights)
 
     def _multithreaded_partial_fit(
         self,
@@ -365,7 +346,7 @@ class LightGBMCV:
         Returns:
             (float): Weighted metric after training for num_iterations.
         """
-        metric_values = np.empty(len(self.items))        
+        metric_values = np.empty(len(self.items))
         if self.num_threads == 1:
             self._single_threaded_partial_fit(
                 metric_values,
