@@ -268,15 +268,18 @@ class LightGBMCV:
                 weight_col=weight_col
             )
             if weight_col is not None:
-                current_weights = preds[weight_col]
-            else:
-                current_weights = None 
-            metric_values[j] = self.metric_fn(
+                metric_values[j] = self.metric_fn(
                     preds[self.target_col],
                     preds["Booster"],
                     preds[self.id_col],
                     preds[self.time_col],
-                    weight_col=current_weights)
+                    weight_col=preds[weight_col])
+            else:
+                metric_values[j] = self.metric_fn(
+                    preds[self.target_col],
+                    preds["Booster"],
+                    preds[self.id_col],
+                    preds[self.time_col])
 
     def _multithreaded_partial_fit(
         self,
