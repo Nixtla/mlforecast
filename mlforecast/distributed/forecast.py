@@ -372,8 +372,10 @@ class DistributedMLForecast:
                 trained_model = clone(model).fit(X, y)
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
+            # Need to materialize
+            prep_selected = prep.select_columns(cols=features + [target_col]).materialize()
             X = RayDMatrix(
-                prep.select_columns(cols=features + [target_col]),
+                prep_selected,
                 label=target_col,
             )
             for name, model in self.models.items():
