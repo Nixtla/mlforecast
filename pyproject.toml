@@ -57,7 +57,7 @@ dev = [
     "mlflow>=2.10.0",
     "mypy",
     "nbdev<2.3.26",
-    "numpy",
+    "numpy<2",
     "pandas<2.2",
     "pre-commit",
     "polars[numpy]<=1.31.0",
