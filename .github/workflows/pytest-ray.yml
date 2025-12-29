@@ -1,4 +1,4 @@
-name: pytest
+name: pytest-ray
 
 on:
   push:
@@ -12,13 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  all-tests:
+  ray-tests:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - name: Clone repo
         uses: actions/checkout@v4
@@ -27,15 +27,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+      - name: Install dependencies
         run: |
-          pip install uv pytest && uv pip install --system ".[dev,dask]"
-
-      - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          pip install uv pytest && uv pip install --system ".[dev,dask]"
+          pip install uv pytest && uv pip install --system ".[dev,ray]"
 
       - name: Install lightgbm on macOS
         if: matrix.os == 'macos-latest'
@@ -44,6 +38,5 @@ jobs:
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
           brew install lightgbm
 
-      - name: Run pytest
-        run: uv run pytest -m "not ray"
-
+      - name: Run Ray tests
+        run: uv run pytest tests/distributed_ray/ -v

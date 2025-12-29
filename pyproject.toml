@@ -93,6 +93,9 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "ray: marks tests as requiring Ray (deselect with '-m \"not ray\"')",
+]
 addopts = [
     "--cov=mlforecast",
     "--cov-report=term-missing",
