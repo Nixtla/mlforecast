@@ -4,11 +4,9 @@ import warnings
 import dask.dataframe as dd
 import pandas as pd
 import pytest
-import ray
 
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
-from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import generate_daily_series
 
@@ -57,6 +55,8 @@ def test_dask_distributed_forecast():
 @pytest.mark.skipif(sys.version_info <= (3, 9), reason="Distributed tests are not supported on Python < 3.10")
 @pytest.mark.skip()
 def test_ray_distributed_forecast():
+    import ray
+    from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
     series = generate_daily_series(
         100, equal_ends=True, min_length=500, max_length=1_000
     )
