@@ -45,5 +45,5 @@ jobs:
           brew install lightgbm
 
       - name: Run pytest
-        run: uv run pytest -m "not ray"
+        run: uv run pytest --ignore=tests/distributed_ray/
 
