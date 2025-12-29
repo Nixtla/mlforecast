@@ -1,9 +1,11 @@
 import operator
 import sys
 
+import pandas as pd
 import pytest
 import ray
 
+from mlforecast import MLForecast
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
 from mlforecast.lag_transforms import Combine, ExpandingMean, RollingMean
@@ -28,40 +30,73 @@ def test_ray_combine_transforms():
         batch_format="pandas"
     )
 
+    # Define lag transforms configuration
+    lag_transforms_config = {
+        1: [
+            Combine(
+                RollingMean(window_size=7, min_samples=1),
+                ExpandingMean(),
+                operator.sub,
+            ),
+            Combine(
+                RollingMean(window_size=7, min_samples=1),
+                ExpandingMean(),
+                operator.add
+            ),
+            RollingMean(window_size=7, min_samples=1)
+        ]
+    }
+
+    # Create distributed MLForecast with Ray
     dmlf = DistributedMLForecast(
         models=[RayLGBMForecast()],
         freq="D",
-        lag_transforms={
-            1: [
-                Combine(
-                    RollingMean(window_size=7, min_samples=1),
-                    ExpandingMean(),
-                    operator.sub,
-                ),
-                Combine(
-                    RollingMean(window_size=7, min_samples=1),
-                    ExpandingMean(),
-                    operator.add
-                ),
-                RollingMean(window_size=7, min_samples=1)
-            ]
-        },
+        lag_transforms=lag_transforms_config,
     )
 
-    # Test preprocessing creates expected features
-    transformed_df = dmlf.preprocess(
+    # Test preprocessing with Ray creates expected features
+    ray_transformed_df = dmlf.preprocess(
         ray_dataset,
         id_col='unique_id',
         time_col='ds',
         target_col='y'
     )
+    ray_result = ray_transformed_df.to_pandas()
 
-    # Verify features were created
-    df_pandas = transformed_df.to_pandas()
-    assert 'rolling_mean_lag1_window_size7_min_samples1' in df_pandas.columns
-    assert not df_pandas.empty
+    # Create local MLForecast for comparison (without model to avoid fitting)
+    local_mlf = MLForecast(
+        models=[],
+        freq="D",
+        lag_transforms=lag_transforms_config,
+    )
 
-    # Test fitting works
+    # Preprocess with local version
+    local_result = local_mlf.preprocess(series, dropna=False)
+
+    # Compare feature columns (both should have the same features)
+    ray_feature_cols = [col for col in ray_result.columns if col.startswith(('lag', 'rolling', 'expanding'))]
+    local_feature_cols = [col for col in local_result.columns if col.startswith(('lag', 'rolling', 'expanding'))]
+    assert sorted(ray_feature_cols) == sorted(local_feature_cols), "Feature columns don't match"
+
+    # Verify expected features were created
+    assert 'rolling_mean_lag1_window_size7_min_samples1' in ray_result.columns
+    assert not ray_result.empty
+
+    # Compare feature values for a sample of data
+    # Sort both dataframes to ensure proper comparison
+    ray_sorted = ray_result.sort_values(['unique_id', 'ds']).reset_index(drop=True)
+    local_sorted = local_result.sort_values(['unique_id', 'ds']).reset_index(drop=True)
+
+    # Compare the generated features (allowing for floating point differences)
+    for col in ray_feature_cols:
+        pd.testing.assert_series_equal(
+            ray_sorted[col],
+            local_sorted[col],
+            check_names=False,
+            atol=1e-6
+        )
+
+    # Test fitting works with Ray
     dmlf.fit(ray_dataset)
 
     # Test can convert to local
