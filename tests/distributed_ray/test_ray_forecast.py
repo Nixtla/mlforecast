@@ -44,9 +44,9 @@ def test_ray_distributed_forecast():
         ray_dataset, static_features=[], dropna=False
     )
     fcst.fit(training_df_featured, static_features=[], dropna=False)
-    preds1 = fcst.predict(10).materialize()
+    preds1 = fcst.predict(10).to_pandas()
 
     # df without features
     fcst.preprocess(ray_dataset, static_features=[], dropna=False)
-    preds2 = fcst.predict(10).materialize()
+    preds2 = fcst.predict(10).to_pandas()
     pd.testing.assert_frame_equal(preds1, preds2)
