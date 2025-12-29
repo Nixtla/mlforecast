@@ -61,7 +61,7 @@ def test_ray_combine_transforms():
         time_col='ds',
         target_col='y'
     )
-    ray_result = ray_transformed_df.to_pandas().sort_values(["unique_id", "ds"])
+    ray_result = ray_transformed_df.to_pandas().sort_values(["unique_id", "ds"], ignore_index = True)
 
     # Create local MLForecast for comparison (without model to avoid fitting)
     local_mlf = MLForecast(
@@ -71,7 +71,7 @@ def test_ray_combine_transforms():
     )
 
     # Preprocess with local version
-    local_result = local_mlf.preprocess(series).sort_values(["unique_id", "ds"])
+    local_result = local_mlf.preprocess(series).sort_values(["unique_id", "ds"], ignore_index = True)
 
     # Compare feature columns (both should have the same features)
     ray_feature_cols = [col for col in ray_result.columns if col.startswith(('lag', 'rolling', 'expanding'))]
