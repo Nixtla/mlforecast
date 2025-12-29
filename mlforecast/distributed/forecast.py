@@ -784,7 +784,13 @@ class DistributedMLForecast:
             ]
             out = {}
             for name, partition_tfms in by_transform:
-                out[name] = partition_tfms[0].stack(partition_tfms)
+                # Check if transform has _core_tfm before stacking
+                if hasattr(partition_tfms[0], '_core_tfm'):
+                    # Standard transforms with state - need to stack
+                    out[name] = partition_tfms[0].stack(partition_tfms)
+                else:
+                    # Composite transforms like Combine - already configured, use first instance
+                    out[name] = partition_tfms[0]
             return out
 
         uids = possibly_concat_indices([ts.uids for ts in all_ts])
