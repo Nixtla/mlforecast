@@ -41,4 +41,4 @@ jobs:
           brew install lightgbm
 
       - name: Run Ray tests
-        run: pytest tests/distributed_ray/ -v
+        run: pytest tests/distributed_ray/ -v --no-cov
