@@ -45,6 +45,7 @@ def test_ray_distributed_forecast():
     )
     fcst.fit(training_df_featured, static_features=[], dropna=False)
     preds1 = fcst.predict(10).to_pandas().sort_values(["unique_id", "ds"], ignore_index = True)
+    fcst.save('/tmp/test_ray_forecast_model.pkl')
 
     # df without features
     fcst.preprocess(ray_dataset, static_features=[], dropna=False)
