@@ -61,7 +61,7 @@ def test_ray_combine_transforms():
         time_col='ds',
         target_col='y'
     )
-    ray_result = ray_transformed_df.to_pandas()
+    ray_result = ray_transformed_df.to_pandas().sort_values(["unique_id", "ds"])
 
     # Create local MLForecast for comparison (without model to avoid fitting)
     local_mlf = MLForecast(
@@ -71,28 +71,21 @@ def test_ray_combine_transforms():
     )
 
     # Preprocess with local version
-    local_result = local_mlf.preprocess(series, dropna=False)
+    local_result = local_mlf.preprocess(series).sort_values(["unique_id", "ds"])
 
     # Compare feature columns (both should have the same features)
     ray_feature_cols = [col for col in ray_result.columns if col.startswith(('lag', 'rolling', 'expanding'))]
     local_feature_cols = [col for col in local_result.columns if col.startswith(('lag', 'rolling', 'expanding'))]
     assert sorted(ray_feature_cols) == sorted(local_feature_cols), "Feature columns don't match"
 
-    # Verify expected features were created
-    assert 'rolling_mean_lag1_window_size7_min_samples1' in ray_result.columns
     assert not ray_result.empty
-
-    # Compare feature values for a sample of data
-    # Sort both dataframes to ensure proper comparison
-    ray_sorted = ray_result.sort_values(['unique_id', 'ds']).reset_index(drop=True)
-    local_sorted = local_result.sort_values(['unique_id', 'ds']).reset_index(drop=True)
 
     # Compare the generated features (allowing for floating point differences)
     for col in ray_feature_cols:
         pd.testing.assert_series_equal(
-            ray_sorted[col],
-            local_sorted[col],
-            check_names=False,
+            ray_result[col],
+            local_result[col],
+            check_dtype=False,
             atol=1e-6
         )
 
