@@ -31,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install uv pytest && uv pip install --system ".[dev,ray]" ray[data]==2.50.0
+          pip install uv pytest && uv pip install --system ".[dev,ray]" ray[data]
 
       - name: Install lightgbm on macOS
         if: matrix.os == 'macos-latest'
@@ -41,4 +41,4 @@ jobs:
           brew install lightgbm
 
       - name: Run Ray tests
-        run: uv run pytest tests/distributed_ray/ -v
+        run: pytest tests/distributed_ray/ -v
