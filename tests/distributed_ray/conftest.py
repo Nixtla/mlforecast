@@ -1,4 +1,11 @@
+import sys
 import pytest
+
+# Skip entire directory if Ray is not available or on Windows
+pytest.importorskip('ray', reason="Ray is required for distributed tests")
+if sys.platform == "win32":
+    pytest.skip("Distributed tests are not supported on Windows", allow_module_level=True)
+
 import ray
 
 
