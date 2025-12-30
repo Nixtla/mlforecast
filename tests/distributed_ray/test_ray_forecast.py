@@ -15,7 +15,7 @@ warnings.simplefilter("ignore", FutureWarning)
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(sys.version_info <= (3, 9), reason="Distributed tests are not supported on Python < 3.10")
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="Distributed tests are not supported on Python < 3.10")
 @pytest.mark.parametrize(
     "model_class,model_kwargs",
     [
