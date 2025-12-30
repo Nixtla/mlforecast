@@ -20,7 +20,7 @@ warnings.simplefilter("ignore", FutureWarning)
     "model_class,model_kwargs",
     [
         (RayLGBMForecast, {"verbosity": -1, "random_state": 0}),
-        (RayXGBForecast, {"random_state": 0, "n_jobs": 1}),
+        (RayXGBForecast, {"random_state": 0}),
     ],
     ids=["lightgbm", "xgboost"]
 )
