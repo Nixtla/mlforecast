@@ -39,9 +39,9 @@ Documentation = "https://nixtlaverse.nixtla.io/mlforecast/"
 
 
 [project.optional-dependencies]
-dask = ["fugue[dask]>=0.9.3", "dask[complete]<=2024.12.1", "lightgbm", "xgboost"]
-ray = ["fugue[ray]>=0.9.3", "lightgbm_ray", "xgboost_ray"]
-spark = ["fugue[spark]>=0.9.3", "pyspark>=3.3", "lightgbm", "xgboost"]
+dask = ["fugue[dask]>=0.9.4", "dask[complete]<=2024.12.1", "lightgbm", "xgboost"]
+ray = ["fugue[ray]>=0.9.4", "lightgbm_ray", "xgboost_ray"]
+spark = ["fugue[spark]>=0.9.4", "pyspark>=3.3", "lightgbm", "xgboost"]
 aws = ["fsspec[s3]"]
 gcp = ["fsspec[gcs]"]
 azure = ["fsspec[adl]"]
@@ -57,8 +57,8 @@ dev = [
     "mlflow>=2.10.0",
     "mypy",
     "nbdev<2.3.26",
-    "numpy<2",
-    "pandas<2.2",
+    "numpy",
+    "pandas",
     "pre-commit",
     "polars[numpy]<=1.31.0",
     "pyarrow",
