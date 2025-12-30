@@ -36,7 +36,8 @@ def evaluate_on_valid(preds, valid):
 
 
 @pytest.mark.parametrize("use_weight_col", [True, False])
-def test_lightgbm_cv_pipeline(m4_data, use_weight_col):
+@pytest.mark.parametrize("metric", ["rmse", "mape"])
+def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
     train, valid, horizon = m4_data
     if use_weight_col:
         train["weight_col"] = 1
@@ -45,6 +46,7 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col):
         h=horizon,
         params={"verbose": -1},
         compute_cv_preds=True,
+        metric=metric
     )
     cv = LightGBMCV(
         freq=1,
@@ -53,18 +55,20 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col):
     hist = cv.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
     preds = cv.predict(horizon)
     eval1 = evaluate_on_valid(preds, valid)
-
     cv2 = LightGBMCV(
         freq=1,
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
     )
     hist2 = cv2.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
-    assert hist2[-1][1] < hist[-1][1]
+    if metric=='mape':
+        assert hist2[-1][1] < hist[-1][1]
+    else:
+        assert hist2[-1][1] > hist[-1][1]
     preds2 = cv2.predict(horizon)
     eval2 = evaluate_on_valid(preds2, valid)
     assert eval2 < eval1
-
+    
     cv3 = LightGBMCV(
         freq=1,
         target_transforms=[Differences([24 * 7])],
@@ -90,6 +94,7 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col):
         n_windows=2,
         h=horizon,
         params={"verbose": -1},
+        metric=metric
     )
     score = cv4.partial_fit(10)
     assert np.isclose(hist[0][1], score, atol=1e-7)

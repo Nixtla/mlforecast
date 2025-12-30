@@ -23,41 +23,43 @@ from mlforecast.core import (
 )
 
 
-def _mape(y_true, y_pred, ids, _date, weight_col=None):
-    abs_pct_err = abs(y_true - y_pred) / y_true
-    grouped_errors = abs_pct_err.groupby(ids, observed=True)
+def _mape(y_true, y_pred, ids, _dates, weight_series=None):
+    abs_pct_err = (y_true - y_pred).abs() / y_true.abs()  # safer
+    grouped = abs_pct_err.groupby(ids, observed=True)
     
-    if weight_col is not None:
-        weight_series = weight_col.groupby(ids).sum()
-        print(f"Weight Series: {weight_series}")
-        weight_sum = weight_series.sum()
+    if weight_series is None:
+        return grouped.mean().mean()
 
-        if weight_sum > 0:  
-            weighted_mean = (grouped_errors.mean() * weight_series).sum() / weight_sum
-            return weighted_mean
-        else:
-            warnings.warn("Warning: Total weight is zero, cannot compute weighted MAPE.", UserWarning)
-            return float('nan')
-    else:
-        return grouped_errors.mean().mean() 
+    w_by_id = weight_series.groupby(ids, observed=True).sum()
+    mape_by_id = grouped.mean()
+
+    weight_sum = w_by_id.sum()
+    if weight_sum <= 0:
+        warnings.warn("Total weight is zero, cannot compute weighted MAPE.", UserWarning)
+        return float("nan")
+
+    return (mape_by_id * w_by_id).sum() / weight_sum
 
 
-def _rmse(y_true, y_pred, ids, _date, weight_col=None):
+def _rmse(y_true, y_pred, ids, _dates, weight_series=None):
     sq_err = (y_true - y_pred) ** 2
-    grouped_errors = sq_err.groupby(ids, observed=True)
-    mean_squared_errors = grouped_errors.mean()
+    mse_by_id = sq_err.groupby(ids, observed=True).mean()
 
-    if weight_col is not None:
-        weight_series = weight_col.groupby(ids).sum()
-        weight_sum = weight_series.sum()
-        if weight_sum > 0:  
-            weighted_mean = (mean_squared_errors * weight_series).sum() / weight_sum
-            return (weighted_mean ** 0.5) 
-        else:
-            warnings.warn("Warning: Total weight is zero, cannot compute weighted RMSE.", UserWarning)
-            return float('nan')
-    else:
-        return (mean_squared_errors.mean() ** 0.5) 
+    if weight_series is None:
+        return np.sqrt(mse_by_id.mean())
+
+    w_by_id = weight_series.groupby(ids, observed=True).sum()
+    weight_sum = w_by_id.sum()
+
+    if weight_sum <= 0:
+        warnings.warn(
+            "Warning: Total weight is zero, cannot compute weighted RMSE.",
+            UserWarning,
+        )
+        return float("nan")
+
+    weighted_mse = (mse_by_id * w_by_id).sum() / weight_sum
+    return np.sqrt(weighted_mse)
 
 
 _metric2fn = {"mape": _mape, "rmse": _rmse}
@@ -161,7 +163,7 @@ class LightGBMCV:
         weights: Optional[Sequence[float]] = None,
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
-        weight_col: Optional[List] = None,
+        weight_col: Optional[str] = None,
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -254,7 +256,7 @@ class LightGBMCV:
         num_iterations,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        weight_col: Optional[np.ndarray] = None
+        weight_col: Optional[str] = None
     ):
         for j, (ts, bst, valid) in enumerate(self.items):
             preds = _update_and_predict(
@@ -273,7 +275,7 @@ class LightGBMCV:
                     preds["Booster"],
                     preds[self.id_col],
                     preds[self.time_col],
-                    weight_col=preds[weight_col])
+                    weight_series=preds[weight_col])
             else:
                 metric_values[j] = self.metric_fn(
                     preds[self.target_col],
@@ -287,7 +289,7 @@ class LightGBMCV:
         num_iterations,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
-        weight_col: Optional[np.ndarray] = None
+        weight_col: Optional[str] = None
     ):
         with ThreadPoolExecutor(self.num_threads) as executor:
             futures = []
@@ -312,7 +314,7 @@ class LightGBMCV:
                     preds["Booster"],
                     preds[self.id_col],
                     preds[self.time_col],
-                    weight_col=preds[weight_col].values
+                    weight_series=preds[weight_col].values
                 )
                 for preds in cv_preds
             ]
