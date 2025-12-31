@@ -5,7 +5,7 @@ __all__ = ['lightgbm_space', 'xgboost_space', 'catboost_space', 'linear_regressi
 
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import optuna
