@@ -961,7 +961,7 @@ class MLForecast:
             fcst._cs_df = intervals["scores"]
         return fcst
 
-    def update(self, df: DataFrame, validate_input: str = False) -> None:
+    def update(self, df: DataFrame, validate_input: bool = False) -> None:
         """Update the values of the stored series.
 
         Args:
