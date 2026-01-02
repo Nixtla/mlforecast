@@ -881,7 +881,7 @@ class TimeSeries:
             """Expected size mismatch: Each unique_id needs to start from the last
             day of the previous history and should contain continuous observations."""
 
-    def update(self, df: DataFrame, validate_input: str = False) -> None:
+    def update(self, df: DataFrame, validate_input: bool = False) -> None:
         """Update the values of the stored series."""  
         validate_format(df, self.id_col, self.time_col, self.target_col)
         uids = self.uids
