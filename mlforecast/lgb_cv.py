@@ -187,7 +187,8 @@ class LightGBMCV:
             metric (str or callable): Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'.
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
-
+            weight_col (str, optional):Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
+                
         Returns:
             (LightGBMCV): CV object with internal data structures for partial_fit.
         """
