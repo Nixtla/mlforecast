@@ -23,6 +23,7 @@ mlforecast_objective(
     id_col="unique_id",
     time_col="ds",
     target_col="y",
+    weight_col=None,
 )
 ```
 
@@ -45,6 +46,7 @@ Name | Type | Description | Default
 `id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains sample weights. Defaults to None. | <code>None</code>
 
 **Returns:**
 
