@@ -244,6 +244,8 @@ class AutoMLForecast:
         fit_config (callable, optional): Function that takes an optuna trial and produces a configuration passed to the MLForecast fit method.
             Defaults to None.
         num_threads (int): Number of threads to use when computing the features. Defaults to 1.
+        reuse_cv_splits (bool): Creates splits for cv once and re-uses them for tuning instead of generating the splits in each tuning round.
+            Default is set to False.
     """
 
     def __init__(

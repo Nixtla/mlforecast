@@ -80,9 +80,9 @@ def mlforecast_objective(
             freq=freq,
             **config["mlf_init_params"],
         )
-        _splits = cv_splits
-        if _splits is None:
-            _splits = ufp.backtest_splits(
+        splits = cv_splits
+        if splits is None:
+            splits = ufp.backtest_splits(
                 df,
                 n_windows=n_windows,
                 h=h,
@@ -92,10 +92,10 @@ def mlforecast_objective(
                 step_size=step_size,
                 input_size=input_size,
             )
-        elif not isinstance(_splits, list):
-            _splits = list(_splits)
+        elif not isinstance(splits, list):
+            splits = list(splits)
         metrics = []
-        for i, (_, train, valid) in enumerate(_splits):
+        for i, (_, train, valid) in enumerate(splits):
             should_fit = i == 0 or (refit > 0 and i % refit == 0)
             if should_fit:
                 mlf.fit(
