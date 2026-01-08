@@ -4,7 +4,6 @@ __all__ = ['BaseTargetTransform', 'Differences', 'AutoDifferences', 'AutoSeasona
 
 import abc
 import copy
-import warnings
 from typing import Iterable, List, Optional, Sequence
 
 import coreforecast.scalers as core_scalers
