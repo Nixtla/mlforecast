@@ -147,13 +147,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| If the combination of parameters doesn't provide enough data for seasonality detection. After applying max_diffs differences, at least 2 full seasonal cycles are required.
-
-**Warns:**
-
-Type | Description
----- | -----------
-<code>UserWarning</code>| If only 2-3 cycles are available after differencing. While the method will run, results may be unreliable. At least 4 full cycles are recommended for robust seasonality detection.
+<code>[ValueError](#ValueError)</code>| During fit_transform, if any series doesn't have enough data points. With n_seasons specified, each series must have at least `max_season_length * n_seasons` observations.
 
 ```python
 def test_scaler(sc, series):
