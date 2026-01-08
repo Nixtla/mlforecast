@@ -147,7 +147,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| During fit_transform, if any series doesn't have enough data points. With n_seasons specified, each series must have at least `max_season_length * n_seasons` observations.
+<code>[ValueError](#ValueError)</code>| If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing, there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
 
 ```python
 def test_scaler(sc, series):
