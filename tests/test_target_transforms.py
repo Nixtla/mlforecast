@@ -278,56 +278,51 @@ def test_mlforecast_polars(mlforecast_setup):
 def test_autoseasonality_and_differences_validation():
     """Test validation logic for AutoSeasonalityAndDifferences safety guard."""
 
-    # Test 1: ValueError when < 3 cycles are available
-    # With max_season_length=12, max_diffs=1, n_seasons=2:
-    # total_obs = 12 * 2 = 24, obs_after_diffs = 23, cycles = 1.92 < 3
+    # Test 1: ValueError when series has insufficient data
+    # With max_season_length=12, n_seasons=3, we need at least 36 observations per series
+    # Create a series with only 20 observations (too short)
+    sc = AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=3)
+    ga_short = GroupedArray(np.arange(20), np.array([0, 20]))
+
     with pytest.raises(ValueError) as exc_info:
-        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=2)
+        sc.fit_transform(ga_short)
     error_msg = str(exc_info.value)
-    assert "Insufficient data for seasonality detection" in error_msg
-    assert "1.9 seasonal cycles" in error_msg
-    assert "At least 3 full cycles are required" in error_msg
+    assert "Insufficient data" in error_msg
+    assert "requires at least 36 observations" in error_msg
+    assert "[20]" in error_msg  # Shows the actual length
 
-    # Test 2: UserWarning when 3 <= cycles < 4
-    # With max_season_length=12, max_diffs=1, n_seasons=4:
-    # total_obs = 48, obs_after_diffs = 47, cycles = 3.92
-    with pytest.warns(UserWarning) as warning_info:
-        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=4)
-    assert len(warning_info) == 1
-    warning_msg = str(warning_info[0].message)
-    assert "Limited data for reliable seasonality detection" in warning_msg
-    assert "3.9 seasonal cycles" in warning_msg
-    assert "At least 4 full cycles are recommended" in warning_msg
-    assert "Results may be unreliable" in warning_msg
+    # Test 2: Success when series has sufficient data
+    # Create a series with 50 observations (sufficient)
+    ga_long = GroupedArray(np.arange(50), np.array([0, 50]))
+    transformed = sc.fit_transform(ga_long)
+    assert transformed.data is not None
 
-    # Test 3: No warning when >= 4 cycles
-    # With max_season_length=12, max_diffs=1, n_seasons=5:
-    # total_obs = 60, obs_after_diffs = 59, cycles = 4.92 >= 4
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=5)
-        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
-        assert len(user_warnings) == 0
+    # Test 3: Multiple series - some too short
+    # Series 1: 40 obs (ok), Series 2: 20 obs (too short), Series 3: 50 obs (ok)
+    data = np.concatenate([np.arange(40), np.arange(20), np.arange(50)])
+    indptr = np.array([0, 40, 60, 110])
+    ga_mixed = GroupedArray(data, indptr)
+
+    with pytest.raises(ValueError) as exc_info:
+        sc.fit_transform(ga_mixed)
+    error_msg = str(exc_info.value)
+    assert "Insufficient data in 1 series" in error_msg
+    assert "[20]" in error_msg
 
     # Test 4: No validation when n_seasons=None
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=None)
-        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
-        assert len(user_warnings) == 0
+    sc_no_validation = AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=None)
+    ga_any_length = GroupedArray(np.arange(15), np.array([0, 15]))
+    # Should not raise - n_seasons=None means use all available data
+    transformed = sc_no_validation.fit_transform(ga_any_length)
+    assert transformed.data is not None
 
-    # Test 5: Edge cases
-    # Just below 3 cycles (should error)
+    # Test 5: Edge case - exactly the minimum required length
+    sc_exact = AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=2)
+    ga_exact = GroupedArray(np.arange(20), np.array([0, 20]))  # Exactly 10 * 2 = 20
+    transformed = sc_exact.fit_transform(ga_exact)
+    assert transformed.data is not None
+
+    # One observation short should fail
+    ga_one_short = GroupedArray(np.arange(19), np.array([0, 19]))
     with pytest.raises(ValueError):
-        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=3)
-
-    # Between 3-4 cycles (should warn)
-    with pytest.warns(UserWarning):
-        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=4)
-
-    # Above 4 cycles (should not warn)
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=5)
-        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
-        assert len(user_warnings) == 0
+        sc_exact.fit_transform(ga_one_short)
