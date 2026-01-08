@@ -4,6 +4,7 @@ __all__ = ['BaseTargetTransform', 'Differences', 'AutoDifferences', 'AutoSeasona
 
 import abc
 import copy
+import warnings
 from typing import Iterable, List, Optional, Sequence
 
 import coreforecast.scalers as core_scalers
@@ -233,11 +234,53 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         n_seasons (int, optional): Number of seasons to use to determine the number of differences. Defaults to 10.
             If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test.
             Smaller values will be faster but could be less accurate.
+
+    Raises:
+        ValueError: If the combination of parameters doesn't provide enough data for seasonality detection.
+            After applying max_diffs differences, at least 2 full seasonal cycles are required.
+
+    Warnings:
+        UserWarning: If only 2-3 cycles are available after differencing. While the method will run,
+            results may be unreliable. At least 4 full cycles are recommended for robust seasonality detection.
     """
 
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
+        # Validate that we have enough data after differencing for seasonality detection
+        # We need at least 2 full cycles minimum, but recommend 4+ for robust detection
+        # This ensures the STL decomposition (which requires low_pass_length >= 3) will work
+        if n_seasons is not None:
+            absolute_min_cycles = 3  # Absolute minimum to attempt detection
+            recommended_min_cycles = 4  # Recommended minimum for robust detection
+            total_obs = max_season_length * n_seasons
+            obs_after_diffs = total_obs - max_diffs
+            cycles_available = obs_after_diffs / max_season_length
+
+            if cycles_available < absolute_min_cycles:
+                min_n_seasons = (absolute_min_cycles * max_season_length + max_diffs) / max_season_length
+                raise ValueError(
+                    f"Insufficient data for seasonality detection. "
+                    f"With max_season_length={max_season_length}, max_diffs={max_diffs}, and n_seasons={n_seasons}, "
+                    f"only {cycles_available:.1f} seasonal cycles are available after differencing. "
+                    f"At least {absolute_min_cycles} full cycles are required. "
+                    f"Either increase n_seasons to at least {int(min_n_seasons) + 1}, "
+                    f"decrease max_diffs, or set n_seasons=None to use all available data."
+                )
+            elif cycles_available < recommended_min_cycles:
+                recommended_n_seasons = (recommended_min_cycles * max_season_length + max_diffs) / max_season_length
+                warnings.warn(
+                    f"Limited data for reliable seasonality detection. "
+                    f"With max_season_length={max_season_length}, max_diffs={max_diffs}, and n_seasons={n_seasons}, "
+                    f"only {cycles_available:.1f} seasonal cycles are available after differencing. "
+                    f"At least {recommended_min_cycles} full cycles are recommended for robust results. "
+                    f"Consider increasing n_seasons to at least {int(recommended_n_seasons) + 1}, "
+                    f"decreasing max_diffs, or setting n_seasons=None to use all available data. "
+                    f"Results may be unreliable.",
+                    UserWarning,
+                    stacklevel=2
+                )
+
         self.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=max_season_length,
             max_diffs=max_diffs,
