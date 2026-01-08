@@ -235,16 +235,14 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
             Smaller values will be faster but could be less accurate.
 
     Raises:
-        ValueError: During fit_transform, if any series doesn't have enough data points.
-            With n_seasons specified, each series must have at least `max_season_length * n_seasons` observations.
+        ValueError: If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing,
+            there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
     """
 
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
-        self.max_season_length = max_season_length
         self.max_diffs = max_diffs
-        self.n_seasons = n_seasons
         self.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=max_season_length,
             max_diffs=max_diffs,
@@ -252,23 +250,24 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         )
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        # Validate that each series has enough data points
-        if self.n_seasons is not None:
-            series_lengths = np.diff(ga.indptr)
-            min_required_length = self.max_season_length * self.n_seasons
-            short_series = series_lengths < min_required_length
+        # Validate that each series has enough data for STL decomposition
+        # STL requires at least 2 periods of the detected seasonal period after differencing.
+        # Since the minimum detectable period is 2, we need at least 4 observations after differencing.
+        series_lengths = np.diff(ga.indptr)
+        min_required = self.max_diffs + 4
+        short_series = series_lengths < min_required
 
-            if short_series.any():
-                short_indices = np.where(short_series)[0]
-                short_lengths = series_lengths[short_series]
-                raise ValueError(
-                    f"Insufficient data in {len(short_indices)} series. "
-                    f"With max_season_length={self.max_season_length} and n_seasons={self.n_seasons}, "
-                    f"each series requires at least {min_required_length} observations. "
-                    f"Found series with lengths: {short_lengths[:5].tolist()}"
-                    f"{'...' if len(short_lengths) > 5 else ''}. "
-                    f"Either increase series length, reduce n_seasons, or set n_seasons=None to use all available data."
-                )
+        if short_series.any():
+            short_indices = np.where(short_series)[0]
+            short_lengths = series_lengths[short_series]
+            raise ValueError(
+                f"Insufficient data in {len(short_indices)} series for seasonality detection. "
+                f"With max_diffs={self.max_diffs}, each series requires at least {min_required} observations "
+                f"to ensure STL decomposition can run (need 4+ observations after differencing). "
+                f"Found series with lengths: {short_lengths[:5].tolist()}"
+                f"{'...' if len(short_lengths) > 5 else ''}. "
+                f"Either filter out short series, decrease max_diffs, or use a different transformation."
+            )
 
         # Call parent's fit_transform
         return super().fit_transform(ga)
