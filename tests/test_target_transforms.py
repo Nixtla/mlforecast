@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -271,3 +273,61 @@ def test_mlforecast_polars(mlforecast_setup):
     pd_preds = fcst_pd.fit(series_pd).predict(5)
 
     pd.testing.assert_frame_equal(pd_preds, pl_preds.to_pandas())
+
+
+def test_autoseasonality_and_differences_validation():
+    """Test validation logic for AutoSeasonalityAndDifferences safety guard."""
+
+    # Test 1: ValueError when < 3 cycles are available
+    # With max_season_length=12, max_diffs=1, n_seasons=2:
+    # total_obs = 12 * 2 = 24, obs_after_diffs = 23, cycles = 1.92 < 3
+    with pytest.raises(ValueError) as exc_info:
+        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=2)
+    error_msg = str(exc_info.value)
+    assert "Insufficient data for seasonality detection" in error_msg
+    assert "1.9 seasonal cycles" in error_msg
+    assert "At least 3 full cycles are required" in error_msg
+
+    # Test 2: UserWarning when 3 <= cycles < 4
+    # With max_season_length=12, max_diffs=1, n_seasons=4:
+    # total_obs = 48, obs_after_diffs = 47, cycles = 3.92
+    with pytest.warns(UserWarning) as warning_info:
+        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=4)
+    assert len(warning_info) == 1
+    warning_msg = str(warning_info[0].message)
+    assert "Limited data for reliable seasonality detection" in warning_msg
+    assert "3.9 seasonal cycles" in warning_msg
+    assert "At least 4 full cycles are recommended" in warning_msg
+    assert "Results may be unreliable" in warning_msg
+
+    # Test 3: No warning when >= 4 cycles
+    # With max_season_length=12, max_diffs=1, n_seasons=5:
+    # total_obs = 60, obs_after_diffs = 59, cycles = 4.92 >= 4
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=5)
+        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
+        assert len(user_warnings) == 0
+
+    # Test 4: No validation when n_seasons=None
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        AutoSeasonalityAndDifferences(max_season_length=12, max_diffs=1, n_seasons=None)
+        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
+        assert len(user_warnings) == 0
+
+    # Test 5: Edge cases
+    # Just below 3 cycles (should error)
+    with pytest.raises(ValueError):
+        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=3)
+
+    # Between 3-4 cycles (should warn)
+    with pytest.warns(UserWarning):
+        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=4)
+
+    # Above 4 cycles (should not warn)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        AutoSeasonalityAndDifferences(max_season_length=10, max_diffs=1, n_seasons=5)
+        user_warnings = [warning for warning in w if issubclass(warning.category, UserWarning)]
+        assert len(user_warnings) == 0

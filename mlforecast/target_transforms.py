@@ -248,7 +248,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
         # Validate that we have enough data after differencing for seasonality detection
-        # We need at least 2 full cycles minimum, but recommend 4+ for robust detection
+        # We need at least 3 full cycles minimum, but recommend 4+ for robust detection
         # This ensures the STL decomposition (which requires low_pass_length >= 3) will work
         if n_seasons is not None:
             absolute_min_cycles = 3  # Absolute minimum to attempt detection
