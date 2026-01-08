@@ -143,6 +143,18 @@ Name | Type | Description | Default
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
 
+**Raises:**
+
+Type | Description
+---- | -----------
+<code>[ValueError](#ValueError)</code>| If the combination of parameters doesn't provide enough data for seasonality detection. After applying max_diffs differences, at least 2 full seasonal cycles are required.
+
+**Warns:**
+
+Type | Description
+---- | -----------
+<code>UserWarning</code>| If only 2-3 cycles are available after differencing. While the method will run, results may be unreliable. At least 4 full cycles are recommended for robust seasonality detection.
+
 ```python
 def test_scaler(sc, series):
     id_counts = counts_by_id(series, 'unique_id')
