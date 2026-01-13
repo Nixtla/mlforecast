@@ -561,6 +561,174 @@ def test_ts_update(series):
     last7 = ts.ga.take_from_groups(slice(-7, None)).data
     assert 0 < np.abs(last7 / orig_last7 - 1).mean() < 0.5
 
+
+def _make_valid_update(series, engine):
+    if engine == "polars":
+        last_vals = series.join(
+            series.group_by("unique_id").agg(pl.col("ds").max()),
+            on=["unique_id", "ds"],
+        )
+        update1 = last_vals.with_columns(pl.col("ds").dt.offset_by("1d"))
+        update2 = last_vals.with_columns(pl.col("ds").dt.offset_by("2d"))
+        update = pl.concat([update1, update2])
+        return update.with_columns((pl.col("y") + 1).alias("y"))
+    last_vals = series.groupby("unique_id", observed=True).tail(1).copy()
+    update1 = last_vals.copy()
+    update2 = last_vals.copy()
+    update1["ds"] += pd.offsets.Day()
+    update2["ds"] += 2 * pd.offsets.Day()
+    update = pd.concat([update1, update2], ignore_index=True)
+    update["y"] = update["y"] + 1
+    return update
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_validation_valid_continuous(engine):
+    series = generate_daily_series(3, n_static_features=2, engine=engine)
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lags=[1])
+    ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    update = _make_valid_update(series, engine)
+    ts.update(update, validate_input=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_validation_invalid_gap(engine):
+    series = generate_daily_series(3, n_static_features=2, engine=engine)
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lags=[1])
+    ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    if engine == "polars":
+        last_vals = series.join(
+            series.group_by("unique_id").agg(pl.col("ds").max()),
+            on=["unique_id", "ds"],
+        )
+        update = pl.concat(
+            [
+                last_vals.with_columns(pl.col("ds").dt.offset_by("1d")),
+                last_vals.with_columns(pl.col("ds").dt.offset_by("3d")),
+            ]
+        )
+    else:
+        last_vals = series.groupby("unique_id", observed=True).tail(1).copy()
+        update = pd.concat(
+            [
+                last_vals.assign(ds=last_vals["ds"] + pd.offsets.Day()),
+                last_vals.assign(ds=last_vals["ds"] + 3 * pd.offsets.Day()),
+            ],
+            ignore_index=True,
+        )
+    with pytest.raises(ValueError, match="gaps or duplicate"):
+        ts.update(update, validate_input=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_validation_invalid_start(engine):
+    series = generate_daily_series(3, n_static_features=2, engine=engine)
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lags=[1])
+    ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    if engine == "polars":
+        last_vals = series.join(
+            series.group_by("unique_id").agg(pl.col("ds").max()),
+            on=["unique_id", "ds"],
+        )
+        update = pl.concat(
+            [
+                last_vals,
+                last_vals.with_columns(pl.col("ds").dt.offset_by("1d")),
+            ]
+        )
+    else:
+        last_vals = series.groupby("unique_id", observed=True).tail(1).copy()
+        update = pd.concat(
+            [
+                last_vals,
+                last_vals.assign(ds=last_vals["ds"] + pd.offsets.Day()),
+            ],
+            ignore_index=True,
+        )
+    with pytest.raises(ValueError, match="invalid start"):
+        ts.update(update, validate_input=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_validation_new_series(engine):
+    series = generate_daily_series(3, n_static_features=2, engine=engine)
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lags=[1])
+    ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    update = _make_valid_update(series, engine)
+    if engine == "polars":
+        new_series = pl.DataFrame(
+            {
+                "unique_id": ["new_0", "new_0"],
+                "ds": [datetime.datetime(2020, 1, 1), datetime.datetime(2020, 1, 2)],
+                "y": [1.0, 2.0],
+                "static_0": [0, 0],
+                "static_1": [1, 1],
+            }
+        ).with_columns(
+            pl.col("ds").dt.cast_time_unit("ns"),
+            pl.col("unique_id").cast(pl.Categorical),
+        )
+        cast_exprs = []
+        for col, dtype in update.schema.items():
+            if dtype == pl.Categorical and new_series.schema[col] != pl.Categorical:
+                cast_exprs.append(
+                    pl.col(col).cast(pl.Utf8).cast(pl.Categorical).alias(col)
+                )
+            else:
+                cast_exprs.append(pl.col(col).cast(dtype).alias(col))
+        new_series = new_series.with_columns(cast_exprs)
+        update = pl.concat([update, new_series])
+    else:
+        new_series = pd.DataFrame(
+            {
+                "unique_id": ["new_0", "new_0"],
+                "ds": pd.to_datetime(["2020-01-01", "2020-01-02"]),
+                "y": [1.0, 2.0],
+                "static_0": [0, 0],
+                "static_1": [1, 1],
+            }
+        )
+        update = pd.concat([update, new_series], ignore_index=True)
+    ts.update(update, validate_input=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_validation_frequency_mismatch(engine):
+    series = generate_daily_series(3, n_static_features=2, engine=engine)
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lags=[1])
+    ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    if engine == "polars":
+        last_vals = series.join(
+            series.group_by("unique_id").agg(pl.col("ds").max()),
+            on=["unique_id", "ds"],
+        )
+        update = pl.concat(
+            [
+                last_vals.with_columns(pl.col("ds").dt.offset_by("1d")),
+                last_vals.with_columns(
+                    pl.col("ds").dt.offset_by("1d").dt.offset_by("1h")
+                ),
+            ]
+        )
+    else:
+        last_vals = series.groupby("unique_id", observed=True).tail(1).copy()
+        update = pd.concat(
+            [
+                last_vals.assign(ds=last_vals["ds"] + pd.offsets.Day()),
+                last_vals.assign(
+                    ds=last_vals["ds"] + pd.offsets.Day() + pd.offsets.Hour()
+                ),
+            ],
+            ignore_index=True,
+        )
+    with pytest.raises(ValueError, match="aligned"):
+        ts.update(update, validate_input=True)
+
 def test_ts_polars():
     two_series = generate_daily_series(2, n_static_features=2, engine="polars")
     ts = TimeSeries(freq="1d", lags=[1], date_features=["weekday"])
