@@ -863,7 +863,7 @@ class TimeSeries:
             ts = cloudpickle.load(f)
         return ts
     
-    def _validate_new_df(self, df: pd.DataFrame) -> None:
+    def _validate_new_df(self, df: DataFrame) -> None:
         if isinstance(df, pl.DataFrame):
             stats = (
                 df.group_by(self.id_col)
@@ -881,6 +881,8 @@ class TimeSeries:
             expected_df = last_dates_df.with_columns(
                 pl.Series(name="_expected_start", values=expected_start)
             ).select([self.id_col, "_expected_start"])
+            stats = stats.with_columns(pl.col(self.id_col).cast(pl.Utf8))
+            expected_df = expected_df.with_columns(pl.col(self.id_col).cast(pl.Utf8))
             stats = stats.join(expected_df, on=self.id_col, how="left")
             bad_starts = stats.filter(
                 pl.col("_expected_start").is_not_null()
@@ -972,7 +974,12 @@ class TimeSeries:
             )
 
     def update(self, df: DataFrame, validate_input: bool = False) -> None:
-        """Update the values of the stored series."""  
+        """Update the values of the stored series.
+
+        Args:
+            df: New observations to append.
+            validate_input: If True, validate continuity, start dates, and frequency.
+        """
         validate_format(df, self.id_col, self.time_col, self.target_col)
         uids = self.uids
         if isinstance(uids, pd.Index):

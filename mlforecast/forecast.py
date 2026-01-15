@@ -966,5 +966,6 @@ class MLForecast:
 
         Args:
             df (pandas or polars DataFrame): Dataframe with new observations.
+            validate_input (bool): If True, validate continuity, start dates, and frequency.
         """
         self.ts.update(df, validate_input)
