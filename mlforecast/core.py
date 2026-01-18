@@ -865,6 +865,7 @@ class TimeSeries:
     
     def _validate_new_df(self, df: DataFrame) -> None:
         if isinstance(df, pl.DataFrame):
+            df = df.sort([self.id_col, self.time_col])
             stats = (
                 df.group_by(self.id_col)
                 .agg(
@@ -894,34 +895,24 @@ class TimeSeries:
                     "Series have invalid start dates. "
                     f"Expected start at last_date + freq for: {bad_ids}."
                 )
-            if isinstance(self.freq, int):
-                diffs = pl.col("_max") - pl.col("_min")
-                misaligned = stats.filter((diffs % self.freq) != 0)
-                if misaligned.height:
-                    raise ValueError(
-                        "Found timestamps not aligned to the configured frequency."
-                    )
-                expected_count = diffs // self.freq + 1
-            else:
-                delta = pd.Timedelta(pd.tseries.frequencies.to_offset(self.freq))
-                delta_ns = delta.value
-                min_ns = pl.col("_min").dt.timestamp("ns")
-                max_ns = pl.col("_max").dt.timestamp("ns")
-                diffs_ns = max_ns - min_ns
-                misaligned = stats.filter((diffs_ns % delta_ns) != 0)
-                if misaligned.height:
-                    raise ValueError(
-                        "Found timestamps not aligned to the configured frequency."
-                    )
-                expected_count = diffs_ns // delta_ns + 1
-            gaps = stats.filter(expected_count != pl.col("_size"))
+            expected_next = ufp.offset_times(df[self.time_col], self.freq, 1)
+            df_check = df.with_columns(
+                pl.Series(name="_expected_next", values=expected_next)
+            ).with_columns(
+                pl.col(self.time_col).shift(-1).over(self.id_col).alias("_next")
+            )
+            gaps = df_check.filter(
+                pl.col("_next").is_not_null()
+                & (pl.col("_expected_next") != pl.col("_next"))
+            )
             if gaps.height:
-                bad_ids = gaps[self.id_col].to_list()
+                bad_ids = gaps[self.id_col].unique().to_list()
                 raise ValueError(
                     "Found gaps or duplicate timestamps in the update for: "
                     f"{bad_ids}."
                 )
             return
+        df = df.sort_values([self.id_col, self.time_col])
         stats = (
             df.groupby(self.id_col, observed=True)[self.time_col]
             .agg(["min", "max", "size"])
@@ -947,27 +938,11 @@ class TimeSeries:
                 "Series have invalid start dates. "
                 f"Expected start at last_date + freq for: {bad_ids}."
             )
-        diffs = stats["_max"] - stats["_min"]
-        if isinstance(self.freq, int):
-            delta = self.freq
-            remainder = diffs % delta
-            if (remainder != 0).any():
-                raise ValueError(
-                    "Found timestamps not aligned to the configured frequency."
-                )
-            expected_count = diffs // delta + 1
-        else:
-            offset = pd.tseries.frequencies.to_offset(self.freq)
-            delta = pd.Timedelta(offset)
-            remainder = diffs % delta
-            if (remainder != pd.Timedelta(0)).any():
-                raise ValueError(
-                    "Found timestamps not aligned to the configured frequency."
-                )
-            expected_count = diffs // delta + 1
-        gaps = expected_count != stats["_size"]
+        expected_next = ufp.offset_times(df[self.time_col], self.freq, 1)
+        next_time = df.groupby(self.id_col, observed=True)[self.time_col].shift(-1)
+        gaps = next_time.notna() & (expected_next != next_time)
         if gaps.any():
-            bad_ids = stats.loc[gaps, self.id_col].tolist()
+            bad_ids = df.loc[gaps, self.id_col].unique().tolist()
             raise ValueError(
                 "Found gaps or duplicate timestamps in the update for: "
                 f"{bad_ids}."

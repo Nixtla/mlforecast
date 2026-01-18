@@ -567,6 +567,7 @@ def _generate_series_with_freq(n_series, freq_name, n_static_features, engine):
     from utilsforecast.data import generate_series
     from math import ceil, log10
 
+    max_length = 200 if freq_name == "yearly" else 500
     freq_map = {
         "hourly": "h",
         "daily": "D",
@@ -579,7 +580,7 @@ def _generate_series_with_freq(n_series, freq_name, n_static_features, engine):
         n_series=n_series,
         freq=freq_map[freq_name],
         min_length=50,
-        max_length=500,
+        max_length=max_length,
         n_static_features=n_static_features,
         equal_ends=False,
         static_as_categorical=True,
@@ -881,7 +882,7 @@ def test_update_validation_frequency_mismatch(engine, freq_name):
             ],
             ignore_index=True,
         )
-    with pytest.raises(ValueError, match="aligned"):
+    with pytest.raises(ValueError, match="gaps or duplicate"):
         ts.update(update, validate_input=True)
 
 
@@ -931,8 +932,6 @@ def test_update_validation_misaligned_intermediate_timestamp(engine, freq_name):
         df3 = last_vals.assign(ds=last_vals["ds"] + freq_config["pandas_offset2"])
         update = pd.concat([df1, df2, df3], ignore_index=True)
 
-    # This SHOULD raise an error but currently PASSES (bug!)
-    # When the validation is fixed, this test will pass by catching the error
     with pytest.raises(ValueError, match="aligned|gaps or duplicate"):
         ts.update(update, validate_input=True)
 
