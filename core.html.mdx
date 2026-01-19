@@ -128,10 +128,17 @@ predict(
 #### `TimeSeries.update`
 
 ```python
-update(df)
+update(df, validate_input=False)
 ```
 
 Update the values of the stored series.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | New observations to append. | *required*
+`validate_input` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
 
 ```python
 def month_start_or_end(dates):

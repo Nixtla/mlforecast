@@ -112,7 +112,7 @@ Name | Type | Description | Default
 #### `MLForecast.update`
 
 ```python
-update(df)
+update(df, validate_input=False)
 ```
 
 Update the values of the stored series.
@@ -122,6 +122,7 @@ Update the values of the stored series.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `df` | <code>pandas or polars DataFrame</code> | Dataframe with new observations. | *required*
+`validate_input` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
 
 #### `MLForecast.make_future_dataframe`
 
