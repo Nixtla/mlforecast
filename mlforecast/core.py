@@ -792,14 +792,8 @@ class TimeSeries:
                         "If all your features are dynamic please provide an empty list (static_features=[])."
                     )
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
-                if getattr(self, "max_horizon", None) is None:
-                    ends = ufp.offset_times(self.last_dates, self.freq, horizon)
-                    expected_rows_X = len(self.uids) * horizon
-                else:
-                    # direct approach needs exogenous features for all horizons
-                    # to properly align features with their respective forecast horizons
-                    ends = ufp.offset_times(self.last_dates, self.freq, horizon)
-                    expected_rows_X = len(self.uids) * horizon
+                ends = ufp.offset_times(self.last_dates, self.freq, horizon)
+                expected_rows_X = len(self.uids) * horizon
                 dates_validation = type(X_df)(
                     {
                         self.id_col: self.uids,
