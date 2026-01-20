@@ -834,14 +834,37 @@ def test_direct_approach_single_timestamp():
         preds2 = fcst2.predict(h=h, X_df=X_df_one)  # single timestamp (reused)
         # Verify warning was raised
         assert len(w) == 1
-        assert "last available features" in str(w[0].message)
-    # Both should produce predictions of correct shape
+        assert 'missing horizon steps' in str(w[0].message)
+
+    # Shape validation
     assert preds1.shape[0] == len(series['unique_id'].unique()) * h
     assert preds2.shape[0] == len(series['unique_id'].unique()) * h
-    # Both predictions should be the same in the first period
+
+    # Sanity checks for partial-feature predictions (preds2)
+    model_cols = [col for col in preds2.columns if col not in ['unique_id', 'ds']]
+    for col in model_cols:
+        # 1. No NaN/Inf values
+        assert not preds2[col].isna().any(), f"{col} contains NaN values"
+        assert not np.isinf(preds2[col]).any(), f"{col} contains Inf values"
+
+        # 2. Values within reasonable bounds (based on training data statistics)
+        lower_bound = train['y'].min()
+        upper_bound = train['y'].max()
+        assert preds2[col].min() >= lower_bound, \
+            f"{col} has values below training data bound: {preds2[col].min()} < {lower_bound}"
+        assert preds2[col].max() <= upper_bound, \
+            f"{col} has values above training data bound: {preds2[col].max()} > {upper_bound}"
+
+    # First period predictions should be identical (same features used)
     first_preds1 = preds1.groupby('unique_id', observed=True).head(1)
     first_preds2 = preds2.groupby('unique_id', observed=True).head(1)
     pd.testing.assert_frame_equal(first_preds1, first_preds2[first_preds1.columns])
+
+    # Full predictions should be highly correlated
+    for col in model_cols:
+        correlation = np.corrcoef(preds1[col], preds2[col])[0, 1]
+        assert correlation > 0.95, \
+            f"{col} predictions have low correlation: {correlation:.3f}"
 
 
 def test_direct_forecasting_exogenous_alignment():
