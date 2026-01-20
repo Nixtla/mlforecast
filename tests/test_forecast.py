@@ -835,10 +835,13 @@ def test_direct_approach_single_timestamp():
         # Verify warning was raised
         assert len(w) == 1
         assert "last available features" in str(w[0].message)
-
     # Both should produce predictions of correct shape
     assert preds1.shape[0] == len(series['unique_id'].unique()) * h
     assert preds2.shape[0] == len(series['unique_id'].unique()) * h
+    # Both predictions should be the same in the first period
+    first_preds1 = preds1.groupby('unique_id', observed=True).head(1)
+    first_preds2 = preds2.groupby('unique_id', observed=True).head(1)
+    pd.testing.assert_frame_equal(first_preds1, first_preds2[first_preds1.columns])
 
 
 def test_direct_forecasting_exogenous_alignment():
