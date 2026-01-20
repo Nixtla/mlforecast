@@ -51,5 +51,5 @@ jobs:
           brew install lightgbm
 
       - name: Run pytest
-        run: run pytest # Ray isn't compatible with UV
+        run: pytest # Ray isn't compatible with UV
 
