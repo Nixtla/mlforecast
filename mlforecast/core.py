@@ -822,8 +822,8 @@ class TimeSeries:
                 if X_df.shape[0] < expected_rows_X:
                     warnings.warn(
                         f"X_df has {X_df.shape[0]} rows but {expected_rows_X} expected for horizon {horizon}. "
-                        "The last available features for each series will be reused for remaining horizons. "
-                        "For best results with direct forecasting, provide features for all horizons."
+                        "Features will be reused for missing horizon steps. "
+                        "Use `make_future_dataframe(h)` or `get_missing_future(h, X_df)` to generate complete features."
                     )
                 drop_cols = [self.id_col, self.time_col, "_start", "_end"]
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
