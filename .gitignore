@@ -161,3 +161,16 @@ nbs/_extensions
 catboost_info
 *.pkl
 mlruns
+
+.codspeed
+
+# ignore files created in the docs folder
+docs/**/*.mdx
+
+docs-scripts
+docs/mintlify/examples
+
+nbs/_extensions
+.quarto
+
+*.png
