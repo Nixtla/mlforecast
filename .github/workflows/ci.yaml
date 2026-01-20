@@ -54,7 +54,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --group d
+        run: uv sync --group dev
 
       - name: Run m4 performance tests
         run: uv run pytest tests/test_m4.py --no-cov
