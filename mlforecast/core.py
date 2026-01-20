@@ -708,7 +708,10 @@ class TimeSeries:
                     new_x = self._get_features_for_next_step(X_df)
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
-                    predictions[:, i] = model[i].predict(new_x)
+                    preds = model[i].predict(new_x)
+                    if len(preds) != len(self.uids):
+                        raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")
+                    predictions[:, i] = preds
                 raw_preds = predictions.ravel()
                 result = ufp.assign_columns(result, name, raw_preds)
         return result
