@@ -51,5 +51,7 @@ jobs:
           brew install lightgbm
 
       - name: Run pytest
-        run: pytest # Ray isn't compatible with UV
+        env: 
+          RAY_ENABLE_UV_RUN_RUNTIME_ENV: 0          
+        run: uv run pytest
 
