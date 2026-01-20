@@ -607,8 +607,10 @@ class TimeSeries:
         new_x = self._update_features()
         if X_df is not None:
             n_series = len(self.uids)
-            h = X_df.shape[0] // n_series
-            rows = np.arange(self._h, X_df.shape[0], h)
+            h = X_df.shape[0] // n_series  # how many timestamps per series
+            # Use min to cap at last available row if self._h exceeds available data
+            row_offset = min(self._h, h - 1)
+            rows = np.arange(row_offset, X_df.shape[0], h)
             X = ufp.take_rows(X_df, rows)
             X = ufp.drop_index_if_pandas(X)
             new_x = ufp.horizontal_concat([new_x, X])
@@ -701,11 +703,11 @@ class TimeSeries:
         for name, model in models.items():
             with self._backup():
                 self._predict_setup()
-                new_x = self._get_features_for_next_step(X_df)
-                if before_predict_callback is not None:
-                    new_x = before_predict_callback(new_x)
-                predictions = np.empty((new_x.shape[0], horizon))
+                predictions = np.empty((len(self.uids), horizon))
                 for i in range(horizon):
+                    new_x = self._get_features_for_next_step(X_df)
+                    if before_predict_callback is not None:
+                        new_x = before_predict_callback(new_x)
                     predictions[:, i] = model[i].predict(new_x)
                 raw_preds = predictions.ravel()
                 result = ufp.assign_columns(result, name, raw_preds)
@@ -794,9 +796,10 @@ class TimeSeries:
                     ends = ufp.offset_times(self.last_dates, self.freq, horizon)
                     expected_rows_X = len(self.uids) * horizon
                 else:
-                    # direct approach uses only the immediate next timestamp
-                    ends = starts
-                    expected_rows_X = len(self.uids)
+                    # direct approach needs exogenous features for all horizons
+                    # to properly align features with their respective forecast horizons
+                    ends = ufp.offset_times(self.last_dates, self.freq, horizon)
+                    expected_rows_X = len(self.uids) * horizon
                 dates_validation = type(X_df)(
                     {
                         self.id_col: self.uids,
@@ -807,14 +810,21 @@ class TimeSeries:
                 X_df = ufp.join(X_df, dates_validation, on=self.id_col)
                 mask = ufp.between(X_df[self.time_col], X_df["_start"], X_df["_end"])
                 X_df = ufp.filter_with_mask(X_df, mask)
-                if X_df.shape[0] != expected_rows_X:
+                if X_df.shape[0] < len(self.uids):
                     msg = (
                         "Found missing inputs in X_df. "
-                        "It should have one row per id and time for the complete forecasting horizon.\n"
+                        "It should have at least one row per id.\n"
                         "You can get the expected structure by running `MLForecast.make_future_dataframe(h)` "
-                        "or get the missing combinatins in your current `X_df` by running `MLForecast.get_missing_future(h, X_df)`."
+                        "or get the missing combinations in your current `X_df` by running `MLForecast.get_missing_future(h, X_df)`."
                     )
                     raise ValueError(msg)
+                # Warn if partial features provided
+                if X_df.shape[0] < expected_rows_X:
+                    warnings.warn(
+                        f"X_df has {X_df.shape[0]} rows but {expected_rows_X} expected for horizon {horizon}. "
+                        "The last available features for each series will be reused for remaining horizons. "
+                        "For best results with direct forecasting, provide features for all horizons."
+                    )
                 drop_cols = [self.id_col, self.time_col, "_start", "_end"]
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)

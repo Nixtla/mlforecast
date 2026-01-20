@@ -13,7 +13,7 @@ import utilsforecast.processing as ufp
 import xgboost as xgb
 from sklearn import set_config
 from sklearn.linear_model import LinearRegression
-from utilsforecast.feature_engineering import time_features
+from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
 
 from mlforecast import MLForecast
@@ -29,6 +29,7 @@ from mlforecast.utils import (
     PredictionIntervals,
     generate_daily_series,
     generate_prices_for_series,
+    generate_series,
 )
 
 set_config(display='text')
@@ -812,20 +813,78 @@ def test_save_load():
 
 # direct approach requires only one timestamp and produces same results for two models
 def test_direct_approach_single_timestamp():
-    """Test direct approach requires only one timestamp and produces same results for two models."""
+    """Test direct approach works with partial X_df (backward compatibility)."""
     series = generate_daily_series(5)
     h = 5
     freq = 'D'
     train, future = time_features(series, freq=freq, features=['day'], h=h)
     models = [LinearRegression(), lgb.LGBMRegressor(n_estimators=5)]
 
+    # Test 1: Full features work correctly
     fcst1 = MLForecast(models=models, freq=freq, date_features=['dayofweek'])
     fcst1.fit(train, max_horizon=h, static_features=[])
-    preds1 = fcst1.predict(h=h, X_df=future)  # extra timestamps
+    preds1 = fcst1.predict(h=h, X_df=future)  # full timestamps
 
+    # Test 2: Partial features work (backward compatibility)
     fcst2 = MLForecast(models=models[::-1], freq=freq, date_features=['dayofweek'])
     fcst2.fit(train, max_horizon=h, static_features=[])
     X_df_one = future.groupby('unique_id', observed=True).head(1)
-    preds2 = fcst2.predict(h=h, X_df=X_df_one)  # only needed timestamp
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        preds2 = fcst2.predict(h=h, X_df=X_df_one)  # single timestamp (reused)
+        # Verify warning was raised
+        assert len(w) == 1
+        assert "last available features" in str(w[0].message)
 
-    pd.testing.assert_frame_equal(preds1, preds2[preds1.columns])
+    # Both should produce predictions of correct shape
+    assert preds1.shape[0] == len(series['unique_id'].unique()) * h
+    assert preds2.shape[0] == len(series['unique_id'].unique()) * h
+
+
+def test_direct_forecasting_exogenous_alignment():
+    """Test that direct forecasting correctly aligns exogenous features to each horizon.
+
+    This test reproduces the bug reported in issue #496 where direct forecasting
+    only uses exogenous features from horizon 1 for all horizons. The test creates
+    two versions of exogenous data:
+    1. test_X_df: Correct Fourier features for all horizons
+    2. test_X_df_zeros: Fourier features zeroed out for horizon > 1
+
+    Before fix: Predictions are identical (bug - only horizon 1 features used)
+    After fix: Predictions differ (correct - each horizon uses its aligned features)
+    """
+    H = 3
+    df = generate_series(3, freq="W", min_length=104, n_static_features=1)
+    df, _ = fourier(df, freq="W", season_length=52, k=1, h=H)
+
+    # Train/test split
+    test = df.groupby("unique_id").tail(H)
+    train = df.drop(test.index)
+    test_X_df = test.drop(columns=["static_0", "y"])
+
+    # Create version with zeros for horizon > 1
+    test_X_df_zeros = test_X_df.copy()
+    test_X_df_zeros["is_first_ds"] = test_X_df_zeros.groupby("unique_id")["ds"].transform(
+        lambda x: x == x.min()
+    )
+    test_X_df_zeros.loc[~test_X_df_zeros["is_first_ds"], ["sin1_52", "cos1_52"]] = 0
+    test_X_df_zeros = test_X_df_zeros.drop(columns="is_first_ds")
+
+    # Fit and predict
+    fcst = MLForecast(
+        models=lgb.LGBMRegressor(random_state=0, verbosity=-1),
+        freq="W",
+        lags=[1],
+        date_features=["month"],
+    )
+    fcst.fit(train, static_features=["static_0"], max_horizon=H)
+
+    preds_correct = fcst.predict(h=H, X_df=test_X_df)
+    preds_zeros = fcst.predict(h=H, X_df=test_X_df_zeros)
+
+    # After fix: predictions should be DIFFERENT
+    # (before fix they are identical, proving the bug)
+    assert not np.allclose(
+        preds_correct["LGBMRegressor"].values,
+        preds_zeros["LGBMRegressor"].values
+    )
