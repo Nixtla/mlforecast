@@ -914,3 +914,48 @@ def test_direct_forecasting_exogenous_alignment():
         preds_correct["LGBMRegressor"].values,
         preds_zeros["LGBMRegressor"].values
     )
+
+
+def test_direct_forecasting_perfect_exogenous_fit():
+    """Test that direct forecasting correctly uses exogenous features for each horizon.
+
+    This test validates that when a model is trained with a perfect linear relationship
+    between the target and an exogenous feature (y = X), the predictions at each horizon
+    correctly use the aligned exogenous features from X_df. If properly implemented,
+    predictions should equal the exogenous feature values.
+    """
+    H = 3
+
+    # Create simple training data where y = X (perfect linear relationship)
+    df = pd.DataFrame({
+        "ds": np.arange(7),
+        "X": np.arange(7),
+        "unique_id": "ex",
+        "y": np.arange(7),
+    })
+
+    # Create test dataframe with exogenous features for prediction
+    test_df = pd.DataFrame({
+        "ds": np.arange(7, 10),
+        "X": np.arange(7, 10),
+        "unique_id": "ex",
+    })
+
+    # Fit with max_horizon to enable direct forecasting
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+    )
+    fcst.fit(df, static_features=[], max_horizon=H)
+
+    # Predict using exogenous features
+    individual_preds = fcst.predict(h=H, X_df=test_df)
+
+    # Validation: predictions should equal the exogenous feature values
+    # This proves each horizon model uses the correct aligned features
+    np.testing.assert_allclose(
+        individual_preds['LinearRegression'].values,
+        test_df['X'].values,
+        rtol=1e-10,
+        err_msg="Direct forecasting predictions do not match expected exogenous feature values"
+    )
