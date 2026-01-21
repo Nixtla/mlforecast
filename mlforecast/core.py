@@ -31,6 +31,7 @@ from sklearn.pipeline import Pipeline
 from utilsforecast.compat import (
     DataFrame,
     DFType,
+    Series,
     pl,
     pl_DataFrame,
     pl_Series,
