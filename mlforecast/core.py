@@ -378,11 +378,23 @@ class TimeSeries:
         self._group_states: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         group_tfms = self._get_group_tfms()
         if group_tfms:
-            def _make_group_id(data, cols):
+            def _add_group_id(data, cols):
                 if isinstance(data, pd.DataFrame):
-                    return data[cols].astype(str).agg("__".join, axis=1)
-                expr = pl.concat_str([pl.col(c).cast(pl.Utf8) for c in cols], separator="__")
-                return data.select(expr).to_series(0)
+                    groups = data[cols].drop_duplicates().reset_index(drop=True)
+                    groups["_group_id"] = np.arange(len(groups), dtype=np.int64)
+                    data = data.merge(groups, on=cols, how="left")
+                else:
+                    groups = data.select(cols).unique(maintain_order=True)
+                    groups = groups.with_row_count(name="_group_id")
+                    data = data.join(groups, on=cols, how="left")
+                return data, groups
+
+            def _map_group_id(data, groups, cols):
+                if isinstance(data, pd.DataFrame):
+                    joined = data[cols].merge(groups, on=cols, how="left")
+                    return joined["_group_id"].to_numpy()
+                joined = data.select(cols).join(groups, on=cols, how="left")
+                return joined["_group_id"].to_numpy()
 
             for group_cols, tfms in group_tfms.items():
                 for col in group_cols:
@@ -402,8 +414,9 @@ class TimeSeries:
                     maintain_order=True,
                 )
                 group_df = ufp.sort(group_df, by=group_cols_list + [time_col])
-                group_id = _make_group_id(group_df, group_cols_list)
-                group_df = ufp.assign_columns(group_df, "_group_id", group_id)
+                group_df, groups = _add_group_id(group_df, group_cols_list)
+                group_df = ufp.drop_index_if_pandas(group_df)
+                groups = ufp.drop_index_if_pandas(groups)
                 if isinstance(group_df, pd.DataFrame):
                     process_df = group_df[["_group_id", time_col, target_col]]
                 else:
@@ -421,20 +434,20 @@ class TimeSeries:
                 ga = GroupedArray(group_values, processed.indptr)
                 group_uids = processed.uids
                 if isinstance(self.static_features_, pd.DataFrame):
-                    series_group_id = _make_group_id(self.static_features_, group_cols_list)
-                    uid_index = pd.Series(
-                        np.arange(len(group_uids)), index=pd.Index(group_uids.astype(str))
+                    series_group_id = _map_group_id(
+                        self.static_features_, groups, group_cols_list
                     )
-                    group_idx = uid_index.reindex(series_group_id.astype(str)).to_numpy()
+                    group_idx = series_group_id.astype(np.int64, copy=False)
                 else:
-                    series_group_id = _make_group_id(self.static_features_, group_cols_list)
-                    group_uids_str = pl.Series(group_uids).cast(pl.Utf8)
-                    uid_index = {v: i for i, v in enumerate(group_uids_str.to_list())}
-                    group_idx = np.array([uid_index[v] for v in series_group_id.to_list()])
+                    series_group_id = _map_group_id(
+                        self.static_features_, groups, group_cols_list
+                    )
+                    group_idx = series_group_id.astype(np.int64, copy=False)
                 self._group_states[group_cols] = {
                     "ga": ga,
                     "df": group_df,
                     "group_cols": group_cols_list,
+                    "groups": groups,
                     "group_uids": group_uids,
                     "group_idx": group_idx,
                 }
@@ -1269,11 +1282,10 @@ class TimeSeries:
                     )
         group_tfms = self._get_group_tfms()
         if group_tfms:
-            def _make_group_id(data, cols):
+            def _attach_group_id(data, groups, cols):
                 if isinstance(data, pd.DataFrame):
-                    return data[cols].astype(str).agg("__".join, axis=1)
-                expr = pl.concat_str([pl.col(c).cast(pl.Utf8) for c in cols], separator="__")
-                return data.select(expr).to_series(0)
+                    return data.merge(groups, on=cols, how="left")
+                return data.join(groups, on=cols, how="left")
 
             for group_cols in group_tfms.keys():
                 state = self._group_states[group_cols]
@@ -1285,8 +1297,38 @@ class TimeSeries:
                     maintain_order=True,
                 )
                 group_df = ufp.sort(group_df, by=group_cols_list + [self.time_col])
-                group_id = _make_group_id(group_df, group_cols_list)
-                group_df = ufp.assign_columns(group_df, "_group_id", group_id)
+                groups = state["groups"]
+                group_df = _attach_group_id(group_df, groups, group_cols_list)
+                if isinstance(group_df, pd.DataFrame):
+                    missing = group_df["_group_id"].isna()
+                    if missing.any():
+                        new_groups = group_df.loc[missing, group_cols_list].drop_duplicates()
+                        new_groups = new_groups.reset_index(drop=True)
+                        start = len(groups)
+                        new_groups["_group_id"] = np.arange(
+                            start, start + len(new_groups), dtype=np.int64
+                        )
+                        groups = pd.concat([groups, new_groups], ignore_index=True)
+                        group_df = group_df.drop(columns="_group_id").merge(
+                            groups, on=group_cols_list, how="left"
+                        )
+                else:
+                    missing = group_df["_group_id"].is_null()
+                    if missing.any():
+                        new_groups = (
+                            group_df.filter(missing)
+                            .select(group_cols_list)
+                            .unique(maintain_order=True)
+                        )
+                        start = groups.height
+                        new_groups = new_groups.with_row_count(
+                            name="_group_id", offset=start
+                        )
+                        groups = pl.concat([groups, new_groups], how="vertical")
+                        group_df = group_df.drop("_group_id").join(
+                            groups, on=group_cols_list, how="left"
+                        )
+                state["groups"] = groups
                 id_counts = ufp.counts_by_id(group_df, "_group_id")
                 uids = state["group_uids"]
                 if isinstance(uids, pd.Index):
@@ -1308,14 +1350,15 @@ class TimeSeries:
                 )
                 state["group_uids"] = ufp.sort(sizes["_group_id"])
                 if isinstance(self.static_features_, pd.DataFrame):
-                    series_group_id = _make_group_id(self.static_features_, group_cols_list)
-                    uid_index = pd.Series(
-                        np.arange(len(state["group_uids"])),
-                        index=pd.Index(state["group_uids"].astype(str)),
-                    )
-                    state["group_idx"] = uid_index.reindex(series_group_id.astype(str)).to_numpy()
+                    series_group_id = self.static_features_[group_cols_list].merge(
+                        groups, on=group_cols_list, how="left"
+                    )["_group_id"].to_numpy()
+                    state["group_idx"] = series_group_id.astype(np.int64, copy=False)
                 else:
-                    series_group_id = _make_group_id(self.static_features_, group_cols_list)
-                    group_uids_str = pl.Series(state["group_uids"]).cast(pl.Utf8)
-                    uid_index = {v: i for i, v in enumerate(group_uids_str.to_list())}
-                    state["group_idx"] = np.array([uid_index[v] for v in series_group_id.to_list()])
+                    series_group_id = (
+                        self.static_features_
+                        .select(group_cols_list)
+                        .join(groups, on=group_cols_list, how="left")["_group_id"]
+                        .to_numpy()
+                    )
+                    state["group_idx"] = series_group_id.astype(np.int64, copy=False)
