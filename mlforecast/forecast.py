@@ -186,6 +186,131 @@ class MLForecast:
     def freq(self):
         return self.ts.freq
 
+    def _get_exog_cols(self) -> List[str]:
+        """
+        Identify user-provided exogenous columns that need shifting.
+
+        Excludes:
+        - Static features (from self.ts.static_features_)
+        - Lag transform features (from self.ts.transforms.keys())
+        - Date features (from self.ts.date_features)
+        - Weight column (self.ts.weight_col)
+
+        Returns:
+            List of column names that are exogenous/dynamic features.
+        """
+        static_cols = set(self.ts.static_features_.columns)
+        lag_cols = set(self.ts.transforms.keys())
+        date_cols = {f.__name__ if callable(f) else f for f in self.ts.date_features}
+
+        exclude = static_cols | lag_cols | date_cols
+        if self.ts.weight_col is not None:
+            exclude.add(self.ts.weight_col)
+
+        exog_cols = [c for c in self.ts.features_order_ if c not in exclude]
+        return exog_cols
+
+    @staticmethod
+    def _shift_array_by_groups(
+        arr: np.ndarray,
+        indptr: np.ndarray,
+        shift: int,
+    ) -> np.ndarray:
+        """
+        Shift array values forward by `shift` positions within each group.
+        Similar logic to GroupedArray.expand_target().
+
+        For row p in group g, gets value from row p+shift (within same group).
+        Rows that can't be shifted get NaN.
+
+        Args:
+            arr: 1D array of values to shift.
+            indptr: Group boundary indices (length n_groups + 1).
+            shift: Number of positions to shift forward.
+
+        Returns:
+            Array with shifted values. Rows near end of each group get NaN.
+        """
+        out = np.full_like(arr, np.nan, dtype=np.float64)
+        n_groups = len(indptr) - 1
+        for i in range(n_groups):
+            start, end = indptr[i], indptr[i + 1]
+            group_size = end - start
+            if group_size > shift:
+                out[start : end - shift] = arr[start + shift : end]
+        return out
+
+    def _shift_exog_features(
+        self,
+        X: Union[DataFrame, np.ndarray],
+        indptr: np.ndarray,
+        horizon: int,
+        exog_cols: List[str],
+    ) -> Union[DataFrame, np.ndarray]:
+        """
+        Shift exogenous feature columns forward by `horizon` positions per group.
+
+        For each group, row i gets the feature value from row i+horizon.
+        Rows that can't be shifted (near end of group) get NaN.
+
+        Args:
+            X: Feature matrix (DataFrame or ndarray).
+            indptr: Group boundary indices.
+            horizon: Number of positions to shift forward.
+            exog_cols: Column names to shift.
+
+        Returns:
+            Copy of X with shifted exogenous columns.
+        """
+        if isinstance(X, np.ndarray):
+            # Find column indices
+            if self.ts.weight_col:
+                x_cols = [self.ts.weight_col, *self.ts.features_order_]
+            else:
+                x_cols = self.ts.features_order_
+            exog_idxs = [x_cols.index(c) for c in exog_cols]
+            X_shifted = X.copy()
+            for idx in exog_idxs:
+                X_shifted[:, idx] = self._shift_array_by_groups(
+                    X[:, idx], indptr, horizon
+                )
+        else:
+            # DataFrame (pandas or polars)
+            X_shifted = ufp.copy_if_pandas(X, deep=True)
+            for col in exog_cols:
+                shifted_vals = self._shift_array_by_groups(
+                    X[col].to_numpy(), indptr, horizon
+                )
+                X_shifted = ufp.assign_columns(X_shifted, col, shifted_vals)
+        return X_shifted
+
+    def _get_valid_shifted_mask(
+        self,
+        X: Union[DataFrame, np.ndarray],
+        exog_cols: List[str],
+    ) -> np.ndarray:
+        """
+        Return boolean mask where all exogenous columns are not NaN.
+
+        Args:
+            X: Feature matrix (DataFrame or ndarray).
+            exog_cols: Column names to check for NaN.
+
+        Returns:
+            Boolean array where True means all exog columns are valid.
+        """
+        if isinstance(X, np.ndarray):
+            if self.ts.weight_col:
+                x_cols = [self.ts.weight_col, *self.ts.features_order_]
+            else:
+                x_cols = self.ts.features_order_
+            exog_idxs = [x_cols.index(c) for c in exog_cols]
+            return ~np.any(np.isnan(X[:, exog_idxs]), axis=1)
+        else:
+            # DataFrame
+            exog_vals = np.column_stack([X[c].to_numpy() for c in exog_cols])
+            return ~np.any(np.isnan(exog_vals), axis=1)
+
     @classmethod
     def from_cv(cls, cv: "LightGBMCV") -> "MLForecast":
         if not hasattr(cv, "best_iteration_"):
@@ -252,12 +377,17 @@ class MLForecast:
         X: Union[DataFrame, np.ndarray],
         y: np.ndarray,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
+        indptr: Optional[np.ndarray] = None,
+        exog_cols: Optional[List[str]] = None,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
         Args:
             X (pandas or polars DataFrame or numpy array): Features.
             y (numpy array): Target.
+            models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method.
+            indptr (numpy array, optional): Group boundary indices for shifting exogenous features.
+            exog_cols (list of str, optional): Exogenous column names to shift per horizon.
 
         Returns:
             MLForecast: Forecast object with trained models.
@@ -289,10 +419,22 @@ class MLForecast:
             model_fit_kwargs = models_fit_kwargs.get(name, None)
             if y.ndim == 2 and y.shape[1] > 1:
                 self.models_[name] = []
-                for col in range(y.shape[1]):
-                    keep = ~np.isnan(y[:, col])
-                    Xh = ufp.filter_with_mask(X, keep)
-                    yh = y[keep, col]
+                for horizon in range(y.shape[1]):
+                    # Shift exogenous features for this horizon
+                    if exog_cols and indptr is not None and horizon > 0:
+                        X_shifted = self._shift_exog_features(
+                            X, indptr, horizon, exog_cols
+                        )
+                    else:
+                        X_shifted = X
+
+                    # Filter: target not NaN AND (for shifted features) features not NaN
+                    keep = ~np.isnan(y[:, horizon])
+                    if exog_cols and horizon > 0:
+                        keep = keep & self._get_valid_shifted_mask(X_shifted, exog_cols)
+
+                    Xh = ufp.filter_with_mask(X_shifted, keep)
+                    yh = y[keep, horizon]
                     self.models_[name].append(
                         fit_model(
                             model,
@@ -373,7 +515,7 @@ class MLForecast:
                 c for c in df.columns if c not in (self.ts.id_col, self.ts.time_col)
             ]
             id_counts = ufp.counts_by_id(df, self.ts.id_col)
-            sizes = id_counts["counts"].to_numpy()
+            sizes = id_counts["counts"].to_numpy().astype(np.int64)
             indptr = np.append(0, sizes.cumsum())
         for tfm in self.ts.target_transforms[::-1]:
             if isinstance(tfm, _BaseGroupedArrayTargetTransform):
@@ -416,6 +558,8 @@ class MLForecast:
         target_col: str,
         max_horizon: Optional[int],
         weight_col: Optional[str],
+        indptr: Optional[np.ndarray] = None,
+        exog_cols: Optional[List[str]] = None,
     ) -> DFType:
         if weight_col is not None:
             if isinstance(X, np.ndarray):
@@ -428,6 +572,11 @@ class MLForecast:
             base = ufp.take_rows(base, sort_idxs)
             X = ufp.take_rows(X, sort_idxs)
             y = y[sort_idxs]
+            # Recompute indptr after sorting
+            if indptr is not None:
+                id_counts = ufp.counts_by_id(base, id_col)
+                sizes = id_counts["counts"].to_numpy().astype(np.int64)
+                indptr = np.append(0, sizes.cumsum())
         if max_horizon is None:
             fitted_values = ufp.assign_columns(base, target_col, y)
             for name, model in self.models_.items():
@@ -445,12 +594,36 @@ class MLForecast:
                 horizon_fitted_values.append(horizon_base)
             for name, horizon_models in self.models_.items():
                 for horizon, model in enumerate(horizon_models):
-                    preds = model.predict(X)
+                    # Shift exogenous features for this horizon before prediction
+                    if exog_cols and indptr is not None and horizon > 0:
+                        X_shifted = self._shift_exog_features(
+                            X, indptr, horizon, exog_cols
+                        )
+                        # Only predict on rows with valid shifted features
+                        valid_mask = self._get_valid_shifted_mask(X_shifted, exog_cols)
+                        X_valid = ufp.filter_with_mask(X_shifted, valid_mask)
+                        preds_valid = model.predict(X_valid)
+                        # Create full predictions array with NaN for invalid rows
+                        preds = np.full(len(X_shifted), np.nan)
+                        preds[valid_mask] = preds_valid
+                    else:
+                        preds = model.predict(X)
                     horizon_fitted_values[horizon] = ufp.assign_columns(
                         horizon_fitted_values[horizon], name, preds
                     )
             for horizon, horizon_df in enumerate(horizon_fitted_values):
                 keep_mask = ~ufp.is_nan(horizon_df[target_col])
+                # Convert to numpy array for consistent manipulation
+                if hasattr(keep_mask, "to_numpy"):
+                    keep_mask = keep_mask.to_numpy()
+                # Also filter by valid shifted features for this horizon
+                if exog_cols and indptr is not None and horizon > 0:
+                    X_shifted = self._shift_exog_features(
+                        X, indptr, horizon, exog_cols
+                    )
+                    keep_mask = keep_mask & self._get_valid_shifted_mask(
+                        X_shifted, exog_cols
+                    )
                 horizon_df = ufp.filter_with_mask(horizon_df, keep_mask)
                 horizon_df = ufp.copy_if_pandas(horizon_df, deep=True)
                 horizon_df = self._invert_transforms_fitted(horizon_df)
@@ -521,28 +694,67 @@ class MLForecast:
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
-        prep = self.preprocess(
-            df=df,
-            id_col=id_col,
-            time_col=time_col,
-            target_col=target_col,
-            static_features=static_features,
-            dropna=dropna,
-            keep_last_n=keep_last_n,
-            max_horizon=max_horizon,
-            return_X_y=not fitted,
-            as_numpy=as_numpy,
-            weight_col=weight_col,
-        )
-        if isinstance(prep, tuple):
-            X, y = prep
-        else:
+        indptr = None
+        exog_cols = None
+
+        # When max_horizon is set, always get full DataFrame to compute group boundaries
+        if max_horizon is not None:
+            prep = self.preprocess(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                return_X_y=False,
+                as_numpy=False,
+                weight_col=weight_col,
+            )
+            # Restore the as_numpy setting for prediction
+            self.ts.as_numpy = as_numpy
+
+            # Compute group boundaries from the preprocessed DataFrame
+            id_counts = ufp.counts_by_id(prep, id_col)
+            sizes = id_counts["counts"].to_numpy().astype(np.int64)
+            indptr = np.append(0, sizes.cumsum())
+
+            # Identify exogenous columns
+            exog_cols = self._get_exog_cols()
+            if not exog_cols:
+                exog_cols = None
+
+            # Extract X and y
             base = prep[[id_col, time_col]]
             X, y = self._extract_X_y(prep, target_col, weight_col)
             if as_numpy:
                 X = ufp.to_numpy(X)
             del prep
-        self.fit_models(X, y, models_fit_kwargs)
+        else:
+            # Standard path (unchanged)
+            prep = self.preprocess(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                return_X_y=not fitted,
+                as_numpy=as_numpy,
+                weight_col=weight_col,
+            )
+            if isinstance(prep, tuple):
+                X, y = prep
+            else:
+                base = prep[[id_col, time_col]]
+                X, y = self._extract_X_y(prep, target_col, weight_col)
+                if as_numpy:
+                    X = ufp.to_numpy(X)
+                del prep
+        self.fit_models(X, y, models_fit_kwargs, indptr=indptr, exog_cols=exog_cols)
         if fitted:
             fitted_values = self._compute_fitted_values(
                 base=base,
@@ -553,6 +765,8 @@ class MLForecast:
                 target_col=target_col,
                 max_horizon=max_horizon,
                 weight_col=self.ts.weight_col,
+                indptr=indptr,
+                exog_cols=exog_cols,
             )
             fitted_values = ufp.drop_index_if_pandas(fitted_values)
             self.fcst_fitted_values_ = fitted_values
@@ -856,6 +1070,16 @@ class MLForecast:
                 train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
                 if as_numpy:
                     train_X = ufp.to_numpy(train_X)
+                # Compute indptr and exog_cols for fitted values with max_horizon
+                cv_indptr = None
+                cv_exog_cols = None
+                if max_horizon is not None:
+                    id_counts = ufp.counts_by_id(prep, id_col)
+                    sizes = id_counts["counts"].to_numpy().astype(np.int64)
+                    cv_indptr = np.append(0, sizes.cumsum())
+                    cv_exog_cols = self._get_exog_cols()
+                    if not cv_exog_cols:
+                        cv_exog_cols = None
                 del prep
                 fitted_values = self._compute_fitted_values(
                     base=base,
@@ -866,6 +1090,8 @@ class MLForecast:
                     target_col=target_col,
                     max_horizon=max_horizon,
                     weight_col=weight_col,
+                    indptr=cv_indptr,
+                    exog_cols=cv_exog_cols,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
