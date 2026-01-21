@@ -726,11 +726,14 @@ class MLForecast:
                 exog_cols = None
 
             # Extract X and y
-            base = prep[[id_col, time_col]]
-            X, y = self._extract_X_y(prep, target_col, weight_col)
-            if as_numpy:
-                X = ufp.to_numpy(X)
-            del prep
+            if isinstance(prep, tuple):
+                X, y = prep
+            else:
+                base = prep[[id_col, time_col]]
+                X, y = self._extract_X_y(prep, target_col, weight_col)
+                if as_numpy:
+                    X = ufp.to_numpy(X)
+                del prep
         else:
             # Standard path (unchanged)
             prep = self.preprocess(
