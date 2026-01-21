@@ -244,7 +244,7 @@ Type | Description
 #### `MLForecast.fit_models`
 
 ```python
-fit_models(X, y, models_fit_kwargs=None)
+fit_models(X, y, models_fit_kwargs=None, indptr=None, exog_cols=None)
 ```
 
 Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
@@ -255,6 +255,9 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `X` | <code>pandas or polars DataFrame or numpy array</code> | Features. | *required*
 `y` | <code>numpy array</code> | Target. | *required*
+`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. | <code>None</code>
+`indptr` | <code>numpy array</code> | Group boundary indices for shifting exogenous features. | <code>None</code>
+`exog_cols` | <code>list of str</code> | Exogenous column names to shift per horizon. | <code>None</code>
 
 **Returns:**
 
