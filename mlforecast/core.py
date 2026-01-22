@@ -390,6 +390,14 @@ class TimeSeries:
         self._group_states: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         group_tfms = self._get_group_tfms()
         if group_tfms:
+            if self.target_transforms is not None:
+                transformed_target = ga.data
+                if self._restore_idxs is not None:
+                    transformed_target = transformed_target[self._restore_idxs]
+                df_for_group = ufp.assign_columns(df, target_col, transformed_target)
+            else:
+                df_for_group = df
+
             def _add_group_id(data, cols):
                 if isinstance(data, pd.DataFrame):
                     groups = data[cols].drop_duplicates().reset_index(drop=True)
@@ -420,7 +428,7 @@ class TimeSeries:
                         f"Missing from static_features: {missing}."
                     )
                 group_df = ufp.group_by_agg(
-                    df[group_cols_list + [time_col, target_col]],
+                    df_for_group[group_cols_list + [time_col, target_col]],
                     group_cols_list + [time_col],
                     {target_col: "sum"},
                     maintain_order=True,
@@ -1389,6 +1397,7 @@ class TimeSeries:
                     uids = pd.Series(uids)
                 uids, new_ids = ufp.match_if_categorical(uids, group_df["_group_id"])
                 group_df = ufp.assign_columns(group_df, "_group_id", new_ids)
+                group_df = ufp.sort(group_df, by=["_group_id", self.time_col])
                 values = group_df[self.target_col].to_numpy().astype(self.ga.data.dtype, copy=False)
                 try:
                     sizes = ufp.join(uids, id_counts, on="_group_id", how="outer_coalesce")

@@ -840,6 +840,147 @@ def test_group_update_requires_complete_timestamps(engine):
         ts.update(update_df)
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_group_update_new_group_order(engine):
+    if engine == "polars":
+        df = pl.DataFrame(
+            {
+                "unique_id": ["a", "a", "b", "b"],
+                "ds": [1, 2, 1, 2],
+                "y": [1, 1, 2, 2],
+                "brand": ["b", "b", "b", "b"],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+        update_df = pl.DataFrame(
+            {
+                "unique_id": ["a", "b", "c"],
+                "ds": [3, 3, 3],
+                "y": [1, 2, 100],
+                "brand": ["b", "b", "a"],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    else:
+        df = pd.DataFrame(
+            {
+                "unique_id": ["a", "a", "b", "b"],
+                "ds": [1, 2, 1, 2],
+                "y": [1, 1, 2, 2],
+                "brand": ["b", "b", "b", "b"],
+            }
+        )
+        update_df = pd.DataFrame(
+            {
+                "unique_id": ["a", "b", "c"],
+                "ds": [3, 3, 3],
+                "y": [1, 2, 100],
+                "brand": ["b", "b", "a"],
+            }
+        )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(1, groupby=["brand"])]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    ts.update(update_df)
+    state = ts._group_states[("brand",)]
+    groups = state["groups"]
+    if engine == "polars":
+        full_df = pl.concat([df, update_df], how="vertical")
+        agg = ufp.group_by_agg(
+            full_df, ["brand", "ds"], {"y": "sum"}, maintain_order=True
+        )
+        agg = agg.join(groups, on=["brand"], how="left")
+        agg = ufp.sort(agg, by=["_group_id", "ds"])
+        expected = agg["y"].to_numpy()
+    else:
+        full_df = pd.concat([df, update_df], ignore_index=True)
+        agg = (
+            full_df.groupby(["brand", "ds"], observed=True)["y"]
+            .sum()
+            .reset_index()
+        )
+        agg = agg.merge(groups, on=["brand"], how="left")
+        agg = agg.sort_values(["_group_id", "ds"])
+        expected = agg["y"].to_numpy()
+    np.testing.assert_allclose(state["ga"].data, expected)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_group_lag_transform_uses_transformed_target(engine):
+    if engine == "polars":
+        df = pl.DataFrame(
+            {
+                "unique_id": ["a", "a", "a", "b", "b", "b"],
+                "ds": [1, 2, 3, 1, 2, 3],
+                "y": [1, 2, 3, 10, 20, 30],
+                "brand": ["x", "x", "x", "x", "x", "x"],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    else:
+        df = pd.DataFrame(
+            {
+                "unique_id": ["a", "a", "a", "b", "b", "b"],
+                "ds": [1, 2, 3, 1, 2, 3],
+                "y": [1, 2, 3, 10, 20, 30],
+                "brand": ["x", "x", "x", "x", "x", "x"],
+            }
+        )
+    tfm = RollingMean(1, groupby=["brand"])
+    ts = TimeSeries(
+        freq=1,
+        lag_transforms={1: [tfm]},
+        target_transforms=[Differences([1])],
+    )
+    ts._fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["brand"],
+    )
+    assert ts._sort_idxs is None
+    if engine == "polars":
+        transformed_df = df.with_columns(pl.Series(name="y", values=ts.ga.data))
+        agg = (
+            transformed_df.group_by(["brand", "ds"])
+            .agg(pl.col("y").sum())
+            .sort(["brand", "ds"])
+            .with_columns(pl.col("y").shift(1).over("brand").alias("expected"))
+        )
+        expected = (
+            transformed_df.select(["brand", "ds"])
+            .join(agg.select(["brand", "ds", "expected"]), on=["brand", "ds"], how="left")[
+                "expected"
+            ]
+            .to_numpy()
+        )
+    else:
+        transformed_df = df.copy()
+        transformed_df["y"] = ts.ga.data
+        agg = (
+            transformed_df.groupby(["brand", "ds"], observed=True)["y"]
+            .sum()
+            .reset_index()
+        )
+        agg["expected"] = agg.groupby("brand", observed=True)["y"].shift(1)
+        expected = (
+            transformed_df[["brand", "ds"]]
+            .merge(agg[["brand", "ds", "expected"]], on=["brand", "ds"], how="left")[
+                "expected"
+            ]
+            .to_numpy()
+        )
+    mask = ~np.isnan(ts.ga.data)
+    expected = expected[mask]
+    prep = ts._transform(df, dropna=False)
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(prep[col].to_numpy(), expected, equal_nan=True)
+
+
 def test_global_update_y_appends_pandas_times():
     df = pd.DataFrame(
         {
