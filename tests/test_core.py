@@ -840,6 +840,30 @@ def test_group_update_requires_complete_timestamps(engine):
         ts.update(update_df)
 
 
+def test_global_update_y_appends_pandas_times():
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a", "a", "b", "b"],
+            "ds": [1, 2, 1, 2],
+            "y": [1, 2, 10, 20],
+        }
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, global_=True)]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+    )
+    ts._predict_setup()
+    ts._update_features()
+    assert isinstance(ts._global_times, pd.Index)
+    orig_len = len(ts._global_times)
+    ts._update_y(np.zeros(len(ts.uids)))
+    assert len(ts._global_times) == orig_len + 1
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_global_rolling_std(engine):
     if engine == "polars":

@@ -336,7 +336,7 @@ class TimeSeries:
                     sorted_df = tfm.fit_transform(sorted_df)
                     ga.data = sorted_df[target_col].to_numpy()
         self._global_ga: Optional[GroupedArray] = None
-        self._global_times: Optional[Series] = None
+        self._global_times: Optional[Union[Series, pd.Index]] = None
         if self._get_global_tfms():
             global_df = ufp.group_by_agg(
                 sorted_df[[time_col, target_col]],
@@ -349,7 +349,10 @@ class TimeSeries:
             self._global_ga = GroupedArray(
                 global_values, np.array([0, global_values.size], dtype=np.int32)
             )
-            self._global_times = global_df[time_col]
+            if isinstance(global_df, pd.DataFrame):
+                self._global_times = pd.Index(global_df[time_col])
+            else:
+                self._global_times = global_df[time_col]
         to_drop = [id_col, time_col, target_col]
         if static_features is None:
             static_features = [c for c in df.columns if c not in [time_col, target_col]]
@@ -1318,7 +1321,10 @@ class TimeSeries:
                 indptr = np.array([0, combined.size], dtype=np.int32)
                 self._global_ga = GroupedArray(combined, indptr)
             if self._global_times is None:
-                self._global_times = global_df[self.time_col]
+                if isinstance(global_df, pd.DataFrame):
+                    self._global_times = pd.Index(global_df[self.time_col])
+                else:
+                    self._global_times = global_df[self.time_col]
             else:
                 if isinstance(self._global_times, pl_Series):
                     self._global_times = pl.concat(
