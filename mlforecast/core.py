@@ -223,6 +223,16 @@ class TimeSeries:
         """Names of all computed features."""
         return list(self.transforms.keys()) + self._date_feature_names
 
+    def _get_dynamic_exog_cols(self, df_columns: List[str]) -> List[str]:
+        """Identify user-provided exogenous columns that need time-alignment."""
+        static_cols = set(self.static_features_.columns)
+        lag_cols = set(self.transforms.keys())
+        date_cols = {f.__name__ if callable(f) else f for f in self.date_features}
+        exclude = static_cols | lag_cols | date_cols | {self.id_col, self.time_col, self.target_col}
+        if self.weight_col is not None:
+            exclude.add(self.weight_col)
+        return [c for c in df_columns if c not in exclude]
+
     def __repr__(self):
         return (
             f"TimeSeries(freq={self.freq}, "
@@ -503,6 +513,108 @@ class TimeSeries:
             df = ufp.copy_if_pandas(df, deep=False)
             df = ufp.assign_columns(df, self.target_col, target)
         return df
+
+    def _transform_per_horizon(
+        self,
+        prep: DFType,
+        original_df: DFType,
+        max_horizon: int,
+        target_col: str,
+        as_numpy: bool = False,
+    ) -> Iterator[Tuple[Union[DFType, np.ndarray], np.ndarray]]:
+        """Generator that yields (X, y) tuples for each horizon.
+
+        For horizon h:
+        - Dynamic exogenous features are aligned to predict h steps ahead
+        - Target at each horizon is taken from the preprocessed dataframe
+        - Lag/date features remain unchanged (computed from current time)
+
+        Args:
+            prep: Preprocessed dataframe with expanded targets (y0, y1, ..., y{max_horizon-1})
+            original_df: Original input dataframe for exog feature lookup
+            max_horizon: Number of horizons
+            target_col: Name of target column
+            as_numpy: Whether to convert X to numpy array
+        """
+        exog_cols = self._get_dynamic_exog_cols(list(original_df.columns))
+
+        # Get feature columns (excluding target columns)
+        if self.weight_col is not None:
+            x_cols = [self.weight_col, *self.features_order_]
+        else:
+            x_cols = self.features_order_
+
+        # Non-exog feature columns (lags, date features, static)
+        non_exog_cols = [c for c in x_cols if c not in exog_cols]
+
+        # Target column names (y0, y1, ..., y{max_horizon-1})
+        target_cols = [f"{target_col}{i}" for i in range(max_horizon)]
+
+        # Build exog lookup dictionary from original_df for efficient lookups
+        # Key: (id, time) -> exog values
+        if exog_cols:
+            # Create a lookup dataframe indexed by (id, time)
+            exog_lookup = original_df[[self.id_col, self.time_col] + exog_cols]
+
+        for h in range(max_horizon):
+            # Get target for this horizon
+            y_h = prep[target_cols[h]].to_numpy()
+
+            if h == 0 or not exog_cols:
+                # No offset needed for horizon 0 or if no exog cols
+                X_h = prep[x_cols]
+            else:
+                # Start with the non-exog features from prep
+                X_h = ufp.copy_if_pandas(prep[non_exog_cols], deep=True)
+
+                # Offset timestamps by h to get aligned exogenous features
+                offset_times = ufp.offset_times(prep[self.time_col], self.freq, h)
+
+                # Create lookup dataframe with row index to maintain order
+                if isinstance(prep, pl_DataFrame):
+                    # Polars - use with_row_index()
+                    lookup_df = (
+                        prep[[self.id_col]]
+                        .with_columns(pl_Series('_offset_time', offset_times))
+                        .with_row_index('_row_idx')
+                    )
+                    exog_renamed = exog_lookup.rename({self.time_col: '_offset_time'})
+                    merged = lookup_df.join(exog_renamed, on=[self.id_col, '_offset_time'], how='left')
+                    merged = merged.sort('_row_idx')
+
+                    # Assign exog columns to X_h
+                    for col in exog_cols:
+                        X_h = X_h.with_columns(merged[col].alias(col))
+                else:
+                    # Pandas
+                    lookup_df = prep[[self.id_col]].copy()
+                    lookup_df['_offset_time'] = offset_times
+                    lookup_df['_row_idx'] = np.arange(len(prep))
+                    exog_renamed = exog_lookup.rename(columns={self.time_col: '_offset_time'})
+                    merged = lookup_df.merge(exog_renamed, on=[self.id_col, '_offset_time'], how='left')
+                    # Sort by original row order
+                    merged = merged.sort_values('_row_idx')
+
+                    # Assign exog columns to X_h
+                    for col in exog_cols:
+                        X_h[col] = merged[col].values
+
+                # Reorder columns to match x_cols
+                X_h = X_h[x_cols]
+
+            # Filter valid rows (non-NaN target and exog)
+            valid = ~np.isnan(y_h)
+            if exog_cols and h > 0:
+                for col in exog_cols:
+                    valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
+
+            X_h = ufp.filter_with_mask(X_h, valid)
+            y_h = y_h[valid]
+
+            if as_numpy:
+                X_h = ufp.to_numpy(X_h)
+
+            yield X_h, y_h
 
     def fit_transform(
         self,
