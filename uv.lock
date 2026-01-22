@@ -2944,7 +2944,7 @@ requires-dist = [
 aws = [{ name = "fsspec", extras = ["s3"] }]
 azure = [{ name = "fsspec", extras = ["adl"] }]
 dask = [
-    { name = "dask", extras = ["complete"], specifier = ">=2026.1.1" },
+    { name = "dask", extras = ["complete"] },
     { name = "fugue", extras = ["dask"], specifier = ">=0.9.4" },
     { name = "lightgbm" },
     { name = "xgboost" },
