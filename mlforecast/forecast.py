@@ -302,6 +302,7 @@ class MLForecast:
                     self.models_[name].append(fitted)
         else:
             # Recursive forecasting (unchanged)
+            assert X is not None and y is not None, "X and y are required when generator_factory is not provided"
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
                 if y.ndim == 2 and y.shape[1] > 1:
@@ -676,6 +677,7 @@ class MLForecast:
             self.fit_models(generator_factory=generator_factory, models_fit_kwargs=models_fit_kwargs)
 
             if fitted:
+                assert not isinstance(prep, tuple)  # return_X_y=False ensures prep is a DataFrame
                 base = prep[[id_col, time_col]]
                 X, y = self._extract_X_y(prep, target_col, weight_col)
                 # Keep X as DataFrame for exog alignment in _compute_fitted_values
