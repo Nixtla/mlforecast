@@ -302,6 +302,15 @@ class TimeSeries:
         else:
             self.uids = uids
             self.last_dates = pl_Series(times)
+        if self._get_global_tfms() or self._get_group_tfms():
+            if isinstance(self.last_dates, pd.Index):
+                aligned = self.last_dates.nunique() == 1
+            else:
+                aligned = self.last_dates.n_unique() == 1
+            if not aligned:
+                raise ValueError(
+                    "Global and group lag transforms require all series to end at the same timestamp."
+                )
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
                 df.shape[0], dtype=np.int32
@@ -992,6 +1001,15 @@ class TimeSeries:
                 "Cannot use `ids` with global or group lag transforms. "
                 "These transforms require forecasting all series together."
             )
+        if self._get_global_tfms() or self._get_group_tfms():
+            if isinstance(self.last_dates, pd.Index):
+                aligned = self.last_dates.nunique() == 1
+            else:
+                aligned = self.last_dates.n_unique() == 1
+            if not aligned:
+                raise ValueError(
+                    "Global and group lag transforms require all series to end at the same timestamp."
+                )
         if ids is not None:
             unseen = set(ids) - set(self.uids)
             if unseen:
