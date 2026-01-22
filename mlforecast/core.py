@@ -1214,6 +1214,36 @@ class TimeSeries:
         df = ufp.sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
+        if self._get_global_tfms() or self._get_group_tfms():
+            if isinstance(self.last_dates, pd.Index):
+                aligned = self.last_dates.nunique() == 1
+            else:
+                aligned = self.last_dates.n_unique() == 1
+            if not aligned:
+                raise ValueError(
+                    "Global and group lag transforms require all series to end at the same timestamp."
+                )
+            if isinstance(df, pd.DataFrame):
+                expected_ids = pd.Index(uids).union(pd.Index(new_ids))
+                expected_count = len(expected_ids)
+                counts = df.groupby(self.time_col, observed=True)[self.id_col].nunique()
+                bad_times = counts[counts != expected_count]
+                if not bad_times.empty:
+                    raise ValueError(
+                        "Global and group lag transforms require updates to include all series for each timestamp."
+                    )
+            else:
+                expected_ids = pl.concat([pl.Series(uids), pl.Series(new_ids)]).unique()
+                expected_count = expected_ids.len()
+                counts = (
+                    df.group_by(self.time_col)
+                    .agg(pl.col(self.id_col).n_unique().alias("_n_ids"))
+                )
+                bad_times = counts.filter(pl.col("_n_ids") != expected_count)
+                if bad_times.height:
+                    raise ValueError(
+                        "Global and group lag transforms require updates to include all series for each timestamp."
+                    )
         if validate_input:   
             self._validate_new_df(df=df) 
         id_counts = ufp.counts_by_id(df, self.id_col)
