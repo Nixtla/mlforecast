@@ -244,7 +244,7 @@ Type | Description
 #### `MLForecast.fit_models`
 
 ```python
-fit_models(X=None, y=None, models_fit_kwargs=None, generator_factory=None)
+fit_models(X, y, models_fit_kwargs=None)
 ```
 
 Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
@@ -253,10 +253,8 @@ Manually train models. Use this if you called `MLForecast.preprocess` beforehand
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`X` | <code>pandas or polars DataFrame or numpy array</code> | Features (for recursive or legacy direct forecasting). | <code>None</code>
-`y` | <code>numpy array</code> | Target (for recursive or legacy direct forecasting). | <code>None</code>
-`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. | <code>None</code>
-`generator_factory` | <code>[callable](#callable)</code> | Factory function that returns an iterator yielding (X_h, y_h) tuples per horizon. | <code>None</code>
+`X` | <code>pandas or polars DataFrame or numpy array</code> | Features. | *required*
+`y` | <code>numpy array</code> | Target. | *required*
 
 **Returns:**
 
