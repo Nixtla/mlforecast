@@ -147,6 +147,10 @@ class _RollingBase(_BaseLagTransform):
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
                 If `None`, will be set to `window_size`. Defaults to None.
+            global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
+                Requires all series to end at the same timestamp. Defaults to False.
+            groupby (Sequence[str], optional): Column names to group by before computing the statistic.
+                Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -225,6 +229,10 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
                 If `None`, will be set to `window_size`. Defaults to None.
+            global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
+                Requires all series to end at the same timestamp. Defaults to False.
+            groupby (Sequence[str], optional): Column names to group by before computing the statistic.
+                Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -280,7 +288,14 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
 
 
 class _ExpandingBase(_BaseLagTransform):
-    """Expanding statistic"""
+    """Expanding statistic
+
+    Args:
+        global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
+            Requires all series to end at the same timestamp. Defaults to False.
+        groupby (Sequence[str], optional): Column names to group by before computing the statistic.
+            Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+    """
 
     def __init__(
         self,
@@ -337,6 +352,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
 
     Args:
         alpha (float): Smoothing factor.
+        global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
+            Requires all series to end at the same timestamp. Defaults to False.
+        groupby (Sequence[str], optional): Column names to group by before computing the statistic.
+            Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
     """
 
     def __init__(

@@ -247,6 +247,19 @@ class TimeSeries:
             local[name] = tfm
         return local
 
+    def _check_aligned_ends(self) -> None:
+        """Check that all series end at the same timestamp when using global/group transforms."""
+        if not (self._get_global_tfms() or self._get_group_tfms()):
+            return
+        if isinstance(self.last_dates, pd.Index):
+            aligned = self.last_dates.nunique() == 1
+        else:
+            aligned = self.last_dates.n_unique() == 1
+        if not aligned:
+            raise ValueError(
+                "Global and group lag transforms require all series to end at the same timestamp."
+            )
+
     @property
     def _date_feature_names(self):
         return [f.__name__ if callable(f) else f for f in self.date_features]
@@ -302,15 +315,7 @@ class TimeSeries:
         else:
             self.uids = uids
             self.last_dates = pl_Series(times)
-        if self._get_global_tfms() or self._get_group_tfms():
-            if isinstance(self.last_dates, pd.Index):
-                aligned = self.last_dates.nunique() == 1
-            else:
-                aligned = self.last_dates.n_unique() == 1
-            if not aligned:
-                raise ValueError(
-                    "Global and group lag transforms require all series to end at the same timestamp."
-                )
+        self._check_aligned_ends()
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
                 df.shape[0], dtype=np.int32
@@ -405,7 +410,7 @@ class TimeSeries:
                     data = data.merge(groups, on=cols, how="left")
                 else:
                     groups = data.select(cols).unique(maintain_order=True)
-                    groups = groups.with_row_count(name="_group_id")
+                    groups = groups.with_row_index(name="_group_id")
                     data = data.join(groups, on=cols, how="left")
                 return data, groups
 
@@ -453,16 +458,10 @@ class TimeSeries:
                 group_values = processed.data[:, 0]
                 ga = GroupedArray(group_values, processed.indptr)
                 group_uids = processed.uids
-                if isinstance(self.static_features_, pd.DataFrame):
-                    series_group_id = _map_group_id(
-                        self.static_features_, groups, group_cols_list
-                    )
-                    group_idx = series_group_id.astype(np.int64, copy=False)
-                else:
-                    series_group_id = _map_group_id(
-                        self.static_features_, groups, group_cols_list
-                    )
-                    group_idx = series_group_id.astype(np.int64, copy=False)
+                series_group_id = _map_group_id(
+                    self.static_features_, groups, group_cols_list
+                )
+                group_idx = series_group_id.astype(np.int64, copy=False)
                 self._group_states[group_cols] = {
                     "ga": ga,
                     "df": group_df,
@@ -1012,15 +1011,7 @@ class TimeSeries:
                 "Cannot use `ids` with global or group lag transforms. "
                 "These transforms require forecasting all series together."
             )
-        if self._get_global_tfms() or self._get_group_tfms():
-            if isinstance(self.last_dates, pd.Index):
-                aligned = self.last_dates.nunique() == 1
-            else:
-                aligned = self.last_dates.n_unique() == 1
-            if not aligned:
-                raise ValueError(
-                    "Global and group lag transforms require all series to end at the same timestamp."
-                )
+        self._check_aligned_ends()
         if ids is not None:
             unseen = set(ids) - set(self.uids)
             if unseen:
@@ -1225,15 +1216,8 @@ class TimeSeries:
         df = ufp.sort(df, by=[self.id_col, self.time_col])
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
+        self._check_aligned_ends()
         if self._get_global_tfms() or self._get_group_tfms():
-            if isinstance(self.last_dates, pd.Index):
-                aligned = self.last_dates.nunique() == 1
-            else:
-                aligned = self.last_dates.n_unique() == 1
-            if not aligned:
-                raise ValueError(
-                    "Global and group lag transforms require all series to end at the same timestamp."
-                )
             if isinstance(df, pd.DataFrame):
                 expected_ids = pd.Index(uids).union(pd.Index(new_ids))
                 expected_count = len(expected_ids)
@@ -1383,7 +1367,7 @@ class TimeSeries:
                             .unique(maintain_order=True)
                         )
                         start = groups.height
-                        new_groups = new_groups.with_row_count(
+                        new_groups = new_groups.with_row_index(
                             name="_group_id", offset=start
                         )
                         groups = pl.concat([groups, new_groups], how="vertical")
