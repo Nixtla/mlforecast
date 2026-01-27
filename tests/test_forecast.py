@@ -1330,3 +1330,64 @@ def test_horizons_with_exogenous():
 
     preds = fcst.predict(h=14, X_df=future_df)
     assert preds.shape[0] > 0
+
+
+def test_horizons_with_target_transforms():
+    """Test that sparse horizons work correctly with target transforms.
+
+    This is a regression test for the bug where inverse_transform failed
+    because indptr was computed using the requested horizon instead of
+    the actual number of predictions (output_horizon).
+    """
+    from mlforecast.target_transforms import Differences
+
+    df = generate_daily_series(5, min_length=50, max_length=60)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7, 14],
+        target_transforms=[Differences([7])],
+    )
+    fcst.fit(df, horizons=[7, 14])
+
+    # This should not raise an error about indptr/data size mismatch
+    preds = fcst.predict(h=14)
+
+    # Should have 2 predictions per series (h=7 and h=14)
+    n_series = df['unique_id'].nunique()
+    assert preds.shape[0] == n_series * 2
+
+
+def test_horizons_cross_validation_with_target_transforms():
+    """Test cross_validation with sparse horizons and target transforms.
+
+    This is a regression test for the bug where cross_validation failed
+    with sparse horizons because:
+    1. inverse_transform used wrong indptr size
+    2. result row count check didn't account for sparse output
+    """
+    from mlforecast.target_transforms import Differences
+
+    df = generate_daily_series(5, min_length=100, max_length=120)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7, 14],
+        target_transforms=[Differences([7])],
+    )
+
+    # This should not raise any errors
+    cv_results = fcst.cross_validation(
+        df,
+        n_windows=2,
+        h=14,
+        horizons=[7, 14],
+    )
+
+    # Should have 2 predictions per series per window
+    n_series = df['unique_id'].nunique()
+    n_windows = 2
+    n_horizons = 2  # [7, 14]
+    assert cv_results.shape[0] == n_series * n_windows * n_horizons
