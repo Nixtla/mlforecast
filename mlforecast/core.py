@@ -1323,7 +1323,9 @@ class TimeSeries:
                         for c in preds.columns
                         if c not in (self.id_col, self.time_col)
                     ]
-                    indptr = np.arange(0, horizon * (len(self.uids) + 1), horizon)
+                    # Calculate actual predictions per series (handles sparse horizons)
+                    preds_per_series = len(preds) // len(self.uids)
+                    indptr = np.arange(0, preds_per_series * (len(self.uids) + 1), preds_per_series)
                 for tfm in self.target_transforms[::-1]:
                     if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                         for col in model_cols:

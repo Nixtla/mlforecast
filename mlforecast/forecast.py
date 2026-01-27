@@ -1082,7 +1082,18 @@ class MLForecast:
             sort_idxs = ufp.maybe_compute_sort_indices(result, id_col, time_col)
             if sort_idxs is not None:
                 result = ufp.take_rows(result, sort_idxs)
-            if result.shape[0] < valid.shape[0]:
+            # Calculate expected rows accounting for sparse horizons
+            internal_horizons = getattr(self.ts, "_horizons", None)
+            full_range = list(range(self.ts.max_horizon)) if self.ts.max_horizon else None
+            is_sparse = internal_horizons is not None and internal_horizons != full_range
+            if is_sparse:
+                # Sparse horizons: expect only predictions for trained horizons <= h
+                n_trained_horizons = sum(1 for th in internal_horizons if th < h)
+                n_series = valid[id_col].nunique()
+                expected_rows = n_trained_horizons * n_series
+            else:
+                expected_rows = valid.shape[0]
+            if result.shape[0] < expected_rows:
                 raise ValueError(
                     "Cross validation result produced less results than expected. "
                     "Please verify that the frequency set on the MLForecast constructor matches your series' "
