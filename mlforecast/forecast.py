@@ -1088,7 +1088,8 @@ class MLForecast:
             is_sparse = internal_horizons is not None and internal_horizons != full_range
             if is_sparse:
                 # Sparse horizons: expect only predictions for trained horizons <= h
-                n_trained_horizons = sum(1 for th in internal_horizons if th < h)
+                assert internal_horizons is not None
+                n_trained_horizons = sum(th < h for th in internal_horizons)
                 n_series = valid[id_col].nunique()
                 expected_rows = n_trained_horizons * n_series
             else:
