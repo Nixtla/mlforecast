@@ -100,6 +100,7 @@ fit_transform(
     dropna=True,
     keep_last_n=None,
     max_horizon=None,
+    horizons=None,
     return_X_y=False,
     as_numpy=False,
     weight_col=None,
@@ -111,6 +112,13 @@ Add the features to `data` and save the required information for the predictions
 If not all features are static, specify which ones are in `static_features`.
 If you don't want to drop rows with null values after the transformations set `dropna=False`
 If `keep_last_n` is not None then that number of observations is kept across all series for updates.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`max_horizon` | <code>[Optional](#typing.Optional)\[[int](#int)\]</code> | Train models for all horizons 1 to max_horizon. | <code>None</code>
+`horizons` | <code>[Optional](#typing.Optional)\[[List](#typing.List)\[[int](#int)\]\]</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. | <code>None</code>
 
 #### `TimeSeries.predict`
 
