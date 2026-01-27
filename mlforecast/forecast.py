@@ -261,8 +261,8 @@ class MLForecast:
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
         Args:
-            X (pandas or polars DataFrame or numpy array, optional): Features (for recursive or legacy direct forecasting).
-            y (numpy array, optional): Target (for recursive or legacy direct forecasting).
+            X (pandas or polars DataFrame or numpy array, optional): Features (for recursive forecasting).
+            y (numpy array, optional): Target (for recursive forecasting).
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method.
             generator_factory (callable, optional): Factory function that returns an iterator yielding (h, X_h, y_h) tuples per horizon.
 
@@ -291,7 +291,7 @@ class MLForecast:
                     X = ufp.drop_columns(X, weight_col)
             return clone(model).fit(X, y, **fit_kwargs)
 
-        self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator], Dict[int, BaseEstimator]]] = {}
+        self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
         if generator_factory is not None:
             # Direct forecasting with generator factory
@@ -309,27 +309,9 @@ class MLForecast:
             assert X is not None and y is not None, "X and y are required when generator_factory is not provided"
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
-                if y.ndim == 2 and y.shape[1] > 1:
-                    # Legacy direct forecasting (without generator)
-                    # Keep as list for backward compatibility
-                    self.models_[name] = []
-                    for horizon in range(y.shape[1]):
-                        keep = ~np.isnan(y[:, horizon])
-                        Xh = ufp.filter_with_mask(X, keep)
-                        yh = y[keep, horizon]
-                        self.models_[name].append(
-                            fit_model(
-                                model,
-                                Xh,
-                                yh,
-                                self.ts.weight_col,
-                                model_fit_kwargs,
-                            )
-                        )
-                else:
-                    self.models_[name] = fit_model(
-                        model, X, y, self.ts.weight_col, model_fit_kwargs
-                    )
+                self.models_[name] = fit_model(
+                    model, X, y, self.ts.weight_col, model_fit_kwargs
+                )
         return self
 
     def _conformity_scores(
@@ -458,7 +440,7 @@ class MLForecast:
         if max_horizon is None:
             fitted_values = ufp.assign_columns(base, target_col, y)
             for name, model in self.models_.items():
-                assert not isinstance(model, list)  # mypy
+                assert not isinstance(model, dict)  # mypy
                 preds = model.predict(X)
                 fitted_values = ufp.assign_columns(fitted_values, name, preds)
             fitted_values = self._invert_transforms_fitted(fitted_values)
@@ -480,11 +462,7 @@ class MLForecast:
             models_trained_with_numpy = self.ts.as_numpy
 
             for name, horizon_models in self.models_.items():
-                # Handle both dict (new generator factory) and list (legacy) model storage
-                if isinstance(horizon_models, dict):
-                    model_items = horizon_models.items()
-                else:
-                    model_items = enumerate(horizon_models)
+                model_items = horizon_models.items()
 
                 for h, model in model_items:
                     # Get valid mask for this horizon (target not NaN)
@@ -844,8 +822,8 @@ class MLForecast:
                 "If you used cross_validation before please fit again."
             )
         first_model = next(iter(self.models_.values()))
-        # Models can be stored as list (legacy) or dict (new generator factory) for direct forecasting
-        first_model_is_multi = isinstance(first_model, (list, dict))
+        # Models are stored as dict for direct forecasting
+        first_model_is_multi = isinstance(first_model, dict)
         max_horizon = self.ts.max_horizon
         if first_model_is_multi and max_horizon is None:
             raise ValueError(

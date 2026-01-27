@@ -1094,7 +1094,7 @@ class TimeSeries:
 
     def _predict_multi(
         self,
-        models: Dict[str, Union[List[BaseEstimator], Dict[int, BaseEstimator]]],
+        models: Dict[str, Dict[int, BaseEstimator]],
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
@@ -1114,6 +1114,7 @@ class TimeSeries:
 
         if is_sparse:
             # Sparse horizons: filter to those <= requested horizon (0-indexed)
+            assert internal_horizons is not None  # mypy: guaranteed by is_sparse check
             horizons_to_predict = [h for h in internal_horizons if h < horizon]
             if not horizons_to_predict:
                 raise ValueError(
@@ -1166,9 +1167,6 @@ class TimeSeries:
                 self._predict_setup()
                 predictions = np.empty((len(self.uids), output_horizon))
 
-                # Determine if models are stored as dict or list
-                is_dict_model = isinstance(model, dict)
-
                 for out_idx, h in enumerate(horizons_to_predict):
                     # Advance features to the correct horizon step
                     # We need to step through all horizons up to h to maintain state
@@ -1178,12 +1176,7 @@ class TimeSeries:
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
 
-                    # Get the model for this horizon
-                    if is_dict_model:
-                        horizon_model = model[h]
-                    else:
-                        horizon_model = model[h]
-
+                    horizon_model = model[h]
                     preds = horizon_model.predict(new_x)
                     if len(preds) != len(self.uids):
                         raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")
@@ -1236,7 +1229,7 @@ class TimeSeries:
 
     def predict(
         self,
-        models: Dict[str, Union[BaseEstimator, List[BaseEstimator]]],
+        models: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]],
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
