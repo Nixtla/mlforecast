@@ -212,6 +212,7 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
@@ -227,6 +228,7 @@ class MLForecast:
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
+            horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             return_X_y (bool): Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
@@ -243,6 +245,7 @@ class MLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
+            horizons=horizons,
             return_X_y=return_X_y,
             as_numpy=as_numpy,
             weight_col=weight_col,
@@ -261,7 +264,7 @@ class MLForecast:
             X (pandas or polars DataFrame or numpy array, optional): Features (for recursive or legacy direct forecasting).
             y (numpy array, optional): Target (for recursive or legacy direct forecasting).
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method.
-            generator_factory (callable, optional): Factory function that returns an iterator yielding (X_h, y_h) tuples per horizon.
+            generator_factory (callable, optional): Factory function that returns an iterator yielding (h, X_h, y_h) tuples per horizon.
 
         Returns:
             MLForecast: Forecast object with trained models.
@@ -288,18 +291,19 @@ class MLForecast:
                     X = ufp.drop_columns(X, weight_col)
             return clone(model).fit(X, y, **fit_kwargs)
 
-        self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator]]] = {}
+        self.models_: Dict[str, Union[BaseEstimator, List[BaseEstimator], Dict[int, BaseEstimator]]] = {}
 
         if generator_factory is not None:
             # Direct forecasting with generator factory
+            # Models are stored as dict keyed by horizon index (0-indexed)
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
-                self.models_[name] = []
+                self.models_[name] = {}
                 # Create fresh generator for each model (generators are single-use)
                 horizon_gen = generator_factory()
-                for h, (X_h, y_h) in enumerate(horizon_gen):
+                for h, X_h, y_h in horizon_gen:
                     fitted = fit_model(model, X_h, y_h, self.ts.weight_col, model_fit_kwargs)
-                    self.models_[name].append(fitted)
+                    self.models_[name][h] = fitted
         else:
             # Recursive forecasting (unchanged)
             assert X is not None and y is not None, "X and y are required when generator_factory is not provided"
@@ -307,6 +311,7 @@ class MLForecast:
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
                 if y.ndim == 2 and y.shape[1] > 1:
                     # Legacy direct forecasting (without generator)
+                    # Keep as list for backward compatibility
                     self.models_[name] = []
                     for horizon in range(y.shape[1]):
                         keep = ~np.isnan(y[:, horizon])
@@ -337,6 +342,7 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
         n_windows: int = 2,
         h: int = 1,
         as_numpy: bool = False,
@@ -371,6 +377,7 @@ class MLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
+            horizons=horizons,
             prediction_intervals=None,
             as_numpy=as_numpy,
         )
@@ -473,7 +480,13 @@ class MLForecast:
             models_trained_with_numpy = self.ts.as_numpy
 
             for name, horizon_models in self.models_.items():
-                for h, model in enumerate(horizon_models):
+                # Handle both dict (new generator factory) and list (legacy) model storage
+                if isinstance(horizon_models, dict):
+                    model_items = horizon_models.items()
+                else:
+                    model_items = enumerate(horizon_models)
+
+                for h, model in model_items:
                     # Get valid mask for this horizon (target not NaN)
                     y_h = y[:, h] if y.ndim == 2 else y
                     valid_target = ~np.isnan(y_h)
@@ -601,6 +614,7 @@ class MLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         fitted: bool = False,
         as_numpy: bool = False,
@@ -618,6 +632,7 @@ class MLForecast:
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
+            horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
             fitted (bool): Save in-sample predictions. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Defaults to False.
@@ -641,12 +656,14 @@ class MLForecast:
                 static_features=static_features,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                horizons=horizons,
                 n_windows=prediction_intervals.n_windows,
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
-        # When max_horizon is set, use generator factory approach
-        if max_horizon is not None:
+        # When max_horizon or horizons is set, use generator factory approach
+        if max_horizon is not None or horizons is not None:
             # Preprocess to get DataFrame with expanded targets
             prep = self.preprocess(
                 df=df,
@@ -656,7 +673,8 @@ class MLForecast:
                 static_features=static_features,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
-                max_horizon=max_horizon,  # Expand targets
+                max_horizon=max_horizon,
+                horizons=horizons,
                 return_X_y=False,
                 as_numpy=False,
                 weight_col=weight_col,
@@ -664,13 +682,17 @@ class MLForecast:
             # Restore the as_numpy setting for prediction
             self.ts.as_numpy = as_numpy
 
+            # Get the effective max horizon and internal horizons from preprocessing
+            effective_max_horizon = self.ts.max_horizon
+            internal_horizons = self.ts._horizons
+
             # Store original df for exog lookup in generator
             original_df = df
 
             # Factory function - creates fresh generator for each model
             def generator_factory():
                 return self.ts._transform_per_horizon(
-                    prep, original_df, max_horizon, target_col, as_numpy
+                    prep, original_df, internal_horizons, target_col, as_numpy
                 )
 
             # Train models using generator factory
@@ -689,7 +711,7 @@ class MLForecast:
                     id_col=id_col,
                     time_col=time_col,
                     target_col=target_col,
-                    max_horizon=max_horizon,
+                    max_horizon=effective_max_horizon,
                     weight_col=self.ts.weight_col,
                     original_df=original_df,
                 )
@@ -821,14 +843,16 @@ class MLForecast:
                 "No fitted models found. You have to call fit or preprocess + fit_models. "
                 "If you used cross_validation before please fit again."
             )
-        first_model_is_list = isinstance(next(iter(self.models_.values())), list)
+        first_model = next(iter(self.models_.values()))
+        # Models can be stored as list (legacy) or dict (new generator factory) for direct forecasting
+        first_model_is_multi = isinstance(first_model, (list, dict))
         max_horizon = self.ts.max_horizon
-        if first_model_is_list and max_horizon is None:
+        if first_model_is_multi and max_horizon is None:
             raise ValueError(
                 "Found one model per horizon but `max_horizon` is None. "
                 "If you ran preprocess after fit please run fit again."
             )
-        elif not first_model_is_list and max_horizon is not None:
+        elif not first_model_is_multi and max_horizon is not None:
             raise ValueError(
                 "Found a single model for all horizons "
                 f"but `max_horizon` is {max_horizon}. "
@@ -937,6 +961,7 @@ class MLForecast:
         keep_last_n: Optional[int] = None,
         refit: Union[bool, int] = True,
         max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
@@ -962,6 +987,7 @@ class MLForecast:
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
+            horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             refit (bool or int): Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True.
             before_predict_callback (callable, optional): Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None.
             after_predict_callback (callable, optional): Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None.
@@ -1000,6 +1026,7 @@ class MLForecast:
                     dropna=dropna,
                     keep_last_n=keep_last_n,
                     max_horizon=max_horizon,
+                    horizons=horizons,
                     prediction_intervals=prediction_intervals,
                     fitted=fitted,
                     as_numpy=as_numpy,
@@ -1023,11 +1050,13 @@ class MLForecast:
                     static_features=static_features,
                     dropna=dropna,
                     keep_last_n=keep_last_n,
-                    max_horizon=max_horizon,  # Expand targets if max_horizon is set
+                    max_horizon=max_horizon,
+                    horizons=horizons,
                     return_X_y=False,
                     weight_col=weight_col,
                 )
                 assert not isinstance(prep, tuple)
+                effective_max_horizon = self.ts.max_horizon
                 base = prep[[id_col, time_col]]
                 train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
                 if as_numpy:
@@ -1040,9 +1069,9 @@ class MLForecast:
                     id_col=id_col,
                     time_col=time_col,
                     target_col=target_col,
-                    max_horizon=max_horizon,
+                    max_horizon=effective_max_horizon,
                     weight_col=weight_col,
-                    original_df=train if max_horizon is not None else None,
+                    original_df=train if effective_max_horizon is not None else None,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
