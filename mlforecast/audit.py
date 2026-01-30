@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Tuple, Union
 
 import pandas as pd
-from utilsforecast.compat import DataFrame, DFType, pl
+from utilsforecast.compat import DFType, pl
 
 
 class AuditDataSeverity(Enum):
