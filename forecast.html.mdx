@@ -32,7 +32,7 @@ Name | Type | Description | Default
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 
@@ -54,6 +54,7 @@ fit(
     as_numpy=False,
     weight_col=None,
     models_fit_kwargs=None,
+    audit_data=False,
 )
 ```
 
@@ -76,6 +77,8 @@ Name | Type | Description | Default
 `fitted` | <code>[bool](#bool)</code> | Save in-sample predictions. Defaults to False. | <code>False</code>
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
+`audit_data` | <code>[bool](#bool)</code> | Run data quality audits before fitting. Warns about missing dates and duplicate rows. Defaults to False. | <code>False</code>
 
 **Returns:**
 
@@ -217,6 +220,7 @@ preprocess(
     return_X_y=False,
     as_numpy=False,
     weight_col=None,
+    audit_data=False,
 )
 ```
 
@@ -238,6 +242,7 @@ Name | Type | Description | Default
 `return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`audit_data` | <code>[bool](#bool)</code> | Run data quality audits before preprocessing. Warns about missing dates and duplicate rows. Defaults to False. | <code>False</code>
 
 **Returns:**
 
@@ -293,6 +298,7 @@ cross_validation(
     fitted=False,
     as_numpy=False,
     weight_col=None,
+    audit_data=False,
 )
 ```
 
@@ -325,6 +331,7 @@ Name | Type | Description | Default
 `fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`audit_data` | <code>[bool](#bool)</code> | Run data quality audits on the full dataset before cross-validation. Warns about missing dates and duplicate rows. Defaults to False. | <code>False</code>
 
 **Returns:**
 
