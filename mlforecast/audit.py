@@ -60,7 +60,7 @@ def audit_missing_dates(
     """Check for missing dates/gaps in time series data.
 
     For each series (id_col), checks if there are gaps between the series'
-    minimum timestamp and the global maximum timestamp at the specified frequency.
+    minimum and maximum timestamps at the specified frequency.
 
     Args:
         df: Input DataFrame (pandas or polars)
@@ -92,10 +92,7 @@ def _audit_missing_dates_pandas(
     time_col: str,
 ) -> Tuple[AuditDataSeverity, pd.DataFrame]:
     """Pandas implementation of missing dates audit."""
-    # Get global end time (maximum across all series)
-    global_end = df[time_col].max()
-
-    # Get per-series start times (minimum for each series)
+    # Get per-series bounds (min and max for each series)
     series_bounds = df.groupby(id_col, observed=True)[time_col].agg(['min', 'max']).reset_index()
     series_bounds.columns = [id_col, 'start', 'end']
 
@@ -107,15 +104,16 @@ def _audit_missing_dates_pandas(
     for _, row in series_bounds.iterrows():
         series_id = row[id_col]
         series_start = row['start']
+        series_end = row['end']
 
-        # Generate complete date range for this series
+        # Generate complete date range for this series (from its own start to its own end)
         if is_datetime:
             # For datetime columns
             if isinstance(freq, int):
                 # Integer freq with datetime column - use period
                 complete_range = pd.date_range(
                     start=series_start,
-                    end=global_end,
+                    end=series_end,
                     periods=None,
                     freq=pd.tseries.frequencies.to_offset(freq)
                 )
@@ -123,7 +121,7 @@ def _audit_missing_dates_pandas(
                 # String freq (e.g., 'D', 'H')
                 complete_range = pd.date_range(
                     start=series_start,
-                    end=global_end,
+                    end=series_end,
                     freq=freq
                 )
         else:
@@ -132,7 +130,7 @@ def _audit_missing_dates_pandas(
                 raise ValueError(
                     f"For integer time columns, freq must be an integer, got {type(freq)}"
                 )
-            complete_range = range(int(series_start), int(global_end) + 1, freq)
+            complete_range = range(int(series_start), int(series_end) + 1, freq)
 
         # Get actual dates for this series
         actual_dates = set(df[df[id_col] == series_id][time_col].values)
@@ -195,9 +193,6 @@ def _audit_missing_dates_polars(
     time_col: str,
 ) -> Tuple[AuditDataSeverity, 'pl.DataFrame']:
     """Polars implementation of missing dates audit."""
-    # Get global end time
-    global_end = df[time_col].max()
-
     # Get per-series bounds
     series_bounds = df.group_by(id_col).agg([
         pl.col(time_col).min().alias('start'),
@@ -212,8 +207,9 @@ def _audit_missing_dates_polars(
     for row in series_bounds.iter_rows(named=True):
         series_id = row[id_col]
         series_start = row['start']
+        series_end = row['end']
 
-        # Generate complete date range
+        # Generate complete date range for this series (from its own start to its own end)
         if is_datetime:
             # For datetime columns - convert freq to polars duration string
             freq_str = _convert_freq_to_polars(freq)
@@ -222,7 +218,7 @@ def _audit_missing_dates_polars(
             if df[time_col].dtype == pl.Date:
                 complete_range = pl.date_range(
                     start=series_start,
-                    end=global_end,
+                    end=series_end,
                     interval=freq_str,
                     eager=True
                 )
@@ -230,7 +226,7 @@ def _audit_missing_dates_polars(
                 # For Datetime types
                 complete_range = pl.datetime_range(
                     start=series_start,
-                    end=global_end,
+                    end=series_end,
                     interval=freq_str,
                     eager=True
                 )
@@ -240,7 +236,7 @@ def _audit_missing_dates_polars(
                 raise ValueError(
                     f"For integer time columns, freq must be an integer, got {type(freq)}"
                 )
-            complete_range = list(range(int(series_start), int(global_end) + 1, freq))
+            complete_range = list(range(int(series_start), int(series_end) + 1, freq))
 
         # Get actual dates for this series
         actual_dates_list = df.filter(pl.col(id_col) == series_id)[time_col].to_list()

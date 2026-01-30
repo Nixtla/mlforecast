@@ -191,13 +191,10 @@ class TestAuditMissingDates:
             'y': [1, 2, 3]
         })
         severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
-        # Series A starts 2020-01-01, should go to global max 2020-01-03
-        # Series B starts 2020-01-02, should go to global max 2020-01-03
-        # Series C starts 2020-01-03, ends at 2020-01-03 (no gaps)
-        # So A should be missing 2020-01-02 and 2020-01-03
-        # B should be missing 2020-01-03
-        assert severity == AuditDataSeverity.FAIL
-        assert len(missing) > 0
+        # Each series has only one row, so start == end for each
+        # No gaps possible within a single-row series
+        assert severity == AuditDataSeverity.PASS
+        assert len(missing) == 0
 
     def test_audit_missing_dates_different_series_lengths(self):
         """Test with series of different lengths."""
@@ -210,7 +207,58 @@ class TestAuditMissingDates:
             'y': list(range(8))
         })
         severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
-        # Both series are complete from their start to the global end
+        # Both series are complete from their own start to their own end
         # So no missing dates
         assert severity == AuditDataSeverity.PASS
         assert len(missing) == 0
+
+    def test_audit_missing_dates_per_series_end_no_false_positives(self):
+        """Test that different end dates don't trigger false positives (per-series end behavior)."""
+        # Scenario: Station A operates through Jan 10, Station B closed on Jan 5
+        # This should NOT warn about B missing Jan 6-10
+        df = pd.DataFrame({
+            'unique_id': ['Station_A'] * 10 + ['Station_B'] * 5,
+            'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
+                 pd.date_range('2020-01-01', periods=5, freq='D').tolist(),
+            'y': list(range(15))
+        })
+        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        # Each series is complete within its own timespan
+        assert severity == AuditDataSeverity.PASS
+        assert len(missing) == 0
+
+    def test_audit_missing_dates_gap_within_shorter_series(self):
+        """Test that gaps WITHIN a shorter series are still detected."""
+        # Station A: complete through Jan 10
+        # Station B: has gap on Jan 3, ends Jan 5
+        df = pd.DataFrame({
+            'unique_id': ['Station_A'] * 10 + ['Station_B'] * 4,
+            'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
+                 [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
+                  pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05')],  # Missing Jan 3
+            'y': list(range(14))
+        })
+        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        # Should detect gap on Jan 3 in Station B
+        assert severity == AuditDataSeverity.FAIL
+        assert len(missing) > 0
+        # Verify it's Station_B that has the issue
+        assert 'Station_B' in missing['unique_id'].values
+        # Verify Jan 3 is the missing date
+        missing_b = missing[missing['unique_id'] == 'Station_B']
+        assert pd.Timestamp('2020-01-03') in missing_b['ds'].values
+        # Station A should not have any missing dates
+        assert 'Station_A' not in missing['unique_id'].values
+
+    def test_audit_missing_dates_per_series_end_polars(self):
+        """Test per-series end behavior with polars."""
+        # Same scenario as pandas test - different end dates should be OK
+        df = pl.DataFrame({
+            'unique_id': ['Station_A'] * 10 + ['Station_B'] * 5,
+            'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
+                 pd.date_range('2020-01-01', periods=5, freq='D').tolist(),
+            'y': list(range(15))
+        })
+        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        assert severity == AuditDataSeverity.PASS
+        assert missing.shape[0] == 0
