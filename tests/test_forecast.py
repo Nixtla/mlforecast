@@ -1439,3 +1439,204 @@ def test_horizons_cross_validation_with_target_transforms():
     n_windows = 2
     n_horizons = 2  # [7, 14]
     assert cv_results.shape[0] == n_series * n_windows * n_horizons
+
+
+def test_fit_with_audit_data_clean():
+    """Test that fit with audit_data=True works on clean data without warnings."""
+    # Use equal_ends=True to ensure all series have the same length
+    df = generate_daily_series(3, min_length=50, max_length=50, equal_ends=True)
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7]
+    )
+
+    # Should not produce any warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # Turn warnings into errors
+        fcst.fit(df, audit_data=True)
+
+    # Model should be fitted
+    assert hasattr(fcst, 'models_')
+    assert len(fcst.models_) > 0
+
+
+def test_fit_with_audit_data_duplicates():
+    """Test that fit with audit_data=True warns about duplicates but continues."""
+    df = generate_daily_series(3, min_length=50, max_length=100)
+
+    # Add duplicate rows
+    duplicate_rows = df.head(5).copy()
+    df = pd.concat([df, duplicate_rows], ignore_index=True)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7]
+    )
+
+    # Should produce warning about duplicates
+    with pytest.warns(UserWarning, match="duplicate.*timestamp.*pairs"):
+        fcst.fit(df, audit_data=True)
+
+    # Model should still be fitted (execution continues)
+    assert hasattr(fcst, 'models_')
+    assert len(fcst.models_) > 0
+
+
+def test_fit_with_audit_data_missing_dates():
+    """Test that fit with audit_data=True warns about missing dates but continues."""
+    # Create data with gaps
+    df = pd.DataFrame({
+        'unique_id': ['A'] * 10 + ['B'] * 8,
+        'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
+             [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
+              pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05'),
+              pd.Timestamp('2020-01-06'), pd.Timestamp('2020-01-08'),
+              pd.Timestamp('2020-01-09'), pd.Timestamp('2020-01-10')],
+        'y': list(range(18))
+    })
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1]
+    )
+
+    # Should produce warning about missing dates
+    with pytest.warns(UserWarning, match="missing dates"):
+        fcst.fit(df, audit_data=True)
+
+    # Model should still be fitted
+    assert hasattr(fcst, 'models_')
+
+
+def test_fit_with_audit_data_both_issues():
+    """Test that both warnings are issued when there are duplicates and missing dates."""
+    # Create data with both issues
+    df = pd.DataFrame({
+        'unique_id': ['A'] * 10 + ['B'] * 8,
+        'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
+             [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
+              pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05'),
+              pd.Timestamp('2020-01-06'), pd.Timestamp('2020-01-08'),
+              pd.Timestamp('2020-01-09'), pd.Timestamp('2020-01-10')],
+        'y': list(range(18))
+    })
+
+    # Add duplicate rows
+    duplicate_rows = df.head(3).copy()
+    df = pd.concat([df, duplicate_rows], ignore_index=True)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1]
+    )
+
+    # Should produce both warnings
+    with pytest.warns(UserWarning) as record:
+        fcst.fit(df, audit_data=True)
+
+    # Check that we got at least 2 warnings (one for duplicates, one for missing dates)
+    assert len(record) >= 2
+    warning_messages = [str(w.message) for w in record]
+    assert any('duplicate' in msg.lower() for msg in warning_messages)
+    assert any('missing dates' in msg.lower() for msg in warning_messages)
+
+
+def test_fit_audit_data_default_false():
+    """Test backward compatibility - audit_data defaults to False."""
+    # Create data with issues
+    df = generate_daily_series(3, min_length=50, max_length=100)
+    duplicate_rows = df.head(5).copy()
+    df = pd.concat([df, duplicate_rows], ignore_index=True)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7]
+    )
+
+    # Should not produce any warnings (default behavior)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fcst.fit(df)  # audit_data defaults to False
+
+    # Model should still be fitted
+    assert hasattr(fcst, 'models_')
+
+
+def test_preprocess_with_audit_data():
+    """Test that preprocess method honors audit_data parameter."""
+    df = pd.DataFrame({
+        'unique_id': ['A'] * 10,
+        'ds': pd.date_range('2020-01-01', periods=10, freq='D'),
+        'y': list(range(10))
+    })
+
+    # Add duplicate rows
+    duplicate_rows = df.head(2).copy()
+    df = pd.concat([df, duplicate_rows], ignore_index=True)
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1]
+    )
+
+    # Should produce warning when audit_data=True
+    with pytest.warns(UserWarning, match="duplicate"):
+        fcst.preprocess(df, audit_data=True)
+
+    # Should not produce warning when audit_data=False (default)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fcst.preprocess(df, audit_data=False)
+
+
+def test_cross_validation_with_audit_data():
+    """Test that cross_validation method honors audit_data parameter."""
+    # Create data with gaps
+    df = pd.DataFrame({
+        'unique_id': ['A'] * 50 + ['B'] * 48,
+        'ds': pd.date_range('2020-01-01', periods=50, freq='D').tolist() +
+             [pd.Timestamp('2020-01-01') + pd.Timedelta(days=i)
+              for i in [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                        39, 40, 41, 42, 43, 44, 45, 46, 47, 49]],  # Missing day 48
+        'y': list(range(98))
+    })
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1]
+    )
+
+    # Should produce warning when audit_data=True
+    with pytest.warns(UserWarning, match="missing dates"):
+        cv_results = fcst.cross_validation(
+            df,
+            n_windows=2,
+            h=5,
+            audit_data=True
+        )
+
+    # Should have results
+    assert cv_results.shape[0] > 0
+
+    # Should not produce warning when audit_data=False (default)
+    fcst2 = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cv_results2 = fcst2.cross_validation(
+            df,
+            n_windows=2,
+            h=5,
+            audit_data=False
+        )
