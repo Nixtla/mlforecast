@@ -3,6 +3,7 @@ __all__ = ["MLForecast"]
 
 import copy
 import re
+import reprlib
 import warnings
 from pathlib import Path
 from typing import (
@@ -41,6 +42,7 @@ from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
+from .audit import AuditDataSeverity, audit_duplicate_rows, audit_missing_dates
 from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals
 
@@ -202,6 +204,52 @@ class MLForecast:
         fcst.ts = copy.deepcopy(cv.ts)
         return fcst
 
+    def _run_data_audits(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+    ) -> None:
+        """Run data quality audits and issue warnings if problems found.
+
+        Args:
+            df: Input DataFrame to audit
+            id_col: Name of the ID column
+            time_col: Name of the timestamp column
+        """
+        import pandas as pd
+
+        # Check for duplicate rows
+        dup_severity, dup_df = audit_duplicate_rows(df, id_col, time_col)
+        if dup_severity == AuditDataSeverity.FAIL:
+            n_duplicates = dup_df.shape[0]
+            if isinstance(df, pd.DataFrame):
+                affected_ids = dup_df[id_col].unique()
+            else:
+                affected_ids = dup_df[id_col].unique().to_list()
+            sample_ids = reprlib.repr(list(affected_ids[:10]))
+            warnings.warn(
+                f"Found {n_duplicates} duplicate (id, timestamp) pairs.\n"
+                f"This may lead to incorrect lag features and model training issues.\n"
+                f"Affected series: {sample_ids}"
+            )
+
+        # Check for missing dates
+        missing_severity, missing_df = audit_missing_dates(df, self.freq, id_col, time_col)
+        if missing_severity == AuditDataSeverity.FAIL:
+            n_missing = missing_df.shape[0]
+            if isinstance(df, pd.DataFrame):
+                affected_ids = missing_df[id_col].unique()
+            else:
+                affected_ids = missing_df[id_col].unique().to_list()
+            sample_ids = reprlib.repr(list(affected_ids[:10]))
+            warnings.warn(
+                f"Found {n_missing} missing dates in time series.\n"
+                f"This may lead to incorrect lag features.\n"
+                f"Affected series: {sample_ids}\n"
+                f"Consider using the fill_gaps parameter or preprocessing your data."
+            )
+
     def preprocess(
         self,
         df: DFType,
@@ -216,6 +264,7 @@ class MLForecast:
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        audit_data: bool = False,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
@@ -232,10 +281,15 @@ class MLForecast:
             return_X_y (bool): Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            audit_data (bool): Run data quality audits before preprocessing. Warns about missing dates and duplicate rows. Defaults to False.
 
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
+        # Run data audits if requested
+        if audit_data:
+            self._run_data_audits(df, id_col, time_col)
+
         return self.ts.fit_transform(
             df,
             id_col=id_col,
@@ -598,6 +652,7 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
+        audit_data: bool = False,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -615,6 +670,8 @@ class MLForecast:
             fitted (bool): Save in-sample predictions. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method. Defaults to None.
+            audit_data (bool): Run data quality audits before fitting. Warns about missing dates and duplicate rows. Defaults to False.
 
         Returns:
             MLForecast: Forecast object with series values and trained models.
@@ -656,6 +713,7 @@ class MLForecast:
                 return_X_y=False,
                 as_numpy=False,
                 weight_col=weight_col,
+                audit_data=audit_data,
             )
             # Restore the as_numpy setting for prediction
             self.ts.as_numpy = as_numpy
@@ -709,6 +767,7 @@ class MLForecast:
                 return_X_y=not fitted,
                 as_numpy=as_numpy,
                 weight_col=weight_col,
+                audit_data=audit_data,
             )
             if isinstance(prep, tuple):
                 X, y = prep
@@ -949,6 +1008,7 @@ class MLForecast:
         fitted: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        audit_data: bool = False,
     ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -976,10 +1036,15 @@ class MLForecast:
             fitted (bool): Store the in-sample predictions. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            audit_data (bool): Run data quality audits on the full dataset before cross-validation. Warns about missing dates and duplicate rows. Defaults to False.
 
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
+        # Run data audits once on full dataset if requested
+        if audit_data:
+            self._run_data_audits(df, id_col, time_col)
+
         results = []
         cv_models = []
         cv_fitted_values = []
