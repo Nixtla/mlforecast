@@ -37,7 +37,7 @@ Name | Type | Description | Default
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `engine` | <code>fugue execution engine</code> | Dask Client, Spark Session, etc to use for the distributed computation. If None will infer depending on the input type. Defaults to None. | <code>None</code>
 `num_partitions` | <code>number of data partitions to use</code> | If None, the default partitions provided by the AnyDataFrame used by the `fit` and `cross_validation` methods will be used. If a Ray Dataset is provided and `num_partitions` is None, the partitioning will be done by the `id_col`. Defaults to None. | <code>None</code>
