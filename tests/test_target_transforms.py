@@ -126,6 +126,18 @@ def test_autodifferences():
         np.tile(sc.scaler_.tails_, 2),
     )
 
+def test_autodifferences_restored():
+    sc = AutoDifferences(1)
+    sc.store_fitted = True
+    ga = GroupedArray(np.arange(10, dtype=float), np.array([0, 10]))
+    transformed = sc.fit_transform(ga)
+    keep_mask = ~np.isnan(transformed.data)
+    transformed_dropna = GroupedArray(
+        transformed.data[keep_mask], np.array([0, keep_mask.sum()])
+    )
+    restored = sc.inverse_transform_fitted(transformed_dropna)
+    np.testing.assert_allclose(restored.data, ga.data[keep_mask])
+
 def test_autoseasonaldifferences():
     sc = AutoSeasonalDifferences(season_length=5, max_diffs=1)
     ga = GroupedArray(np.arange(5)[np.arange(10) % 5], np.array([0, 10]))
@@ -273,6 +285,27 @@ def test_mlforecast_polars(mlforecast_setup):
     pd_preds = fcst_pd.fit(series_pd).predict(5)
 
     pd.testing.assert_frame_equal(pd_preds, pl_preds.to_pandas())
+
+
+def test_mlforecast_fit_with_preprocessed_autodifferences():
+    series = generate_daily_series(1, min_length=50, max_length=50, with_trend=True)
+    fcst = MLForecast(
+        models=[],
+        freq="D",
+        target_transforms=[AutoDifferences(max_diffs=1)],
+    )
+    preprocessed = fcst.preprocess(series)
+    fcst.fit(
+        preprocessed.dropna(),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        fitted=True,
+        dropna=True,
+    )
+    fitted = fcst.forecast_fitted_values()
+    assert fitted is not None
+    assert len(fitted) > 0
 
 
 def test_autoseasonality_and_differences_validation():
