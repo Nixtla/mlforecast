@@ -219,7 +219,7 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(self.scaler_.inverse_transform(core_ga), ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
-        if not self.fitted_:
+        if not self.fitted_ or self.fitted_indptr_ is None:
             return ga
         if self.fitted_[0].size < ga.data.size:
             raise ValueError("fitted differences are smaller than provided target.")
