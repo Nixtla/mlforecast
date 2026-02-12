@@ -185,6 +185,19 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
 
     def _diffs_per_step(self, indptr_dtype: np.dtype) -> List[np.ndarray]:
+        """Convert stored differences into per-step difference arrays.
+
+        For each differencing step, returns an array indicating the lag to use
+        for each series. This is needed to properly reverse the differencing
+        during inverse_transform_fitted.
+
+        Args:
+            indptr_dtype: The dtype to use for the resulting arrays.
+
+        Returns:
+            List of arrays, one per differencing step, where each array contains
+            the lag value (0 or season_length) to use for each series.
+        """
         diffs = self.scaler_.diffs_
         if isinstance(diffs, list):
             return [d.astype(indptr_dtype, copy=False) for d in diffs]
@@ -219,10 +232,28 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(self.scaler_.inverse_transform(core_ga), ga.indptr)
 
     def inverse_transform_fitted(self, ga: GroupedArray) -> GroupedArray:
+        """Inverse transform fitted values.
+
+        Reverses the differencing transformation by reconstructing the original
+        values from the differenced fitted values. This is used when fitted=True
+        to restore the fitted predictions to the original scale.
+
+        Args:
+            ga: GroupedArray containing the differenced fitted values.
+
+        Returns:
+            GroupedArray with fitted values in the original scale.
+
+        Raises:
+            ValueError: If fitted differences are smaller than provided target.
+        """
         if not self.fitted_ or self.fitted_indptr_ is None:
             return ga
         if self.fitted_[0].size < ga.data.size:
-            raise ValueError("fitted differences are smaller than provided target.")
+            raise ValueError(
+                f"fitted differences are smaller than provided target. "
+                f"Fitted size: {self.fitted_[0].size}, target size: {ga.data.size}"
+            )
         transformed = ga.data.copy()
         diffs_per_step = self._diffs_per_step(self.fitted_indptr_.dtype)
         for ds, fitted in zip(reversed(diffs_per_step), reversed(self.fitted_)):
