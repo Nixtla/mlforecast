@@ -1,4 +1,3 @@
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -59,7 +58,7 @@ def test_transforms(setup_series):
     _, diffs, _, _, ga = setup_series
 
     diffs.store_fitted = True
-    transformed = diffs.fit_transform(ga)
+    diffs.fit_transform(ga)
 
     new_ga = GroupedArray(np.random.rand(10), np.arange(11))
     prev_orig = [diffs.scalers_[i].tails_[::d].copy() for i, d in enumerate(diffs.differences)]
@@ -177,7 +176,7 @@ def test_autodifferences_restored_multiple_series(max_diffs):
 def test_autoseasonaldifferences():
     sc = AutoSeasonalDifferences(season_length=5, max_diffs=1)
     ga = GroupedArray(np.arange(5)[np.arange(10) % 5], np.array([0, 10]))
-    transformed = sc.fit_transform(ga)
+    sc.fit_transform(ga)
     sc.inverse_transform(ga)
     sc.update(ga)
 
@@ -214,7 +213,7 @@ def test_autoseasonaldifferences_restored(max_diffs):
 def test_autoseasonality_and_differences():
     sc = AutoSeasonalityAndDifferences(max_season_length=5, max_diffs=1)
     ga = GroupedArray(np.arange(5)[np.arange(10) % 5], np.array([0, 10]))
-    transformed = sc.fit_transform(ga)
+    sc.fit_transform(ga)
     sc.inverse_transform(ga)
     sc.update(ga)
 

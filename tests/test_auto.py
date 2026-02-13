@@ -59,7 +59,7 @@ def test_automlforecast_pipeline(weekly_data):
         freq=1,
         season_length=season_length,
         models={"lgb": AutoLightGBM(), "ridge": auto_ridge},
-        fit_config=lambda trial: {"static_features": ["unique_id"]},
+        fit_config=lambda _trial: {"static_features": ["unique_id"]},
         num_threads=2,
     )
 
@@ -79,7 +79,7 @@ def test_automlforecast_pipeline(weekly_data):
     
 def test_automlforecast_weight_col(weekly_data):
 
-    def custom_loss(val_df, train_df, weight_col):
+    def custom_loss(val_df, train_df, weight_col, **kwargs):
         error = (val_df['y'] - val_df['model']).abs()
         indices = val_df.index
         weights = train.loc[indices, weight_col].values
@@ -106,7 +106,7 @@ def test_automlforecast_weight_col(weekly_data):
         freq=1,
         season_length=season_length,
         models={"ridge": auto_ridge},  
-        fit_config=lambda trial: {'static_features': []}
+        fit_config=lambda _trial: {'static_features': []}
     )
 
     auto_mlf.fit(
@@ -278,11 +278,11 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     n_windows = 2
     num_samples = 5 
     
-    def ridge_config(trial):  
+    def ridge_config(_trial):  
         return {"alpha": 1.0, "fit_intercept": True, "solver": "svd"}
-    def fit_config(trial):  
+    def fit_config(_trial):  
         return {"dropna": True}
-    def init_config(trial):  
+    def init_config(_trial):  
         return {
             "lags": [1, 2, 3],
         }

@@ -128,7 +128,7 @@ def test_lightgbmcv_callback():
 def test_lightgbmcv_custom_metric(m4_data):
     train, _, horizon = m4_data
 
-    def weighted_mape(y_true, y_pred, ids, dates):
+    def weighted_mape(y_true, y_pred, ids, _dates):
         abs_pct_err = abs(y_true - y_pred) / abs(y_true)
         mape_by_serie = abs_pct_err.groupby(ids).mean()
         totals_per_serie = y_pred.groupby(ids).sum()

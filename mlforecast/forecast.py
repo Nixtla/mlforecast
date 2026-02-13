@@ -21,6 +21,7 @@ from typing import (
 import cloudpickle
 import fsspec
 import numpy as np
+import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DataFrame, DFType, pl_DataFrame, pl_Series
