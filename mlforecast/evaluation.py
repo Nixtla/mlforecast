@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import List, Callable, Dict, Optional, Union
-import utilsforecast.processing as ufp
+from typing import List, Callable, Optional
 from utilsforecast.compat import DataFrame
 
 class PerformanceEvaluator:
