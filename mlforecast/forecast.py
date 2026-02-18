@@ -151,7 +151,15 @@ class MLForecast:
             freq (str or int or pd.offsets.BaseOffset): Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
             lags (list of int, optional): Lags of the target to use as features. Defaults to None.
             lag_transforms (dict of int to list of functions, optional): Mapping of target lags to their transformations. Defaults to None.
-            date_features (list of str or callable, optional): Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None.
+            date_features (list of str or callable, optional): Features computed from the dates.
+                Can be pandas/polars date attributes or callables that take the dates as input.
+                Built-in string options are:
+                ['year', 'month', 'day', 'hour', 'minute', 'second', 'dayofyear',
+                 'day_of_year', 'weekofyear', 'week', 'dayofweek', 'day_of_week',
+                 'weekday', 'quarter', 'daysinmonth', 'is_month_start', 'is_month_end',
+                 'is_quarter_start', 'is_quarter_end', 'is_year_start', 'is_year_end'].
+                For broad compatibility across pandas versions/backends prefer `week` over
+                `weekofyear` and `dayofyear` over `day_of_year`. Defaults to None.
             num_threads (int): Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1.
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
@@ -838,6 +846,7 @@ class MLForecast:
                 "If you ran preprocess after fit please run fit again."
             )
 
+        new_ts: Optional[TimeSeries] = None
         if new_df is not None:
             if level is not None:
                 raise ValueError(
@@ -869,7 +878,7 @@ class MLForecast:
             new_ts.as_numpy = self.ts.as_numpy
             ts = new_ts
         else:
-            ts = self.ts  
+            ts = self.ts
         forecasts = ts.predict(
             models=self.models_,
             horizon=h,
@@ -878,6 +887,9 @@ class MLForecast:
             X_df=X_df,
             ids=ids,
         )
+        if new_ts is not None:
+            # Persist transfer-learning state only after a successful prediction.
+            self.ts = new_ts
         if level is not None:
             if self._cs_df is None:
                 warn_msg = (
@@ -886,6 +898,25 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
+                if isinstance(self._cs_df, pl_DataFrame):
+                    cs_ids = set(self._cs_df[self.ts.id_col].unique().to_list())
+                else:
+                    cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
+                if ids is None:
+                    if len(cs_ids) != self.ts.ga.n_groups:
+                        raise ValueError(
+                            "Prediction intervals were calibrated on a different set of series "
+                            "than the current forecasting state. Please rerun `fit` before "
+                            "requesting intervals."
+                        )
+                else:
+                    missing_ids = set(ids) - cs_ids
+                    if missing_ids:
+                        raise ValueError(
+                            "Prediction intervals are only available for series seen during "
+                            "interval calibration. Missing ids: "
+                            f"{missing_ids}."
+                        )
                 if (self.prediction_intervals.h != 1) and (
                     self.prediction_intervals.h < h
                 ):

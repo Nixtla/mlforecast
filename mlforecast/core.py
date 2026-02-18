@@ -292,6 +292,49 @@ class TimeSeries:
                 "Global and group lag transforms require all series to end at the same timestamp."
             )
 
+    def _warn_gaps(self, bad_ids: List[Any]) -> None:
+        max_ids_to_show = 10
+        shown_ids = bad_ids[:max_ids_to_show]
+        extra = len(bad_ids) - len(shown_ids)
+        if extra > 0:
+            ids_msg = f"{shown_ids} (+{extra} more)"
+        else:
+            ids_msg = str(shown_ids)
+        warnings.warn(
+            f"The following series have gaps (missing timestamps): {ids_msg}. "
+            "This means that lag features will be computed based on positional "
+            "order rather than temporal order, which may produce incorrect results. "
+            "Consider filling the gaps in your data before fitting.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    def _check_gaps(self, sorted_df: DataFrame) -> None:
+        """Warn if any series have gaps (missing timestamps)."""
+        if isinstance(sorted_df, pd.DataFrame):
+            expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            next_time = sorted_df.groupby(
+                self.id_col, observed=True
+            )[self.time_col].shift(-1)
+            gaps = next_time.notna() & (expected_next != next_time)
+            if gaps.any():
+                bad_ids = sorted_df.loc[gaps, self.id_col].unique().tolist()
+                self._warn_gaps(bad_ids)
+        elif pl is not None and isinstance(sorted_df, pl.DataFrame):
+            expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            df_check = sorted_df.with_columns(
+                pl.Series(name="_expected_next", values=expected_next)
+            ).with_columns(
+                pl.col(self.time_col).shift(-1).over(self.id_col).alias("_next")
+            )
+            gaps = df_check.filter(
+                pl.col("_next").is_not_null()
+                & (pl.col("_expected_next") != pl.col("_next"))
+            )
+            if gaps.height:
+                bad_ids = gaps[self.id_col].unique().to_list()
+                self._warn_gaps(bad_ids)
+
     @property
     def _date_feature_names(self):
         return [f.__name__ if callable(f) else f for f in self.date_features]
@@ -366,6 +409,7 @@ class TimeSeries:
             sorted_df = ufp.take_rows(sorted_df, self._sort_idxs)
         else:
             self._restore_idxs = None
+        self._check_gaps(sorted_df)
         if self.target_transforms is not None:
             for tfm in self.target_transforms:
                 if isinstance(tfm, _BaseGroupedArrayTargetTransform):
@@ -546,9 +590,25 @@ class TimeSeries:
             if isinstance(dates, pd.DatetimeIndex):
                 if feature in ("week", "weekofyear"):
                     dates = dates.isocalendar()
-                feat_vals = getattr(dates, feature)
+                try:
+                    feat_vals = getattr(dates, feature)
+                except AttributeError:
+                    supported = sorted(date_features_dtypes.keys())
+                    raise ValueError(
+                        f"Unknown date feature '{feature}'. "
+                        f"Supported features: {supported}. "
+                        "You can also pass a callable."
+                    ) from None
             else:
-                feat_vals = getattr(dates.dt, feature)()
+                try:
+                    feat_vals = getattr(dates.dt, feature)()
+                except AttributeError:
+                    supported = sorted(date_features_dtypes.keys())
+                    raise ValueError(
+                        f"Unknown date feature '{feature}'. "
+                        f"Supported features: {supported}. "
+                        "You can also pass a callable."
+                    ) from None
         if isinstance(feat_vals, (pd.Index, pd.Series)):
             feat_vals = np.asarray(feat_vals)
             feat_dtype = date_features_dtypes.get(feature)

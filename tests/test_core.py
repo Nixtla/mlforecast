@@ -1963,3 +1963,98 @@ def test_timeseries_num_threads_minus_one(series):
     prep_single = ts_single.fit_transform(series, "unique_id", "ds", "y")
 
     pd.testing.assert_frame_equal(prep_multi, prep_single)
+
+
+@pytest.mark.parametrize(
+    "engine, freq",
+    [
+        ("pandas", "D"),
+        ("polars", "1d"),
+    ],
+)
+def test_check_gaps_warns_with_datetime(engine, freq):
+    """Test that fitting with gaps in datetime series triggers a warning."""
+    series = generate_daily_series(2, min_length=10, max_length=10, engine=engine)
+    # Drop one row from the first series to create a gap
+    if engine == "pandas":
+        series = series.drop(series.index[3]).reset_index(drop=True)
+    else:
+        mask = [True] * series.height
+        mask[3] = False
+        series = series.filter(pl.Series(mask))
+    ts = TimeSeries(freq=freq, lags=[1])
+    with pytest.warns(UserWarning, match="gaps"):
+        ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+
+
+@pytest.mark.parametrize("engine, freq", [("pandas", "D"), ("polars", "1d")])
+def test_check_gaps_no_warning_clean_data(engine, freq):
+    """Test that fitting with clean data does not trigger a gap warning."""
+    series = generate_daily_series(2, min_length=10, max_length=10, engine=engine)
+    ts = TimeSeries(freq=freq, lags=[1])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+
+
+def test_check_gaps_integer_timestamps():
+    """Test gap detection with integer timestamps."""
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a"] * 5,
+            "ds": [1, 2, 3, 5, 6],  # gap at 4
+            "y": [10, 20, 30, 40, 50],
+        }
+    )
+    ts = TimeSeries(freq=1, lags=[1])
+    with pytest.warns(UserWarning, match="gaps"):
+        ts.fit_transform(df, id_col="unique_id", time_col="ds", target_col="y")
+
+
+@pytest.mark.parametrize("engine, freq", [("pandas", "D"), ("polars", "1d")])
+def test_check_gaps_identifies_correct_series(engine, freq):
+    """Test that the warning identifies only the series with gaps."""
+    series = generate_daily_series(3, min_length=10, max_length=10, engine=engine)
+    # Identify the second series and remove one row to create a gap
+    if engine == "pandas":
+        uid = series["unique_id"].unique()[1]
+        mask = series["unique_id"] == uid
+        idx = series[mask].index[3]
+        series = series.drop(idx).reset_index(drop=True)
+    else:
+        uid = series["unique_id"].unique().to_list()[1]
+        row_indices = list(range(series.height))
+        uid_rows = [
+            i for i in row_indices if series["unique_id"][i] == uid
+        ]
+        drop_idx = uid_rows[3]
+        mask = [True] * series.height
+        mask[drop_idx] = False
+        series = series.filter(pl.Series(mask))
+    ts = TimeSeries(freq=freq, lags=[1])
+    with pytest.warns(UserWarning, match=str(uid)):
+        ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+
+
+def test_check_gaps_warning_truncates_long_id_list():
+    """Test that warning message truncates id list when many series have gaps."""
+    n_ids = 12
+    df = pd.DataFrame(
+        {
+            "unique_id": [f"id_{i}" for i in range(n_ids) for _ in range(2)],
+            "ds": [1, 3] * n_ids,
+            "y": np.arange(2 * n_ids),
+        }
+    )
+    ts = TimeSeries(freq=1, lags=[1])
+    with pytest.warns(UserWarning, match=r"\(\+\d+ more\)"):
+        ts.fit_transform(df, id_col="unique_id", time_col="ds", target_col="y")
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_invalid_date_feature(engine):
+    """Test that an invalid date feature string raises ValueError with supported list."""
+    series = generate_daily_series(2, min_length=10, max_length=10, engine=engine)
+    ts = TimeSeries(freq="D" if engine == "pandas" else "1d", lags=[1], date_features=["not_a_real_feature"])
+    with pytest.raises(ValueError, match="Supported features"):
+        ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
