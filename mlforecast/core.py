@@ -312,7 +312,11 @@ class TimeSeries:
     def _check_gaps(self, sorted_df: DataFrame) -> None:
         """Warn if any series have gaps (missing timestamps)."""
         if isinstance(sorted_df, pd.DataFrame):
-            expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            try:
+                expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            except Exception:
+                # Gap checks are best-effort diagnostics and must not break fit.
+                return
             next_time = sorted_df.groupby(
                 self.id_col, observed=True
             )[self.time_col].shift(-1)
@@ -321,7 +325,11 @@ class TimeSeries:
                 bad_ids = sorted_df.loc[gaps, self.id_col].unique().tolist()
                 self._warn_gaps(bad_ids)
         elif pl is not None and isinstance(sorted_df, pl.DataFrame):
-            expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            try:
+                expected_next = ufp.offset_times(sorted_df[self.time_col], self.freq, 1)
+            except Exception:
+                # Gap checks are best-effort diagnostics and must not break fit.
+                return
             df_check = sorted_df.with_columns(
                 pl.Series(name="_expected_next", values=expected_next)
             ).with_columns(
