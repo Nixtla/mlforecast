@@ -1963,3 +1963,40 @@ def test_timeseries_num_threads_minus_one(series):
     prep_single = ts_single.fit_transform(series, "unique_id", "ds", "y")
 
     pd.testing.assert_frame_equal(prep_multi, prep_single)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_invalid_date_feature(engine):
+    """Test that an invalid date feature string raises ValueError with supported list."""
+    series = generate_daily_series(2, min_length=10, max_length=10, engine=engine)
+    ts = TimeSeries(freq="D" if engine == "pandas" else "1d", lags=[1], date_features=["not_a_real_feature"])
+    with pytest.raises(ValueError, match="Supported features"):
+        ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+
+
+@pytest.mark.parametrize(
+    "engine, freq, feature",
+    [
+        ("pandas", "D", "weekofyear"),
+        ("polars", "1d", "weekofyear"),
+        ("polars", "1d", "dayofyear"),
+        ("polars", "1d", "day_of_year"),
+        ("polars", "1d", "dayofweek"),
+        ("polars", "1d", "day_of_week"),
+        ("polars", "1d", "daysinmonth"),
+        ("polars", "1d", "is_month_start"),
+        ("polars", "1d", "is_month_end"),
+        ("polars", "1d", "is_quarter_start"),
+        ("polars", "1d", "is_quarter_end"),
+        ("polars", "1d", "is_year_start"),
+        ("polars", "1d", "is_year_end"),
+    ],
+)
+def test_date_feature_aliases_supported(engine, freq, feature):
+    """Test supported aliases and calendar boundary features across backends."""
+    series = generate_daily_series(2, min_length=40, max_length=40, engine=engine)
+    ts = TimeSeries(freq=freq, lags=[1], date_features=[feature])
+    transformed = ts.fit_transform(
+        series, id_col="unique_id", time_col="ds", target_col="y"
+    )
+    assert feature in transformed.columns
