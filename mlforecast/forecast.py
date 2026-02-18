@@ -903,7 +903,8 @@ class MLForecast:
                 else:
                     cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
                 if ids is None:
-                    if len(cs_ids) != self.ts.ga.n_groups:
+                    active_ids = set(self.ts.uids)
+                    if cs_ids != active_ids:
                         raise ValueError(
                             "Prediction intervals were calibrated on a different set of series "
                             "than the current forecasting state. Please rerun `fit` before "

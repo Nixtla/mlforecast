@@ -1547,3 +1547,23 @@ def test_transfer_learning_then_intervals_raises_clear_error():
 
     with pytest.raises(ValueError, match="calibrated on a different set of series"):
         fcst.predict(h=5, level=[90])
+
+
+def test_transfer_learning_then_intervals_raises_with_same_series_count():
+    """Intervals should fail if ids differ, even when the number of series matches."""
+    train_a = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_b = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_b["unique_id"] = train_b["unique_id"].cat.rename_categories(
+        {c: f"new_{c}" for c in train_b["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1, 2, 3],
+    )
+    fcst.fit(train_a, prediction_intervals=PredictionIntervals(n_windows=2, h=5))
+    fcst.predict(h=5, new_df=train_b)
+
+    with pytest.raises(ValueError, match="calibrated on a different set of series"):
+        fcst.predict(h=5, level=[90])
