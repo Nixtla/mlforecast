@@ -1149,7 +1149,6 @@ def test_direct_forecasting_perfect_exogenous_fit_multiple_series():
 
     # Add exogenous feature X to future dataframe
     # X continues from where training left off (20, 21, 22, ...)
-    last_train_idx = df.groupby('unique_id', observed=True)['X'].transform('max')
     future_df = future_df.sort_values(['unique_id', 'ds']).reset_index(drop=True)
     future_df['X'] = future_df.groupby('unique_id', observed=True).cumcount() + 20.0
 

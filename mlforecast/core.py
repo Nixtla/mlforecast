@@ -587,28 +587,96 @@ class TimeSeries:
             feat_vals = feature(dates)
         else:
             feat_name = feature
-            if isinstance(dates, pd.DatetimeIndex):
-                if feature in ("week", "weekofyear"):
-                    dates = dates.isocalendar()
-                try:
-                    feat_vals = getattr(dates, feature)
-                except AttributeError:
-                    supported = sorted(date_features_dtypes.keys())
-                    raise ValueError(
-                        f"Unknown date feature '{feature}'. "
-                        f"Supported features: {supported}. "
-                        "You can also pass a callable."
-                    ) from None
-            else:
-                try:
-                    feat_vals = getattr(dates.dt, feature)()
-                except AttributeError:
-                    supported = sorted(date_features_dtypes.keys())
-                    raise ValueError(
-                        f"Unknown date feature '{feature}'. "
-                        f"Supported features: {supported}. "
-                        "You can also pass a callable."
-                    ) from None
+            supported = sorted(date_features_dtypes.keys())
+            try:
+                if isinstance(dates, pd.DatetimeIndex):
+                    pandas_feature = {
+                        "day_of_year": "dayofyear",
+                        "day_of_week": "dayofweek",
+                    }.get(feature, feature)
+                    if feature in ("week", "weekofyear"):
+                        feat_vals = dates.isocalendar().week
+                    else:
+                        feat_vals = getattr(dates, pandas_feature)
+                elif isinstance(dates, pd.Series):
+                    pandas_feature = {
+                        "day_of_year": "dayofyear",
+                        "day_of_week": "dayofweek",
+                    }.get(feature, feature)
+                    if feature in ("week", "weekofyear"):
+                        feat_vals = dates.dt.isocalendar().week
+                    else:
+                        accessor = getattr(dates.dt, pandas_feature)
+                        feat_vals = accessor() if callable(accessor) else accessor
+                elif pl is not None and isinstance(dates, pl.Expr):
+                    polars_feature = {
+                        "dayofyear": "ordinal_day",
+                        "day_of_year": "ordinal_day",
+                        "weekofyear": "week",
+                        "dayofweek": "weekday",
+                        "day_of_week": "weekday",
+                    }.get(feature, feature)
+                    if polars_feature == "daysinmonth":
+                        feat_vals = dates.dt.month_end().dt.day()
+                    elif polars_feature == "is_month_start":
+                        feat_vals = dates == dates.dt.month_start()
+                    elif polars_feature == "is_month_end":
+                        feat_vals = dates == dates.dt.month_end()
+                    elif polars_feature == "is_quarter_start":
+                        feat_vals = dates.dt.month().is_in([1, 4, 7, 10]) & (
+                            dates.dt.day() == 1
+                        )
+                    elif polars_feature == "is_quarter_end":
+                        feat_vals = dates.dt.month().is_in([3, 6, 9, 12]) & (
+                            dates == dates.dt.month_end()
+                        )
+                    elif polars_feature == "is_year_start":
+                        feat_vals = (dates.dt.month() == 1) & (dates.dt.day() == 1)
+                    elif polars_feature == "is_year_end":
+                        feat_vals = (dates.dt.month() == 12) & (
+                            dates == dates.dt.month_end()
+                        )
+                    else:
+                        feat_vals = getattr(dates.dt, polars_feature)()
+                elif pl is not None and isinstance(dates, pl_Series):
+                    polars_feature = {
+                        "dayofyear": "ordinal_day",
+                        "day_of_year": "ordinal_day",
+                        "weekofyear": "week",
+                        "dayofweek": "weekday",
+                        "day_of_week": "weekday",
+                    }.get(feature, feature)
+                    if polars_feature == "daysinmonth":
+                        feat_vals = dates.dt.month_end().dt.day()
+                    elif polars_feature == "is_month_start":
+                        feat_vals = dates == dates.dt.month_start()
+                    elif polars_feature == "is_month_end":
+                        feat_vals = dates == dates.dt.month_end()
+                    elif polars_feature == "is_quarter_start":
+                        feat_vals = dates.dt.month().is_in([1, 4, 7, 10]) & (
+                            dates.dt.day() == 1
+                        )
+                    elif polars_feature == "is_quarter_end":
+                        feat_vals = dates.dt.month().is_in([3, 6, 9, 12]) & (
+                            dates == dates.dt.month_end()
+                        )
+                    elif polars_feature == "is_year_start":
+                        feat_vals = (dates.dt.month() == 1) & (dates.dt.day() == 1)
+                    elif polars_feature == "is_year_end":
+                        feat_vals = (dates.dt.month() == 12) & (
+                            dates == dates.dt.month_end()
+                        )
+                    else:
+                        accessor = getattr(dates.dt, polars_feature)
+                        feat_vals = accessor() if callable(accessor) else accessor
+                else:
+                    raise AttributeError
+            except AttributeError:
+                raise ValueError(
+                    f"Unknown date feature '{feature}'. "
+                    f"Supported features: {supported}. "
+                    "You can also pass a callable."
+                ) from None
         if isinstance(feat_vals, (pd.Index, pd.Series)):
             feat_vals = np.asarray(feat_vals)
             feat_dtype = date_features_dtypes.get(feature)
