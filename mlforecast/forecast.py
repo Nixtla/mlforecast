@@ -3,7 +3,6 @@ __all__ = ["MLForecast"]
 
 import copy
 import re
-import reprlib
 import warnings
 from pathlib import Path
 from typing import (
