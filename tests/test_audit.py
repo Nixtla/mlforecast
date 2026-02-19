@@ -128,7 +128,7 @@ class TestAuditMissingDates:
                  pd.date_range('2020-01-01', periods=5, freq='D').tolist(),
             'y': list(range(10))
         })
-        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        severity, missing = audit_missing_dates(df, '1d', 'unique_id', 'ds')
         assert severity == AuditDataSeverity.PASS
         assert missing.shape[0] == 0
 
@@ -141,7 +141,7 @@ class TestAuditMissingDates:
                   pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05')],
             'y': list(range(9))
         })
-        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        severity, missing = audit_missing_dates(df, '1d', 'unique_id', 'ds')
         assert severity == AuditDataSeverity.FAIL
         assert missing.shape[0] > 0
         # Should have one missing date for series B
@@ -259,6 +259,6 @@ class TestAuditMissingDates:
                  pd.date_range('2020-01-01', periods=5, freq='D').tolist(),
             'y': list(range(15))
         })
-        severity, missing = audit_missing_dates(df, 'D', 'unique_id', 'ds')
+        severity, missing = audit_missing_dates(df, '1d', 'unique_id', 'ds')
         assert severity == AuditDataSeverity.PASS
         assert missing.shape[0] == 0
