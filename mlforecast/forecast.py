@@ -1037,6 +1037,7 @@ class MLForecast:
                     fitted=fitted,
                     as_numpy=as_numpy,
                     weight_col=weight_col,
+                    validate_data=False,
                 )
                 cv_models.append(self.models_)
                 if fitted:
@@ -1060,6 +1061,7 @@ class MLForecast:
                     horizons=horizons,
                     return_X_y=False,
                     weight_col=weight_col,
+                    validate_data=False,
                 )
                 assert not isinstance(prep, tuple)
                 effective_max_horizon = self.ts.max_horizon

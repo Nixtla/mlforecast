@@ -714,9 +714,8 @@ def polars_pandas_test_data():
     series_pl = series_pl[permutation]
     series_pd = series_pd.iloc[permutation]
 
-    cfg = dict(
+    base_cfg = dict(
         models=[LinearRegression(), lgb.LGBMRegressor(verbosity=-1)],
-        freq='1d',
         lags=[1, 2],
         lag_transforms={
             1: [ExpandingMean()],
@@ -725,6 +724,8 @@ def polars_pandas_test_data():
         date_features=['day', 'month', 'week', 'year'],
         target_transforms=[Differences([1, 2]), LocalStandardScaler()],
     )
+    cfg_pl = dict(**base_cfg, freq='1d')
+    cfg_pd = dict(**base_cfg, freq='D')
     fit_kwargs = dict(
         fitted=True,
         prediction_intervals=PredictionIntervals(h=horizon),
@@ -748,7 +749,8 @@ def polars_pandas_test_data():
         'series_pd': series_pd,
         'prices_pl': prices_pl,
         'prices_pd': prices_pd,
-        'cfg': cfg,
+        'cfg_pl': cfg_pl,
+        'cfg_pd': cfg_pd,
         'fit_kwargs': fit_kwargs,
         'predict_kwargs': predict_kwargs,
         'cv_kwargs': cv_kwargs,
@@ -764,7 +766,7 @@ def test_polars_pandas_compatibility(polars_pandas_test_data, max_horizon, as_nu
     if not as_numpy:
         pytest.skip("LightGBM with polars DataFrames not fully supported yet")
 
-    fcst_pl = MLForecast(**data['cfg'])
+    fcst_pl = MLForecast(**data['cfg_pl'])
     fcst_pl.fit(data['series_pl'], max_horizon=max_horizon, as_numpy=as_numpy, **data['fit_kwargs'])
     fitted_pl = fcst_pl.forecast_fitted_values()
     preds_pl = fcst_pl.predict(X_df=data['prices_pl'], **data['predict_kwargs'])
@@ -772,7 +774,7 @@ def test_polars_pandas_compatibility(polars_pandas_test_data, max_horizon, as_nu
     cv_pl = fcst_pl.cross_validation(data['series_pl'], as_numpy=as_numpy, **data['cv_kwargs'])
     cv_fitted_pl = fcst_pl.cross_validation_fitted_values()
 
-    fcst_pd = MLForecast(**data['cfg'])
+    fcst_pd = MLForecast(**data['cfg_pd'])
     fcst_pd.fit(data['series_pd'], max_horizon=max_horizon, as_numpy=as_numpy, **data['fit_kwargs'])
     fitted_pd = fcst_pd.forecast_fitted_values()
     preds_pd = fcst_pd.predict(X_df=data['prices_pd'], **data['predict_kwargs'])
@@ -1537,9 +1539,9 @@ def test_fit_with_validate_data_both_issues():
         fcst.fit(df_gap, validate_data=True)
 
 
-def test_fit_validate_data_default_false():
-    """Test backward compatibility - validate_data defaults to False."""
-    # Create data with issues
+def test_fit_validate_data_default_true():
+    """Test that validate_data defaults to True - raises on duplicates by default."""
+    # Create data with duplicate rows
     df = generate_daily_series(3, min_length=50, max_length=100)
     duplicate_rows = df.head(5).copy()
     df = pd.concat([df, duplicate_rows], ignore_index=True)
@@ -1550,13 +1552,18 @@ def test_fit_validate_data_default_false():
         lags=[1, 7]
     )
 
-    # Should not produce any warnings (default behavior)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        fcst.fit(df)  # validate_data defaults to False
+    # Should raise by default (validate_data=True)
+    with pytest.raises(ValueError, match="duplicate"):
+        fcst.fit(df)
 
-    # Model should still be fitted
-    assert hasattr(fcst, 'models_')
+    # Should succeed when validation is explicitly disabled
+    fcst2 = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 7]
+    )
+    fcst2.fit(df, validate_data=False)
+    assert hasattr(fcst2, 'models_')
 
 
 def test_preprocess_with_validate_data():
