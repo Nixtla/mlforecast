@@ -271,7 +271,7 @@ def validate_df(
     time_col: str,
     freq: Union[str, int],
 ) -> None:
-    """Run data quality audits and issue warnings if problems are found.
+    """Run data quality validations and issue warnings if problems are found.
 
     Checks for duplicate (id, timestamp) pairs and missing dates/gaps.
     Issues a warning for each problem found without raising exceptions.

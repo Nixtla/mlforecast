@@ -204,7 +204,7 @@ class MLForecast:
         fcst.ts = copy.deepcopy(cv.ts)
         return fcst
 
-    def _run_data_audits(
+    def _validate_data(
         self,
         df: DataFrame,
         id_col: str,
@@ -226,7 +226,7 @@ class MLForecast:
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
-        validate_data: bool = False,
+        validate_data: bool = True,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
@@ -240,17 +240,17 @@ class MLForecast:
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
-            return_X_y (bool): Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
+            return_X_y (bool): Return a tuple with the features and the target. If False will return a single dataframe. Defaults to True.
+            as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
-            validate_data (bool): Run data quality audits before preprocessing. Warns about missing dates and duplicate rows. Defaults to False.
+            validate_data (bool): Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
-        # Run data audits if requested
+        # Run data validations if requested
         if validate_data:
-            self._run_data_audits(df, id_col, time_col)
+            self._validate_data(df, id_col, time_col)
 
         return self.ts.fit_transform(
             df,
@@ -614,7 +614,7 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
-        validate_data: bool = False,
+        validate_data: bool = True,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -629,11 +629,11 @@ class MLForecast:
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
-            fitted (bool): Save in-sample predictions. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Defaults to False.
+            fitted (bool): Save in-sample predictions. Defaults to True.
+            as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method. Defaults to None.
-            validate_data (bool): Run data quality audits before fitting. Warns about missing dates and duplicate rows. Defaults to False.
+            validate_data (bool): Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             MLForecast: Forecast object with series values and trained models.
@@ -970,7 +970,7 @@ class MLForecast:
         fitted: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
-        validate_data: bool = False,
+        validate_data: bool = True,
     ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -995,17 +995,17 @@ class MLForecast:
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None.
-            fitted (bool): Store the in-sample predictions. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Defaults to False.
+            fitted (bool): Store the in-sample predictions. Defaults to True.
+            as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
-            validate_data (bool): Run data quality audits on the full dataset before cross-validation. Warns about missing dates and duplicate rows. Defaults to False.
+            validate_data (bool): Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
-        # Run data audits once on full dataset if requested
+        # Run data validations once on full dataset if requested
         if validate_data:
-            self._run_data_audits(df, id_col, time_col)
+            self._validate_data(df, id_col, time_col)
 
         results = []
         cv_models = []

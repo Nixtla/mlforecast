@@ -7,7 +7,7 @@ from mlforecast.data_validation import (
 )
 
 
-class TestAuditDuplicateRows:
+class TestValidateDuplicateRows:
     """Test suite for validate_duplicate_rows function."""
 
     def test_validate_duplicate_rows_pass_pandas(self):
@@ -65,7 +65,7 @@ class TestAuditDuplicateRows:
         assert len(duplicates) == 0
 
 
-class TestAuditMissingDates:
+class TestValidateMissingDates:
     """Test suite for missing_dates function."""
 
     def test_missing_dates_pass_pandas(self):
