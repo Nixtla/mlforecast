@@ -1441,8 +1441,8 @@ def test_horizons_cross_validation_with_target_transforms():
     assert cv_results.shape[0] == n_series * n_windows * n_horizons
 
 
-def test_fit_with_audit_data_clean():
-    """Test that fit with audit_data=True works on clean data without warnings."""
+def test_fit_with_validate_data_clean():
+    """Test that fit with validate_data=True works on clean data without warnings."""
     # Use equal_ends=True to ensure all series have the same length
     df = generate_daily_series(3, min_length=50, max_length=50, equal_ends=True)
     fcst = MLForecast(
@@ -1454,15 +1454,15 @@ def test_fit_with_audit_data_clean():
     # Should not produce any warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # Turn warnings into errors
-        fcst.fit(df, audit_data=True)
+        fcst.fit(df, validate_data=True)
 
     # Model should be fitted
     assert hasattr(fcst, 'models_')
     assert len(fcst.models_) > 0
 
 
-def test_fit_with_audit_data_duplicates():
-    """Test that fit with audit_data=True warns about duplicates but continues."""
+def test_fit_with_validate_data_duplicates():
+    """Test that fit with validate_data=True raises ValueError on duplicates."""
     df = generate_daily_series(3, min_length=50, max_length=100)
 
     # Add duplicate rows
@@ -1475,17 +1475,13 @@ def test_fit_with_audit_data_duplicates():
         lags=[1, 7]
     )
 
-    # Should produce warning about duplicates
-    with pytest.warns(UserWarning, match="duplicate.*timestamp.*pairs"):
-        fcst.fit(df, audit_data=True)
-
-    # Model should still be fitted (execution continues)
-    assert hasattr(fcst, 'models_')
-    assert len(fcst.models_) > 0
+    # Duplicates are a hard error - raises ValueError and stops execution
+    with pytest.raises(ValueError, match="duplicate"):
+        fcst.fit(df, validate_data=True)
 
 
-def test_fit_with_audit_data_missing_dates():
-    """Test that fit with audit_data=True warns about missing dates but continues."""
+def test_fit_with_validate_data_missing_dates():
+    """Test that fit with validate_data=True warns about missing dates but continues."""
     # Create data with gaps
     df = pd.DataFrame({
         'unique_id': ['A'] * 10 + ['B'] * 8,
@@ -1505,48 +1501,44 @@ def test_fit_with_audit_data_missing_dates():
 
     # Should produce warning about missing dates
     with pytest.warns(UserWarning, match="missing dates"):
-        fcst.fit(df, audit_data=True)
+        fcst.fit(df, validate_data=True)
 
     # Model should still be fitted
     assert hasattr(fcst, 'models_')
 
 
-def test_fit_with_audit_data_both_issues():
-    """Test that both warnings are issued when there are duplicates and missing dates."""
-    # Create data with both issues
-    df = pd.DataFrame({
+def test_fit_with_validate_data_both_issues():
+    """Test that duplicates raise ValueError and missing dates issue a warning."""
+    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+
+    # Data with duplicates -> ValueError is raised immediately
+    df_dup = pd.DataFrame({
         'unique_id': ['A'] * 10 + ['B'] * 8,
         'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
-             [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
-              pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05'),
-              pd.Timestamp('2020-01-06'), pd.Timestamp('2020-01-08'),
-              pd.Timestamp('2020-01-09'), pd.Timestamp('2020-01-10')],
+             [pd.Timestamp('2020-01-01') + pd.Timedelta(days=i) for i in range(8)],
         'y': list(range(18))
     })
+    duplicate_rows = df_dup.head(3).copy()
+    df_dup = pd.concat([df_dup, duplicate_rows], ignore_index=True)
 
-    # Add duplicate rows
-    duplicate_rows = df.head(3).copy()
-    df = pd.concat([df, duplicate_rows], ignore_index=True)
+    with pytest.raises(ValueError, match="duplicate"):
+        fcst.fit(df_dup, validate_data=True)
 
-    fcst = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1]
-    )
-
-    # Should produce both warnings
-    with pytest.warns(UserWarning) as record:
-        fcst.fit(df, audit_data=True)
-
-    # Check that we got at least 2 warnings (one for duplicates, one for missing dates)
-    assert len(record) >= 2
-    warning_messages = [str(w.message) for w in record]
-    assert any('duplicate' in msg.lower() for msg in warning_messages)
-    assert any('missing dates' in msg.lower() for msg in warning_messages)
+    # Data with missing dates only -> warning is issued
+    df_gap = pd.DataFrame({
+        'unique_id': ['B'] * 8,
+        'ds': [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
+               pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05'),
+               pd.Timestamp('2020-01-06'), pd.Timestamp('2020-01-08'),
+               pd.Timestamp('2020-01-09'), pd.Timestamp('2020-01-10')],
+        'y': list(range(8))
+    })
+    with pytest.warns(UserWarning, match="missing dates"):
+        fcst.fit(df_gap, validate_data=True)
 
 
-def test_fit_audit_data_default_false():
-    """Test backward compatibility - audit_data defaults to False."""
+def test_fit_validate_data_default_false():
+    """Test backward compatibility - validate_data defaults to False."""
     # Create data with issues
     df = generate_daily_series(3, min_length=50, max_length=100)
     duplicate_rows = df.head(5).copy()
@@ -1561,14 +1553,14 @@ def test_fit_audit_data_default_false():
     # Should not produce any warnings (default behavior)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        fcst.fit(df)  # audit_data defaults to False
+        fcst.fit(df)  # validate_data defaults to False
 
     # Model should still be fitted
     assert hasattr(fcst, 'models_')
 
 
-def test_preprocess_with_audit_data():
-    """Test that preprocess method honors audit_data parameter."""
+def test_preprocess_with_validate_data():
+    """Test that preprocess method honors validate_data parameter."""
     df = pd.DataFrame({
         'unique_id': ['A'] * 10,
         'ds': pd.date_range('2020-01-01', periods=10, freq='D'),
@@ -1585,18 +1577,18 @@ def test_preprocess_with_audit_data():
         lags=[1]
     )
 
-    # Should produce warning when audit_data=True
-    with pytest.warns(UserWarning, match="duplicate"):
-        fcst.preprocess(df, audit_data=True)
+    # Should raise ValueError when validate_data=True and duplicates are present
+    with pytest.raises(ValueError, match="duplicate"):
+        fcst.preprocess(df, validate_data=True)
 
-    # Should not produce warning when audit_data=False (default)
+    # Should not produce warning when validate_data=False (default)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        fcst.preprocess(df, audit_data=False)
+        fcst.preprocess(df, validate_data=False)
 
 
-def test_cross_validation_with_audit_data():
-    """Test that cross_validation method honors audit_data parameter."""
+def test_cross_validation_with_validate_data():
+    """Test that cross_validation method honors validate_data parameter."""
     # Create data with gaps
     df = pd.DataFrame({
         'unique_id': ['A'] * 50 + ['B'] * 48,
@@ -1614,19 +1606,19 @@ def test_cross_validation_with_audit_data():
         lags=[1]
     )
 
-    # Should produce warning when audit_data=True
+    # Should produce warning when validate_data=True
     with pytest.warns(UserWarning, match="missing dates"):
         cv_results = fcst.cross_validation(
             df,
             n_windows=2,
             h=5,
-            audit_data=True
+            validate_data=True
         )
 
     # Should have results
     assert cv_results.shape[0] > 0
 
-    # Should not produce warning when audit_data=False (default)
+    # Should not produce warning when validate_data=False (default)
     fcst2 = MLForecast(
         models=[LinearRegression()],
         freq='D',
@@ -1638,5 +1630,5 @@ def test_cross_validation_with_audit_data():
             df,
             n_windows=2,
             h=5,
-            audit_data=False
+            validate_data=False
         )
