@@ -1,17 +1,15 @@
 __all__ = [
-    'AuditDataSeverity',
-    'audit_missing_dates',
-    'audit_duplicate_rows',
-    'audit_update_start_dates',
-    'audit_update_continuity',
+    'missing_dates',
+    'validate_duplicate_rows',
+    'validate_update_start_dates',
+    'validate_update_continuity',
     'validate_update_df',
-    'run_data_audits',
+    'validate_df',
 ]
 
 
 import reprlib
 import warnings
-from enum import Enum
 from typing import Tuple, Union
 
 import pandas as pd
@@ -20,17 +18,11 @@ from utilsforecast.preprocessing import fill_gaps
 from utilsforecast.processing import anti_join, offset_times
 
 
-class AuditDataSeverity(Enum):
-    """Severity levels for data audit results"""
-    PASS = "pass"
-    FAIL = "fail"
-
-
-def audit_duplicate_rows(
+def validate_duplicate_rows(
     df: DFType,
     id_col: str,
     time_col: str,
-) -> Tuple[AuditDataSeverity, DFType]:
+) -> Tuple[bool, DFType]:
     """Check for duplicate (id, timestamp) pairs in the data.
 
     Args:
@@ -40,32 +32,32 @@ def audit_duplicate_rows(
 
     Returns:
         Tuple of (severity, duplicates_df):
-            - severity: PASS if no duplicates found, FAIL otherwise
-            - duplicates_df: DataFrame containing duplicate rows (empty if PASS)
+            - has_issues: False if no duplicates found, True otherwise
+            - duplicates_df: DataFrame containing duplicate rows (empty if False)
     """
     if df.shape[0] == 0:
-        return (AuditDataSeverity.PASS, df.head(0))
+        return (False, df.head(0))
 
     if isinstance(df, pd.DataFrame):
         duplicates = df[df.duplicated(subset=[id_col, time_col], keep=False)]
         if len(duplicates) > 0:
-            return (AuditDataSeverity.FAIL, duplicates)
-        return (AuditDataSeverity.PASS, duplicates)
+            return (True, duplicates)
+        return (False, duplicates)
     else:
         duplicates = df.filter(
             pl.struct([id_col, time_col]).is_duplicated()
         )
         if duplicates.shape[0] > 0:
-            return (AuditDataSeverity.FAIL, duplicates)
-        return (AuditDataSeverity.PASS, duplicates)
+            return (True, duplicates)
+        return (False, duplicates)
 
 
-def audit_missing_dates(
+def missing_dates(
     df: DFType,
     freq: Union[str, int],
     id_col: str,
     time_col: str,
-) -> Tuple[AuditDataSeverity, DFType]:
+) -> Tuple[bool, DFType]:
     """Check for missing dates/gaps in time series data.
 
     For each series (id_col), checks if there are gaps between the series'
@@ -81,11 +73,11 @@ def audit_missing_dates(
 
     Returns:
         Tuple of (severity, missing_dates_df):
-            - severity: PASS if no gaps found, FAIL otherwise
-            - missing_dates_df: DataFrame with missing (id, timestamp) pairs (empty if PASS)
+            - has_issues: False if no gaps found, True otherwise
+            - missing_dates_df: DataFrame with missing (id, timestamp) pairs (empty if False)
     """
     if df.shape[0] == 0:
-        return (AuditDataSeverity.PASS, df[[id_col, time_col]].head(0))
+        return (False, df[[id_col, time_col]].head(0))
 
     filled = fill_gaps(
         df, freq=freq, start='per_serie', end='per_serie',
@@ -97,17 +89,17 @@ def audit_missing_dates(
         on=[id_col, time_col],
     )
     if missing.shape[0] == 0:
-        return (AuditDataSeverity.PASS, missing)
-    return (AuditDataSeverity.FAIL, missing)
+        return (False, missing)
+    return (True, missing)
 
 
-def audit_update_start_dates(
+def validate_update_start_dates(
     df: DFType,
     id_col: str,
     time_col: str,
     last_dates_df: DFType,
     freq: Union[str, int],
-) -> Tuple[AuditDataSeverity, DFType]:
+) -> Tuple[bool, DFType]:
     """Check that each series in df starts at the expected timestamp (last_date + freq).
 
     Args:
@@ -122,11 +114,11 @@ def audit_update_start_dates(
 
     Returns:
         Tuple of (severity, bad_df):
-            - severity: PASS if all series start at the expected timestamp, FAIL otherwise
-            - bad_df: DataFrame with id_col for series with invalid start dates (empty if PASS)
+            - has_issues: False if all series start at the expected timestamp, True otherwise
+            - bad_df: DataFrame with id_col for series with invalid start dates (empty if False)
     """
     if df.shape[0] == 0:
-        return (AuditDataSeverity.PASS, df[[id_col]].head(0))
+        return (False, df[[id_col]].head(0))
 
     if isinstance(df, pd.DataFrame):
         df_sorted = df.sort_values([id_col, time_col])
@@ -147,8 +139,8 @@ def audit_update_start_dates(
         )
         bad = stats.loc[start_mismatch, [id_col]]
         if bad.shape[0] > 0:
-            return (AuditDataSeverity.FAIL, bad)
-        return (AuditDataSeverity.PASS, bad)
+            return (True, bad)
+        return (False, bad)
     else:
         df_sorted = df.sort([id_col, time_col])
         stats = (
@@ -168,16 +160,16 @@ def audit_update_start_dates(
             & (pl.col('_min') != pl.col('_expected_start'))
         ).select([id_col])
         if bad.height > 0:
-            return (AuditDataSeverity.FAIL, bad)
-        return (AuditDataSeverity.PASS, bad)
+            return (True, bad)
+        return (False, bad)
 
 
-def audit_update_continuity(
+def validate_update_continuity(
     df: DFType,
     id_col: str,
     time_col: str,
     freq: Union[str, int],
-) -> Tuple[AuditDataSeverity, DFType]:
+) -> Tuple[bool, DFType]:
     """Check for gaps or duplicate timestamps within time series data.
 
     For each series, checks that consecutive timestamps are exactly one frequency
@@ -192,12 +184,12 @@ def audit_update_continuity(
             strings (e.g. '1d', '1h'). Pass an integer for integer time columns.
 
     Returns:
-        Tuple of (severity, bad_df):
-            - severity: PASS if no gaps or duplicates found, FAIL otherwise
-            - bad_df: DataFrame with id_col for affected series (empty if PASS)
+        Tuple of (has_issues, bad_df):
+            - has_issues: False if no gaps or duplicates found, True otherwise
+            - bad_df: DataFrame with id_col for affected series (empty if False)
     """
     if df.shape[0] == 0:
-        return (AuditDataSeverity.PASS, df[[id_col]].head(0))
+        return (False, df[[id_col]].head(0))
 
     if isinstance(df, pd.DataFrame):
         df_sorted = df.sort_values([id_col, time_col])
@@ -206,8 +198,8 @@ def audit_update_continuity(
         gaps = next_time.notna() & (expected_next != next_time)
         bad = df_sorted.loc[gaps, [id_col]].drop_duplicates()
         if bad.shape[0] > 0:
-            return (AuditDataSeverity.FAIL, bad)
-        return (AuditDataSeverity.PASS, bad)
+            return (True, bad)
+        return (False, bad)
     else:
         df_sorted = df.sort([id_col, time_col])
         expected_next = offset_times(df_sorted[time_col], freq, 1)
@@ -221,8 +213,8 @@ def audit_update_continuity(
             & (pl.col('_expected_next') != pl.col('_next'))
         ).select([id_col]).unique()
         if bad.height > 0:
-            return (AuditDataSeverity.FAIL, bad)
-        return (AuditDataSeverity.PASS, bad)
+            return (True, bad)
+        return (False, bad)
 
 
 def validate_update_df(
@@ -256,16 +248,16 @@ def validate_update_df(
     else:
         last_dates_df = pl.DataFrame({id_col: uids, '_last': last_dates})
 
-    sev, bad = audit_update_start_dates(df, id_col, time_col, last_dates_df, freq)
-    if sev == AuditDataSeverity.FAIL:
+    has_issues, bad = validate_update_start_dates(df, id_col, time_col, last_dates_df, freq)
+    if has_issues:
         bad_ids = bad[id_col].tolist() if isinstance(bad, pd.DataFrame) else bad[id_col].to_list()
         raise ValueError(
             "Series have invalid start dates. "
             f"Expected start at last_date + freq for: {bad_ids}."
         )
 
-    sev, bad = audit_update_continuity(df, id_col, time_col, freq)
-    if sev == AuditDataSeverity.FAIL:
+    has_issues, bad = validate_update_continuity(df, id_col, time_col, freq)
+    if has_issues:
         bad_ids = bad[id_col].tolist() if isinstance(bad, pd.DataFrame) else bad[id_col].to_list()
         raise ValueError(
             "Found gaps or duplicate timestamps in the update for: "
@@ -273,7 +265,7 @@ def validate_update_df(
         )
 
 
-def run_data_audits(
+def validate_df(
     df: DFType,
     id_col: str,
     time_col: str,
@@ -292,8 +284,8 @@ def run_data_audits(
             strings (e.g. 'D', 'h'). For polars DataFrames use polars duration
             strings (e.g. '1d', '1h'). Pass an integer for integer time columns.
     """
-    dup_severity, dup_df = audit_duplicate_rows(df, id_col, time_col)
-    if dup_severity == AuditDataSeverity.FAIL:
+    has_duplicates, dup_df = validate_duplicate_rows(df, id_col, time_col)
+    if has_duplicates:
         n_duplicates = dup_df.shape[0]
         affected_ids = dup_df[id_col].unique() if isinstance(dup_df, pd.DataFrame) else dup_df[id_col].unique().to_list()
         sample_ids = reprlib.repr(list(affected_ids[:10]))
@@ -304,8 +296,8 @@ def run_data_audits(
             f"Affected series: {sample_ids}"
         )
 
-    missing_severity, missing_df = audit_missing_dates(df, freq, id_col, time_col)
-    if missing_severity == AuditDataSeverity.FAIL:
+    has_missing, missing_df = missing_dates(df, freq, id_col, time_col)
+    if has_missing:
         n_missing = missing_df.shape[0]
         affected_ids = missing_df[id_col].unique() if isinstance(missing_df, pd.DataFrame) else missing_df[id_col].unique().to_list()
         sample_ids = reprlib.repr(list(affected_ids[:10]))

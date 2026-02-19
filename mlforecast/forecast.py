@@ -42,7 +42,7 @@ from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .audit import run_data_audits
+from .data_validation import validate_df
 from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals
 
@@ -210,7 +210,7 @@ class MLForecast:
         id_col: str,
         time_col: str,
     ) -> None:
-        run_data_audits(df, id_col, time_col, self.freq)
+        validate_df(df, id_col, time_col, self.freq)
 
     def preprocess(
         self,

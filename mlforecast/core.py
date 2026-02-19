@@ -1349,7 +1349,7 @@ class TimeSeries:
         return ts
     
     def _validate_new_df(self, df: DataFrame) -> None:
-        from .audit import validate_update_df
+        from .data_validation import validate_update_df
         validate_update_df(df, self.id_col, self.time_col, self.uids, self.last_dates, self.freq)
 
     def update(self, df: DataFrame, validate_new_data: bool = False) -> None:
