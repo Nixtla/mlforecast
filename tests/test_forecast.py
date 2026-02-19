@@ -1632,3 +1632,40 @@ def test_cross_validation_with_validate_data():
             h=5,
             validate_data=False
         )
+def test_mlforecast_num_threads_minus_one():
+    """Test that MLForecast correctly handles num_threads=-1."""
+    import pandas as pd
+    from joblib import cpu_count
+    from sklearn.linear_model import LinearRegression
+
+    from mlforecast import MLForecast
+    from mlforecast.utils import generate_daily_series
+
+    series = generate_daily_series(5, min_length=50, max_length=100, equal_ends=True)
+
+    mlf_multi = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 2, 3],
+        num_threads=-1,
+    )
+    assert mlf_multi.ts.num_threads == cpu_count()
+    assert mlf_multi.ts.num_threads >= 1
+
+    # Verify it works in fit and predict
+    mlf_multi.fit(series)
+    preds_multi = mlf_multi.predict(h=7)
+    assert preds_multi is not None
+    assert len(preds_multi) > 0
+
+    # Compare with num_threads=1
+    mlf_single = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1, 2, 3],
+        num_threads=1,
+    )
+    mlf_single.fit(series)
+    preds_single = mlf_single.predict(h=7)
+
+    pd.testing.assert_frame_equal(preds_multi, preds_single)
