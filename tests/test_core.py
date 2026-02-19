@@ -2000,3 +2000,14 @@ def test_date_feature_aliases_supported(engine, freq, feature):
         series, id_col="unique_id", time_col="ds", target_col="y"
     )
     assert feature in transformed.columns
+
+
+@pytest.mark.parametrize("feature", ["weekday", "dayofweek", "day_of_week"])
+def test_polars_dayofweek_aliases_match_pandas_semantics(feature):
+    series = generate_daily_series(2, min_length=20, max_length=20, engine="polars")
+    ts = TimeSeries(freq="1d", lags=[1], date_features=[feature])
+    transformed = ts.fit_transform(
+        series, id_col="unique_id", time_col="ds", target_col="y"
+    )
+    expected = transformed["ds"].to_pandas().dt.dayofweek.to_numpy()
+    np.testing.assert_array_equal(transformed[feature].to_numpy(), expected)

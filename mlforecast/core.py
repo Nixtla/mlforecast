@@ -569,8 +569,9 @@ class TimeSeries:
                         "dayofyear": "ordinal_day",
                         "day_of_year": "ordinal_day",
                         "weekofyear": "week",
-                        "dayofweek": "weekday",
-                        "day_of_week": "weekday",
+                        "weekday": "weekday_zero_based",
+                        "dayofweek": "weekday_zero_based",
+                        "day_of_week": "weekday_zero_based",
                     }.get(feature, feature)
                     if polars_feature == "daysinmonth":
                         feat_vals = dates.dt.month_end().dt.day()
@@ -592,6 +593,9 @@ class TimeSeries:
                         feat_vals = (dates.dt.month() == 12) & (
                             dates == dates.dt.month_end()
                         )
+                    elif polars_feature == "weekday_zero_based":
+                        # Polars weekday is ISO-based (Mon=1..Sun=7). Match pandas semantics.
+                        feat_vals = dates.dt.weekday() - 1
                     else:
                         feat_vals = getattr(dates.dt, polars_feature)()
                 elif pl is not None and isinstance(dates, pl_Series):
@@ -599,8 +603,9 @@ class TimeSeries:
                         "dayofyear": "ordinal_day",
                         "day_of_year": "ordinal_day",
                         "weekofyear": "week",
-                        "dayofweek": "weekday",
-                        "day_of_week": "weekday",
+                        "weekday": "weekday_zero_based",
+                        "dayofweek": "weekday_zero_based",
+                        "day_of_week": "weekday_zero_based",
                     }.get(feature, feature)
                     if polars_feature == "daysinmonth":
                         feat_vals = dates.dt.month_end().dt.day()
@@ -622,6 +627,9 @@ class TimeSeries:
                         feat_vals = (dates.dt.month() == 12) & (
                             dates == dates.dt.month_end()
                         )
+                    elif polars_feature == "weekday_zero_based":
+                        # Polars weekday is ISO-based (Mon=1..Sun=7). Match pandas semantics.
+                        feat_vals = dates.dt.weekday() - 1
                     else:
                         accessor = getattr(dates.dt, polars_feature)
                         feat_vals = accessor() if callable(accessor) else accessor
