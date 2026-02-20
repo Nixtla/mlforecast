@@ -1,5 +1,5 @@
 __all__ = [
-    'missing_dates',
+    'validate_missing_dates',
     'validate_duplicate_rows',
     'validate_update_start_dates',
     'validate_update_continuity',
@@ -52,7 +52,7 @@ def validate_duplicate_rows(
         return (False, duplicates)
 
 
-def missing_dates(
+def validate_missing_dates(
     df: DFType,
     freq: Union[str, int],
     id_col: str,
@@ -296,7 +296,7 @@ def validate_df(
             f"Affected series: {sample_ids}"
         )
 
-    has_missing, missing_df = missing_dates(df, freq, id_col, time_col)
+    has_missing, missing_df = validate_missing_dates(df, freq, id_col, time_col)
     if has_missing:
         n_missing = missing_df.shape[0]
         affected_ids = missing_df[id_col].unique() if isinstance(missing_df, pd.DataFrame) else missing_df[id_col].unique().to_list()
