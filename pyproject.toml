@@ -20,13 +20,14 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "cloudpickle",
     "coreforecast>=0.0.15",
     "fsspec",
     "optuna",
-    "pandas",
+    "pandas<3.0",
     "scikit-learn",
     "utilsforecast>=0.2.9",
 ]
