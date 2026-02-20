@@ -273,8 +273,8 @@ def validate_df(
 ) -> None:
     """Run data quality validations and issue warnings if problems are found.
 
-    Checks for duplicate (id, timestamp) pairs and missing dates/gaps.
-    Issues a warning for each problem found without raising exceptions.
+    Checks for gaps or duplicate timestamps using a fast consecutive-comparison
+    approach. Issues a warning if problems are found without raising exceptions.
 
     Args:
         df: Input DataFrame (pandas or polars)
@@ -284,25 +284,12 @@ def validate_df(
             strings (e.g. 'D', 'h'). For polars DataFrames use polars duration
             strings (e.g. '1d', '1h'). Pass an integer for integer time columns.
     """
-    has_duplicates, dup_df = validate_duplicate_rows(df, id_col, time_col)
-    if has_duplicates:
-        n_duplicates = dup_df.shape[0]
-        affected_ids = dup_df[id_col].unique() if isinstance(dup_df, pd.DataFrame) else dup_df[id_col].unique().to_list()
-        sample_ids = reprlib.repr(list(affected_ids[:10]))
-        raise ValueError(
-            f"Found {n_duplicates} duplicate (id, timestamp) pairs.\n"
-            f"This will lead to incorrect lag features and model training issues.\n"
-            f"Please deduplicate your data before fitting.\n"
-            f"Affected series: {sample_ids}"
-        )
-
-    has_missing, missing_df = validate_missing_dates(df, freq, id_col, time_col)
-    if has_missing:
-        n_missing = missing_df.shape[0]
-        affected_ids = missing_df[id_col].unique() if isinstance(missing_df, pd.DataFrame) else missing_df[id_col].unique().to_list()
-        sample_ids = reprlib.repr(list(affected_ids[:10]))
+    has_issues, bad = validate_update_continuity(df, id_col, time_col, freq)
+    if has_issues:
+        bad_ids = bad[id_col].tolist() if isinstance(bad, pd.DataFrame) else bad[id_col].to_list()
+        sample_ids = reprlib.repr(bad_ids[:10])
         warnings.warn(
-            f"Found {n_missing} missing dates in time series.\n"
+            f"Found gaps or duplicate timestamps in time series.\n"
             f"This may lead to incorrect lag features.\n"
             f"Affected series: {sample_ids}\n"
             f"Consider using the fill_gaps parameter or preprocessing your data."
