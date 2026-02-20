@@ -41,6 +41,7 @@ from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
+from .data_validation import validate_df
 from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import PredictionIntervals, _resolve_num_threads
 
@@ -203,6 +204,14 @@ class MLForecast:
         fcst.ts = copy.deepcopy(cv.ts)
         return fcst
 
+    def _validate_data(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+    ) -> None:
+        validate_df(df, id_col, time_col, self.freq)
+
     def preprocess(
         self,
         df: DFType,
@@ -217,6 +226,7 @@ class MLForecast:
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        validate_data: bool = True,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
@@ -231,12 +241,17 @@ class MLForecast:
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             return_X_y (bool): Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
+            as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            validate_data (bool): Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
+        # Run data validations if requested
+        if validate_data:
+            self._validate_data(df, id_col, time_col)
+
         return self.ts.fit_transform(
             df,
             id_col=id_col,
@@ -599,6 +614,7 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
+        validate_data: bool = True,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -614,8 +630,10 @@ class MLForecast:
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
             fitted (bool): Save in-sample predictions. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Defaults to False.
+            as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method. Defaults to None.
+            validate_data (bool): Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             MLForecast: Forecast object with series values and trained models.
@@ -657,6 +675,7 @@ class MLForecast:
                 return_X_y=False,
                 as_numpy=False,
                 weight_col=weight_col,
+                validate_data=validate_data,
             )
             # Restore the as_numpy setting for prediction
             self.ts.as_numpy = as_numpy
@@ -710,6 +729,7 @@ class MLForecast:
                 return_X_y=not fitted,
                 as_numpy=as_numpy,
                 weight_col=weight_col,
+                validate_data=validate_data,
             )
             if isinstance(prep, tuple):
                 X, y = prep
@@ -974,6 +994,7 @@ class MLForecast:
         fitted: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        validate_data: bool = True,
     ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -999,12 +1020,17 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None.
             fitted (bool): Store the in-sample predictions. Defaults to False.
-            as_numpy (bool): Cast features to numpy array. Defaults to False.
+            as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            validate_data (bool): Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
+        # Run data validations once on full dataset if requested
+        if validate_data:
+            self._validate_data(df, id_col, time_col)
+
         results = []
         cv_models = []
         cv_fitted_values = []
@@ -1035,6 +1061,7 @@ class MLForecast:
                     fitted=fitted,
                     as_numpy=as_numpy,
                     weight_col=weight_col,
+                    validate_data=False,
                 )
                 cv_models.append(self.models_)
                 if fitted:
@@ -1058,6 +1085,7 @@ class MLForecast:
                     horizons=horizons,
                     return_X_y=False,
                     weight_col=weight_col,
+                    validate_data=False,
                 )
                 assert not isinstance(prep, tuple)
                 effective_max_horizon = self.ts.max_horizon
@@ -1183,11 +1211,11 @@ class MLForecast:
             fcst._cs_df = intervals["scores"]
         return fcst
 
-    def update(self, df: DataFrame, validate_input: bool = False) -> None:
+    def update(self, df: DataFrame, validate_new_data: bool = False) -> None:
         """Update the values of the stored series.
 
         Args:
             df (pandas or polars DataFrame): Dataframe with new observations.
-            validate_input (bool): If True, validate continuity, start dates, and frequency.
+            validate_new_data (bool): If True, validate continuity, start dates, and frequency.
         """
-        self.ts.update(df, validate_input)
+        self.ts.update(df, validate_new_data)
