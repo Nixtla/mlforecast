@@ -7,7 +7,6 @@ __all__ = [
 
 
 import reprlib
-import warnings
 from typing import Tuple, Union
 
 import narwhals as nw
