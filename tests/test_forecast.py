@@ -571,9 +571,8 @@ def test_wrong_frequency_error():
         freq='MS',
         lags=[1],
     )
-    with pytest.raises(ValueError) as exec:
+    with pytest.raises(ValueError, match="freq"):
         fcst_wrong_freq.cross_validation(df_wrong_freq, n_windows=1, h=1)
-    assert 'Cross validation result produced less results than expected' in str(exec.value)
 
 
 def test_best_iter(setup_forecast_data):
@@ -1501,42 +1500,9 @@ def test_fit_with_validate_data_missing_dates():
         lags=[1]
     )
 
-    # Should produce warning about missing dates
-    with pytest.warns(UserWarning, match="missing dates"):
+    # Should produce error about missing dates
+    with pytest.raises(ValueError, match="missing"):
         fcst.fit(df, validate_data=True)
-
-    # Model should still be fitted
-    assert hasattr(fcst, 'models_')
-
-
-def test_fit_with_validate_data_both_issues():
-    """Test that duplicates raise ValueError and missing dates issue a warning."""
-    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
-
-    # Data with duplicates -> ValueError is raised immediately
-    df_dup = pd.DataFrame({
-        'unique_id': ['A'] * 10 + ['B'] * 8,
-        'ds': pd.date_range('2020-01-01', periods=10, freq='D').tolist() +
-             [pd.Timestamp('2020-01-01') + pd.Timedelta(days=i) for i in range(8)],
-        'y': list(range(18))
-    })
-    duplicate_rows = df_dup.head(3).copy()
-    df_dup = pd.concat([df_dup, duplicate_rows], ignore_index=True)
-
-    with pytest.raises(ValueError, match="duplicate"):
-        fcst.fit(df_dup, validate_data=True)
-
-    # Data with missing dates only -> warning is issued
-    df_gap = pd.DataFrame({
-        'unique_id': ['B'] * 8,
-        'ds': [pd.Timestamp('2020-01-01'), pd.Timestamp('2020-01-02'),
-               pd.Timestamp('2020-01-04'), pd.Timestamp('2020-01-05'),
-               pd.Timestamp('2020-01-06'), pd.Timestamp('2020-01-08'),
-               pd.Timestamp('2020-01-09'), pd.Timestamp('2020-01-10')],
-        'y': list(range(8))
-    })
-    with pytest.warns(UserWarning, match="missing dates"):
-        fcst.fit(df_gap, validate_data=True)
 
 
 def test_fit_validate_data_default_true():
@@ -1614,7 +1580,7 @@ def test_cross_validation_with_validate_data():
     )
 
     # Should produce warning when validate_data=True
-    with pytest.warns(UserWarning, match="missing dates"):
+    with pytest.raises(ValueError, match="missing"):
         cv_results = fcst.cross_validation(
             df,
             n_windows=2,
@@ -1622,10 +1588,7 @@ def test_cross_validation_with_validate_data():
             validate_data=True
         )
 
-    # Should have results
-    assert cv_results.shape[0] > 0
-
-    # Should not produce warning when validate_data=False (default)
+    # Should not produce warning when validate_data=False
     fcst2 = MLForecast(
         models=[LinearRegression()],
         freq='D',

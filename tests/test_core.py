@@ -1483,7 +1483,7 @@ def test_update_validation_invalid_gap(engine, freq_name):
             ],
             ignore_index=True,
         )
-    with pytest.raises(ValueError, match="gaps or duplicate"):
+    with pytest.raises(ValueError, match="missing or duplicate timestamps"):
         ts.update(update, validate_new_data=True)
 
 
@@ -1624,7 +1624,7 @@ def test_update_validation_frequency_mismatch(engine, freq_name):
             ],
             ignore_index=True,
         )
-    with pytest.raises(ValueError, match="gaps or duplicate"):
+    with pytest.raises(ValueError, match="missing or duplicate timestamps"):
         ts.update(update, validate_new_data=True)
 
 
@@ -1674,7 +1674,7 @@ def test_update_validation_misaligned_intermediate_timestamp(engine, freq_name):
         df3 = last_vals.assign(ds=last_vals["ds"] + freq_config["pandas_offset2"])
         update = pd.concat([df1, df2, df3], ignore_index=True)
 
-    with pytest.raises(ValueError, match="aligned|gaps or duplicate"):
+    with pytest.raises(ValueError, match="aligned|missing or duplicate timestamps"):
         ts.update(update, validate_new_data=True)
 
 
