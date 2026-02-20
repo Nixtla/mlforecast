@@ -54,6 +54,7 @@ fit(
     as_numpy=False,
     weight_col=None,
     models_fit_kwargs=None,
+    validate_data=True,
 )
 ```
 
@@ -74,8 +75,10 @@ Name | Type | Description | Default
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Save in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 
@@ -114,7 +117,7 @@ Name | Type | Description | Default
 #### `MLForecast.update`
 
 ```python
-update(df, validate_input=False)
+update(df, validate_new_data=False)
 ```
 
 Update the values of the stored series.
@@ -124,7 +127,7 @@ Update the values of the stored series.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `df` | <code>pandas or polars DataFrame</code> | Dataframe with new observations. | *required*
-`validate_input` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
+`validate_new_data` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
 
 #### `MLForecast.make_future_dataframe`
 
@@ -217,6 +220,7 @@ preprocess(
     return_X_y=False,
     as_numpy=False,
     weight_col=None,
+    validate_data=True,
 )
 ```
 
@@ -236,8 +240,9 @@ Name | Type | Description | Default
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 
@@ -293,6 +298,7 @@ cross_validation(
     fitted=False,
     as_numpy=False,
     weight_col=None,
+    validate_data=True,
 )
 ```
 
@@ -323,8 +329,9 @@ Name | Type | Description | Default
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 
