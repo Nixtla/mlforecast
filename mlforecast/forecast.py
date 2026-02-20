@@ -21,6 +21,7 @@ from typing import (
 import cloudpickle
 import fsspec
 import numpy as np
+import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
 from utilsforecast.compat import DataFrame, DFType, pl_DataFrame, pl_Series
@@ -1144,6 +1145,35 @@ class MLForecast:
         remaining_cols = [c for c in out.columns if c not in first_out_cols]
         out = ufp.drop_index_if_pandas(out)
         return out[first_out_cols + remaining_cols]
+
+    def evaluate(
+        self,
+        cv_results: DataFrame,
+        metrics: List[Callable],
+        id_col: Optional[str] = None,
+        target_col: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Evaluate the performance of the models in the cross-validation results.
+
+        Args:
+            cv_results (DataFrame): Output from MLForecast.cross_validation.
+            metrics (List[Callable]): List of metric functions from utilsforecast.losses or similar.
+            id_col (str, optional): Column that identifies each serie. Defaults to self.ts.id_col.
+            target_col (str, optional): Column that contains the target. Defaults to self.ts.target_col.
+
+        Returns:
+            pd.DataFrame: Performance metrics per model, indexed by model name.
+        """
+        from .evaluation import PerformanceEvaluator
+
+        id_col = id_col or self.ts.id_col
+        target_col = target_col or self.ts.target_col
+        evaluator = PerformanceEvaluator(
+            metrics=metrics,
+            id_col=id_col,
+            target_col=target_col,
+        )
+        return evaluator.evaluate(cv_results)
 
     def save(self, path: Union[str, Path]) -> None:
         """Save forecast object

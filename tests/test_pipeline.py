@@ -11,10 +11,10 @@ from mlforecast.utils import generate_daily_series
 
 
 class SeasonalNaive(BaseEstimator):
-    def fit(self, X, y=None):
+    def fit(self, _X, _y=None):
         return self
 
-    def predict(self, X, y=None):
+    def predict(self, X, _y=None):
         return X["lag7"]
 
 

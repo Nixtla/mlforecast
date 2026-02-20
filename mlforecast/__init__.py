@@ -1,5 +1,9 @@
-from importlib.metadata import version
+from importlib.metadata import version, PackageNotFoundError
 
-__version__ = version("mlforecast")
-__all__ = ['MLForecast']
+try:
+    __version__ = version("mlforecast")
+except PackageNotFoundError:
+    __version__ = "unknown"
+__all__ = ["MLForecast", "PerformanceEvaluator", "ParetoFrontier"]
 from mlforecast.forecast import MLForecast
+from mlforecast.evaluation import PerformanceEvaluator, ParetoFrontier
