@@ -1639,8 +1639,6 @@ def test_mlforecast_num_threads_minus_one():
     preds_single = mlf_single.predict(h=7)
 
     pd.testing.assert_frame_equal(preds_multi, preds_single)
-<<<<<<< feat/warning_missing_dates
-=======
 
 
 def test_transfer_learning_updates_uids():
@@ -1755,4 +1753,3 @@ def test_transfer_learning_subset_predict_keeps_full_transform_state():
     # A full forecast should still work for all transfer-learning ids.
     preds = fcst.predict(h=3)
     assert set(preds["unique_id"].unique()) == expected_uids
->>>>>>> main
