@@ -498,14 +498,14 @@ class TimeSeries:
                     group_df = ufp.take_rows(group_df, processed.sort_idxs)
                 group_df = ufp.drop_index_if_pandas(group_df)
                 group_values = processed.data[:, 0]
-                ga = GroupedArray(group_values, processed.indptr)
+                group_ga = GroupedArray(group_values, processed.indptr)
                 group_uids = processed.uids
                 series_group_id = _map_group_id(
                     self.static_features_, groups, group_cols_list
                 )
                 group_idx = series_group_id.astype(np.int64, copy=False)
                 self._group_states[group_cols] = {
-                    "ga": ga,
+                    "ga": group_ga,
                     "df": group_df,
                     "group_cols": group_cols_list,
                     "groups": groups,
