@@ -887,6 +887,7 @@ class MLForecast:
                 # populate the stats needed for the updates
                 new_ts._compute_transforms(core_tfms, updates_only=False)
             new_ts.max_horizon = self.ts.max_horizon
+            new_ts._horizons = self.ts._horizons
             new_ts.as_numpy = self.ts.as_numpy
             ts = new_ts
         else:

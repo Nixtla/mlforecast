@@ -1753,3 +1753,30 @@ def test_transfer_learning_subset_predict_keeps_full_transform_state():
     # A full forecast should still work for all transfer-learning ids.
     preds = fcst.predict(h=3)
     assert set(preds["unique_id"].unique()) == expected_uids
+
+
+def test_transfer_learning_with_sparse_horizons():
+    """Regression test: _horizons must be propagated to new_ts during transfer learning.
+
+    Previously, predict(new_df=...) created a fresh TimeSeries object without copying
+    _horizons, causing a KeyError when sparse horizons (e.g. [3, 10]) were used.
+    """
+    train_a = generate_daily_series(3, min_length=50, max_length=50, n_static_features=0)
+    train_b = generate_daily_series(3, min_length=50, max_length=50, n_static_features=0)
+    train_b["unique_id"] = train_b["unique_id"].cat.rename_categories(
+        {c: f"new_{c}" for c in train_b["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1, 2, 3],
+    )
+    fcst.fit(train_a, horizons=[3, 10])
+
+    preds = fcst.predict(h=10, new_df=train_b)
+
+    n_series = train_b["unique_id"].nunique()
+    # Only horizons 3 and 10 should be returned
+    assert preds.shape[0] == n_series * 2
+    assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
