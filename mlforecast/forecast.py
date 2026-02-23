@@ -469,9 +469,7 @@ class MLForecast:
             trained_horizons = sorted({h for hm in self.models_.values() for h in hm})
             horizon_fitted_values = {}
             for h in trained_horizons:
-                # Get target at horizon h from the y array
                 y_h = y[:, h] if y.ndim == 2 else y
-
                 horizon_base = ufp.copy_if_pandas(base, deep=True)
                 horizon_base = ufp.assign_columns(horizon_base, target_col, y_h)
                 horizon_fitted_values[h] = horizon_base
@@ -479,111 +477,72 @@ class MLForecast:
             # Check if models were trained with numpy arrays
             models_trained_with_numpy = self.ts.as_numpy
 
-            for name, horizon_models in self.models_.items():
-                model_items = horizon_models.items()
+            # Precompute per-horizon aligned features and validity masks once,
+            # shared across all models to avoid redundant joins per model.
+            x_cols = list(X.columns) if hasattr(X, 'columns') else None
+            horizon_cache = {}  # h -> (X_h, valid_mask)
+            for h in trained_horizons:
+                y_h = y[:, h] if y.ndim == 2 else y
+                valid_target = ~np.isnan(y_h)
 
-                for h, model in model_items:
-                    # Get valid mask for this horizon (target not NaN)
-                    y_h = y[:, h] if y.ndim == 2 else y
-                    valid_target = ~np.isnan(y_h)
+                if h == 0 or not exog_cols or original_df is None:
+                    horizon_cache[h] = (X, valid_target)
+                else:
+                    non_exog_cols = [c for c in x_cols if c not in exog_cols] if x_cols else None
+                    offset_times = ufp.offset_times(base[time_col], self.ts.freq, h)
 
-                    if h == 0 or not exog_cols or original_df is None:
-                        # No exog offset needed for horizon 0 or if no exog cols
-                        X_valid = ufp.filter_with_mask(X, valid_target)
-                        X_pred = ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
-                        preds_valid = model.predict(X_pred)
-                        # Create full predictions array with NaN for invalid rows
-                        preds = np.full(len(X), np.nan)
-                        preds[valid_target] = preds_valid
-                    else:
-                        # Build aligned X for this horizon using join with row index
-                        x_cols = list(X.columns) if hasattr(X, 'columns') else None
-                        non_exog_cols = [c for c in x_cols if c not in exog_cols] if x_cols else None
-
-                        offset_times = ufp.offset_times(base[time_col], self.ts.freq, h)
-
-                        # Create lookup dataframe with row index to maintain order
-                        if isinstance(base, pl_DataFrame):
-                            # Polars
-                            lookup_df = (
-                                base[[id_col]]
-                                .with_columns(pl_Series('_offset_time', offset_times))
-                                .with_row_index('_row_idx')
-                            )
-                            exog_source = original_df[[id_col, time_col] + exog_cols]
-                            exog_renamed = exog_source.rename({time_col: '_offset_time'})
-                            merged = lookup_df.join(exog_renamed, on=[id_col, '_offset_time'], how='left')
-                            merged = merged.sort('_row_idx')
-
-                            # Build X_h: non-exog from X + exog from merged
-                            if non_exog_cols:
-                                X_h = X[non_exog_cols]
-                                for col in exog_cols:
-                                    X_h = X_h.with_columns(merged[col].alias(col))
-                                X_h = X_h[x_cols]
-                            else:
-                                X_h = X
+                    if isinstance(base, pl_DataFrame):
+                        lookup_df = (
+                            base[[id_col]]
+                            .with_columns(pl_Series('_offset_time', offset_times))
+                            .with_row_index('_row_idx')
+                        )
+                        exog_source = original_df[[id_col, time_col] + exog_cols]
+                        exog_renamed = exog_source.rename({time_col: '_offset_time'})
+                        merged = lookup_df.join(exog_renamed, on=[id_col, '_offset_time'], how='left')
+                        merged = merged.sort('_row_idx')
+                        if non_exog_cols:
+                            X_h = X[non_exog_cols]
+                            for col in exog_cols:
+                                X_h = X_h.with_columns(merged[col].alias(col))
+                            X_h = X_h[x_cols]
                         else:
-                            # Pandas
-                            lookup_df = base[[id_col]].copy()
-                            lookup_df['_offset_time'] = offset_times
-                            lookup_df['_row_idx'] = np.arange(len(base))
-                            exog_source = original_df[[id_col, time_col] + exog_cols]
-                            exog_renamed = exog_source.rename(columns={time_col: '_offset_time'})
-                            merged = lookup_df.merge(exog_renamed, on=[id_col, '_offset_time'], how='left')
-                            merged = merged.sort_values('_row_idx')
+                            X_h = X
+                    else:
+                        lookup_df = base[[id_col]].copy()
+                        lookup_df['_offset_time'] = offset_times
+                        lookup_df['_row_idx'] = np.arange(len(base))
+                        exog_source = original_df[[id_col, time_col] + exog_cols]
+                        exog_renamed = exog_source.rename(columns={time_col: '_offset_time'})
+                        merged = lookup_df.merge(exog_renamed, on=[id_col, '_offset_time'], how='left')
+                        merged = merged.sort_values('_row_idx')
+                        if non_exog_cols:
+                            X_h = X[non_exog_cols].copy()
+                            for col in exog_cols:
+                                X_h[col] = merged[col].values
+                            X_h = X_h[x_cols]
+                        else:
+                            X_h = X
 
-                            # Build X_h: non-exog from X + exog from merged
-                            if non_exog_cols:
-                                X_h = X[non_exog_cols].copy()
-                                for col in exog_cols:
-                                    X_h[col] = merged[col].values
-                                X_h = X_h[x_cols]
-                            else:
-                                X_h = X
+                    valid = valid_target.copy()
+                    for col in exog_cols:
+                        valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
+                    horizon_cache[h] = (X_h, valid)
 
-                        # Check for valid rows (non-NaN target and exog)
-                        valid = valid_target.copy()
-                        for col in exog_cols:
-                            valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
-
-                        X_valid = ufp.filter_with_mask(X_h, valid)
-                        # Convert to numpy if models were trained with numpy
-                        X_valid_pred = ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
-                        preds_valid = model.predict(X_valid_pred)
-
-                        # Create full predictions array with NaN for invalid rows
-                        preds = np.full(len(X_h), np.nan)
-                        preds[valid] = preds_valid
-
+            for name, horizon_models in self.models_.items():
+                for h, model in horizon_models.items():
+                    X_h, valid = horizon_cache[h]
+                    X_valid = ufp.filter_with_mask(X_h, valid)
+                    X_pred = ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
+                    preds_valid = model.predict(X_pred)
+                    preds = np.full(len(X_h), np.nan)
+                    preds[valid] = preds_valid
                     horizon_fitted_values[h] = ufp.assign_columns(
                         horizon_fitted_values[h], name, preds
                     )
 
             for h, horizon_df in horizon_fitted_values.items():
-                keep_mask = ~ufp.is_nan(horizon_df[target_col])
-                # Convert to numpy array for consistent manipulation
-                if hasattr(keep_mask, "to_numpy"):
-                    keep_mask = keep_mask.to_numpy()
-
-                # Also filter by valid exog features for this horizon
-                if h > 0 and exog_cols and original_df is not None:
-                    # Need to recompute valid mask for exog
-                    prep_df = ufp.horizontal_concat([base, X])
-                    offset_times = ufp.offset_times(prep_df[time_col], self.ts.freq, h)
-                    lookup_df = type(prep_df)({
-                        id_col: prep_df[id_col],
-                        '_offset_time': offset_times,
-                    })
-                    exog_source = original_df[[id_col, time_col] + exog_cols]
-                    exog_source = ufp.rename(exog_source, {time_col: '_offset_time'})
-                    merged = ufp.join(lookup_df, exog_source,
-                                     on=[id_col, '_offset_time'], how='left')
-                    exog_valid = np.ones(len(merged), dtype=bool)
-                    for col in exog_cols:
-                        exog_valid &= ~ufp.is_nan_or_none(merged[col]).to_numpy()
-                    keep_mask = keep_mask & exog_valid
-
+                _, keep_mask = horizon_cache[h]
                 horizon_df = ufp.filter_with_mask(horizon_df, keep_mask)
                 horizon_df = ufp.copy_if_pandas(horizon_df, deep=True)
                 horizon_df = self._invert_transforms_fitted(horizon_df)
