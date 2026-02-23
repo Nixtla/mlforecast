@@ -465,14 +465,16 @@ class MLForecast:
             # y was already extracted from prep by _extract_X_y and contains expanded targets
             exog_cols = self.ts._get_dynamic_exog_cols(list(original_df.columns)) if original_df is not None else []
 
-            horizon_fitted_values = []
-            for h in range(max_horizon):
+            # Only allocate entries for trained horizons (sparse or dense).
+            trained_horizons = sorted({h for hm in self.models_.values() for h in hm})
+            horizon_fitted_values = {}
+            for h in trained_horizons:
                 # Get target at horizon h from the y array
                 y_h = y[:, h] if y.ndim == 2 else y
 
                 horizon_base = ufp.copy_if_pandas(base, deep=True)
                 horizon_base = ufp.assign_columns(horizon_base, target_col, y_h)
-                horizon_fitted_values.append(horizon_base)
+                horizon_fitted_values[h] = horizon_base
 
             # Check if models were trained with numpy arrays
             models_trained_with_numpy = self.ts.as_numpy
@@ -558,7 +560,7 @@ class MLForecast:
                         horizon_fitted_values[h], name, preds
                     )
 
-            for h, horizon_df in enumerate(horizon_fitted_values):
+            for h, horizon_df in horizon_fitted_values.items():
                 keep_mask = ~ufp.is_nan(horizon_df[target_col])
                 # Convert to numpy array for consistent manipulation
                 if hasattr(keep_mask, "to_numpy"):
@@ -588,7 +590,7 @@ class MLForecast:
                 horizon_df = ufp.assign_columns(horizon_df, "h", h + 1)
                 horizon_fitted_values[h] = horizon_df
             fitted_values = ufp.vertical_concat(
-                horizon_fitted_values, match_categories=False
+                list(horizon_fitted_values.values()), match_categories=False
             )
         if self.ts.target_transforms is not None:
             for tfm in self.ts.target_transforms[::-1]:
