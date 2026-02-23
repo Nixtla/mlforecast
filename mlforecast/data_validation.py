@@ -177,9 +177,9 @@ def validate_update_df(
 
     has_issues, bad = validate_continuity(df, id_col, time_col, freq)
     if has_issues:
-        bad_ids = nw.from_native(bad, eager_only=True)[id_col].to_list()
+        bad_ids = reprlib.repr(nw.from_native(bad, eager_only=True)[id_col].to_list())
         raise ValueError(
-            f"Series contain missing or duplicate timestamps with the specified freq {freq}"
+            f"Series contain missing or duplicate timestamps with the specified freq {freq}\n"
             f"Affected series: {bad_ids}\n"
             f"Consider using the fill_gaps parameter or preprocessing your data."
         )
@@ -191,10 +191,10 @@ def validate_df(
     time_col: str,
     freq: Union[str, int],
 ) -> None:
-    """Run data quality validations and issue warnings if problems are found.
+    """Run data quality validations and raise if problems are found.
 
     Checks for gaps or duplicate timestamps using a fast consecutive-comparison
-    approach. Issues a warning if problems are found without raising exceptions.
+    approach. Raises ValueError if problems are found.
 
     Args:
         df: Input DataFrame (pandas or polars)
@@ -206,10 +206,9 @@ def validate_df(
     """
     has_issues, bad = validate_continuity(df, id_col, time_col, freq)
     if has_issues:
-        bad_ids = nw.from_native(bad, eager_only=True)[id_col].to_list()
-        sample_ids = reprlib.repr(bad_ids[:10])
+        bad_ids = reprlib.repr(nw.from_native(bad, eager_only=True)[id_col].to_list())
         raise ValueError(
-            f"Series contain missing or duplicate timestamps with the specified freq {freq}"
-            f"Affected series: {sample_ids}\n"
+            f"Series contain missing or duplicate timestamps with the specified freq {freq}\n"
+            f"Affected series: {bad_ids}\n"
             f"Consider using the fill_gaps parameter or preprocessing your data."
         )
