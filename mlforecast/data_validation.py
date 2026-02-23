@@ -82,8 +82,10 @@ def validate_continuity(
 ) -> Tuple[bool, DFType]:
     """Check for gaps or duplicate timestamps within time series data.
 
-    For each series, checks that consecutive timestamps are exactly one frequency
-    apart. Detects both missing periods and duplicate timestamps.
+    For each series, verifies that n_unique timestamps equals the expected span
+    (offset_times(min, freq, n_unique-1) == max) and that there are no duplicates
+    (count == n_unique). This requires only one offset_times call per series
+    instead of per row, and avoids the window function entirely.
 
     Args:
         df: Input DataFrame (pandas or polars)
@@ -102,20 +104,31 @@ def validate_continuity(
         return (False, df[[id_col]].head(0))
 
     nw_df = nw.from_native(df, eager_only=True)
-    df_sorted = nw_df.sort([id_col, time_col])
 
-    expected_next_native = offset_times(df_sorted[time_col].to_native(), freq, 1)
-    expected_next_nw = nw.from_native(expected_next_native, series_only=True).alias('_expected_next')
-
-    df_check = df_sorted.with_columns(
-        expected_next_nw,
-        nw.col(time_col).shift(-1).over(id_col).alias('_next'),
+    stats = (
+        nw_df.group_by(id_col)
+        .agg([
+            nw.col(time_col).min().alias('_min'),
+            nw.col(time_col).max().alias('_max'),
+            nw.col(time_col).count().alias('_count'),
+            nw.col(time_col).n_unique().alias('_n_unique'),
+        ])
     )
 
-    bad = df_check.filter(
-        ~nw.col('_next').is_null()
-        & (nw.col('_expected_next') != nw.col('_next'))
-    ).select([id_col]).unique()
+    # offset_times accepts Union[int, np.ndarray] for n; convert pandas Series to numpy
+    n_steps = (stats['_n_unique'] - 1).to_native()
+    if isinstance(n_steps, pd.Series):
+        n_steps = n_steps.to_numpy()
+
+    expected_max_native = offset_times(stats['_min'].to_native(), freq, n_steps)
+    expected_max_nw = nw.from_native(expected_max_native, series_only=True).alias('_expected_max')
+
+    stats = stats.with_columns(expected_max_nw)
+
+    bad = stats.filter(
+        (nw.col('_n_unique') != nw.col('_count'))      # duplicates
+        | (nw.col('_max') != nw.col('_expected_max'))  # gaps
+    ).select([id_col])
 
     bad_native = nw.to_native(bad)
     if bad.shape[0] > 0:
