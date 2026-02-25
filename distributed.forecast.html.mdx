@@ -37,7 +37,7 @@ Name | Type | Description | Default
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `engine` | <code>fugue execution engine</code> | Dask Client, Spark Session, etc to use for the distributed computation. If None will infer depending on the input type. Defaults to None. | <code>None</code>
 `num_partitions` | <code>number of data partitions to use</code> | If None, the default partitions provided by the AnyDataFrame used by the `fit` and `cross_validation` methods will be used. If a Ray Dataset is provided and `num_partitions` is None, the partitioning will be done by the `id_col`. Defaults to None. | <code>None</code>
@@ -54,6 +54,7 @@ fit(
     static_features=None,
     dropna=True,
     keep_last_n=None,
+    weight_col=None,
 )
 ```
 
@@ -70,6 +71,7 @@ Name | Type | Description | Default
 `static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 
 **Returns:**
 
@@ -221,6 +223,7 @@ cross_validation(
     before_predict_callback=None,
     after_predict_callback=None,
     input_size=None,
+    weight_col=None,
 )
 ```
 
@@ -246,6 +249,7 @@ Name | Type | Description | Default
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 
 **Returns:**
 

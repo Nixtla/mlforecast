@@ -9,7 +9,9 @@ title: Lag transforms
 ### `RollingQuantile`
 
 ```python
-RollingQuantile(p, window_size, min_samples=None)
+RollingQuantile(
+    p, window_size, min_samples=None, global_=False, groupby=None, **kwargs
+)
 ```
 
 Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
@@ -43,7 +45,15 @@ Rolling statistic
 ### `SeasonalRollingQuantile`
 
 ```python
-SeasonalRollingQuantile(p, season_length, window_size, min_samples=None)
+SeasonalRollingQuantile(
+    p,
+    season_length,
+    window_size,
+    min_samples=None,
+    global_=False,
+    groupby=None,
+    **kwargs
+)
 ```
 
 Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
@@ -77,12 +87,19 @@ Rolling statistic over seasonal periods
 ### `ExpandingQuantile`
 
 ```python
-ExpandingQuantile(p)
+ExpandingQuantile(p, global_=False, groupby=None, **kwargs)
 ```
 
 Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 
 ### `ExpandingMax`
 
@@ -90,11 +107,25 @@ Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 ### `ExpandingMin`
 
 Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 
 ### `ExpandingStd`
 
@@ -102,16 +133,30 @@ Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 ### `ExpandingMean`
 
 Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 ### `ExponentiallyWeightedMean`
 
 ```python
-ExponentiallyWeightedMean(alpha)
+ExponentiallyWeightedMean(alpha, global_=False, groupby=None, **kwargs)
 ```
 
 Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
@@ -123,6 +168,8 @@ Exponentially weighted average
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
+`global_` | <code>[bool](#bool)</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | <code>False</code>
+`groupby` | <code>[Sequence](#typing.Sequence)\[[str](#str)\]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
 
 ### `Offset`
 

@@ -1,7 +1,7 @@
 ---
 description: Compute transformations on exogenous regressors
 output-file: feature_engineering.html
-title: Feature engineering
+title: Feature engineering | MLForecast
 ---
 
 
@@ -67,7 +67,7 @@ Name | Type | Description | Default
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 
 **Returns:**
 

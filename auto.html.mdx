@@ -214,6 +214,7 @@ AutoMLForecast(
     init_config=None,
     fit_config=None,
     num_threads=1,
+    reuse_cv_splits=False,
 )
 ```
 
@@ -228,7 +229,8 @@ Name | Type | Description | Default
 `season_length` | <code>[int](#int)</code> | Length of the seasonal period. This is used for producing the feature space. Only required if `init_config` is None. Defaults to None. | <code>None</code>
 `init_config` | <code>[callable](#callable)</code> | Function that takes an optuna trial and produces a configuration passed to the MLForecast constructor. Defaults to None. | <code>None</code>
 `fit_config` | <code>[callable](#callable)</code> | Function that takes an optuna trial and produces a configuration passed to the MLForecast fit method. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
+`reuse_cv_splits` | <code>[bool](#bool)</code> | Creates splits for cv once and re-uses them for tuning instead of generating the splits in each tuning round. Default is set to False. | <code>False</code>
 
 #### `AutoMLForecast.fit`
 

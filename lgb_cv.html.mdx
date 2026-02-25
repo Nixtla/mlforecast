@@ -29,7 +29,7 @@ Name | Type | Description | Default
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 
 #### `LightGBMCV.fit`
@@ -58,6 +58,7 @@ fit(
     before_predict_callback=None,
     after_predict_callback=None,
     input_size=None,
+    weight_col=None,
 )
 ```
 
@@ -139,6 +140,7 @@ setup(
     weights=None,
     metric="mape",
     input_size=None,
+    weight_col=None,
 )
 ```
 
@@ -162,6 +164,7 @@ Name | Type | Description | Default
 `weights` | <code>sequence of float</code> | Weights to multiply the metric of each window. If None, all windows have the same weight. Defaults to None. | <code>None</code>
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation. | <code>None</code>
 
 **Returns:**
 
@@ -173,7 +176,10 @@ Type | Description
 
 ```python
 partial_fit(
-    num_iterations, before_predict_callback=None, after_predict_callback=None
+    num_iterations,
+    before_predict_callback=None,
+    after_predict_callback=None,
+    weight_col=None,
 )
 ```
 

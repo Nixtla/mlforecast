@@ -32,7 +32,7 @@ Name | Type | Description | Default
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
-`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Defaults to 1. | <code>1</code>
+`num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 
@@ -48,11 +48,13 @@ fit(
     dropna=True,
     keep_last_n=None,
     max_horizon=None,
+    horizons=None,
     prediction_intervals=None,
     fitted=False,
     as_numpy=False,
     weight_col=None,
     models_fit_kwargs=None,
+    validate_data=True,
 )
 ```
 
@@ -70,10 +72,13 @@ Name | Type | Description | Default
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Save in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 
@@ -112,7 +117,7 @@ Name | Type | Description | Default
 #### `MLForecast.update`
 
 ```python
-update(df)
+update(df, validate_new_data=False)
 ```
 
 Update the values of the stored series.
@@ -122,6 +127,7 @@ Update the values of the stored series.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `df` | <code>pandas or polars DataFrame</code> | Dataframe with new observations. | *required*
+`validate_new_data` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
 
 #### `MLForecast.make_future_dataframe`
 
@@ -210,9 +216,11 @@ preprocess(
     dropna=True,
     keep_last_n=None,
     max_horizon=None,
+    horizons=None,
     return_X_y=False,
     as_numpy=False,
     weight_col=None,
+    validate_data=True,
 )
 ```
 
@@ -230,9 +238,11 @@ Name | Type | Description | Default
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 
@@ -243,7 +253,7 @@ Type | Description
 #### `MLForecast.fit_models`
 
 ```python
-fit_models(X, y, models_fit_kwargs=None)
+fit_models(X=None, y=None, models_fit_kwargs=None, generator_factory=None)
 ```
 
 Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
@@ -252,8 +262,10 @@ Manually train models. Use this if you called `MLForecast.preprocess` beforehand
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`X` | <code>pandas or polars DataFrame or numpy array</code> | Features. | *required*
-`y` | <code>numpy array</code> | Target. | *required*
+`X` | <code>pandas or polars DataFrame or numpy array</code> | Features (for recursive forecasting). | <code>None</code>
+`y` | <code>numpy array</code> | Target (for recursive forecasting). | <code>None</code>
+`models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. | <code>None</code>
+`generator_factory` | <code>[callable](#callable)</code> | Factory function that returns an iterator yielding (h, X_h, y_h) tuples per horizon. | <code>None</code>
 
 **Returns:**
 
@@ -277,6 +289,7 @@ cross_validation(
     keep_last_n=None,
     refit=True,
     max_horizon=None,
+    horizons=None,
     before_predict_callback=None,
     after_predict_callback=None,
     prediction_intervals=None,
@@ -285,6 +298,7 @@ cross_validation(
     fitted=False,
     as_numpy=False,
     weight_col=None,
+    validate_data=True,
 )
 ```
 
@@ -307,6 +321,7 @@ Name | Type | Description | Default
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
+`horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `refit` | <code>[bool](#bool) or [int](#int)</code> | Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True. | <code>True</code>
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
@@ -314,8 +329,9 @@ Name | Type | Description | Default
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
 **Returns:**
 

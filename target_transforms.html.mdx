@@ -107,6 +107,36 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 
+#### `AutoDifferences.inverse_transform_fitted`
+
+```python
+inverse_transform_fitted(ga)
+```
+
+Inverse transform fitted values.
+
+Reverses the differencing transformation by reconstructing the original
+values from the differenced fitted values. This is used when fitted=True
+to restore the fitted predictions to the original scale.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`ga` | <code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray containing the differenced fitted values. | *required*
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray with fitted values in the original scale.
+
+**Raises:**
+
+Type | Description
+---- | -----------
+<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
+
 ### `AutoSeasonalDifferences`
 
 ```python
@@ -125,6 +155,36 @@ Name | Type | Description | Default
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
 
+#### `AutoSeasonalDifferences.inverse_transform_fitted`
+
+```python
+inverse_transform_fitted(ga)
+```
+
+Inverse transform fitted values.
+
+Reverses the differencing transformation by reconstructing the original
+values from the differenced fitted values. This is used when fitted=True
+to restore the fitted predictions to the original scale.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`ga` | <code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray containing the differenced fitted values. | *required*
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray with fitted values in the original scale.
+
+**Raises:**
+
+Type | Description
+---- | -----------
+<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
+
 ### `AutoSeasonalityAndDifferences`
 
 ```python
@@ -142,6 +202,42 @@ Name | Type | Description | Default
 `max_season_length` | <code>[int](#int)</code> | Maximum length of the seasonal period. | *required*
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `max_season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
+
+**Raises:**
+
+Type | Description
+---- | -----------
+<code>[ValueError](#ValueError)</code>| If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing, there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
+
+#### `AutoSeasonalityAndDifferences.inverse_transform_fitted`
+
+```python
+inverse_transform_fitted(ga)
+```
+
+Inverse transform fitted values.
+
+Reverses the differencing transformation by reconstructing the original
+values from the differenced fitted values. This is used when fitted=True
+to restore the fitted predictions to the original scale.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`ga` | <code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray containing the differenced fitted values. | *required*
+
+**Returns:**
+
+Type | Description
+---- | -----------
+<code>[GroupedArray](#mlforecast.grouped_array.GroupedArray)</code> | GroupedArray with fitted values in the original scale.
+
+**Raises:**
+
+Type | Description
+---- | -----------
+<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
 
 ```python
 def test_scaler(sc, series):
