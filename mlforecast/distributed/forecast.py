@@ -850,7 +850,11 @@ class DistributedMLForecast:
             statics = ufp.take_rows(statics, sort_idxs)
             statics = ufp.drop_index_if_pandas(statics)
             for tfm in combined_core_lag_tfms.values():
-                tfm._core_tfm = tfm._core_tfm.take(sort_idxs)
+                if hasattr(tfm, "_core_tfm"):
+                    tfm._core_tfm = tfm._core_tfm.take(sort_idxs)
+                else:
+                    tfm.tfm1 = tfm.tfm1.take(sort_idxs)
+                    tfm.tfm2 = tfm.tfm2.take(sort_idxs)
             if combined_target_tfms is not None:
                 combined_target_tfms = [
                     tfm.take(sort_idxs) for tfm in combined_target_tfms
