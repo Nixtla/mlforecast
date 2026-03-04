@@ -55,6 +55,63 @@ def test_combine_name_and_transform(grouped_array):
     expected = Lag(1).transform(grouped_array) / Lag(2).transform(grouped_array)
     np.testing.assert_allclose(transformed, expected)
 
+def test_combine_take(grouped_array):
+    tfm = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+    tfm.transform(grouped_array)
+
+    idxs = np.array([0, 5, 10, 15])
+    subset_tfm = tfm.take(idxs)
+
+    assert isinstance(subset_tfm, Combine)
+    assert subset_tfm.tfm1 is not None
+    assert subset_tfm.tfm2 is not None
+    assert subset_tfm.operator == operator.add
+
+def test_nested_combine_take(grouped_array):
+    inner = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )
+    outer = Combine(
+        inner,
+        RollingMean(window_size=3, min_samples=1),
+        operator.sub
+    )._set_core_tfm(1)
+    outer.transform(grouped_array)
+
+    idxs = np.array([0, 5, 10])
+    subset_tfm = outer.take(idxs)
+
+    assert isinstance(subset_tfm, Combine)
+    assert isinstance(subset_tfm.tfm1, Combine)
+    assert subset_tfm.operator == operator.sub
+    assert subset_tfm.tfm1.operator == operator.add
+
+def test_combine_stack(grouped_array):
+    tfm1 = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+    tfm2 = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+
+    tfm1.transform(grouped_array)
+    tfm2.transform(grouped_array)
+
+    stacked_tfm = Combine.stack([tfm1, tfm2])
+
+    assert isinstance(stacked_tfm, Combine)
+    assert stacked_tfm.operator == operator.add
+
 @pytest.mark.parametrize("tfm", [
     ExpandingMax(),
     ExpandingMean(),
