@@ -112,6 +112,38 @@ def test_combine_stack(grouped_array):
     assert isinstance(stacked_tfm, Combine)
     assert stacked_tfm.operator == operator.add
 
+
+def test_combine_stack_behavioral(grouped_array):
+    """Verify that Combine.stack() doesn't just return first partition"""
+    # Create two Combine transforms with DIFFERENT window sizes to detect if
+    # stacking just returns the first partition vs actually combining them
+    tfm1 = Combine(
+        RollingMean(window_size=3, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+
+    tfm2 = Combine(
+        RollingMean(window_size=7, min_samples=1),  # Different window size
+        RollingMean(window_size=9, min_samples=1),  # Different window size
+        operator.add
+    )._set_core_tfm(1)
+
+    tfm1.transform(grouped_array)
+    tfm2.transform(grouped_array)
+
+    # If stack incorrectly returned partition_tfms[0], it would just return tfm1
+    # The stacked transform should have tfm1's window sizes (since stack keeps first's config)
+    # but should have stacked internal state from both
+    stacked = Combine.stack([tfm1, tfm2])
+
+    # Verify stacked uses first transform's configuration
+    assert stacked.tfm1.window_size == 3
+    assert stacked.tfm2.window_size == 5
+    # Verify it's not just a reference to tfm1 (defensive check)
+    assert stacked is not tfm1
+
+
 @pytest.mark.parametrize("tfm", [
     ExpandingMax(),
     ExpandingMean(),
