@@ -329,15 +329,15 @@ class TimeSeries:
                 raise ValueError(
                     "Each template in `horizon_feature_templates` must include exactly one '{h}' placeholder."
                 )
-            pattern = "^" + re.escape(template).replace(r"\{h\}", r"(?P<h>[1-9]\d*)") + "$"
-            compiled_patterns.append(re.compile(pattern))
+            pattern_str = "^" + re.escape(template).replace(r"\{h\}", r"(?P<h>[1-9]\d*)") + "$"
+            compiled_patterns.append(re.compile(pattern_str))
 
         matched_cols = set()
         per_horizon: Dict[int, List[str]] = {}
         for col in exog_cols:
             matched_horizon = None
-            for pattern in compiled_patterns:
-                match = pattern.match(col)
+            for compiled_pattern in compiled_patterns:
+                match = compiled_pattern.match(col)
                 if match is None:
                     continue
                 horizon = int(match.group("h"))
