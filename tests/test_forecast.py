@@ -1381,6 +1381,58 @@ def test_horizons_with_exogenous():
     assert preds.shape[0] > 0
 
 
+def test_horizon_feature_templates_route_horizon_specific_exog():
+    """Ensure direct models can route horizon-scoped exogenous features via templates."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    train = df.iloc[:-H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    baseline = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    baseline.fit(train, static_features=[], max_horizon=H)
+    with pytest.raises(ValueError, match="Input X contains NaN"):
+        baseline.predict(h=H, X_df=future)
+
+    templated = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    templated.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_feature_templates=["bookings_horizon_{h}"],
+    )
+    preds = templated.predict(h=H, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+
+def test_horizon_feature_templates_require_direct_mode():
+    """Templates are only valid for direct forecasting setups."""
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
+        fcst.fit(
+            df,
+            static_features=[],
+            horizon_feature_templates=["bookings_horizon_{h}"],
+        )
+
+
 def test_horizons_with_target_transforms():
     """Test that sparse horizons work correctly with target transforms.
 
