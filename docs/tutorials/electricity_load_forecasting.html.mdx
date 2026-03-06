@@ -243,7 +243,7 @@ transformations (as the ones we created previously) and historical
 variables.  
 You can see an in-depth tutorial on how to use `MLForecast` [Cross
 Validation methods
-here](https://nixtlaverse.nixtla.io/mlforecast/docs/how-to-guides/cross_validation)
+here](https://nixtlaverse.nixtla.io/mlforecast/docs/how-to-guides/cross_validation.html)
 
 ```python
 import lightgbm as lgb
@@ -306,8 +306,7 @@ lags=[1,12,24]
 Lag transforms are defined as a dictionary where the keys are the lags
 and the values are lists of the transformations that we want to apply to
 that lag. You can refer to the [lag transformations
-guide](https://nixtlaverse.nixtla.io/mlforecast/docs/how-to-guides/lag_transforms_guide)
-for more details.
+guide](lag_transforms_guide.html) for more details.
 
 For using the date features you need to be sure that your time column is
 made of timestamps. Then it might make sense to extract features like
@@ -450,7 +449,7 @@ the `naive`.
 Now we are going to evaluate their performance in the test set. We can
 use both of them for forecasting the test alongside some prediction
 intervals. For that we can use the
-[`PredictionIntervals`](https://nixtlaverse.nixtla.io/mlforecast/utils#class-predictionintervals)
+[`PredictionIntervals`](https://nixtlaverse.nixtla.io/mlforecast/utils.html#predictionintervals)
 function in `mlforecast.utils`.  
 You can see an in-depth tutorial of [Probabilistic Forecasting
 here](https://nixtlaverse.nixtla.io/mlforecast/docs/tutorials/prediction_intervals_in_forecasting_models)
