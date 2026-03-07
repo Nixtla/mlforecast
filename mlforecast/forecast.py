@@ -2,8 +2,8 @@ __all__ = ["MLForecast"]
 
 
 import copy
-import re
 import warnings
+import re
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -21,9 +21,10 @@ from typing import (
 import cloudpickle
 import fsspec
 import numpy as np
+import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, DFType, pl_DataFrame, pl_Series
+from utilsforecast.compat import DataFrame, DFType, pl, pl_DataFrame, pl_Series
 
 from mlforecast.core import (
     DateFeature,
@@ -559,6 +560,83 @@ class MLForecast:
                     tfm.fitted_ = []
         return fitted_values
 
+    def _compute_recursive_fitted_values_on_demand(self, h: int) -> pd.DataFrame:
+        if h <= 1:
+            raise ValueError("`h` must be greater than 1 for on-demand recursive fitted values.")
+        if not hasattr(self, "_fitted_train_df_"):
+            raise ValueError(
+                "Training data for fitted values was not cached. "
+                "Please refit with `fitted=True` before requesting multi-step fitted values."
+            )
+
+        train_df = self._fitted_train_df_
+        if isinstance(train_df, pd.DataFrame):
+            train_pd = train_df.copy()
+        else:
+            train_pd = train_df.to_pandas()
+
+        one_step = self.fcst_fitted_values_
+        if isinstance(one_step, pd.DataFrame):
+            one_step_pd = one_step[[self.ts.id_col, self.ts.time_col]].copy()
+        else:
+            one_step_pd = one_step.select([self.ts.id_col, self.ts.time_col]).to_pandas()
+
+        id_col = self.ts.id_col
+        time_col = self.ts.time_col
+        target_col = self.ts.target_col
+        train_pd = train_pd.sort_values([id_col, time_col]).reset_index(drop=True)
+
+        valid_one_step_times = {
+            uid: set(group[time_col].tolist())
+            for uid, group in one_step_pd.groupby(id_col, observed=True)
+        }
+        static = [c for c in self.ts.static_features_.columns if c != id_col]
+        exclude = {id_col, time_col, target_col, *static}
+        if self.ts.weight_col is not None:
+            exclude.add(self.ts.weight_col)
+        dynamic = [c for c in train_pd.columns if c not in exclude]
+        model_names = list(self.models_.keys())
+
+        rows = []
+        original_ts = self.ts
+        for uid, group in train_pd.groupby(id_col, observed=True):
+            group = group.sort_values(time_col).reset_index(drop=True)
+            valid_uid_times = valid_one_step_times.get(uid, set())
+            for target_idx in range(h - 1, len(group)):
+                origin_idx = target_idx - h
+                if origin_idx < 0:
+                    continue
+                hist = group.iloc[: origin_idx + 1]
+                future = group.iloc[origin_idx + 1 : origin_idx + h + 1]
+                if future.shape[0] < h:
+                    continue
+                if future.iloc[0][time_col] not in valid_uid_times:
+                    continue
+                X_df = None
+                if dynamic:
+                    X_df = future[[id_col, time_col, *dynamic]]
+                try:
+                    preds = self.predict(h=h, new_df=hist, X_df=X_df)
+                finally:
+                    self.ts = original_ts
+                pred_last = preds.iloc[-1]
+                row = {
+                    id_col: group.iloc[target_idx][id_col],
+                    time_col: group.iloc[target_idx][time_col],
+                    target_col: group.iloc[target_idx][target_col],
+                    "h": h,
+                }
+                for model_name in model_names:
+                    row[model_name] = pred_last[model_name]
+                rows.append(row)
+
+        cols = [id_col, time_col, target_col, "h", *model_names]
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        result = pd.DataFrame(rows)[cols]
+        result = result.sort_values([id_col, time_col]).reset_index(drop=True)
+        return result
+
     def fit(
         self,
         df: DataFrame,
@@ -676,6 +754,7 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
+                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=False)
         else:
             # Standard recursive path (unchanged)
             prep = self.preprocess(
@@ -714,14 +793,18 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
+                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=False)
         return self
 
     def forecast_fitted_values(
-        self, level: Optional[List[Union[int, float]]] = None
+        self,
+        h: int = 1,
+        level: Optional[List[Union[int, float]]] = None,
     ) -> DataFrame:
         """Access in-sample predictions.
 
         Args:
+            h (int): Forecast horizon for fitted values. Defaults to 1.
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
 
         Returns:
@@ -729,7 +812,42 @@ class MLForecast:
         """
         if not hasattr(self, "fcst_fitted_values_"):
             raise Exception("Please run the `fit` method using `fitted=True`")
-        res = self.fcst_fitted_values_
+        if not isinstance(h, int) or h < 1:
+            raise ValueError("`h` must be a positive integer.")
+        if not self.models_:
+            if h != 1:
+                raise ValueError("No fitted models available to compute multi-step fitted values.")
+            return self.fcst_fitted_values_
+
+        first_model = next(iter(self.models_.values()))
+        is_direct = isinstance(first_model, dict)
+        if is_direct:
+            res = self.fcst_fitted_values_
+            if "h" in res.columns:
+                if isinstance(res, pd.DataFrame):
+                    res = res[res["h"].eq(h)].reset_index(drop=True)
+                    available = sorted(self.fcst_fitted_values_["h"].unique().tolist())
+                else:
+                    res = res.filter(pl.col("h") == h)
+                    available = sorted(self.fcst_fitted_values_["h"].unique().to_list())
+                if len(res) == 0:
+                    raise ValueError(
+                        f"No fitted values found for h={h}. Available horizons: {available}."
+                    )
+        else:
+            if h == 1:
+                res = self.fcst_fitted_values_
+            else:
+                warnings.warn(
+                    "Computing recursive fitted values for h>1 on demand can be slow.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                res_pd = self._compute_recursive_fitted_values_on_demand(h)
+                if isinstance(self.fcst_fitted_values_, pd.DataFrame):
+                    res = res_pd
+                else:
+                    res = pl.from_pandas(res_pd)
         if level is not None:
             res = ufp.add_insample_levels(
                 res,
