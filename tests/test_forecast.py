@@ -187,6 +187,20 @@ def test_recursive_forecast_fitted_values_on_demand_h():
     np.testing.assert_allclose(restored["y_fit"].values, restored["y_orig"].values)
 
 
+def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(2, global_=True)]},
+    )
+    fcst.fit(df, fitted=True, static_features=[])
+
+    with pytest.raises(ValueError, match="not supported.*global or grouped lag transforms"):
+        fcst.forecast_fitted_values(h=2)
+
+
 def test_direct_forecast_fitted_values_h_filter():
     df = generate_daily_series(2, min_length=40, max_length=40)
     fcst = MLForecast(
@@ -204,6 +218,21 @@ def test_direct_forecast_fitted_values_h_filter():
     assert fitted_h2.shape[0] > 0
     with pytest.raises(ValueError, match="No fitted values found for h=4"):
         fcst.forecast_fitted_values(h=4)
+
+
+def test_forecast_fitted_values_positional_level_compat():
+    df = generate_daily_series(2, min_length=40, max_length=40)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, static_features=[])
+
+    positional = fcst.forecast_fitted_values([80])
+    keyword = fcst.forecast_fitted_values(level=[80])
+
+    pd.testing.assert_frame_equal(positional, keyword)
 
 
 def test_new_df_argument(fitted_fcst, setup_forecast_data, predictions):

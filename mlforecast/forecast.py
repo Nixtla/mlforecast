@@ -563,6 +563,11 @@ class MLForecast:
     def _compute_recursive_fitted_values_on_demand(self, h: int) -> pd.DataFrame:
         if h <= 1:
             raise ValueError("`h` must be greater than 1 for on-demand recursive fitted values.")
+        if self.ts._get_global_tfms() or self.ts._get_group_tfms():
+            raise ValueError(
+                "On-demand recursive fitted values for `h>1` are not supported when using "
+                "global or grouped lag transforms."
+            )
         if not hasattr(self, "_fitted_train_df_"):
             raise ValueError(
                 "Training data for fitted values was not cached. "
@@ -798,14 +803,17 @@ class MLForecast:
 
     def forecast_fitted_values(
         self,
-        h: int = 1,
         level: Optional[List[Union[int, float]]] = None,
+        *,
+        h: int = 1,
     ) -> DataFrame:
         """Access in-sample predictions.
 
         Args:
-            h (int): Forecast horizon for fitted values. Defaults to 1.
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
+            h (int): Forecast horizon for fitted values. Defaults to 1.
+                For recursive models and ``h>1``, values are computed on demand and are not available
+                when global or grouped lag transforms are configured.
 
         Returns:
             pandas or polars DataFrame: Dataframe with predictions for the training set
@@ -838,6 +846,11 @@ class MLForecast:
             if h == 1:
                 res = self.fcst_fitted_values_
             else:
+                if self.ts._get_global_tfms() or self.ts._get_group_tfms():
+                    raise ValueError(
+                        "On-demand recursive fitted values for `h>1` are not supported when using "
+                        "global or grouped lag transforms."
+                    )
                 warnings.warn(
                     "Computing recursive fitted values for h>1 on demand can be slow.",
                     UserWarning,
