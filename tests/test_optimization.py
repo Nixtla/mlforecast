@@ -7,8 +7,30 @@ from utilsforecast.losses import smape
 
 from mlforecast import MLForecast
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
-from mlforecast.optimization import mlforecast_objective
+from mlforecast.optimization import _get_categorical_static_features, mlforecast_objective
 from mlforecast.target_transforms import Differences, LocalBoxCox, LocalStandardScaler
+
+
+def test_get_categorical_static_features_pandas():
+    df = pd.DataFrame({
+        "cat_col": pd.Categorical(["x", "y"]),
+        "str_col": ["foo", "bar"],
+        "num_col": [1.0, 2.0],
+    })
+    result = _get_categorical_static_features(df, ["cat_col", "str_col", "num_col"])
+    assert set(result) == {"cat_col", "str_col"}
+
+
+def test_get_categorical_static_features_polars():
+    pl = pytest.importorskip("polars")
+    df = pl.DataFrame({
+        "cat_col": pl.Series(["x", "y"], dtype=pl.Categorical),
+        "str_col": pl.Series(["foo", "bar"], dtype=pl.String),
+        "enum_col": pl.Series(["a", "b"]).cast(pl.Enum(["a", "b"])),
+        "num_col": pl.Series([1.0, 2.0]),
+    })
+    result = _get_categorical_static_features(df, ["cat_col", "str_col", "enum_col", "num_col"])
+    assert set(result) == {"cat_col", "str_col", "enum_col"}
 
 
 @pytest.fixture(scope="module")
