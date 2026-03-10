@@ -547,7 +547,7 @@ class MLForecast:
                 horizon_df = ufp.filter_with_mask(horizon_df, keep_mask)
                 horizon_df = ufp.copy_if_pandas(horizon_df, deep=True)
                 horizon_df = self._invert_transforms_fitted(horizon_df)
-                horizon_df = ufp.assign_columns(horizon_df, "h", h + 1)
+                horizon_df = ufp.assign_columns(horizon_df, "h", np.int64(h + 1))
                 horizon_fitted_values[h] = horizon_df
             fitted_values = ufp.vertical_concat(
                 list(horizon_fitted_values.values()), match_categories=False
@@ -861,7 +861,12 @@ class MLForecast:
                 raise ValueError("No fitted models available to compute multi-step fitted values.")
             res = self.fcst_fitted_values_
             if "h" not in res.columns:
-                res = ufp.assign_columns(res, "h", h)
+                res = ufp.assign_columns(res, "h", np.int64(h))
+            if isinstance(res, pd.DataFrame):
+                res = res.copy()
+                res["h"] = res["h"].astype(np.int64)
+            else:
+                res = res.with_columns(pl.col("h").cast(pl.Int64))
             return res
 
         first_model = next(iter(self.models_.values()))
@@ -899,7 +904,12 @@ class MLForecast:
                 else:
                     res = pl.from_pandas(res_pd)
         if "h" not in res.columns:
-            res = ufp.assign_columns(res, "h", h)
+            res = ufp.assign_columns(res, "h", np.int64(h))
+        if isinstance(res, pd.DataFrame):
+            res = res.copy()
+            res["h"] = res["h"].astype(np.int64)
+        else:
+            res = res.with_columns(pl.col("h").cast(pl.Int64))
         if level is not None:
             res = ufp.add_insample_levels(
                 res,
