@@ -29,14 +29,25 @@ jobs:
 
       - name: Check wheel contents
         run: |
-          uv pip install fugue>=0.9.4
-          uv run --with "$(ls dist/*.whl)" --no-project python -c "
-          import mlforecast
-          import mlforecast.distributed
-          import mlforecast.distributed.models
-          import mlforecast.distributed.models.dask
-          import mlforecast.distributed.models.ray
-          import mlforecast.distributed.models.spark
+          python -c "
+          import glob, zipfile, sys
+          wheel = glob.glob('dist/*.whl')[0]
+          with zipfile.ZipFile(wheel) as zf:
+              names = zf.namelist()
+          required = [
+              'mlforecast/__init__.py',
+              'mlforecast/distributed/__init__.py',
+              'mlforecast/distributed/models/__init__.py',
+              'mlforecast/distributed/models/dask/__init__.py',
+              'mlforecast/distributed/models/ray/__init__.py',
+              'mlforecast/distributed/models/spark/__init__.py',
+          ]
+          missing = [p for p in required if p not in names]
+          if missing:
+              print('Missing from wheel:')
+              for p in missing:
+                  print(f'  {p}')
+              sys.exit(1)
           print('All subpackages found in wheel.')
           "
 
