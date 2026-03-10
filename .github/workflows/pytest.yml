@@ -12,7 +12,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Check wheel contents
+        run: |
+          uv run --with "$(ls dist/*.whl)" --no-project python -c "
+          import mlforecast
+          import mlforecast.distributed
+          import mlforecast.distributed.models
+          import mlforecast.distributed.models.dask
+          import mlforecast.distributed.models.ray
+          import mlforecast.distributed.models.spark
+          print('All subpackages found in wheel.')
+          "
+
   all-tests:
+    needs: check-package
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
