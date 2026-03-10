@@ -561,13 +561,7 @@ class MLForecast:
         return fitted_values
 
     def _compute_recursive_fitted_values_on_demand(self, h: int) -> pd.DataFrame:
-        if h <= 1:
-            raise ValueError("`h` must be greater than 1 for on-demand recursive fitted values.")
-        if self.ts._get_global_tfms() or self.ts._get_group_tfms():
-            raise ValueError(
-                "On-demand recursive fitted values for `h>1` are not supported when using "
-                "global or grouped lag transforms."
-            )
+        # `h` and transform constraints are validated in `forecast_fitted_values`.
         if not hasattr(self, "_fitted_train_df_"):
             raise ValueError(
                 "Training data for fitted values was not cached. "
@@ -603,32 +597,72 @@ class MLForecast:
         model_names = list(self.models_.keys())
 
         rows = []
-        original_ts = self.ts
         for uid, group in train_pd.groupby(id_col, observed=True):
             group = group.sort_values(time_col).reset_index(drop=True)
             valid_uid_times = valid_one_step_times.get(uid, set())
-            for target_idx in range(h - 1, len(group)):
-                origin_idx = target_idx - h
-                if origin_idx < 0:
+            if not valid_uid_times:
+                continue
+
+            valid_origins = []
+            for origin_idx in range(len(group) - h):
+                first_fcst_time = group.iloc[origin_idx + 1][time_col]
+                if first_fcst_time not in valid_uid_times:
                     continue
-                hist = group.iloc[: origin_idx + 1]
+                valid_origins.append(origin_idx)
+            if not valid_origins:
+                continue
+
+            # Fit once on the first valid origin and then move through origins with updates.
+            first_origin = valid_origins[0]
+            hist = group.iloc[: first_origin + 1]
+            hist = hist[[id_col, time_col, target_col, *dynamic]]
+            temp_ts = TimeSeries(
+                freq=self.ts.freq,
+                lags=self.ts.lags,
+                lag_transforms=self.ts.lag_transforms,
+                date_features=self.ts.date_features,
+                num_threads=self.ts.num_threads,
+                target_transforms=copy.deepcopy(self.ts.target_transforms),
+                lag_transforms_namer=self.ts.lag_transforms_namer,
+            )
+            temp_ts._fit(
+                hist,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=self.ts.static_features,
+                keep_last_n=self.ts.keep_last_n,
+                weight_col=self.ts.weight_col,
+            )
+            core_tfms = temp_ts._get_core_lag_tfms()
+            if core_tfms:
+                temp_ts._compute_transforms(core_tfms, updates_only=False)
+            temp_ts.max_horizon = self.ts.max_horizon
+            temp_ts._horizons = self.ts._horizons
+            temp_ts.as_numpy = self.ts.as_numpy
+
+            current_origin = first_origin
+            for origin_idx in valid_origins:
+                if origin_idx > current_origin:
+                    # Advance the state to the current origin with observed values.
+                    for update_idx in range(current_origin + 1, origin_idx + 1):
+                        obs = group.iloc[[update_idx]][[id_col, time_col, target_col]]
+                        temp_ts.update(obs)
+                    current_origin = origin_idx
+
                 future = group.iloc[origin_idx + 1 : origin_idx + h + 1]
                 if future.shape[0] < h:
-                    continue
-                if future.iloc[0][time_col] not in valid_uid_times:
                     continue
                 X_df = None
                 if dynamic:
                     X_df = future[[id_col, time_col, *dynamic]]
-                try:
-                    preds = self.predict(h=h, new_df=hist, X_df=X_df)
-                finally:
-                    self.ts = original_ts
+                preds = temp_ts.predict(models=self.models_, horizon=h, X_df=X_df)
                 pred_last = preds.iloc[-1]
+                target_idx = origin_idx + h
                 row = {
-                    id_col: group.iloc[target_idx][id_col],
-                    time_col: group.iloc[target_idx][time_col],
-                    target_col: group.iloc[target_idx][target_col],
+                    id_col: group.iloc[target_idx, group.columns.get_loc(id_col)],
+                    time_col: group.iloc[target_idx, group.columns.get_loc(time_col)],
+                    target_col: group.iloc[target_idx, group.columns.get_loc(target_col)],
                     "h": h,
                 }
                 for model_name in model_names:
@@ -759,7 +793,7 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
-                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=False)
+                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
         else:
             # Standard recursive path (unchanged)
             prep = self.preprocess(
@@ -798,7 +832,7 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
-                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=False)
+                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
         return self
 
     def forecast_fitted_values(
@@ -825,7 +859,10 @@ class MLForecast:
         if not self.models_:
             if h != 1:
                 raise ValueError("No fitted models available to compute multi-step fitted values.")
-            return self.fcst_fitted_values_
+            res = self.fcst_fitted_values_
+            if "h" not in res.columns:
+                res = ufp.assign_columns(res, "h", h)
+            return res
 
         first_model = next(iter(self.models_.values()))
         is_direct = isinstance(first_model, dict)
@@ -861,6 +898,8 @@ class MLForecast:
                     res = res_pd
                 else:
                     res = pl.from_pandas(res_pd)
+        if "h" not in res.columns:
+            res = ufp.assign_columns(res, "h", h)
         if level is not None:
             res = ufp.add_insample_levels(
                 res,

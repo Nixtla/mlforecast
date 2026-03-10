@@ -151,7 +151,7 @@ def test_fitted_target(fcst2, setup_forecast_data):
     # predictions for the first horizon are equal to the recursive
     pd.testing.assert_frame_equal(
         fitted_vals.reset_index(drop=True),
-        max_horizon_fitted_values[max_horizon_fitted_values['h'] == 1].drop(columns='h'),
+        max_horizon_fitted_values[max_horizon_fitted_values['h'] == 1].reset_index(drop=True),
     )
     # restored values match
     xx = max_horizon_fitted_values[lambda x: x['unique_id'].eq('H413')].pivot_table(
@@ -178,13 +178,100 @@ def test_recursive_forecast_fitted_values_on_demand_h():
     fitted_h1 = fcst.forecast_fitted_values()
     fitted_h3 = fcst.forecast_fitted_values(h=3)
 
-    assert "h" not in fitted_h1.columns
+    assert "h" in fitted_h1.columns
     assert "h" in fitted_h3.columns
+    assert fitted_h1["h"].eq(1).all()
     assert fitted_h3["h"].eq(3).all()
     assert fitted_h3.shape[0] < fitted_h1.shape[0]
 
-    restored = fitted_h3.merge(df[["unique_id", "ds", "y"]], on=["unique_id", "ds"], suffixes=("_fit", "_orig"))
-    np.testing.assert_allclose(restored["y_fit"].values, restored["y_orig"].values)
+    assert np.isfinite(fitted_h1["LinearRegression"].to_numpy()).all()
+    assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
+    overlap = fitted_h1[["unique_id", "ds", "LinearRegression"]].merge(
+        fitted_h3[["unique_id", "ds", "LinearRegression"]],
+        on=["unique_id", "ds"],
+        suffixes=("_h1", "_h3"),
+    )
+    assert len(overlap) > 0
+    assert not np.allclose(overlap["LinearRegression_h1"], overlap["LinearRegression_h3"])
+
+
+def test_recursive_forecast_fitted_values_on_demand_h_matches_slow_baseline():
+    h = 3
+    df = generate_daily_series(2, min_length=40, max_length=40)
+    df["x"] = np.linspace(0.0, 1.0, len(df))
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+        lag_transforms={1: [RollingMean(3)]},
+    )
+    fcst.fit(df, fitted=True, static_features=[])
+
+    fast = fcst.forecast_fitted_values(h=h).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+
+    train_pd = df.sort_values(["unique_id", "ds"]).reset_index(drop=True)
+    one_step_pd = fcst.fcst_fitted_values_[["unique_id", "ds"]].copy()
+    valid_one_step_times = {
+        uid: set(group["ds"].tolist())
+        for uid, group in one_step_pd.groupby("unique_id", observed=True)
+    }
+    static = [c for c in fcst.ts.static_features_.columns if c != "unique_id"]
+    exclude = {"unique_id", "ds", "y", *static}
+    if fcst.ts.weight_col is not None:
+        exclude.add(fcst.ts.weight_col)
+    dynamic = [c for c in train_pd.columns if c not in exclude]
+
+    rows = []
+    original_ts = fcst.ts
+    for uid, group in train_pd.groupby("unique_id", observed=True):
+        group = group.sort_values("ds").reset_index(drop=True)
+        valid_uid_times = valid_one_step_times.get(uid, set())
+        for target_idx in range(h - 1, len(group)):
+            origin_idx = target_idx - h
+            if origin_idx < 0:
+                continue
+            hist = group.iloc[: origin_idx + 1]
+            future = group.iloc[origin_idx + 1 : origin_idx + h + 1]
+            if future.shape[0] < h:
+                continue
+            if future.iloc[0]["ds"] not in valid_uid_times:
+                continue
+            X_df = future[["unique_id", "ds", *dynamic]] if dynamic else None
+            try:
+                preds = fcst.predict(h=h, new_df=hist, X_df=X_df)
+            finally:
+                fcst.ts = original_ts
+            pred_last = preds.iloc[-1]
+            rows.append(
+                {
+                    "unique_id": group.iloc[target_idx]["unique_id"],
+                    "ds": group.iloc[target_idx]["ds"],
+                    "y": group.iloc[target_idx]["y"],
+                    "h": h,
+                    "LinearRegression": pred_last["LinearRegression"],
+                }
+            )
+    expected = pd.DataFrame(rows).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(fast, expected)
+
+
+def test_recursive_forecast_fitted_values_on_demand_uses_cached_train_snapshot():
+    h = 3
+    df = generate_daily_series(2, min_length=40, max_length=40)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, static_features=[])
+    before = fcst.forecast_fitted_values(h=h).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+
+    # Mutate caller-side dataframe after fit; cached train snapshot should be unaffected.
+    df.loc[:, "y"] = df["y"] + 1000
+    after = fcst.forecast_fitted_values(h=h).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(before, after)
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms():
