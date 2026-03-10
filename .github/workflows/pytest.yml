@@ -29,6 +29,7 @@ jobs:
 
       - name: Check wheel contents
         run: |
+          uv pip install fugue>=0.9.4
           uv run --with "$(ls dist/*.whl)" --no-project python -c "
           import mlforecast
           import mlforecast.distributed
