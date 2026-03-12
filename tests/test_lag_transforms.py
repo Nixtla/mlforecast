@@ -64,12 +64,19 @@ def test_combine_take(grouped_array):
     tfm.transform(grouped_array)
 
     idxs = np.array([0, 5, 10, 15])
+    ml_ga = MLGroupedArray(grouped_array.data, grouped_array.indptr)
+    subset_ml_ga = ml_ga.take(idxs)
+    subset_ga = CoreGroupedArray(subset_ml_ga.data, subset_ml_ga.indptr)
     subset_tfm = tfm.take(idxs)
 
-    assert isinstance(subset_tfm, Combine)
-    assert subset_tfm.tfm1 is not None
-    assert subset_tfm.tfm2 is not None
-    assert subset_tfm.operator == operator.add
+    fresh_tfm = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+    fresh_tfm.transform(subset_ga)
+
+    np.testing.assert_allclose(subset_tfm.update(subset_ga), fresh_tfm.update(subset_ga))
 
 def test_nested_combine_take(grouped_array):
     inner = Combine(
@@ -113,35 +120,40 @@ def test_combine_stack(grouped_array):
     assert stacked_tfm.operator == operator.add
 
 
-def test_combine_stack_behavioral(grouped_array):
-    """Verify that Combine.stack() doesn't just return first partition"""
-    # Create two Combine transforms with DIFFERENT window sizes to detect if
-    # stacking just returns the first partition vs actually combining them
+def test_combine_stack_preserves_all_series(grouped_array):
+    """Verify that Combine.stack() preserves state from all partitions, not just the first."""
+    # Simulate two partitions: each sees a disjoint subset of series
+    ml_ga = MLGroupedArray(grouped_array.data, grouped_array.indptr)
+    ga1_ml = ml_ga.take(np.arange(10))
+    ga2_ml = ml_ga.take(np.arange(10, 20))
+    ga1 = CoreGroupedArray(ga1_ml.data, ga1_ml.indptr)
+    ga2 = CoreGroupedArray(ga2_ml.data, ga2_ml.indptr)
+
     tfm1 = Combine(
         RollingMean(window_size=3, min_samples=1),
         RollingMean(window_size=5, min_samples=1),
         operator.add
     )._set_core_tfm(1)
-
     tfm2 = Combine(
-        RollingMean(window_size=7, min_samples=1),  # Different window size
-        RollingMean(window_size=9, min_samples=1),  # Different window size
+        RollingMean(window_size=3, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
         operator.add
     )._set_core_tfm(1)
 
-    tfm1.transform(grouped_array)
-    tfm2.transform(grouped_array)
+    tfm1.transform(ga1)
+    tfm2.transform(ga2)
 
-    # If stack incorrectly returned partition_tfms[0], it would just return tfm1
-    # The stacked transform should have tfm1's window sizes (since stack keeps first's config)
-    # but should have stacked internal state from both
     stacked = Combine.stack([tfm1, tfm2])
 
-    # Verify stacked uses first transform's configuration
-    assert stacked.tfm1.window_size == 3
-    assert stacked.tfm2.window_size == 5
-    # Verify it's not just a reference to tfm1 (defensive check)
-    assert stacked is not tfm1
+    # A fresh transform on all series should match update() on the stacked transform
+    tfm_full = Combine(
+        RollingMean(window_size=3, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add
+    )._set_core_tfm(1)
+    tfm_full.transform(grouped_array)
+
+    np.testing.assert_allclose(stacked.update(grouped_array), tfm_full.update(grouped_array))
 
 
 @pytest.mark.parametrize("tfm", [

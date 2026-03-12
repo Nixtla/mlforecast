@@ -2865,7 +2865,7 @@ wheels = [
 
 [[package]]
 name = "mlforecast"
-version = "1.0.3.dev0"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },

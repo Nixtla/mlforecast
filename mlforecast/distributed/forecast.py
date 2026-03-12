@@ -367,7 +367,11 @@ class DistributedMLForecast:
         exclude_cols = {id_col, time_col, target_col}
         if weight_col is not None:
             exclude_cols.add(weight_col)
-        features = [x for x in fa.get_column_names(prep) if x not in exclude_cols]
+        features = [
+            x
+            for x in fa.get_column_names(prep)
+            if x not in exclude_cols
+        ]
         self.models_ = {}
         if SPARK_INSTALLED and isinstance(data, SparkDataFrame):
             featurizer = VectorAssembler(
@@ -382,7 +386,7 @@ class DistributedMLForecast:
                 self.models_[name] = model.extract_local_model(trained_model)
         elif DASK_INSTALLED and isinstance(data, dd.DataFrame):
             X, y = prep[features], prep[target_col]
-            if weights := weight_col:
+            if weights:=weight_col:
                 weights = prep[weight_col]
             for name, model in self.models.items():
                 trained_model = clone(model).fit(X, y, sample_weight=weights)
@@ -393,9 +397,7 @@ class DistributedMLForecast:
                 raise NotImplementedError(
                     "Only spark and dask engines currently support sample weights."
                 )
-            prep_selected = prep.select_columns(
-                cols=features + [target_col]
-            ).materialize()
+            prep_selected = prep.select_columns(cols=features + [target_col]).materialize()
             X = RayDMatrix(
                 prep_selected,
                 label=target_col,
