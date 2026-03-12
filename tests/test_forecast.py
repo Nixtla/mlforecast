@@ -288,6 +288,22 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
         fcst.forecast_fitted_values(h=2)
 
 
+def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
+    df = generate_daily_series(2, min_length=50, max_length=50, n_static_features=1, static_as_categorical=False)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, static_features=['static_0'])
+
+    # Should not raise a KeyError due to missing static columns in hist
+    fitted_h3 = fcst.forecast_fitted_values(h=3)
+    assert "h" in fitted_h3.columns
+    assert fitted_h3["h"].eq(3).all()
+    assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
+
+
 def test_direct_forecast_fitted_values_h_filter():
     df = generate_daily_series(2, min_length=40, max_length=40)
     fcst = MLForecast(
