@@ -117,6 +117,26 @@ The date features are stored as they were passed to the constructor.
 test_eq(ts.date_features, flow_config['date_features'])
 ```
 
+Supported built-in string date features (for pandas and polars) are:
+
+* `year`
+* `month`
+* `day`
+* `hour`
+* `minute`
+* `second`
+* `dayofyear`, `day_of_year`
+* `week`, `weekofyear`
+* `dayofweek`, `day_of_week`, `weekday`
+* `quarter`
+* `daysinmonth`
+* `is_month_start`, `is_month_end`
+* `is_quarter_start`, `is_quarter_end`
+* `is_year_start`, `is_year_end`
+
+For broad compatibility across pandas versions/backends, prefer `week`
+over `weekofyear` and `dayofyear` over `day_of_year`.
+
 The transformations are stored as a dictionary where the key is the name
 of the transformation (name of the column in the dataframe with the
 computed features), which is built using `build_transform_name` and the
