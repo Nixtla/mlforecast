@@ -3,6 +3,7 @@ __all__ = ['TimeSeries']
 
 import copy
 import inspect
+import re
 import reprlib
 import warnings
 from collections import Counter, OrderedDict
@@ -240,6 +241,8 @@ class TimeSeries:
             lag_transforms=self.lag_transforms,
             namer=lag_transforms_namer,
         )
+        self.horizon_feature_templates: Optional[List[str]] = None
+        self._horizon_feature_columns: Dict[int, List[str]] = {}
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
@@ -310,6 +313,50 @@ class TimeSeries:
         if self.weight_col is not None:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
+
+    def _split_horizon_exog_cols(
+        self, exog_cols: List[str]
+    ) -> Tuple[List[str], Dict[int, List[str]]]:
+        """Split exogenous columns into common and horizon-specific sets."""
+        templates = self.horizon_feature_templates
+        if not templates:
+            return exog_cols, {}
+        compiled_patterns = []
+        for template in templates:
+            if not isinstance(template, str):
+                raise ValueError("All entries in `horizon_feature_templates` must be strings.")
+            if template.count("{h}") != 1:
+                raise ValueError(
+                    "Each template in `horizon_feature_templates` must include exactly one '{h}' placeholder."
+                )
+            pattern_str = "^" + re.escape(template).replace(r"\{h\}", r"(?P<h>[1-9]\d*)") + "$"
+            compiled_patterns.append(re.compile(pattern_str))
+
+        matched_cols = set()
+        per_horizon: Dict[int, List[str]] = {}
+        for col in exog_cols:
+            matched_horizon = None
+            for compiled_pattern in compiled_patterns:
+                match = compiled_pattern.match(col)
+                if match is None:
+                    continue
+                horizon = int(match.group("h"))
+                if matched_horizon is not None and matched_horizon != horizon:
+                    raise ValueError(
+                        f"Column '{col}' matches multiple horizon templates with conflicting horizons."
+                    )
+                matched_horizon = horizon
+            if matched_horizon is not None:
+                per_horizon.setdefault(matched_horizon, []).append(col)
+                matched_cols.add(col)
+
+        if not matched_cols:
+            raise ValueError(
+                "No dynamic exogenous columns matched `horizon_feature_templates`. "
+                "Please verify the template patterns."
+            )
+        common_exog = [c for c in exog_cols if c not in matched_cols]
+        return common_exog, per_horizon
 
     def __repr__(self):
         return (
@@ -782,6 +829,7 @@ class TimeSeries:
             Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
         """
         exog_cols = self._get_dynamic_exog_cols(list(original_df.columns))
+        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(exog_cols)
 
         # Get feature columns (excluding target columns)
         if self.weight_col is not None:
@@ -791,6 +839,7 @@ class TimeSeries:
 
         # Non-exog feature columns (lags, date features, static)
         non_exog_cols = [c for c in x_cols if c not in exog_cols]
+        self._horizon_feature_columns = {}
 
         # Build exog lookup dictionary from original_df for efficient lookups
         # Key: (id, time) -> exog values
@@ -799,15 +848,22 @@ class TimeSeries:
             exog_lookup = original_df[[self.id_col, self.time_col] + exog_cols]
 
         for h in horizons:
+            horizon_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
+            allowed_cols = set(non_exog_cols) | set(horizon_exog)
+            x_cols_h = [c for c in x_cols if c in allowed_cols]
+            self._horizon_feature_columns[h] = [
+                c for c in x_cols_h if c != self.weight_col
+            ]
+
             # Target column name for this horizon
             target_col_h = f"{target_col}{h}"
 
             # Get target for this horizon
             y_h = prep[target_col_h].to_numpy()
 
-            if h == 0 or not exog_cols:
+            if h == 0 or not horizon_exog:
                 # No offset needed for horizon 0 or if no exog cols
-                X_h = prep[x_cols]
+                X_h = prep[x_cols_h]
             else:
                 # Start with the non-exog features from prep
                 X_h = ufp.copy_if_pandas(prep[non_exog_cols], deep=True)
@@ -828,7 +884,7 @@ class TimeSeries:
                     merged = merged.sort('_row_idx')
 
                     # Assign exog columns to X_h
-                    for col in exog_cols:
+                    for col in horizon_exog:
                         X_h = X_h.with_columns(merged[col].alias(col))
                 else:
                     # Pandas
@@ -841,16 +897,16 @@ class TimeSeries:
                     merged = merged.sort_values('_row_idx')
 
                     # Assign exog columns to X_h
-                    for col in exog_cols:
+                    for col in horizon_exog:
                         X_h[col] = merged[col].values
 
                 # Reorder columns to match x_cols
-                X_h = X_h[x_cols]
+                X_h = X_h[x_cols_h]
 
             # Filter valid rows (non-NaN target and exog)
             valid = ~np.isnan(y_h)
-            if exog_cols and h > 0:
-                for col in exog_cols:
+            if horizon_exog and h > 0:
+                for col in horizon_exog:
                     valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
 
             X_h = ufp.filter_with_mask(X_h, valid)
@@ -1162,6 +1218,13 @@ class TimeSeries:
                 df_constructor = pd.DataFrame
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
+        horizon_feature_columns = getattr(self, "_horizon_feature_columns", {})
+        feature_idx = {c: i for i, c in enumerate(self.features_order_)}
+        horizon_feature_indices = {
+            h: np.array([feature_idx[c] for c in cols], dtype=np.int32)
+            for h, cols in horizon_feature_columns.items()
+            if cols
+        }
 
         for name, model in models.items():
             with self._backup():
@@ -1177,8 +1240,17 @@ class TimeSeries:
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
 
+                    model_x = new_x
+                    h_cols = horizon_feature_columns.get(h)
+                    if h_cols is not None:
+                        if isinstance(new_x, np.ndarray):
+                            col_idx = horizon_feature_indices.get(h)
+                            if col_idx is not None:
+                                model_x = new_x[:, col_idx]
+                        else:
+                            model_x = new_x[h_cols]
                     horizon_model = model[h]
-                    preds = horizon_model.predict(new_x)
+                    preds = horizon_model.predict(model_x)
                     if len(preds) != len(self.uids):
                         raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")
                     predictions[:, out_idx] = preds
