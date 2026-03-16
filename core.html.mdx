@@ -117,8 +117,8 @@ If `keep_last_n` is not None then that number of observations is kept across all
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`max_horizon` | <code>[Optional](#typing.Optional)\[[int](#int)\]</code> | Train models for all horizons 1 to max_horizon. | <code>None</code>
-`horizons` | <code>[Optional](#typing.Optional)\[[List](#typing.List)\[[int](#int)\]\]</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. | <code>None</code>
+`max_horizon` | <code>[Optional](#typing.Optional)[[int](#int)]</code> | Train models for all horizons 1 to max_horizon. | <code>None</code>
+`horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Train models only for specific horizons (1-indexed).       Mutually exclusive with max_horizon. | <code>None</code>
 
 #### `TimeSeries.predict`
 
@@ -147,6 +147,7 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `df` | <code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | New observations to append. | *required*
 `validate_new_data` | <code>[bool](#bool)</code> | If True, validate continuity, start dates, and frequency. | <code>False</code>
+
 
 ```python
 def month_start_or_end(dates):

@@ -14,33 +14,38 @@ RollingQuantile(
 )
 ```
 
-Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
 
 Rolling statistic
+
 
 ### `RollingMax`
 
-Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
 
 Rolling statistic
+
 
 ### `RollingMin`
 
-Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
 
 Rolling statistic
+
 
 ### `RollingStd`
 
-Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
 
 Rolling statistic
+
 
 ### `RollingMean`
 
-Bases: <code>[\_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
+Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
 
 Rolling statistic
+
 
 ### `SeasonalRollingQuantile`
 
@@ -56,33 +61,38 @@ SeasonalRollingQuantile(
 )
 ```
 
-Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
 
 ### `SeasonalRollingMax`
 
-Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
 
 ### `SeasonalRollingMin`
 
-Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
 
 ### `SeasonalRollingStd`
 
-Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
 
 ### `SeasonalRollingMean`
 
-Bases: <code>[\_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
+Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
 
 ### `ExpandingQuantile`
 
@@ -90,7 +100,7 @@ Rolling statistic over seasonal periods
 ExpandingQuantile(p, global_=False, groupby=None, **kwargs)
 ```
 
-Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
@@ -100,10 +110,11 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 
 ### `ExpandingMax`
 
-Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
@@ -113,10 +124,11 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 
 ### `ExpandingMin`
 
-Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
@@ -126,10 +138,11 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 
 ### `ExpandingStd`
 
-Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
@@ -139,10 +152,11 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 
 ### `ExpandingMean`
 
-Bases: <code>[\_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
+Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
 
 Expanding statistic
 
@@ -152,6 +166,7 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
+
 
 ### `ExponentiallyWeightedMean`
 
@@ -159,7 +174,7 @@ Name | Type | Description | Default
 ExponentiallyWeightedMean(alpha, global_=False, groupby=None, **kwargs)
 ```
 
-Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+Bases: <code>[_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
 
 Exponentially weighted average
 
@@ -169,7 +184,8 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
 `global_` | <code>[bool](#bool)</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | <code>False</code>
-`groupby` | <code>[Sequence](#typing.Sequence)\[[str](#str)\]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
+`groupby` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
+
 
 ### `Offset`
 
@@ -177,7 +193,7 @@ Name | Type | Description | Default
 Offset(tfm, n)
 ```
 
-Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+Bases: <code>[_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
 
 Shift series before computing transformation
 
@@ -188,13 +204,14 @@ Name | Type | Description | Default
 `tfm` | <code>[LagTransform](#LagTransform)</code> | Transformation to be applied | *required*
 `n` | <code>[int](#int)</code> | Number of positions to shift (lag) series before applying the transformation | *required*
 
+
 ### `Combine`
 
 ```python
 Combine(tfm1, tfm2, operator)
 ```
 
-Bases: <code>[\_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
+Bases: <code>[_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
 
 Combine two lag transformations using an operator
 
@@ -205,3 +222,4 @@ Name | Type | Description | Default
 `tfm1` | <code>[LagTransform](#LagTransform)</code> | First transformation. | *required*
 `tfm2` | <code>[LagTransform](#LagTransform)</code> | Second transformation. | *required*
 `operator` | <code>[callable](#callable)</code> | Binary operator that defines how to combine the two transformations. | *required*
+
