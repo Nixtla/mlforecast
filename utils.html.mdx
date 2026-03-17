@@ -45,7 +45,8 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | pandas or polars DataFrame: Synthetic panel with columns \[`unique_id`, `ds`, `y`\] and exogenous features.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | pandas or polars DataFrame: Synthetic panel with columns [`unique_id`, `ds`, `y`] and exogenous features.
+
 
 Generate 20 series with lengths between 100 and 1,000.
 
@@ -126,6 +127,7 @@ assert series_equal_ends.groupby('unique_id')['ds'].max().nunique() == 1
 generate_prices_for_series(series, horizon=7, seed=0)
 ```
 
+
 ```python
 series_for_prices = generate_daily_series(20, n_static_features=2, equal_ends=True)
 series_for_prices.rename(columns={'static_1': 'product_id'}, inplace=True)
@@ -161,3 +163,4 @@ PredictionIntervals(n_windows=2, h=1, method='conformal_distribution')
 ```
 
 Class for storing prediction intervals metadata information.
+
