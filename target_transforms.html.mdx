@@ -23,15 +23,17 @@ Bases: <code>[ABC](#abc.ABC)</code>
 
 Base class used for target transformations.
 
+
 ### `Differences`
 
 ```python
 Differences(differences)
 ```
 
-Bases: <code>[\_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
+Bases: <code>[_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
 
 Subtracts previous values of the serie. Can be used to remove trend or seasonalities.
+
 
 ```python
 series = generate_daily_series(10, min_length=50, max_length=100)
@@ -97,7 +99,7 @@ for i in range(len(diffs.differences)):
 AutoDifferences(max_diffs)
 ```
 
-Bases: <code>[\_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
+Bases: <code>[_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
 
 Find and apply the optimal number of differences to each serie.
 
@@ -135,7 +137,8 @@ Type | Description
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
+<code>[ValueError](#ValueError)</code> | If fitted differences are smaller than provided target.
+
 
 ### `AutoSeasonalDifferences`
 
@@ -183,7 +186,8 @@ Type | Description
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
+<code>[ValueError](#ValueError)</code> | If fitted differences are smaller than provided target.
+
 
 ### `AutoSeasonalityAndDifferences`
 
@@ -207,7 +211,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing, there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
+<code>[ValueError](#ValueError)</code> | If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing, there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
 
 #### `AutoSeasonalityAndDifferences.inverse_transform_fitted`
 
@@ -237,7 +241,8 @@ Type | Description
 
 Type | Description
 ---- | -----------
-<code>[ValueError](#ValueError)</code>| If fitted differences are smaller than provided target.
+<code>[ValueError](#ValueError)</code> | If fitted differences are smaller than provided target.
+
 
 ```python
 def test_scaler(sc, series):
@@ -271,15 +276,17 @@ def test_scaler(sc, series):
 
 ### `LocalStandardScaler`
 
-Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
+Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Standardizes each serie by subtracting its mean and dividing by its standard deviation.
 
+
 ### `LocalMinMaxScaler`
 
-Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
+Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Scales each serie to be in the [0, 1] interval.
+
 
 ### `LocalRobustScaler`
 
@@ -287,7 +294,7 @@ Scales each serie to be in the [0, 1] interval.
 LocalRobustScaler(scale)
 ```
 
-Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
+Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Scaler robust to outliers.
 
@@ -297,15 +304,17 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `scale` | <code>[str](#str)</code> | Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Asbolute Deviation). Defaults to 'iqr'. | *required*
 
+
 ### `LocalBoxCox`
 
 ```python
 LocalBoxCox()
 ```
 
-Bases: <code>[\_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
+Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Finds the optimum lambda for each serie and applies the Box-Cox transformation
+
 
 ### `GlobalSklearnTransformer`
 
@@ -316,6 +325,7 @@ GlobalSklearnTransformer(transformer)
 Bases: <code>[BaseTargetTransform](#mlforecast.target_transforms.BaseTargetTransform)</code>
 
 Applies the same scikit-learn transformer to all series.
+
 
 ```python
 # need this import in order for isinstance to work
