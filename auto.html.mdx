@@ -22,7 +22,6 @@ Name | Type | Description | Default
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
-
 ### `AutoElasticNet`
 
 ```python
@@ -39,7 +38,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
-
 
 ### `AutoLasso`
 
@@ -58,7 +56,6 @@ Name | Type | Description | Default
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
-
 ### `AutoRidge`
 
 ```python
@@ -75,7 +72,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
-
 
 ### `AutoLinearRegression`
 
@@ -94,7 +90,6 @@ Name | Type | Description | Default
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
-
 ### `AutoCatboost`
 
 ```python
@@ -111,7 +106,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
-
 
 ### `AutoXGBoost`
 
@@ -130,7 +124,6 @@ Name | Type | Description | Default
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
-
 ### `AutoLightGBM`
 
 ```python
@@ -148,13 +141,11 @@ Name | Type | Description | Default
 `model` | <code>BaseEstimator</code> | scikit-learn compatible regressor | *required*
 `config` | <code>callable</code> | function that takes an optuna trial and produces a configuration | *required*
 
-
 ### `random_forest_space`
 
 ```python
 random_forest_space(trial)
 ```
-
 
 ### `elastic_net_space`
 
@@ -162,13 +153,11 @@ random_forest_space(trial)
 elastic_net_space(trial)
 ```
 
-
 ### `lasso_space`
 
 ```python
 lasso_space(trial)
 ```
-
 
 ### `ridge_space`
 
@@ -176,13 +165,11 @@ lasso_space(trial)
 ridge_space(trial)
 ```
 
-
 ### `linear_regression_space`
 
 ```python
 linear_regression_space(trial)
 ```
-
 
 ### `catboost_space`
 
@@ -190,20 +177,17 @@ linear_regression_space(trial)
 catboost_space(trial)
 ```
 
-
 ### `xgboost_space`
 
 ```python
 xgboost_space(trial)
 ```
 
-
 ### `lightgbm_space`
 
 ```python
 lightgbm_space(trial)
 ```
-
 
 ### `AutoModel`
 
@@ -219,7 +203,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `model` | <code>[BaseEstimator](#sklearn.base.BaseEstimator)</code> | scikit-learn compatible regressor | *required*
 `config` | <code>[callable](#callable)</code> | function that takes an optuna trial and produces a configuration | *required*
-
 
 ### `AutoMLForecast`
 
@@ -293,7 +276,7 @@ Name | Type | Description | Default
 `study_kwargs` | <code>[dict](#dict)</code> | Keyword arguments to be passed to the optuna.Study constructor. Defaults to None. | <code>None</code>
 `optimize_kwargs` | <code>[dict](#dict)</code> | Keyword arguments to be passed to the optuna.Study.optimize method. Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Whether to compute the fitted values when retraining the best model. Defaults to False. | <code>False</code>
-`prediction_intervals` | <code>[Optional](#typing.Optional)[[PredictionIntervals](#mlforecast.utils.PredictionIntervals)]</code> | Configuration to calibrate prediction intervals when retraining the best model. | <code>None</code>
+`prediction_intervals` | <code>[Optional](#typing.Optional)\[[PredictionIntervals](#mlforecast.utils.PredictionIntervals)\]</code> | Configuration to calibrate prediction intervals when retraining the best model. | <code>None</code>
 
 **Returns:**
 
@@ -356,7 +339,6 @@ Name | Type | Description | Default
 Type | Description
 ---- | -----------
 <code>pandas or polars DataFrame</code> | Dataframe with predictions for the training set
-
 
 ```python
 import time
