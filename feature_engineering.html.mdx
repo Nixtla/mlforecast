@@ -46,14 +46,7 @@ prices.head()
 ### `transform_exog`
 
 ```python
-transform_exog(
-    df,
-    lags=None,
-    lag_transforms=None,
-    id_col="unique_id",
-    time_col="ds",
-    num_threads=1,
-)
+transform_exog(df, lags=None, lag_transforms=None, id_col='unique_id', time_col='ds', num_threads=1)
 ```
 
 Compute lag features for dynamic exogenous regressors.

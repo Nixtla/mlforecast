@@ -75,15 +75,7 @@ serie
 ### `TimeSeries`
 
 ```python
-TimeSeries(
-    freq,
-    lags=None,
-    lag_transforms=None,
-    date_features=None,
-    num_threads=1,
-    target_transforms=None,
-    lag_transforms_namer=None,
-)
+TimeSeries(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None)
 ```
 
 Utility class for storing and transforming time series data.
@@ -91,20 +83,7 @@ Utility class for storing and transforming time series data.
 #### `TimeSeries.fit_transform`
 
 ```python
-fit_transform(
-    data,
-    id_col,
-    time_col,
-    target_col,
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    max_horizon=None,
-    horizons=None,
-    return_X_y=False,
-    as_numpy=False,
-    weight_col=None,
-)
+fit_transform(data, id_col, time_col, target_col, static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, return_X_y=False, as_numpy=False, weight_col=None)
 ```
 
 Add the features to `data` and save the required information for the predictions step.
@@ -123,14 +102,7 @@ Name | Type | Description | Default
 #### `TimeSeries.predict`
 
 ```python
-predict(
-    models,
-    horizon,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    X_df=None,
-    ids=None,
-)
+predict(models, horizon, before_predict_callback=None, after_predict_callback=None, X_df=None, ids=None)
 ```
 
 #### `TimeSeries.update`

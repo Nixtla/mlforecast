@@ -9,23 +9,7 @@ description: Utilities for hyperparameter optimization
 ### `mlforecast_objective`
 
 ```python
-mlforecast_objective(
-    df,
-    config_fn,
-    loss,
-    model,
-    freq,
-    n_windows,
-    h,
-    step_size=None,
-    input_size=None,
-    refit=False,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    weight_col=None,
-    cv_splits=None,
-)
+mlforecast_objective(df, config_fn, loss, model, freq, n_windows, h, step_size=None, input_size=None, refit=False, id_col='unique_id', time_col='ds', target_col='y', weight_col=None, cv_splits=None)
 ```
 
 optuna objective function for the MLForecast class

@@ -9,16 +9,7 @@ title: MLForecast
 ### `MLForecast`
 
 ```python
-MLForecast(
-    models,
-    freq,
-    lags=None,
-    lag_transforms=None,
-    date_features=None,
-    num_threads=1,
-    target_transforms=None,
-    lag_transforms_namer=None,
-)
+MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None)
 ```
 
 Forecasting pipeline
@@ -39,23 +30,7 @@ Name | Type | Description | Default
 #### `MLForecast.fit`
 
 ```python
-fit(
-    df,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    max_horizon=None,
-    horizons=None,
-    prediction_intervals=None,
-    fitted=False,
-    as_numpy=False,
-    weight_col=None,
-    models_fit_kwargs=None,
-    validate_data=True,
-)
+fit(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, prediction_intervals=None, fitted=False, as_numpy=False, weight_col=None, models_fit_kwargs=None, validate_data=True)
 ```
 
 Apply the feature engineering and train the models.
@@ -173,15 +148,7 @@ Type | Description
 #### `MLForecast.predict`
 
 ```python
-predict(
-    h,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    new_df=None,
-    level=None,
-    X_df=None,
-    ids=None,
-)
+predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None)
 ```
 
 Compute the predictions for the next `h` steps.
@@ -207,21 +174,7 @@ Type | Description
 #### `MLForecast.preprocess`
 
 ```python
-preprocess(
-    df,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    max_horizon=None,
-    horizons=None,
-    return_X_y=False,
-    as_numpy=False,
-    weight_col=None,
-    validate_data=True,
-)
+preprocess(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, return_X_y=False, as_numpy=False, weight_col=None, validate_data=True)
 ```
 
 Add the features to `data`.
@@ -276,30 +229,7 @@ Name | Type | Description
 #### `MLForecast.cross_validation`
 
 ```python
-cross_validation(
-    df,
-    n_windows,
-    h,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    step_size=None,
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    refit=True,
-    max_horizon=None,
-    horizons=None,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    prediction_intervals=None,
-    level=None,
-    input_size=None,
-    fitted=False,
-    as_numpy=False,
-    weight_col=None,
-    validate_data=True,
-)
+cross_validation(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, static_features=None, dropna=True, keep_last_n=None, refit=True, max_horizon=None, horizons=None, before_predict_callback=None, after_predict_callback=None, prediction_intervals=None, level=None, input_size=None, fitted=False, as_numpy=False, weight_col=None, validate_data=True)
 ```
 
 Perform time series cross validation.

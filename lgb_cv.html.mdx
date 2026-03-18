@@ -9,14 +9,7 @@ title: LightGBMCV
 ### `LightGBMCV`
 
 ```python
-LightGBMCV(
-    freq,
-    lags=None,
-    lag_transforms=None,
-    date_features=None,
-    num_threads=1,
-    target_transforms=None,
-)
+LightGBMCV(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None)
 ```
 
 Create LightGBM CV object.
@@ -35,31 +28,7 @@ Name | Type | Description | Default
 #### `LightGBMCV.fit`
 
 ```python
-fit(
-    df,
-    n_windows,
-    h,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    step_size=None,
-    num_iterations=100,
-    params=None,
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    eval_every=10,
-    weights=None,
-    metric="mape",
-    verbose_eval=True,
-    early_stopping_evals=2,
-    early_stopping_pct=0.01,
-    compute_cv_preds=False,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    input_size=None,
-    weight_col=None,
-)
+fit(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, num_iterations=100, params=None, static_features=None, dropna=True, keep_last_n=None, eval_every=10, weights=None, metric='mape', verbose_eval=True, early_stopping_evals=2, early_stopping_pct=0.01, compute_cv_preds=False, before_predict_callback=None, after_predict_callback=None, input_size=None, weight_col=None)
 ```
 
 Train boosters simultaneously and assess their performance on the complete forecasting window.
@@ -100,9 +69,7 @@ Type | Description
 #### `LightGBMCV.predict`
 
 ```python
-predict(
-    h, before_predict_callback=None, after_predict_callback=None, X_df=None
-)
+predict(h, before_predict_callback=None, after_predict_callback=None, X_df=None)
 ```
 
 Compute predictions with each of the trained boosters.
@@ -125,23 +92,7 @@ Type | Description
 #### `LightGBMCV.setup`
 
 ```python
-setup(
-    df,
-    n_windows,
-    h,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    step_size=None,
-    params=None,
-    static_features=None,
-    dropna=True,
-    keep_last_n=None,
-    weights=None,
-    metric="mape",
-    input_size=None,
-    weight_col=None,
-)
+setup(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, params=None, static_features=None, dropna=True, keep_last_n=None, weights=None, metric='mape', input_size=None, weight_col=None)
 ```
 
 Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
@@ -175,12 +126,7 @@ Type | Description
 #### `LightGBMCV.partial_fit`
 
 ```python
-partial_fit(
-    num_iterations,
-    before_predict_callback=None,
-    after_predict_callback=None,
-    weight_col=None,
-)
+partial_fit(num_iterations, before_predict_callback=None, after_predict_callback=None, weight_col=None)
 ```
 
 Train the boosters for some iterations.

@@ -224,15 +224,7 @@ Name | Type | Description | Default
 ### `AutoMLForecast`
 
 ```python
-AutoMLForecast(
-    models,
-    freq,
-    season_length=None,
-    init_config=None,
-    fit_config=None,
-    num_threads=1,
-    reuse_cv_splits=False,
-)
+AutoMLForecast(models, freq, season_length=None, init_config=None, fit_config=None, num_threads=1, reuse_cv_splits=False)
 ```
 
 Hyperparameter optimization helper
@@ -252,24 +244,7 @@ Name | Type | Description | Default
 #### `AutoMLForecast.fit`
 
 ```python
-fit(
-    df,
-    n_windows,
-    h,
-    num_samples,
-    step_size=None,
-    input_size=None,
-    refit=False,
-    loss=None,
-    id_col="unique_id",
-    time_col="ds",
-    target_col="y",
-    study_kwargs=None,
-    optimize_kwargs=None,
-    fitted=False,
-    prediction_intervals=None,
-    weight_col=None,
-)
+fit(df, n_windows, h, num_samples, step_size=None, input_size=None, refit=False, loss=None, id_col='unique_id', time_col='ds', target_col='y', study_kwargs=None, optimize_kwargs=None, fitted=False, prediction_intervals=None, weight_col=None)
 ```
 
 Carry out the optimization process.
