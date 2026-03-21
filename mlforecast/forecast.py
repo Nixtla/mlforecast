@@ -997,6 +997,10 @@ class MLForecast:
         # Run data validations once on full dataset if requested
         if validate_data:
             self._validate_data(df, id_col, time_col)
+        if fold_transform is not None and prediction_intervals is not None:
+            raise ValueError(
+                "`fold_transform` is not currently supported with `prediction_intervals`."
+            )
         if fold_transform is not None and refit is not True and refit != 1:
             raise ValueError("`fold_transform` requires `refit=True` or `refit=1`.")
 
