@@ -1381,6 +1381,191 @@ def test_horizons_with_exogenous():
     assert preds.shape[0] > 0
 
 
+def test_horizon_feature_templates_route_horizon_specific_exog():
+    """Ensure direct models can route horizon-scoped exogenous features via templates."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    train = df.iloc[:-H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    baseline = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    baseline.fit(train, static_features=[], max_horizon=H)
+    with pytest.raises(ValueError, match="Input X contains NaN"):
+        baseline.predict(h=H, X_df=future)
+
+    templated = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    templated.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_feature_templates=["bookings_horizon_{h}"],
+    )
+    assert templated.horizon_features_ == {
+        1: ["bookings_horizon_1"],
+        2: ["bookings_horizon_2"],
+        3: ["bookings_horizon_3"],
+    }
+    preds = templated.predict(h=H, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+
+def test_horizon_features_route_horizon_specific_exog():
+    """Ensure explicit horizon feature mappings are used directly and persist."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    train = df.iloc[:-H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+    )
+    assert fcst.horizon_features_ == {
+        1: ["bookings_horizon_1"],
+        2: ["bookings_horizon_2"],
+        3: ["bookings_horizon_3"],
+    }
+    preds = fcst.predict(h=H, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        savedir = Path(tmpdir) / "fcst"
+        savedir.mkdir()
+        fcst.save(savedir)
+        loaded = MLForecast.load(savedir)
+    assert loaded.horizon_features_ == fcst.horizon_features_
+    preds_loaded = loaded.predict(h=H, X_df=future)
+    pd.testing.assert_frame_equal(preds, preds_loaded)
+
+
+def test_horizon_feature_templates_require_direct_mode():
+    """Templates are only valid for direct forecasting setups."""
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
+        fcst.fit(
+            df,
+            static_features=[],
+            horizon_feature_templates=["bookings_horizon_{h}"],
+        )
+
+
+def test_horizon_features_require_direct_mode():
+    """Explicit horizon feature mappings are only valid for direct forecasting setups."""
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
+        fcst.fit(
+            df,
+            static_features=[],
+            horizon_features={1: ["bookings_horizon_1"]},
+        )
+
+
+def test_horizon_features_with_weights_and_fitted_values():
+    """Direct fitted values should work when weights and horizon-specific inputs are both used."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["weight"] = np.linspace(1.0, 2.0, len(df))
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        df.iloc[:-H],
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+        weight_col="weight",
+        fitted=True,
+    )
+    fitted = fcst.forecast_fitted_values()
+    assert fitted.shape[0] > 0
+    assert "LinearRegression" in fitted.columns
+
+
+def test_horizon_features_transfer_learning_predict():
+    """Transfer-learning predictions should preserve horizon-specific feature routing."""
+    H = 3
+    df = generate_daily_series(1, min_length=80, max_length=80)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    base_train = df.iloc[:-2 * H]
+    transfer_df = df.iloc[-2 * H : -H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        base_train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+    )
+    preds = fcst.predict(h=H, new_df=transfer_df, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+
 def test_horizons_with_target_transforms():
     """Test that sparse horizons work correctly with target transforms.
 

@@ -240,6 +240,7 @@ class TimeSeries:
             lag_transforms=self.lag_transforms,
             namer=lag_transforms_namer,
         )
+        self.horizon_features_: Dict[int, List[str]] = {}
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
@@ -310,6 +311,20 @@ class TimeSeries:
         if self.weight_col is not None:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
+
+    def _split_horizon_exog_cols(
+        self,
+        exog_cols: List[str],
+        horizon_features: Dict[int, List[str]],
+    ) -> Tuple[List[str], Dict[int, List[str]]]:
+        """Split exogenous columns into common and horizon-specific sets."""
+        if not horizon_features:
+            return exog_cols, {}
+        matched_cols = {
+            col for cols in horizon_features.values() for col in cols if col in exog_cols
+        }
+        common_exog = [c for c in exog_cols if c not in matched_cols]
+        return common_exog, horizon_features
 
     def __repr__(self):
         return (
@@ -781,7 +796,10 @@ class TimeSeries:
         Yields:
             Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
         """
-        exog_cols = self._get_dynamic_exog_cols(list(original_df.columns))
+        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+            exog_cols, self.horizon_features_
+        )
 
         # Get feature columns (excluding target columns)
         if self.weight_col is not None:
@@ -791,7 +809,6 @@ class TimeSeries:
 
         # Non-exog feature columns (lags, date features, static)
         non_exog_cols = [c for c in x_cols if c not in exog_cols]
-
         # Build exog lookup dictionary from original_df for efficient lookups
         # Key: (id, time) -> exog values
         if exog_cols:
@@ -799,15 +816,19 @@ class TimeSeries:
             exog_lookup = original_df[[self.id_col, self.time_col] + exog_cols]
 
         for h in horizons:
+            horizon_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
+            allowed_cols = set(non_exog_cols) | set(horizon_exog)
+            x_cols_h = [c for c in x_cols if c in allowed_cols]
+
             # Target column name for this horizon
             target_col_h = f"{target_col}{h}"
 
             # Get target for this horizon
             y_h = prep[target_col_h].to_numpy()
 
-            if h == 0 or not exog_cols:
+            if h == 0 or not horizon_exog:
                 # No offset needed for horizon 0 or if no exog cols
-                X_h = prep[x_cols]
+                X_h = prep[x_cols_h]
             else:
                 # Start with the non-exog features from prep
                 X_h = ufp.copy_if_pandas(prep[non_exog_cols], deep=True)
@@ -828,7 +849,7 @@ class TimeSeries:
                     merged = merged.sort('_row_idx')
 
                     # Assign exog columns to X_h
-                    for col in exog_cols:
+                    for col in horizon_exog:
                         X_h = X_h.with_columns(merged[col].alias(col))
                 else:
                     # Pandas
@@ -841,16 +862,16 @@ class TimeSeries:
                     merged = merged.sort_values('_row_idx')
 
                     # Assign exog columns to X_h
-                    for col in exog_cols:
+                    for col in horizon_exog:
                         X_h[col] = merged[col].values
 
                 # Reorder columns to match x_cols
-                X_h = X_h[x_cols]
+                X_h = X_h[x_cols_h]
 
             # Filter valid rows (non-NaN target and exog)
             valid = ~np.isnan(y_h)
-            if exog_cols and h > 0:
-                for col in exog_cols:
+            if horizon_exog and h > 0:
+                for col in horizon_exog:
                     valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
 
             X_h = ufp.filter_with_mask(X_h, valid)
@@ -1162,6 +1183,23 @@ class TimeSeries:
                 df_constructor = pd.DataFrame
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
+        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+            exog_cols, self.horizon_features_
+        )
+        feature_idx = {c: i for i, c in enumerate(self.features_order_)}
+        horizon_feature_indices = {}
+        if self.horizon_features_:
+            for h in horizons_to_predict:
+                allowed_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
+                h_cols = [
+                    c
+                    for c in self.features_order_
+                    if c not in exog_cols or c in allowed_exog
+                ]
+                horizon_feature_indices[h] = np.array(
+                    [feature_idx[c] for c in h_cols], dtype=np.int32
+                )
 
         for name, model in models.items():
             with self._backup():
@@ -1177,8 +1215,24 @@ class TimeSeries:
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
 
+                    model_x = new_x
+                    if self.horizon_features_:
+                        if isinstance(new_x, np.ndarray):
+                            col_idx = horizon_feature_indices.get(h)
+                            if col_idx is not None:
+                                model_x = new_x[:, col_idx]
+                        else:
+                            allowed_exog = common_exog_cols + horizon_exog_cols.get(
+                                h + 1, []
+                            )
+                            h_cols = [
+                                c
+                                for c in self.features_order_
+                                if c not in exog_cols or c in allowed_exog
+                            ]
+                            model_x = new_x[h_cols]
                     horizon_model = model[h]
-                    preds = horizon_model.predict(new_x)
+                    preds = horizon_model.predict(model_x)
                     if len(preds) != len(self.uids):
                         raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")
                     predictions[:, out_idx] = preds
