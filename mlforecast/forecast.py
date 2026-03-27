@@ -956,6 +956,7 @@ class MLForecast:
         fitted: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        fold_transform: Optional[Callable[..., Tuple[DFType, DFType]]] = None,
         validate_data: bool = True,
     ) -> DFType:
         """Perform time series cross validation.
@@ -984,6 +985,10 @@ class MLForecast:
             fitted (bool): Store the in-sample predictions. Defaults to False.
             as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            fold_transform (callable, optional): Function applied to each train/validation split before fitting and predicting.
+                Must return the transformed `(train_df, valid_df)` pair. The function receives keyword arguments
+                `id_col`, `time_col` and `target_col`. This requires `refit=True` (or `refit=1`) so models are
+                retrained on each transformed fold. Defaults to None.
             validate_data (bool): Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
@@ -992,6 +997,12 @@ class MLForecast:
         # Run data validations once on full dataset if requested
         if validate_data:
             self._validate_data(df, id_col, time_col)
+        if fold_transform is not None and prediction_intervals is not None:
+            raise ValueError(
+                "`fold_transform` is not currently supported with `prediction_intervals`."
+            )
+        if fold_transform is not None and refit is not True and refit != 1:
+            raise ValueError("`fold_transform` requires `refit=True` or `refit=1`.")
 
         results = []
         cv_models = []
@@ -1007,6 +1018,14 @@ class MLForecast:
             input_size=input_size,
         )
         for i_window, (cutoffs, train, valid) in enumerate(splits):
+            if fold_transform is not None:
+                train, valid = fold_transform(
+                    train,
+                    valid,
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                )
             should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
             if should_fit:
                 self.fit(

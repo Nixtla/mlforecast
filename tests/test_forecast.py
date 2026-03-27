@@ -11,8 +11,11 @@ import polars as pl
 import pytest
 import utilsforecast.processing as ufp
 import xgboost as xgb
+from sklearn.compose import ColumnTransformer
 from sklearn import set_config
 from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import TargetEncoder
 from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
 
@@ -670,6 +673,106 @@ def assert_cross_validation(data, add_exogenous=False):
 def test_cross_validation(non_std_series):
     assert_cross_validation(non_std_series)
     assert_cross_validation(non_std_series, add_exogenous=True)
+
+
+def test_cross_validation_supports_sklearn_target_encoder_pipeline():
+    series = generate_series(n_series=10, min_length=30, max_length=30)
+    series["unique_id"] = series["unique_id"].astype("category")
+    model = make_pipeline(
+        ColumnTransformer(
+            [
+                (
+                    "target_encoder",
+                    TargetEncoder(target_type="continuous"),
+                    ["unique_id"],
+                )
+            ],
+            remainder="passthrough",
+        ),
+        LinearRegression(),
+    )
+    fcst = MLForecast(
+        models=model,
+        freq="D",
+        lags=[1, 2, 7],
+        date_features=["dayofweek"],
+    )
+    cv_results = fcst.cross_validation(
+        series,
+        n_windows=2,
+        h=3,
+        static_features=["unique_id"],
+        as_numpy=False,
+    )
+    assert not cv_results.empty
+    assert cv_results["LinearRegression"].notnull().all()
+
+
+def _fold_mean_encode(train, valid, *, id_col, time_col, target_col):
+    encoded_col = f"{id_col}_mean_enc"
+    if isinstance(train, pd.DataFrame):
+        stats = (
+            train.groupby(id_col, observed=True)[target_col]
+            .mean()
+            .rename(encoded_col)
+            .reset_index()
+        )
+        global_mean = train[target_col].mean()
+        train = train.merge(stats, on=id_col, how="left")
+        valid = valid.merge(stats, on=id_col, how="left")
+        train[encoded_col] = train[encoded_col].fillna(global_mean)
+        valid[encoded_col] = valid[encoded_col].fillna(global_mean)
+    else:
+        stats = train.group_by(id_col).agg(pl.col(target_col).mean().alias(encoded_col))
+        global_mean = train[target_col].mean()
+        train = train.join(stats, on=id_col, how="left").with_columns(
+            pl.col(encoded_col).fill_null(global_mean)
+        )
+        valid = valid.join(stats, on=id_col, how="left").with_columns(
+            pl.col(encoded_col).fill_null(global_mean)
+        )
+    return train, valid
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_cross_validation_fold_transform(engine):
+    series = generate_series(n_series=10, min_length=30, max_length=30)
+    freq = "D"
+    if engine == "polars":
+        series = pl.from_pandas(series)
+        freq = "1d"
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=freq,
+        lags=[1, 2, 7],
+        date_features=["dayofweek"] if engine == "pandas" else ["weekday"],
+    )
+    cv_results = fcst.cross_validation(
+        series,
+        n_windows=2,
+        h=3,
+        static_features=["unique_id"],
+        fold_transform=_fold_mean_encode,
+    )
+    pred_col = "LinearRegression"
+    assert not cv_results.is_empty() if engine == "polars" else not cv_results.empty
+    if engine == "polars":
+        assert cv_results[pred_col].is_not_null().all()
+    else:
+        assert cv_results[pred_col].notnull().all()
+
+
+def test_cross_validation_fold_transform_requires_refit():
+    series = generate_series(n_series=5, min_length=20, max_length=20)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2, 3])
+    with pytest.raises(ValueError, match="`fold_transform` requires `refit=True` or `refit=1`"):
+        fcst.cross_validation(
+            series,
+            n_windows=2,
+            h=3,
+            refit=False,
+            fold_transform=_fold_mean_encode,
+        )
 
 # test short series in cv
 def test_short_series_in_cv():
