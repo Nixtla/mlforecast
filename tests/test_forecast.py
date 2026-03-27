@@ -1499,6 +1499,37 @@ def test_horizon_features_require_direct_mode():
         )
 
 
+def test_horizon_features_with_weights_and_fitted_values():
+    """Direct fitted values should work when weights and horizon-specific inputs are both used."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["weight"] = np.linspace(1.0, 2.0, len(df))
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        df.iloc[:-H],
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+        weight_col="weight",
+        fitted=True,
+    )
+    fitted = fcst.forecast_fitted_values()
+    assert fitted.shape[0] > 0
+    assert "LinearRegression" in fitted.columns
+
+
 def test_horizons_with_target_transforms():
     """Test that sparse horizons work correctly with target transforms.
 

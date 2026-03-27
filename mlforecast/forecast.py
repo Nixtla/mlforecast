@@ -663,8 +663,6 @@ class MLForecast:
                         for c in self.ts.features_order_
                         if c not in exog_cols or c in allowed_exog
                     ]
-                    if weight_col is not None:
-                        x_cols_h = [weight_col, *x_cols_h]
                 else:
                     x_cols_h = x_cols
                 exog_cols_h = (
