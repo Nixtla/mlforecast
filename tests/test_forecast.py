@@ -1416,9 +1416,63 @@ def test_horizon_feature_templates_route_horizon_specific_exog():
         max_horizon=H,
         horizon_feature_templates=["bookings_horizon_{h}"],
     )
+    assert templated.horizon_features_ == {
+        1: ["bookings_horizon_1"],
+        2: ["bookings_horizon_2"],
+        3: ["bookings_horizon_3"],
+    }
     preds = templated.predict(h=H, X_df=future)
     assert preds.shape[0] == H
     assert preds["LinearRegression"].notna().all()
+
+
+def test_horizon_features_route_horizon_specific_exog():
+    """Ensure explicit horizon feature mappings are used directly and persist."""
+    H = 3
+    df = generate_daily_series(1, min_length=50, max_length=50)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    train = df.iloc[:-H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+    )
+    assert fcst.horizon_features_ == {
+        1: ["bookings_horizon_1"],
+        2: ["bookings_horizon_2"],
+        3: ["bookings_horizon_3"],
+    }
+    preds = fcst.predict(h=H, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        savedir = Path(tmpdir) / "fcst"
+        savedir.mkdir()
+        fcst.save(savedir)
+        loaded = MLForecast.load(savedir)
+    assert loaded.horizon_features_ == fcst.horizon_features_
+    preds_loaded = loaded.predict(h=H, X_df=future)
+    pd.testing.assert_frame_equal(preds, preds_loaded)
 
 
 def test_horizon_feature_templates_require_direct_mode():
@@ -1430,6 +1484,18 @@ def test_horizon_feature_templates_require_direct_mode():
             df,
             static_features=[],
             horizon_feature_templates=["bookings_horizon_{h}"],
+        )
+
+
+def test_horizon_features_require_direct_mode():
+    """Explicit horizon feature mappings are only valid for direct forecasting setups."""
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
+        fcst.fit(
+            df,
+            static_features=[],
+            horizon_features={1: ["bookings_horizon_1"]},
         )
 
 

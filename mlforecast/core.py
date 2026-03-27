@@ -241,8 +241,7 @@ class TimeSeries:
             lag_transforms=self.lag_transforms,
             namer=lag_transforms_namer,
         )
-        self.horizon_feature_templates: Optional[List[str]] = None
-        self._horizon_feature_columns: Dict[int, List[str]] = {}
+        self.horizon_features_: Dict[int, List[str]] = {}
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
@@ -315,48 +314,18 @@ class TimeSeries:
         return [c for c in df_columns if c not in exclude]
 
     def _split_horizon_exog_cols(
-        self, exog_cols: List[str]
+        self,
+        exog_cols: List[str],
+        horizon_features: Dict[int, List[str]],
     ) -> Tuple[List[str], Dict[int, List[str]]]:
         """Split exogenous columns into common and horizon-specific sets."""
-        templates = self.horizon_feature_templates
-        if not templates:
+        if not horizon_features:
             return exog_cols, {}
-        compiled_patterns = []
-        for template in templates:
-            if not isinstance(template, str):
-                raise ValueError("All entries in `horizon_feature_templates` must be strings.")
-            if template.count("{h}") != 1:
-                raise ValueError(
-                    "Each template in `horizon_feature_templates` must include exactly one '{h}' placeholder."
-                )
-            pattern_str = "^" + re.escape(template).replace(r"\{h\}", r"(?P<h>[1-9]\d*)") + "$"
-            compiled_patterns.append(re.compile(pattern_str))
-
-        matched_cols = set()
-        per_horizon: Dict[int, List[str]] = {}
-        for col in exog_cols:
-            matched_horizon = None
-            for compiled_pattern in compiled_patterns:
-                match = compiled_pattern.match(col)
-                if match is None:
-                    continue
-                horizon = int(match.group("h"))
-                if matched_horizon is not None and matched_horizon != horizon:
-                    raise ValueError(
-                        f"Column '{col}' matches multiple horizon templates with conflicting horizons."
-                    )
-                matched_horizon = horizon
-            if matched_horizon is not None:
-                per_horizon.setdefault(matched_horizon, []).append(col)
-                matched_cols.add(col)
-
-        if not matched_cols:
-            raise ValueError(
-                "No dynamic exogenous columns matched `horizon_feature_templates`. "
-                "Please verify the template patterns."
-            )
+        matched_cols = {
+            col for cols in horizon_features.values() for col in cols if col in exog_cols
+        }
         common_exog = [c for c in exog_cols if c not in matched_cols]
-        return common_exog, per_horizon
+        return common_exog, horizon_features
 
     def __repr__(self):
         return (
@@ -828,8 +797,10 @@ class TimeSeries:
         Yields:
             Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
         """
-        exog_cols = self._get_dynamic_exog_cols(list(original_df.columns))
-        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(exog_cols)
+        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+            exog_cols, self.horizon_features_
+        )
 
         # Get feature columns (excluding target columns)
         if self.weight_col is not None:
@@ -839,8 +810,6 @@ class TimeSeries:
 
         # Non-exog feature columns (lags, date features, static)
         non_exog_cols = [c for c in x_cols if c not in exog_cols]
-        self._horizon_feature_columns = {}
-
         # Build exog lookup dictionary from original_df for efficient lookups
         # Key: (id, time) -> exog values
         if exog_cols:
@@ -851,9 +820,6 @@ class TimeSeries:
             horizon_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
             allowed_cols = set(non_exog_cols) | set(horizon_exog)
             x_cols_h = [c for c in x_cols if c in allowed_cols]
-            self._horizon_feature_columns[h] = [
-                c for c in x_cols_h if c != self.weight_col
-            ]
 
             # Target column name for this horizon
             target_col_h = f"{target_col}{h}"
@@ -1218,13 +1184,23 @@ class TimeSeries:
                 df_constructor = pd.DataFrame
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
-        horizon_feature_columns = getattr(self, "_horizon_feature_columns", {})
+        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+            exog_cols, self.horizon_features_
+        )
         feature_idx = {c: i for i, c in enumerate(self.features_order_)}
-        horizon_feature_indices = {
-            h: np.array([feature_idx[c] for c in cols], dtype=np.int32)
-            for h, cols in horizon_feature_columns.items()
-            if cols
-        }
+        horizon_feature_indices = {}
+        if self.horizon_features_:
+            for h in horizons_to_predict:
+                allowed_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
+                h_cols = [
+                    c
+                    for c in self.features_order_
+                    if c not in exog_cols or c in allowed_exog
+                ]
+                horizon_feature_indices[h] = np.array(
+                    [feature_idx[c] for c in h_cols], dtype=np.int32
+                )
 
         for name, model in models.items():
             with self._backup():
@@ -1241,13 +1217,20 @@ class TimeSeries:
                         new_x = before_predict_callback(new_x)
 
                     model_x = new_x
-                    h_cols = horizon_feature_columns.get(h)
-                    if h_cols is not None:
+                    if self.horizon_features_:
                         if isinstance(new_x, np.ndarray):
                             col_idx = horizon_feature_indices.get(h)
                             if col_idx is not None:
                                 model_x = new_x[:, col_idx]
                         else:
+                            allowed_exog = common_exog_cols + horizon_exog_cols.get(
+                                h + 1, []
+                            )
+                            h_cols = [
+                                c
+                                for c in self.features_order_
+                                if c not in exog_cols or c in allowed_exog
+                            ]
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
                     preds = horizon_model.predict(model_x)
