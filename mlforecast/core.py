@@ -3,7 +3,6 @@ __all__ = ['TimeSeries']
 
 import copy
 import inspect
-import re
 import reprlib
 import warnings
 from collections import Counter, OrderedDict

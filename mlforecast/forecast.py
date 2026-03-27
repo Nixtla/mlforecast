@@ -649,12 +649,13 @@ class MLForecast:
 
             # Precompute per-horizon aligned features and validity masks once,
             # shared across all models to avoid redundant joins per model.
-            x_cols = list(X.columns) if hasattr(X, 'columns') else None
+            x_cols: Optional[List[str]] = list(X.columns) if hasattr(X, "columns") else None
             feature_idx = {c: i for i, c in enumerate(self.ts.features_order_)}
             horizon_cache = {}  # h -> (X_h, valid_mask)
             for h in trained_horizons:
                 y_h = y[:, h] if y.ndim == 2 else y
                 valid_target = ~np.isnan(y_h)
+                x_cols_h: Optional[List[str]]
                 if self.horizon_features_:
                     allowed_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
                     x_cols_h = [
