@@ -1530,6 +1530,42 @@ def test_horizon_features_with_weights_and_fitted_values():
     assert "LinearRegression" in fitted.columns
 
 
+def test_horizon_features_transfer_learning_predict():
+    """Transfer-learning predictions should preserve horizon-specific feature routing."""
+    H = 3
+    df = generate_daily_series(1, min_length=80, max_length=80)
+    df["bookings_horizon_1"] = df["y"] * 0.9
+    df["bookings_horizon_2"] = df["y"] * 0.7
+    df["bookings_horizon_3"] = df["y"] * 0.5
+    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
+    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+
+    base_train = df.iloc[:-2 * H]
+    transfer_df = df.iloc[-2 * H : -H]
+    future = df.iloc[-H:][
+        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    ]
+
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq='D',
+        lags=[1],
+    )
+    fcst.fit(
+        base_train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features={
+            1: ["bookings_horizon_1"],
+            2: ["bookings_horizon_2"],
+            3: ["bookings_horizon_3"],
+        },
+    )
+    preds = fcst.predict(h=H, new_df=transfer_df, X_df=future)
+    assert preds.shape[0] == H
+    assert preds["LinearRegression"].notna().all()
+
+
 def test_horizons_with_target_transforms():
     """Test that sparse horizons work correctly with target transforms.
 

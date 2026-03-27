@@ -1065,6 +1065,7 @@ class MLForecast:
             new_ts.max_horizon = self.ts.max_horizon
             new_ts._horizons = self.ts._horizons
             new_ts.as_numpy = self.ts.as_numpy
+            new_ts.horizon_features_ = copy.deepcopy(self.ts.horizon_features_)
             ts = new_ts
         else:
             ts = self.ts
