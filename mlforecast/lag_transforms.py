@@ -463,7 +463,12 @@ class Combine(_BaseLagTransform):
 
     @staticmethod
     def stack(transforms: Sequence["Combine"]) -> "Combine":
-        out = copy.deepcopy(transforms[0])
-        out.tfm1 = transforms[0].tfm1.stack([tfm.tfm1 for tfm in transforms])
-        out.tfm2 = transforms[0].tfm2.stack([tfm.tfm2 for tfm in transforms])
+        first = transforms[0]
+        # Build a shallow copy with tfm1/tfm2 cleared so deepcopy doesn't waste
+        # time on attributes that are unconditionally overwritten below.
+        stub = copy.copy(first)
+        stub.tfm1 = stub.tfm2 = None
+        out = copy.deepcopy(stub)
+        out.tfm1 = first.tfm1.stack([tfm.tfm1 for tfm in transforms])
+        out.tfm2 = first.tfm2.stack([tfm.tfm2 for tfm in transforms])
         return out

@@ -75,12 +75,12 @@ def test_nested_combine_take(grouped_array):
     inner = Combine(
         RollingMean(window_size=7, min_samples=1),
         RollingMean(window_size=5, min_samples=1),
-        operator.add
+        operator.add,
     )
     outer = Combine(
         inner,
         RollingMean(window_size=3, min_samples=1),
-        operator.sub
+        operator.sub,
     )._set_core_tfm(1)
     outer.transform(grouped_array)
 
@@ -92,25 +92,64 @@ def test_nested_combine_take(grouped_array):
     assert subset_tfm.operator == operator.sub
     assert subset_tfm.tfm1.operator == operator.add
 
+    # Numerical correctness: subset transform update must match a freshly-fitted
+    # transform on those same series.
+    data_parts = [
+        grouped_array.data[grouped_array.indptr[i] : grouped_array.indptr[i + 1]]
+        for i in idxs
+    ]
+    subset_data = np.concatenate(data_parts)
+    subset_indptr = np.append(0, np.cumsum([len(p) for p in data_parts]))
+    subset_ga = CoreGroupedArray(subset_data, subset_indptr)
+
+    fresh_inner = Combine(
+        RollingMean(window_size=7, min_samples=1),
+        RollingMean(window_size=5, min_samples=1),
+        operator.add,
+    )
+    fresh_outer = Combine(
+        fresh_inner,
+        RollingMean(window_size=3, min_samples=1),
+        operator.sub,
+    )._set_core_tfm(1)
+    fresh_outer.transform(subset_ga)
+
+    np.testing.assert_allclose(subset_tfm.update(subset_ga), fresh_outer.update(subset_ga))
+
 def test_combine_stack(grouped_array):
+    # Split grouped_array into two halves so each partition has distinct series
+    mid = len(grouped_array.indptr) // 2
+    ga1 = CoreGroupedArray(
+        grouped_array.data[: grouped_array.indptr[mid]],
+        grouped_array.indptr[: mid + 1],
+    )
+    ga2 = CoreGroupedArray(
+        grouped_array.data[grouped_array.indptr[mid] :],
+        grouped_array.indptr[mid:] - grouped_array.indptr[mid],
+    )
+
     tfm1 = Combine(
         RollingMean(window_size=7, min_samples=1),
         RollingMean(window_size=5, min_samples=1),
-        operator.add
+        operator.add,
     )._set_core_tfm(1)
     tfm2 = Combine(
         RollingMean(window_size=7, min_samples=1),
         RollingMean(window_size=5, min_samples=1),
-        operator.add
+        operator.add,
     )._set_core_tfm(1)
 
-    tfm1.transform(grouped_array)
-    tfm2.transform(grouped_array)
+    tfm1.transform(ga1)
+    tfm2.transform(ga2)
 
     stacked_tfm = Combine.stack([tfm1, tfm2])
 
     assert isinstance(stacked_tfm, Combine)
     assert stacked_tfm.operator == operator.add
+
+    # Numerical correctness: stacked update must equal individual updates concatenated
+    expected = np.concatenate([tfm1.update(ga1), tfm2.update(ga2)])
+    np.testing.assert_allclose(stacked_tfm.update(grouped_array), expected)
 
 
 def test_combine_stack_behavioral(grouped_array):
