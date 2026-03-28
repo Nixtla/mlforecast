@@ -708,11 +708,11 @@ class MLForecast:
         horizons: Optional[List[int]] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         fitted: bool = False,
-        cache_train_df: bool = True,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         validate_data: bool = True,
+        cache_train_df: bool = True,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -728,14 +728,14 @@ class MLForecast:
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
             fitted (bool): Save in-sample predictions. Defaults to False.
-            cache_train_df (bool): Cache a copy of the training data when `fitted=True` so
-                `forecast_fitted_values(h>1)` can be called later for recursive models without
-                passing `train_df`. Disable this to avoid the memory overhead and pass
-                `train_df` directly to `forecast_fitted_values` when needed. Defaults to True.
             as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method. Defaults to None.
             validate_data (bool): Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            cache_train_df (bool): Cache a copy of the training data when `fitted=True` so
+                `forecast_fitted_values(h>1)` can be called later for recursive models without
+                passing `train_df`. Disable this to avoid the memory overhead and pass
+                `train_df` directly to `forecast_fitted_values` when needed. Defaults to True.
 
         Returns:
             MLForecast: Forecast object with series values and trained models.

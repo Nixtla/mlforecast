@@ -647,10 +647,13 @@ class AutoMLForecast:
             if fitted_vals is None:
                 fitted_vals = model_fitted
             else:
+                join_keys = [model.ts.id_col, model.ts.time_col]
+                if "h" in fitted_vals.columns and "h" in model_fitted.columns:
+                    join_keys.append("h")
                 fitted_vals = ufp.join(
                     fitted_vals,
                     ufp.drop_columns(model_fitted, model.ts.target_col),
-                    on=[model.ts.id_col, model.ts.time_col],
+                    on=join_keys,
                     how="inner",
                 )
         return fitted_vals
