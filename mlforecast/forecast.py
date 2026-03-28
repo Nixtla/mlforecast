@@ -560,15 +560,25 @@ class MLForecast:
                     tfm.fitted_ = []
         return fitted_values
 
-    def _compute_recursive_fitted_values_on_demand(self, h: int) -> pd.DataFrame:
+    def _compute_recursive_fitted_values_on_demand(
+        self,
+        h: int,
+        train_df: Optional[DFType] = None,
+    ) -> pd.DataFrame:
         # `h` and transform constraints are validated in `forecast_fitted_values`.
-        if not hasattr(self, "_fitted_train_df_"):
-            raise ValueError(
-                "Training data for fitted values was not cached. "
-                "Please refit with `fitted=True` before requesting multi-step fitted values."
-            )
+        # This intentionally mirrors the existing recursive prediction engine:
+        # feature updates are vectorized across series at each step, but origins
+        # are advanced one at a time to preserve parity with `predict`. A fully
+        # origin-batched rollout would require a separate recursive engine.
+        if train_df is None:
+            if not hasattr(self, "_fitted_train_df_"):
+                raise ValueError(
+                    "Training data for multi-step fitted values was not cached. "
+                    "Pass `train_df` to `forecast_fitted_values` or refit with "
+                    "`cache_train_df=True`."
+                )
+            train_df = self._fitted_train_df_
 
-        train_df = self._fitted_train_df_
         if isinstance(train_df, pd.DataFrame):
             train_pd = train_df.copy()
         else:
@@ -595,6 +605,10 @@ class MLForecast:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
         model_names = list(self.models_.keys())
+        if isinstance(self.ts.static_features_, pd.DataFrame):
+            static_features_pd = self.ts.static_features_.copy(deep=True)
+        else:
+            static_features_pd = self.ts.static_features_.to_pandas()
 
         rows = []
         for uid, group in train_pd.groupby(id_col, observed=True):
@@ -630,10 +644,15 @@ class MLForecast:
                 id_col=id_col,
                 time_col=time_col,
                 target_col=target_col,
-                static_features=self.ts.static_features,
+                static_features=[id_col],
                 keep_last_n=self.ts.keep_last_n,
                 weight_col=self.ts.weight_col,
             )
+            temp_ts.static_features_ = static_features_pd[
+                static_features_pd[id_col].eq(uid)
+            ].reset_index(drop=True)
+            temp_ts.static_features = self.ts.static_features
+            temp_ts.features_order_ = list(self.ts.features_order_)
             core_tfms = temp_ts._get_core_lag_tfms()
             if core_tfms:
                 temp_ts._compute_transforms(core_tfms, updates_only=False)
@@ -689,6 +708,7 @@ class MLForecast:
         horizons: Optional[List[int]] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         fitted: bool = False,
+        cache_train_df: bool = True,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
@@ -708,6 +728,10 @@ class MLForecast:
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
             fitted (bool): Save in-sample predictions. Defaults to False.
+            cache_train_df (bool): Cache a copy of the training data when `fitted=True` so
+                `forecast_fitted_values(h>1)` can be called later for recursive models without
+                passing `train_df`. Disable this to avoid the memory overhead and pass
+                `train_df` directly to `forecast_fitted_values` when needed. Defaults to True.
             as_numpy (bool): Cast features to numpy array. Defaults to True.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method. Defaults to None.
@@ -793,7 +817,8 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
-                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
+                if hasattr(self, "_fitted_train_df_"):
+                    delattr(self, "_fitted_train_df_")
         else:
             # Standard recursive path (unchanged)
             prep = self.preprocess(
@@ -832,7 +857,10 @@ class MLForecast:
                 )
                 fitted_values = ufp.drop_index_if_pandas(fitted_values)
                 self.fcst_fitted_values_ = fitted_values
-                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
+                if cache_train_df:
+                    self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
+                elif hasattr(self, "_fitted_train_df_"):
+                    delattr(self, "_fitted_train_df_")
         return self
 
     def forecast_fitted_values(
@@ -840,6 +868,7 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         *,
         h: int = 1,
+        train_df: Optional[DFType] = None,
     ) -> DataFrame:
         """Access in-sample predictions.
 
@@ -848,6 +877,9 @@ class MLForecast:
             h (int): Forecast horizon for fitted values. Defaults to 1.
                 For recursive models and ``h>1``, values are computed on demand and are not available
                 when global or grouped lag transforms are configured.
+            train_df (pandas or polars DataFrame, optional): Training data to use when computing
+                recursive fitted values for ``h>1`` on demand. Pass this to avoid caching a full
+                copy of the training data on the fitted object. Defaults to None.
 
         Returns:
             pandas or polars DataFrame: Dataframe with predictions for the training set
@@ -873,17 +905,21 @@ class MLForecast:
         is_direct = isinstance(first_model, dict)
         if is_direct:
             res = self.fcst_fitted_values_
-            if "h" in res.columns:
-                if isinstance(res, pd.DataFrame):
-                    res = res[res["h"].eq(h)].reset_index(drop=True)
-                    available = sorted(self.fcst_fitted_values_["h"].unique().tolist())
-                else:
-                    res = res.filter(pl.col("h") == h)
-                    available = sorted(self.fcst_fitted_values_["h"].unique().to_list())
-                if len(res) == 0:
-                    raise ValueError(
-                        f"No fitted values found for h={h}. Available horizons: {available}."
-                    )
+            if "h" not in res.columns:
+                raise ValueError(
+                    "Direct fitted values are missing horizon information. "
+                    "Please refit the model with the current version."
+                )
+            if isinstance(res, pd.DataFrame):
+                res = res[res["h"].eq(h)].reset_index(drop=True)
+                available = sorted(self.fcst_fitted_values_["h"].unique().tolist())
+            else:
+                res = res.filter(pl.col("h") == h)
+                available = sorted(self.fcst_fitted_values_["h"].unique().to_list())
+            if len(res) == 0:
+                raise ValueError(
+                    f"No fitted values found for h={h}. Available horizons: {available}."
+                )
         else:
             if h == 1:
                 res = self.fcst_fitted_values_
@@ -898,7 +934,9 @@ class MLForecast:
                     UserWarning,
                     stacklevel=2,
                 )
-                res_pd = self._compute_recursive_fitted_values_on_demand(h)
+                res_pd = self._compute_recursive_fitted_values_on_demand(
+                    h, train_df=train_df
+                )
                 if isinstance(self.fcst_fitted_values_, pd.DataFrame):
                     res = res_pd
                 else:

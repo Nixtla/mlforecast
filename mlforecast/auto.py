@@ -621,19 +621,29 @@ class AutoMLForecast:
     def forecast_fitted_values(
         self,
         level: Optional[List[Union[int, float]]] = None,
+        *,
+        h: int = 1,
+        train_df: Optional[DataFrame] = None,
     ) -> DataFrame:
         """Access in-sample predictions.
 
         Args:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals.
                 Defaults to None.
+            h (int): Forecast horizon for fitted values. Defaults to 1.
+            train_df (pandas or polars DataFrame, optional): Training data to use when computing
+                recursive fitted values for ``h>1`` on demand. Defaults to None.
 
         Returns:
             (pandas or polars DataFrame): Dataframe with predictions for the training set
         """
         fitted_vals = None
         for name, model in self.models_.items():
-            model_fitted = model.forecast_fitted_values(level=level)
+            model_fitted = model.forecast_fitted_values(
+                level=level,
+                h=h,
+                train_df=train_df,
+            )
             if fitted_vals is None:
                 fitted_vals = model_fitted
             else:

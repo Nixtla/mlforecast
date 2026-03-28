@@ -304,6 +304,36 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
+def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
+    h = 3
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, static_features=[], cache_train_df=False)
+
+    assert not hasattr(fcst, "_fitted_train_df_")
+    fitted_h3 = fcst.forecast_fitted_values(h=h, train_df=df)
+    assert "h" in fitted_h3.columns
+    assert fitted_h3["h"].eq(h).all()
+    assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
+
+
+def test_recursive_forecast_fitted_values_on_demand_h_requires_train_df_without_cache():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, static_features=[], cache_train_df=False)
+
+    with pytest.raises(ValueError, match="Pass `train_df` to `forecast_fitted_values`"):
+        fcst.forecast_fitted_values(h=3)
+
+
 def test_direct_forecast_fitted_values_h_filter():
     df = generate_daily_series(2, min_length=40, max_length=40)
     fcst = MLForecast(
@@ -321,6 +351,20 @@ def test_direct_forecast_fitted_values_h_filter():
     assert fitted_h2.shape[0] > 0
     with pytest.raises(ValueError, match="No fitted values found for h=4"):
         fcst.forecast_fitted_values(h=4)
+
+
+def test_direct_forecast_fitted_values_requires_h_metadata():
+    df = generate_daily_series(2, min_length=40, max_length=40)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, max_horizon=3, static_features=[])
+    fcst.fcst_fitted_values_ = fcst.fcst_fitted_values_.drop(columns=["h"])
+
+    with pytest.raises(ValueError, match="missing horizon information"):
+        fcst.forecast_fitted_values(h=2)
 
 
 def test_forecast_fitted_values_positional_level_compat():
