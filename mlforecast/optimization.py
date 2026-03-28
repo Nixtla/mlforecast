@@ -2,6 +2,7 @@ __all__ = ['mlforecast_objective']
 
 
 import copy
+import warnings
 from typing import Any, Callable, Dict, Optional, Union, List, Tuple
 
 import numpy as np
@@ -22,6 +23,13 @@ CVSplit = Tuple[DataFrame, DataFrame, DataFrame]
 def _get_categorical_static_features(df: DataFrame, static_features: List[str]) -> List[str]:
     if not static_features:
         return []
+    missing_features = [feature for feature in static_features if feature not in df.columns]
+    if missing_features:
+        warnings.warn(
+            "Ignoring unrecognized static features not found in the dataframe: "
+            f"{missing_features}.",
+            UserWarning,
+        )
     static_features = [feature for feature in static_features if feature in df.columns]
     if isinstance(df, pd.DataFrame):
         return [
@@ -46,7 +54,7 @@ def _get_categorical_static_features(df: DataFrame, static_features: List[str]) 
             feature
             for feature in static_features
             if schema.get(feature) is not None
-            and any(schema[feature] == dtype for dtype in categorical_dtypes)
+            and isinstance(schema[feature], tuple(categorical_dtypes))
         ]
     return []
 
