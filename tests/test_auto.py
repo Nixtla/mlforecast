@@ -1,11 +1,13 @@
 import time
 
+import numpy as np
 import optuna
 import pandas as pd
 import polars as pl
 import pytest
 from datasetsforecast.m4 import M4, M4Info
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -14,10 +16,11 @@ from mlforecast.auto import (
     AutoLightGBM,
     AutoMLForecast,
     AutoModel,
-    AutoRidge,
     PredictionIntervals,
     ridge_space,
 )
+from mlforecast.lag_transforms import ExpandingMean
+from mlforecast.utils import generate_daily_series
 
 from .conftest import assert_raises_with_message
 
@@ -36,6 +39,31 @@ def weekly_data():
     train["unique_id"] = train["unique_id"].astype("category")
     valid["unique_id"] = valid["unique_id"].astype(train["unique_id"].dtype)
     return train, valid, M4Info[group]
+
+
+def _make_partition_series(n_series: int = 4, length: int = 50) -> pd.DataFrame:
+    df = generate_daily_series(
+        n_series=n_series,
+        min_length=length,
+        max_length=length,
+        n_static_features=0,
+    )
+    brand_map = {
+        uid: i % 2
+        for i, uid in enumerate(df["unique_id"].cat.categories)
+    }
+    df["brand"] = df["unique_id"].map(brand_map).astype("int8")
+    df["promo"] = (df["ds"].dt.dayofweek >= 5).astype("int8")
+    return df
+
+
+def _make_partition_future(df: pd.DataFrame, h: int) -> pd.DataFrame:
+    last_dates = df.groupby("unique_id", observed=True)["ds"].max().reset_index()
+    future = last_dates.loc[last_dates.index.repeat(h)].copy()
+    future["step"] = np.tile(np.arange(1, h + 1), last_dates.shape[0])
+    future["ds"] = future["ds"] + pd.to_timedelta(future["step"], unit="D")
+    future["promo"] = (future["ds"].dt.dayofweek >= 5).astype("int8")
+    return future[["unique_id", "ds", "promo"]].reset_index(drop=True)
 
 
 def test_automlforecast_pipeline(weekly_data):
@@ -76,6 +104,42 @@ def test_automlforecast_pipeline(weekly_data):
     assert not preds.empty
     fitted_vals = auto_mlf.forecast_fitted_values(level=[95])
     assert not fitted_vals.empty
+
+
+def test_automlforecast_with_partition_by_transform():
+    df = _make_partition_series()
+    h = 5
+
+    auto_mlf = AutoMLForecast(
+        freq="D",
+        init_config=lambda trial: {
+            "lags": [1, 2, 7],
+            "lag_transforms": {
+                1: [ExpandingMean(groupby=["brand"], partition_by=["promo"])]
+            },
+        },
+        fit_config=lambda trial: {"static_features": ["brand"], "dropna": False},
+        models={
+            "hgb": AutoModel(
+                HistGradientBoostingRegressor(random_state=0, max_depth=3),
+                lambda trial: {},
+            )
+        },
+        num_threads=1,
+    )
+
+    auto_mlf.fit(
+        df=df,
+        n_windows=1,
+        h=h,
+        num_samples=1,
+        optimize_kwargs={},
+    )
+    preds = auto_mlf.predict(h, X_df=_make_partition_future(df, h))
+
+    assert not preds.empty
+    assert preds.shape[0] == df["unique_id"].nunique() * h
+    assert "hgb" in preds.columns
     
 def test_automlforecast_weight_col(weekly_data):
 

@@ -17,6 +17,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -26,6 +27,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
+from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 from utilsforecast.compat import (
@@ -130,6 +132,10 @@ def _as_tuple(x):
     if isinstance(x, tuple):
         return x
     return (x,)
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> List[str]:
+    return list(dict.fromkeys(items))
 
 
 Freq = Union[int, str]
@@ -241,6 +247,13 @@ class TimeSeries:
             namer=lag_transforms_namer,
         )
         self.ga: GroupedArray
+        self._partition_states: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[str, ...]], Dict[str, Any]
+        ] = {}
+        self._current_partition_keys: Optional[
+            Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], DFType]
+        ] = None
+        self._current_step_x: Optional[DFType] = None
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
         return {
@@ -251,7 +264,9 @@ class TimeSeries:
         return {
             k: v
             for k, v in self.transforms.items()
-            if isinstance(v, _BaseLagTransform) and getattr(v, "global_", False)
+            if isinstance(v, _BaseLagTransform)
+            and getattr(v, "global_", False)
+            and not getattr(v, "partition_by", None)
         }
 
     def _get_group_tfms(self) -> Dict[Tuple[str, ...], Dict[str, _BaseLagTransform]]:
@@ -260,9 +275,37 @@ class TimeSeries:
             if not isinstance(tfm, _BaseLagTransform):
                 continue
             groupby = getattr(tfm, "groupby", None)
-            if not groupby:
+            if not groupby or getattr(tfm, "partition_by", None):
                 continue
             key = tuple(groupby)
+            grouped.setdefault(key, {})[name] = tfm
+        return grouped
+
+    def _get_partition_tfms(
+        self,
+    ) -> Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], Dict[str, _BaseLagTransform]]:
+        grouped: Dict[
+            Tuple[str, Tuple[str, ...], Tuple[str, ...]],
+            Dict[str, _BaseLagTransform],
+        ] = {}
+        for name, tfm in self.transforms.items():
+            if not isinstance(tfm, _BaseLagTransform):
+                continue
+            partition_by = getattr(tfm, "partition_by", None)
+            if not partition_by:
+                continue
+            if getattr(tfm, "global_", False):
+                mode = "global"
+                group_cols: Tuple[str, ...] = ()
+            else:
+                groupby = getattr(tfm, "groupby", None)
+                if groupby:
+                    mode = "group"
+                    group_cols = tuple(groupby)
+                else:
+                    mode = "local"
+                    group_cols = ()
+            key = (mode, group_cols, tuple(partition_by))
             grouped.setdefault(key, {})[name] = tfm
         return grouped
 
@@ -276,12 +319,206 @@ class TimeSeries:
                 continue
             if isinstance(tfm, _BaseLagTransform) and getattr(tfm, "groupby", None):
                 continue
+            if isinstance(tfm, _BaseLagTransform) and getattr(tfm, "partition_by", None):
+                continue
             local[name] = tfm
         return local
 
+    def _get_partition_key_cols(
+        self,
+        mode: str,
+        group_cols: Sequence[str],
+        partition_cols: Sequence[str],
+    ) -> List[str]:
+        if mode == "local":
+            cols = [self.id_col, *partition_cols]
+        elif mode == "group":
+            cols = [*group_cols, *partition_cols]
+        elif mode == "global":
+            cols = [*partition_cols]
+        else:
+            raise ValueError(f"Unknown partition mode: {mode}")
+        return _dedupe_preserve_order(cols)
+
+    def _build_partition_bucket_df(
+        self,
+        df: DFType,
+        mode: str,
+        group_cols: Sequence[str],
+        partition_cols: Sequence[str],
+    ) -> DFType:
+        key_cols = self._get_partition_key_cols(mode, group_cols, partition_cols)
+        if mode == "local":
+            bucket_df = df[key_cols + [self.time_col, self.target_col]]
+            bucket_df = ufp.sort(bucket_df, by=key_cols + [self.time_col])
+            return ufp.drop_index_if_pandas(bucket_df)
+        bucket_df = ufp.group_by_agg(
+            df[key_cols + [self.time_col, self.target_col]],
+            key_cols + [self.time_col],
+            {self.target_col: "sum"},
+            maintain_order=True,
+        )
+        bucket_df = ufp.sort(bucket_df, by=key_cols + [self.time_col])
+        return ufp.drop_index_if_pandas(bucket_df)
+
+    def _add_bucket_id(
+        self, data: DFType, cols: Sequence[str]
+    ) -> Tuple[DFType, DFType]:
+        cols = list(cols)
+        if isinstance(data, pd.DataFrame):
+            groups = data[cols].drop_duplicates().reset_index(drop=True)
+            groups["_bucket_id"] = np.arange(len(groups), dtype=np.int64)
+            data = data.merge(groups, on=cols, how="left")
+        else:
+            groups = data.select(cols).unique(maintain_order=True)
+            groups = groups.with_row_index(name="_bucket_id")
+            data = data.join(groups, on=cols, how="left")
+        return ufp.drop_index_if_pandas(data), ufp.drop_index_if_pandas(groups)
+
+    def _lookup_bucket_ids(
+        self, data: DFType, groups: DFType, cols: Sequence[str]
+    ) -> np.ndarray:
+        cols = list(cols)
+        if isinstance(data, pd.DataFrame):
+            joined = data[cols].merge(groups, on=cols, how="left")
+            bucket_ids = joined["_bucket_id"].to_numpy()
+        else:
+            # Avoid categorical cache mismatches when partition keys come from
+            # different polars sources during update/predict.
+            left = data.select([pl.col(col).cast(pl.String).alias(col) for col in cols])
+            right = groups.select(
+                [pl.col(col).cast(pl.String).alias(col) for col in cols]
+                + [pl.col("_bucket_id")]
+            )
+            joined = left.join(right, on=cols, how="left")
+            bucket_ids = joined["_bucket_id"].to_numpy()
+        missing = pd.isna(bucket_ids)
+        out = np.full(bucket_ids.shape[0], -1, dtype=np.int64)
+        if (~missing).any():
+            out[~missing] = bucket_ids[~missing].astype(np.int64, copy=False)
+        return out
+
+    def _get_partition_context(self, step_df: Optional[DFType]) -> Optional[DFType]:
+        partition_states = getattr(self, "_partition_states", {})
+        if not partition_states:
+            return None
+        required_cols = {self.id_col}
+        for state in partition_states.values():
+            required_cols.update(state["key_cols"])
+        columns = {}
+        missing = []
+        step_columns = set() if step_df is None else set(step_df.columns)
+        for col in required_cols:
+            if step_df is not None and col in step_columns:
+                columns[col] = step_df[col]
+            elif col in self.static_features_.columns:
+                columns[col] = self.static_features_[col]
+            else:
+                missing.append(col)
+        if missing:
+            missing_cols = ", ".join(sorted(missing))
+            raise ValueError(
+                "Partition lag transforms require the following columns in the input "
+                f"data or future exogenous dataframe: {missing_cols}."
+            )
+        if isinstance(self.static_features_, pd.DataFrame):
+            return pd.DataFrame(columns)
+        return pl_DataFrame(columns)
+
+    def _ensure_partition_bucket_ids(
+        self, state: Dict[str, Any], keys_df: DFType
+    ) -> np.ndarray:
+        key_cols = state["key_cols"]
+        bucket_ids = self._lookup_bucket_ids(keys_df, state["groups"], key_cols)
+        missing_mask = bucket_ids < 0
+        if not missing_mask.any():
+            return bucket_ids
+
+        if isinstance(keys_df, pd.DataFrame):
+            missing_groups = (
+                keys_df.loc[missing_mask, key_cols].drop_duplicates().reset_index(drop=True)
+            )
+            start = len(state["groups"])
+            missing_groups["_bucket_id"] = np.arange(
+                start, start + len(missing_groups), dtype=np.int64
+            )
+            state["groups"] = pd.concat([state["groups"], missing_groups], ignore_index=True)
+        else:
+            missing_groups = (
+                keys_df.filter(pl.Series(missing_mask))
+                .select(key_cols)
+                .unique(maintain_order=True)
+            )
+            start = state["groups"].height
+            missing_groups = missing_groups.with_row_index(
+                name="_bucket_id", offset=start
+            )
+            state["groups"] = pl.concat([state["groups"], missing_groups], how="vertical")
+        return self._lookup_bucket_ids(keys_df, state["groups"], key_cols)
+
+    def _compute_partition_features(
+        self, step_df: Optional[DFType]
+    ) -> Dict[str, np.ndarray]:
+        partition_states = getattr(self, "_partition_states", {})
+        if not partition_states:
+            self._current_partition_keys = None
+            return {}
+        context = self._get_partition_context(step_df)
+        assert context is not None
+        self._current_partition_keys = {}
+        n_series = len(self.uids)
+        features: Dict[str, np.ndarray] = {}
+        for state_key, state in partition_states.items():
+            core_ga = CoreGroupedArray(state["ga"].data, state["ga"].indptr)
+            updates = {}
+            for name, tfm in state["tfms"].items():
+                fresh_tfm = copy.deepcopy(tfm)._set_core_tfm(tfm._core_tfm.lag)
+                fresh_tfm.transform(core_ga)
+                updates[name] = fresh_tfm.update(core_ga)
+            bucket_ids = self._lookup_bucket_ids(
+                context, state["groups"], state["key_cols"]
+            )
+            self._current_partition_keys[state_key] = context[state["key_cols"]]
+            valid = bucket_ids >= 0
+            for name, vals in updates.items():
+                out = np.full(n_series, np.nan, dtype=float)
+                if valid.any():
+                    out[valid] = vals[bucket_ids[valid]]
+                features[name] = out
+        return features
+
+    def _update_partition_states(self, new: np.ndarray) -> None:
+        partition_states = getattr(self, "_partition_states", {})
+        if not partition_states:
+            return
+        current_partition_keys = self._current_partition_keys
+        if current_partition_keys is None:
+            raise ValueError("Partition lag transforms require partition keys before updating.")
+        new_arr = np.asarray(new, dtype=self.ga.data.dtype)
+        for state_key, state in partition_states.items():
+            keys_df = current_partition_keys[state_key]
+            old_n_buckets = len(state["groups"])
+            bucket_ids = self._ensure_partition_bucket_ids(state, keys_df)
+            new_n_buckets = len(state["groups"])
+            bucket_sums = np.zeros(new_n_buckets, dtype=self.ga.data.dtype)
+            new_sizes = np.zeros(new_n_buckets, dtype=np.int32)
+            np.add.at(bucket_sums, bucket_ids, new_arr)
+            new_sizes[np.unique(bucket_ids)] = 1
+            new_groups = np.zeros(new_n_buckets, dtype=bool)
+            if new_n_buckets > old_n_buckets:
+                new_groups[old_n_buckets:] = True
+            new_values = bucket_sums[new_sizes.astype(bool)]
+            state["ga"] = state["ga"].append_several(
+                new_sizes=new_sizes,
+                new_values=new_values,
+                new_groups=new_groups,
+            )
+
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using global/group transforms."""
-        if not (self._get_global_tfms() or self._get_group_tfms()):
+        partition_tfms = self._get_partition_tfms()
+        needs_alignment = any(mode in {"global", "group"} for mode, _, _ in partition_tfms)
+        if not (self._get_global_tfms() or self._get_group_tfms() or needs_alignment):
             return
         if isinstance(self.last_dates, pd.Index):
             aligned = self.last_dates.nunique() == 1
@@ -402,7 +639,16 @@ class TimeSeries:
                 self._global_times = global_df[time_col]
         to_drop = [id_col, time_col, target_col]
         if static_features is None:
-            static_features = [c for c in df.columns if c not in [time_col, target_col]]
+            partition_cols = {
+                col
+                for _, _, partition_cols in self._get_partition_tfms().keys()
+                for col in partition_cols
+            }
+            static_features = [
+                c
+                for c in df.columns
+                if c not in [time_col, target_col] and c not in partition_cols
+            ]
         elif id_col not in static_features:
             static_features = [id_col, *static_features]
         else:  # static_features defined and contain id_col
@@ -434,17 +680,71 @@ class TimeSeries:
         self.features_order_ = [c for c in df.columns if c not in to_drop] + [
             f for f in self.features if f not in df.columns
         ]
+        df_for_special = df
+        if self.target_transforms is not None:
+            transformed_target = ga.data
+            if self._restore_idxs is not None:
+                transformed_target = transformed_target[self._restore_idxs]
+            # Keep the caller's dataframe untouched when building aggregated or
+            # partitioned states from the transformed target.
+            df_for_special = ufp.copy_if_pandas(df, deep=True)
+            df_for_special = ufp.assign_columns(
+                df_for_special, target_col, transformed_target
+            )
+
+        self._partition_states = {}
+        partition_tfms = self._get_partition_tfms()
+        if partition_tfms:
+            for (mode, group_cols, partition_cols), tfms in partition_tfms.items():
+                for col in partition_cols:
+                    if col not in df.columns:
+                        raise ValueError(
+                            f"Partition column '{col}' not found in dataframe."
+                        )
+                if mode == "group":
+                    missing = [
+                        c
+                        for c in group_cols
+                        if c not in self.static_features_.columns
+                    ]
+                    if missing:
+                        raise ValueError(
+                            "Groupby columns must be static features. "
+                            f"Missing from static_features: {missing}."
+                        )
+                bucket_df = self._build_partition_bucket_df(
+                    df_for_special, mode, group_cols, partition_cols
+                )
+                key_cols = self._get_partition_key_cols(
+                    mode, group_cols, partition_cols
+                )
+                bucket_df, groups = self._add_bucket_id(bucket_df, key_cols)
+                if isinstance(bucket_df, pd.DataFrame):
+                    process_df = bucket_df[["_bucket_id", time_col, target_col]]
+                else:
+                    process_df = bucket_df.select(["_bucket_id", time_col, target_col])
+                processed = ufp.process_df(
+                    process_df,
+                    id_col="_bucket_id",
+                    time_col=time_col,
+                    target_col=target_col,
+                )
+                if processed.sort_idxs is not None:
+                    bucket_df = ufp.take_rows(bucket_df, processed.sort_idxs)
+                bucket_df = ufp.drop_index_if_pandas(bucket_df)
+                self._partition_states[(mode, group_cols, partition_cols)] = {
+                    "mode": mode,
+                    "group_cols": list(group_cols),
+                    "partition_cols": list(partition_cols),
+                    "key_cols": key_cols,
+                    "tfms": tfms,
+                    "ga": GroupedArray(processed.data[:, 0], processed.indptr),
+                    "df": bucket_df,
+                    "groups": groups,
+                }
         self._group_states: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         group_tfms = self._get_group_tfms()
         if group_tfms:
-            if self.target_transforms is not None:
-                transformed_target = ga.data
-                if self._restore_idxs is not None:
-                    transformed_target = transformed_target[self._restore_idxs]
-                df_for_group = ufp.assign_columns(df, target_col, transformed_target)
-            else:
-                df_for_group = df
-
             def _add_group_id(data, cols):
                 if isinstance(data, pd.DataFrame):
                     groups = data[cols].drop_duplicates().reset_index(drop=True)
@@ -475,7 +775,7 @@ class TimeSeries:
                         f"Missing from static_features: {missing}."
                     )
                 group_df = ufp.group_by_agg(
-                    df_for_group[group_cols_list + [time_col, target_col]],
+                    df_for_special[group_cols_list + [time_col, target_col]],
                     group_cols_list + [time_col],
                     {target_col: "sum"},
                     maintain_order=True,
@@ -632,6 +932,32 @@ class TimeSeries:
                         join_df = join_df.with_columns(pl.Series(name=name, values=vals))
                     joined = df.select(group_cols_list + [self.time_col]).join(
                         join_df, on=group_cols_list + [self.time_col], how="left"
+                    )
+                    for name in feature_cols:
+                        features[name] = joined[name].to_numpy()
+        if self._partition_states:
+            for state in self._partition_states.values():
+                bucket_df = state["df"]
+                bucket_vals = state["ga"].apply_transforms(
+                    transforms=state["tfms"], updates_only=False
+                )
+                key_cols = state["key_cols"]
+                feature_cols = list(bucket_vals.keys())
+                if isinstance(df, pd.DataFrame):
+                    join_df = bucket_df[key_cols + [self.time_col]].copy()
+                    for name, vals in bucket_vals.items():
+                        join_df[name] = vals
+                    joined = df[key_cols + [self.time_col]].merge(
+                        join_df, on=key_cols + [self.time_col], how="left"
+                    )
+                    for name in feature_cols:
+                        features[name] = joined[name].to_numpy()
+                else:
+                    join_df = bucket_df.select(key_cols + [self.time_col])
+                    for name, vals in bucket_vals.items():
+                        join_df = join_df.with_columns(pl.Series(name=name, values=vals))
+                    joined = df.select(key_cols + [self.time_col]).join(
+                        join_df, on=key_cols + [self.time_col], how="left"
                     )
                     for name in feature_cols:
                         features[name] = joined[name].to_numpy()
@@ -942,8 +1268,9 @@ class TimeSeries:
                 group_sums = np.zeros(n_groups, dtype=self.ga.data.dtype)
                 np.add.at(group_sums, group_idx, new_arr)
                 state["ga"] = state["ga"].append(group_sums)
+        self._update_partition_states(new_arr)
 
-    def _update_features(self) -> DataFrame:
+    def _update_features(self, step_df: Optional[DFType] = None) -> DataFrame:
         """Compute the current values of all the features using the latest values of the time series."""
         self.curr_dates: Union[pd.Index, pl_Series] = ufp.offset_times(
             self.curr_dates, self.freq, 1
@@ -968,6 +1295,7 @@ class TimeSeries:
                 group_idx = state["group_idx"]
                 for name, vals in updates.items():
                     features[name] = vals[group_idx]
+        features.update(self._compute_partition_features(step_df))
 
         for feature in self.date_features:
             feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
@@ -1010,7 +1338,7 @@ class TimeSeries:
         return df
 
     def _get_features_for_next_step(self, X_df=None):
-        new_x = self._update_features()
+        X = None
         if X_df is not None:
             n_series = len(self.uids)
             h = X_df.shape[0] // n_series  # how many timestamps per series
@@ -1019,6 +1347,12 @@ class TimeSeries:
             rows = np.arange(row_offset, X_df.shape[0], h)
             X = ufp.take_rows(X_df, rows)
             X = ufp.drop_index_if_pandas(X)
+        self._current_step_x = X
+        new_x = self._update_features(step_df=X)
+        if X is not None:
+            X = ufp.drop_columns(
+                X, [c for c in [self.id_col, self.time_col] if c in X.columns]
+            )
             new_x = ufp.horizontal_concat([new_x, X])
         if isinstance(new_x, pd.DataFrame):
             nulls = new_x.isnull().any()
@@ -1040,7 +1374,9 @@ class TimeSeries:
         ga = copy.copy(self.ga)
         # if these save state (like ExpandingMean) they'll get modified by the updates
         lag_tfms = copy.deepcopy(self.transforms)
+        target_tfms = copy.deepcopy(self.target_transforms)
         group_states = copy.deepcopy(getattr(self, "_group_states", {}))
+        partition_states = copy.deepcopy(getattr(self, "_partition_states", {}))
         global_ga = copy.copy(getattr(self, "_global_ga", None))
         global_times = copy.copy(getattr(self, "_global_times", None))
         try:
@@ -1048,11 +1384,14 @@ class TimeSeries:
         finally:
             self.ga = ga
             self.transforms = lag_tfms
+            self.target_transforms = target_tfms
             if global_ga is not None or global_times is not None:
                 self._global_ga = global_ga
                 self._global_times = global_times
             if group_states:
                 self._group_states = group_states
+            if partition_states:
+                self._partition_states = partition_states
 
     def _predict_setup(self) -> None:
         # TODO: move to utils
@@ -1063,6 +1402,8 @@ class TimeSeries:
         self.test_dates: List[Union[pd.Index, pl_Series]] = []
         self.y_pred = []
         self._h = 0
+        self._current_partition_keys = None
+        self._current_step_x = None
 
     def _predict_recursive(
         self,
@@ -1371,7 +1712,9 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        if self._get_global_tfms() or self._get_group_tfms():
+        partition_tfms = self._get_partition_tfms()
+        has_partition_agg = any(mode in {"global", "group"} for mode, _, _ in partition_tfms)
+        if self._get_global_tfms() or self._get_group_tfms() or has_partition_agg:
             if isinstance(df, pd.DataFrame):
                 expected_ids = pd.Index(uids).union(pd.Index(new_ids))
                 expected_count = len(expected_ids)
@@ -1563,3 +1906,38 @@ class TimeSeries:
                         .to_numpy()
                     )
                     state["group_idx"] = series_group_id.astype(np.int64, copy=False)
+        if self._partition_states:
+            for state in self._partition_states.values():
+                old_n_buckets = len(state["groups"])
+                bucket_df = self._build_partition_bucket_df(
+                    df,
+                    state["mode"],
+                    state["group_cols"],
+                    state["partition_cols"],
+                )
+                bucket_ids = self._ensure_partition_bucket_ids(state, bucket_df)
+                if isinstance(bucket_df, pd.DataFrame):
+                    bucket_df = bucket_df.copy()
+                    bucket_df["_bucket_id"] = bucket_ids
+                else:
+                    bucket_df = bucket_df.with_columns(
+                        pl.Series(name="_bucket_id", values=bucket_ids)
+                    )
+                bucket_df = ufp.sort(bucket_df, by=["_bucket_id", self.time_col])
+                id_counts = ufp.counts_by_id(bucket_df, "_bucket_id")
+                if isinstance(state["groups"], pd.DataFrame):
+                    all_ids = state["groups"][["_bucket_id"]].copy()
+                else:
+                    all_ids = state["groups"].select("_bucket_id")
+                sizes = ufp.join(all_ids, id_counts, on="_bucket_id", how="left")
+                sizes = ufp.fill_null(sizes, {"counts": 0})
+                sizes = ufp.sort(sizes, by="_bucket_id")
+                new_groups = sizes["_bucket_id"].to_numpy() >= old_n_buckets
+                bucket_values = bucket_df[self.target_col].to_numpy().astype(
+                    self.ga.data.dtype, copy=False
+                )
+                state["ga"] = state["ga"].append_several(
+                    new_sizes=sizes["counts"].to_numpy().astype(np.int32),
+                    new_values=bucket_values,
+                    new_groups=new_groups,
+                )
