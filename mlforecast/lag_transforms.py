@@ -111,6 +111,9 @@ class _BaseLagTransform(BaseEstimator):
         )
         return out
 
+    def _get_configured_lag(self) -> int:
+        return self._core_tfm.lag
+
     @property
     def _lag(self):
         return self._core_tfm.lag - 1
@@ -443,6 +446,9 @@ class Offset(_BaseLagTransform):
         self._core_tfm = self.tfm._core_tfm
         return self
 
+    def _get_configured_lag(self) -> int:
+        return self.tfm._get_configured_lag() - self.n
+
     @property
     def update_samples(self) -> int:
         return self.tfm.update_samples + self.n
@@ -494,6 +500,26 @@ class Combine(_BaseLagTransform):
 
     def update(self, ga: CoreGroupedArray) -> np.ndarray:
         return self.operator(self.tfm1.update(ga), self.tfm2.update(ga))
+
+    def take(self, idxs: np.ndarray) -> "Combine":
+        out = copy.deepcopy(self)
+        out.tfm1 = self.tfm1.take(idxs)
+        out.tfm2 = self.tfm2.take(idxs)
+        return out
+
+    @staticmethod
+    def stack(transforms: Sequence["Combine"]) -> "Combine":
+        out = copy.deepcopy(transforms[0])
+        out.tfm1 = transforms[0].tfm1.stack([tfm.tfm1 for tfm in transforms])
+        out.tfm2 = transforms[0].tfm2.stack([tfm.tfm2 for tfm in transforms])
+        return out
+
+    def _get_configured_lag(self) -> int:
+        lag1 = self.tfm1._get_configured_lag()
+        lag2 = self.tfm2._get_configured_lag()
+        if lag1 != lag2:
+            raise ValueError("Combined transforms must share the same configured lag.")
+        return lag1
 
     @property
     def update_samples(self):

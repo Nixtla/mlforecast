@@ -309,6 +309,11 @@ class TimeSeries:
             grouped.setdefault(key, {})[name] = tfm
         return grouped
 
+    def _has_aggregated_partition_tfms(self) -> bool:
+        return any(
+            mode in {"global", "group"} for mode, _, _ in self._get_partition_tfms()
+        )
+
     def _get_local_tfms(
         self,
         transforms: Mapping[str, Union[Tuple[Any, ...], _BaseLagTransform]],
@@ -472,7 +477,9 @@ class TimeSeries:
             core_ga = CoreGroupedArray(state["ga"].data, state["ga"].indptr)
             updates = {}
             for name, tfm in state["tfms"].items():
-                fresh_tfm = copy.deepcopy(tfm)._set_core_tfm(tfm._core_tfm.lag)
+                fresh_tfm = copy.deepcopy(tfm)._set_core_tfm(
+                    tfm._get_configured_lag()
+                )
                 fresh_tfm.transform(core_ga)
                 updates[name] = fresh_tfm.update(core_ga)
             bucket_ids = self._lookup_bucket_ids(
@@ -516,9 +523,11 @@ class TimeSeries:
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using global/group transforms."""
-        partition_tfms = self._get_partition_tfms()
-        needs_alignment = any(mode in {"global", "group"} for mode, _, _ in partition_tfms)
-        if not (self._get_global_tfms() or self._get_group_tfms() or needs_alignment):
+        if not (
+            self._get_global_tfms()
+            or self._get_group_tfms()
+            or self._has_aggregated_partition_tfms()
+        ):
             return
         if isinstance(self.last_dates, pd.Index):
             aligned = self.last_dates.nunique() == 1
@@ -637,17 +646,19 @@ class TimeSeries:
                 self._global_times = pd.Index(global_df[time_col])
             else:
                 self._global_times = global_df[time_col]
+        partition_tfms = self._get_partition_tfms()
+        group_tfms = self._get_group_tfms()
         to_drop = [id_col, time_col, target_col]
         if static_features is None:
-            partition_cols = {
+            partition_feature_cols = {
                 col
-                for _, _, partition_cols in self._get_partition_tfms().keys()
-                for col in partition_cols
+                for _, _, partition_cols_key in partition_tfms.keys()
+                for col in partition_cols_key
             }
             static_features = [
                 c
                 for c in df.columns
-                if c not in [time_col, target_col] and c not in partition_cols
+                if c not in [time_col, target_col] and c not in partition_feature_cols
             ]
         elif id_col not in static_features:
             static_features = [id_col, *static_features]
@@ -681,7 +692,7 @@ class TimeSeries:
             f for f in self.features if f not in df.columns
         ]
         df_for_special = df
-        if self.target_transforms is not None:
+        if self.target_transforms is not None and (partition_tfms or group_tfms):
             transformed_target = ga.data
             if self._restore_idxs is not None:
                 transformed_target = transformed_target[self._restore_idxs]
@@ -693,7 +704,6 @@ class TimeSeries:
             )
 
         self._partition_states = {}
-        partition_tfms = self._get_partition_tfms()
         if partition_tfms:
             for (mode, group_cols, partition_cols), tfms in partition_tfms.items():
                 for col in partition_cols:
@@ -743,7 +753,6 @@ class TimeSeries:
                     "groups": groups,
                 }
         self._group_states: Dict[Tuple[str, ...], Dict[str, Any]] = {}
-        group_tfms = self._get_group_tfms()
         if group_tfms:
             def _add_group_id(data, cols):
                 if isinstance(data, pd.DataFrame):
@@ -1578,7 +1587,11 @@ class TimeSeries:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
     ) -> DFType:
-        if ids is not None and (self._get_global_tfms() or self._get_group_tfms()):
+        if ids is not None and (
+            self._get_global_tfms()
+            or self._get_group_tfms()
+            or self._has_aggregated_partition_tfms()
+        ):
             raise ValueError(
                 "Cannot use `ids` with global or group lag transforms. "
                 "These transforms require forecasting all series together."
@@ -1712,9 +1725,11 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        partition_tfms = self._get_partition_tfms()
-        has_partition_agg = any(mode in {"global", "group"} for mode, _, _ in partition_tfms)
-        if self._get_global_tfms() or self._get_group_tfms() or has_partition_agg:
+        if (
+            self._get_global_tfms()
+            or self._get_group_tfms()
+            or self._has_aggregated_partition_tfms()
+        ):
             if isinstance(df, pd.DataFrame):
                 expected_ids = pd.Index(uids).union(pd.Index(new_ids))
                 expected_count = len(expected_ids)

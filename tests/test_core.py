@@ -1,4 +1,5 @@
 import copy
+import operator
 import datetime
 import tempfile
 import warnings
@@ -18,7 +19,9 @@ from mlforecast.core import (
     _name_models,
 )
 from mlforecast.lag_transforms import (
+    Combine,
     ExpandingMean,
+    Offset,
     RollingMean,
     RollingQuantile,
     RollingStd,
@@ -857,6 +860,33 @@ def test_partition_lag_transform_predict(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_combine_lag_transform_predict(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = Combine(
+        ExpandingMean(partition_by=["promo"]),
+        Offset(ExpandingMean(partition_by=["promo"]), 1),
+        operator.add,
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    feats = SaveFeatures()
+    ts.predict({"y": A()}, 2, X_df=future, before_predict_callback=feats)
+    features = _maybe_to_pandas(feats.get_features(with_step=True))
+    col = tfm._get_name(1)
+
+    assert col in features.columns
+    assert not features[col].isna().all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_partition_lag_transform_predict(engine):
     df = _make_partition_df(engine, include_brand=True)
     future = _make_partition_future_df(engine)
@@ -914,6 +944,77 @@ def test_global_partition_lag_transform_predict(engine):
         np.array([16.75, 14.333333333333334]),
         equal_nan=True,
     )
+
+
+@pytest.mark.parametrize(
+    "engine, tfm, include_brand, static_features",
+    [
+        (
+            "pandas",
+            ExpandingMean(groupby=["brand"], partition_by=["promo"]),
+            True,
+            ["brand"],
+        ),
+        (
+            "polars",
+            ExpandingMean(groupby=["brand"], partition_by=["promo"]),
+            True,
+            ["brand"],
+        ),
+        (
+            "pandas",
+            ExpandingMean(global_=True, partition_by=["promo"]),
+            False,
+            [],
+        ),
+        (
+            "polars",
+            ExpandingMean(global_=True, partition_by=["promo"]),
+            False,
+            [],
+        ),
+    ],
+)
+def test_aggregated_partition_lag_transform_predict_ids_error(
+    engine, tfm, include_brand, static_features
+):
+    df = _make_partition_df(engine, include_brand=include_brand)
+    future = _make_partition_future_df(engine, include_brand=include_brand)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=static_features,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot use `ids` with global or group lag transforms",
+    ):
+        ts.predict({"y": A()}, 2, X_df=future, ids=["a"])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_local_partition_lag_transform_predict_ids(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = ExpandingMean(partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+
+    preds = ts.predict({"y": A()}, 2, X_df=future, ids=["a"])
+    preds = _maybe_to_pandas(preds)
+    assert preds["unique_id"].unique().tolist() == ["a"]
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
