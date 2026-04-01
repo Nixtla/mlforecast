@@ -1381,87 +1381,94 @@ def test_horizons_with_exogenous():
     assert preds.shape[0] > 0
 
 
-def test_horizon_feature_templates_route_horizon_specific_exog():
-    """Ensure direct models can route horizon-scoped exogenous features via templates."""
+@pytest.fixture(params=["pandas", "polars"])
+def horizon_features_data(request):
+    """Horizon-specific exogenous train/future data in pandas or polars format.
+
+    Builds the dataframe in pandas (NaN assignment is straightforward), then
+    converts to polars when needed so both formats share identical values.
+    """
     H = 3
-    df = generate_daily_series(1, min_length=50, max_length=50)
-    df["bookings_horizon_1"] = df["y"] * 0.9
-    df["bookings_horizon_2"] = df["y"] * 0.7
-    df["bookings_horizon_3"] = df["y"] * 0.5
-    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
-    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+    n = 50
+    df_pd = generate_daily_series(1, min_length=n, max_length=n)
+    df_pd["bookings_horizon_1"] = df_pd["y"] * 0.9
+    df_pd["bookings_horizon_2"] = df_pd["y"] * 0.7
+    df_pd["bookings_horizon_3"] = df_pd["y"] * 0.5
+    # Introduce NaNs that horizon routing must handle: h1 missing for last 2
+    # rows, h2 missing for the last row.
+    df_pd.iloc[-2:, df_pd.columns.get_loc("bookings_horizon_1")] = None
+    df_pd.iloc[-1, df_pd.columns.get_loc("bookings_horizon_2")] = None
 
-    train = df.iloc[:-H]
-    future = df.iloc[-H:][
-        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
-    ]
+    exog_cols = ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
+    horizon_features = {
+        1: ["bookings_horizon_1"],
+        2: ["bookings_horizon_2"],
+        3: ["bookings_horizon_3"],
+    }
 
-    baseline = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1],
-    )
+    if request.param == "pandas":
+        train = df_pd.iloc[:-H]
+        future = df_pd.iloc[-H:][exog_cols]
+        freq = "D"
+    else:
+        df_pl = pl.from_pandas(df_pd)  # pandas NaN → polars null automatically
+        train = df_pl.head(n - H)
+        future = df_pl.tail(H).select(exog_cols)
+        freq = "1d"
+
+    return {
+        "train": train,
+        "future": future,
+        "H": H,
+        "freq": freq,
+        "horizon_features": horizon_features,
+    }
+
+
+def _to_pandas(df):
+    """Normalise a pandas or polars DataFrame to pandas for assertions."""
+    return df.to_pandas() if isinstance(df, pl.DataFrame) else df
+
+
+def test_horizon_feature_templates_route_horizon_specific_exog(horizon_features_data):
+    """Ensure direct models can route horizon-scoped exogenous features via templates."""
+    data = horizon_features_data
+    H, freq = data["H"], data["freq"]
+    train, future = data["train"], data["future"]
+
+    baseline = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     baseline.fit(train, static_features=[], max_horizon=H)
     with pytest.raises(ValueError, match="Input X contains NaN"):
         baseline.predict(h=H, X_df=future)
 
-    templated = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1],
-    )
+    templated = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     templated.fit(
         train,
         static_features=[],
         max_horizon=H,
         horizon_feature_templates=["bookings_horizon_{h}"],
     )
-    assert templated.horizon_features_ == {
-        1: ["bookings_horizon_1"],
-        2: ["bookings_horizon_2"],
-        3: ["bookings_horizon_3"],
-    }
-    preds = templated.predict(h=H, X_df=future)
+    assert templated.horizon_features_ == data["horizon_features"]
+    preds = _to_pandas(templated.predict(h=H, X_df=future))
     assert preds.shape[0] == H
     assert preds["LinearRegression"].notna().all()
 
 
-def test_horizon_features_route_horizon_specific_exog():
+def test_horizon_features_route_horizon_specific_exog(horizon_features_data):
     """Ensure explicit horizon feature mappings are used directly and persist."""
-    H = 3
-    df = generate_daily_series(1, min_length=50, max_length=50)
-    df["bookings_horizon_1"] = df["y"] * 0.9
-    df["bookings_horizon_2"] = df["y"] * 0.7
-    df["bookings_horizon_3"] = df["y"] * 0.5
-    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
-    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+    data = horizon_features_data
+    H, freq = data["H"], data["freq"]
+    train, future = data["train"], data["future"]
 
-    train = df.iloc[:-H]
-    future = df.iloc[-H:][
-        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
-    ]
-
-    fcst = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1],
-    )
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     fcst.fit(
         train,
         static_features=[],
         max_horizon=H,
-        horizon_features={
-            1: ["bookings_horizon_1"],
-            2: ["bookings_horizon_2"],
-            3: ["bookings_horizon_3"],
-        },
+        horizon_features=data["horizon_features"],
     )
-    assert fcst.horizon_features_ == {
-        1: ["bookings_horizon_1"],
-        2: ["bookings_horizon_2"],
-        3: ["bookings_horizon_3"],
-    }
-    preds = fcst.predict(h=H, X_df=future)
+    assert fcst.horizon_features_ == data["horizon_features"]
+    preds = _to_pandas(fcst.predict(h=H, X_df=future))
     assert preds.shape[0] == H
     assert preds["LinearRegression"].notna().all()
 
@@ -1471,50 +1478,51 @@ def test_horizon_features_route_horizon_specific_exog():
         fcst.save(savedir)
         loaded = MLForecast.load(savedir)
     assert loaded.horizon_features_ == fcst.horizon_features_
-    preds_loaded = loaded.predict(h=H, X_df=future)
+    preds_loaded = _to_pandas(loaded.predict(h=H, X_df=future))
     pd.testing.assert_frame_equal(preds, preds_loaded)
 
 
-def test_horizon_feature_templates_require_direct_mode():
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_feature_templates_require_direct_mode(df_engine):
     """Templates are only valid for direct forecasting setups."""
-    df = generate_daily_series(2, min_length=30, max_length=30)
-    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    df = generate_daily_series(2, min_length=30, max_length=30, engine=df_engine)
+    freq = "1d" if df_engine == "polars" else "D"
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
-        fcst.fit(
-            df,
-            static_features=[],
-            horizon_feature_templates=["bookings_horizon_{h}"],
-        )
+        fcst.fit(df, static_features=[], horizon_feature_templates=["bookings_horizon_{h}"])
 
 
-def test_horizon_features_require_direct_mode():
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_features_require_direct_mode(df_engine):
     """Explicit horizon feature mappings are only valid for direct forecasting setups."""
-    df = generate_daily_series(2, min_length=30, max_length=30)
-    fcst = MLForecast(models=[LinearRegression()], freq='D', lags=[1])
+    df = generate_daily_series(2, min_length=30, max_length=30, engine=df_engine)
+    freq = "1d" if df_engine == "polars" else "D"
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     with pytest.raises(ValueError, match="only supported when using `max_horizon` or `horizons`"):
-        fcst.fit(
-            df,
-            static_features=[],
-            horizon_features={1: ["bookings_horizon_1"]},
-        )
+        fcst.fit(df, static_features=[], horizon_features={1: ["bookings_horizon_1"]})
 
 
-def test_horizon_features_with_weights_and_fitted_values():
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_features_with_weights_and_fitted_values(df_engine):
     """Direct fitted values should work when weights and horizon-specific inputs are both used."""
     H = 3
-    df = generate_daily_series(1, min_length=50, max_length=50)
-    df["weight"] = np.linspace(1.0, 2.0, len(df))
-    df["bookings_horizon_1"] = df["y"] * 0.9
-    df["bookings_horizon_2"] = df["y"] * 0.7
-    df["bookings_horizon_3"] = df["y"] * 0.5
+    n = 50
+    df_pd = generate_daily_series(1, min_length=n, max_length=n)
+    df_pd["weight"] = np.linspace(1.0, 2.0, n)
+    df_pd["bookings_horizon_1"] = df_pd["y"] * 0.9
+    df_pd["bookings_horizon_2"] = df_pd["y"] * 0.7
+    df_pd["bookings_horizon_3"] = df_pd["y"] * 0.5
 
-    fcst = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1],
-    )
+    if df_engine == "polars":
+        train = pl.from_pandas(df_pd).head(n - H)
+        freq = "1d"
+    else:
+        train = df_pd.iloc[:-H]
+        freq = "D"
+
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     fcst.fit(
-        df.iloc[:-H],
+        train,
         static_features=[],
         max_horizon=H,
         horizon_features={
@@ -1527,30 +1535,37 @@ def test_horizon_features_with_weights_and_fitted_values():
     )
     fitted = fcst.forecast_fitted_values()
     assert fitted.shape[0] > 0
-    assert "LinearRegression" in fitted.columns
+    assert "LinearRegression" in _to_pandas(fitted).columns
 
 
-def test_horizon_features_transfer_learning_predict():
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_features_transfer_learning_predict(df_engine):
     """Transfer-learning predictions should preserve horizon-specific feature routing."""
     H = 3
-    df = generate_daily_series(1, min_length=80, max_length=80)
-    df["bookings_horizon_1"] = df["y"] * 0.9
-    df["bookings_horizon_2"] = df["y"] * 0.7
-    df["bookings_horizon_3"] = df["y"] * 0.5
-    df.iloc[-2:, df.columns.get_loc("bookings_horizon_1")] = None
-    df.iloc[-1, df.columns.get_loc("bookings_horizon_2")] = None
+    n = 80
+    df_pd = generate_daily_series(1, min_length=n, max_length=n)
+    df_pd["bookings_horizon_1"] = df_pd["y"] * 0.9
+    df_pd["bookings_horizon_2"] = df_pd["y"] * 0.7
+    df_pd["bookings_horizon_3"] = df_pd["y"] * 0.5
+    df_pd.iloc[-2:, df_pd.columns.get_loc("bookings_horizon_1")] = None
+    df_pd.iloc[-1, df_pd.columns.get_loc("bookings_horizon_2")] = None
 
-    base_train = df.iloc[:-2 * H]
-    transfer_df = df.iloc[-2 * H : -H]
-    future = df.iloc[-H:][
-        ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
-    ]
+    exog_cols = ["unique_id", "ds", "bookings_horizon_1", "bookings_horizon_2", "bookings_horizon_3"]
 
-    fcst = MLForecast(
-        models=[LinearRegression()],
-        freq='D',
-        lags=[1],
-    )
+    if df_engine == "polars":
+        df = pl.from_pandas(df_pd)
+        base_train = df.head(n - 2 * H)
+        transfer_df = df.slice(n - 2 * H, H)
+        future = df.tail(H).select(exog_cols)
+        freq = "1d"
+    else:
+        df = df_pd
+        base_train = df.iloc[: -2 * H]
+        transfer_df = df.iloc[-2 * H : -H]
+        future = df.iloc[-H:][exog_cols]
+        freq = "D"
+
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
     fcst.fit(
         base_train,
         static_features=[],
@@ -1561,7 +1576,7 @@ def test_horizon_features_transfer_learning_predict():
             3: ["bookings_horizon_3"],
         },
     )
-    preds = fcst.predict(h=H, new_df=transfer_df, X_df=future)
+    preds = _to_pandas(fcst.predict(h=H, new_df=transfer_df, X_df=future))
     assert preds.shape[0] == H
     assert preds["LinearRegression"].notna().all()
 
