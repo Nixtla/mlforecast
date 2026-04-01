@@ -296,6 +296,13 @@ class MLForecast:
                     raise ValueError(
                         "Each value in `horizon_features` must be a list of column names."
                     )
+                if not cols:
+                    warnings.warn(
+                        f"`horizon_features` includes an empty list for horizon {horizon}. "
+                        "This entry has no effect and can be removed.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
                 resolved[horizon] = list(dict.fromkeys(cols))
         else:
             templates = list(horizon_feature_templates or [])

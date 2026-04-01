@@ -1183,7 +1183,9 @@ class TimeSeries:
             # So dates need to be [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
             if isinstance(self.curr_dates, pl_Series):
                 df_constructor = pl_DataFrame
-                # Compute dates for all horizons, then stack and flatten
+                # Compute dates for all horizons, then stack and flatten.
+                # horizons_to_predict is 0-indexed; offset_times(dates, freq, n) gives
+                # dates + n*freq, so h + 1 converts 0-indexed h to a 1-step-ahead offset.
                 dates_per_horizon = [ufp.offset_times(self.curr_dates, self.freq, h + 1) for h in horizons_to_predict]
                 # Stack: each row is a series, each col is a horizon
                 dates_matrix = pl.DataFrame(dates_per_horizon).transpose()
@@ -1192,7 +1194,9 @@ class TimeSeries:
                 dates = pl.Series(dates)
             else:
                 df_constructor = pd.DataFrame
-                # Compute dates for all horizons, then stack and flatten
+                # Compute dates for all horizons, then stack and flatten.
+                # horizons_to_predict is 0-indexed; offset_times(dates, freq, n) gives
+                # dates + n*freq, so h + 1 converts 0-indexed h to a 1-step-ahead offset.
                 dates_per_horizon = [ufp.offset_times(self.curr_dates, self.freq, h + 1) for h in horizons_to_predict]
                 # Stack: each row is a series, each col is a horizon
                 dates_matrix = np.column_stack(dates_per_horizon)
