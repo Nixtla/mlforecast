@@ -107,9 +107,9 @@ def mlforecast_objective(
         (Callable[[optuna.Trial], float]): optuna objective function
     """
     def objective(trial: optuna.Trial) -> float:
-        config = config_fn(trial)
+        config = copy.deepcopy(config_fn(trial))
         model_copy = clone(model)
-        model_params = dict(config["model_params"])
+        model_params = config["model_params"]
         static_features = config["mlf_fit_params"].get("static_features", [])
         if (
             static_features

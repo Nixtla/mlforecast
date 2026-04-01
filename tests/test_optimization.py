@@ -105,6 +105,84 @@ def test_mlforecast_objective_passes_only_categorical_static_features_to_catboos
     assert all(features == ["store_type"] for features in DummyCatBoostRegressor.fit_cat_features)
 
 
+def test_mlforecast_objective_respects_explicit_cat_features(monkeypatch):
+    monkeypatch.setattr(
+        "mlforecast.optimization.CatBoostRegressor",
+        DummyCatBoostRegressor,
+    )
+    DummyCatBoostRegressor.fit_cat_features = []
+
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    df["store_type"] = df["unique_id"].map({"id_0": "a", "id_1": "b"})
+    df["store_size"] = df["unique_id"].map({"id_0": 100.0, "id_1": 200.0}).astype(float)
+
+    explicit_cat_features = ["store_size"]  # intentionally override with numeric column
+
+    def config_fn(trial):  # noqa: ARG001
+        return {
+            "model_params": {"cat_features": explicit_cat_features},
+            "mlf_init_params": {"lags": [1]},
+            "mlf_fit_params": {"static_features": ["store_type", "store_size"]},
+        }
+
+    def loss(df: pd.DataFrame, train_df: pd.DataFrame) -> float:  # noqa: ARG001
+        return abs(df["y"] - df["model"]).mean()
+
+    objective = mlforecast_objective(
+        df=df,
+        config_fn=config_fn,
+        loss=loss,
+        model=DummyCatBoostRegressor(),
+        freq="D",
+        n_windows=1,
+        h=2,
+    )
+    objective(optuna.trial.FixedTrial({}))
+
+    # Auto-detection must not override the user's explicit cat_features
+    assert all(
+        features == explicit_cat_features
+        for features in DummyCatBoostRegressor.fit_cat_features
+    )
+
+
+def test_mlforecast_objective_saves_cat_features_in_user_attrs(monkeypatch):
+    monkeypatch.setattr(
+        "mlforecast.optimization.CatBoostRegressor",
+        DummyCatBoostRegressor,
+    )
+    DummyCatBoostRegressor.fit_cat_features = []
+
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    df["store_type"] = df["unique_id"].map({"id_0": "a", "id_1": "b"})
+    df["store_size"] = df["unique_id"].map({"id_0": 100.0, "id_1": 200.0}).astype(float)
+
+    def config_fn(trial):  # noqa: ARG001
+        return {
+            "model_params": {},
+            "mlf_init_params": {"lags": [1]},
+            "mlf_fit_params": {"static_features": ["store_type", "store_size"]},
+        }
+
+    def loss(df: pd.DataFrame, train_df: pd.DataFrame) -> float:  # noqa: ARG001
+        return abs(df["y"] - df["model"]).mean()
+
+    objective = mlforecast_objective(
+        df=df,
+        config_fn=config_fn,
+        loss=loss,
+        model=DummyCatBoostRegressor(),
+        freq="D",
+        n_windows=1,
+        h=2,
+    )
+    study = optuna.create_study()
+    study.optimize(objective, n_trials=1)
+
+    saved_model_params = study.best_trial.user_attrs["config"]["model_params"]
+    assert saved_model_params.get("cat_features") == ["store_type"]
+
+
 @pytest.fixture(scope="module")
 def weekly_data():
     group = "Weekly"
