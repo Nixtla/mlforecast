@@ -326,6 +326,23 @@ class TimeSeries:
         common_exog = [c for c in exog_cols if c not in matched_cols]
         return common_exog, horizon_features
 
+    def _get_cols_for_horizon(
+        self,
+        h: int,
+        common_exog: List[str],
+        horizon_exog_map: Dict[int, List[str]],
+        exog_cols: List[str],
+    ) -> List[str]:
+        """Return the ordered feature columns to use for 0-indexed horizon h.
+
+        ``horizon_exog_map`` uses 1-indexed keys (matching the user-facing
+        ``horizon_features`` dict), so we convert with ``h + 1``.
+        """
+        # Internal horizons are 0-indexed; user-facing horizon_features keys are
+        # 1-indexed, hence the +1 conversion here.
+        allowed_exog = common_exog + horizon_exog_map.get(h + 1, [])
+        return [c for c in self.features_order_ if c not in exog_cols or c in allowed_exog]
+
     def __repr__(self):
         return (
             f"TimeSeries(freq={self.freq}, "
@@ -797,7 +814,8 @@ class TimeSeries:
             Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
         """
         exog_cols = self._get_dynamic_exog_cols(self.features_order_)
-        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+        exog_cols_set = set(exog_cols)
+        common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
             exog_cols, self.horizon_features_
         )
 
@@ -816,9 +834,14 @@ class TimeSeries:
             exog_lookup = original_df[[self.id_col, self.time_col] + exog_cols]
 
         for h in horizons:
-            horizon_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
-            allowed_cols = set(non_exog_cols) | set(horizon_exog)
-            x_cols_h = [c for c in x_cols if c in allowed_cols]
+            h_cols = self._get_cols_for_horizon(h, common_exog_cols, horizon_exog_map, exog_cols)
+            h_cols_set = set(h_cols)
+            # exog subset for this horizon — used for time-aligned joining and NaN filtering
+            horizon_exog = [c for c in h_cols if c in exog_cols_set]
+            # weight_col lives in x_cols but not in features_order_ (and thus not in
+            # h_cols); keep any x_col that is non-exog (weight, lags, dates, static)
+            # or is an allowed exog for this horizon.
+            x_cols_h = [c for c in x_cols if c not in exog_cols_set or c in h_cols_set]
 
             # Target column name for this horizon
             target_col_h = f"{target_col}{h}"
@@ -868,7 +891,9 @@ class TimeSeries:
                 # Reorder columns to match x_cols
                 X_h = X_h[x_cols_h]
 
-            # Filter valid rows (non-NaN target and exog)
+            # Filter valid rows: rows where any horizon-specific exog is NaN/null
+            # are dropped — they cannot be used for this horizon's model even if
+            # the target itself is valid.
             valid = ~np.isnan(y_h)
             if horizon_exog and h > 0:
                 for col in horizon_exog:
@@ -1184,19 +1209,16 @@ class TimeSeries:
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
         exog_cols = self._get_dynamic_exog_cols(self.features_order_)
-        common_exog_cols, horizon_exog_cols = self._split_horizon_exog_cols(
+        common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
             exog_cols, self.horizon_features_
         )
         feature_idx = {c: i for i, c in enumerate(self.features_order_)}
         horizon_feature_indices = {}
         if self.horizon_features_:
             for h in horizons_to_predict:
-                allowed_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
-                h_cols = [
-                    c
-                    for c in self.features_order_
-                    if c not in exog_cols or c in allowed_exog
-                ]
+                h_cols = self._get_cols_for_horizon(
+                    h, common_exog_cols, horizon_exog_map, exog_cols
+                )
                 horizon_feature_indices[h] = np.array(
                     [feature_idx[c] for c in h_cols], dtype=np.int32
                 )
@@ -1222,14 +1244,9 @@ class TimeSeries:
                             if col_idx is not None:
                                 model_x = new_x[:, col_idx]
                         else:
-                            allowed_exog = common_exog_cols + horizon_exog_cols.get(
-                                h + 1, []
+                            h_cols = self._get_cols_for_horizon(
+                                h, common_exog_cols, horizon_exog_map, exog_cols
                             )
-                            h_cols = [
-                                c
-                                for c in self.features_order_
-                                if c not in exog_cols or c in allowed_exog
-                            ]
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
                     preds = horizon_model.predict(model_x)

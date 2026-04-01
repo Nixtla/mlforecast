@@ -631,7 +631,7 @@ class MLForecast:
             # Use the passed y array which has shape (n_rows, max_horizon)
             # y was already extracted from prep by _extract_X_y and contains expanded targets
             exog_cols = self.ts._get_dynamic_exog_cols(self.ts.features_order_)
-            common_exog_cols, horizon_exog_cols = self.ts._split_horizon_exog_cols(
+            common_exog_cols, horizon_exog_map = self.ts._split_horizon_exog_cols(
                 exog_cols, self.horizon_features_
             )
 
@@ -657,12 +657,9 @@ class MLForecast:
                 valid_target = ~np.isnan(y_h)
                 x_cols_h: Optional[List[str]]
                 if self.horizon_features_:
-                    allowed_exog = common_exog_cols + horizon_exog_cols.get(h + 1, [])
-                    x_cols_h = [
-                        c
-                        for c in self.ts.features_order_
-                        if c not in exog_cols or c in allowed_exog
-                    ]
+                    x_cols_h = self.ts._get_cols_for_horizon(
+                        h, common_exog_cols, horizon_exog_map, exog_cols
+                    )
                 else:
                     x_cols_h = x_cols
                 exog_cols_h = (
