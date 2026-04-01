@@ -635,7 +635,18 @@ class AutoMLForecast:
                 recursive fitted values for ``h>1`` on demand. Defaults to None.
 
         Returns:
-            (pandas or polars DataFrame): Dataframe with predictions for the training set
+            pandas or polars DataFrame: DataFrame with the following columns:
+
+            - ``id_col``: series identifier.
+            - ``time_col``: timestamp of the predicted observation.
+            - ``target_col``: actual observed value.
+            - ``h``: number of steps ahead the prediction was made. For recursive models
+              this equals the ``h`` argument. For direct models (``max_horizon``) it
+              reflects the specific horizon step (1-indexed) at which each row was
+              predicted, ranging from 1 to ``max_horizon``.
+            - One column per model with the fitted (in-sample) predictions.
+            - If ``level`` is provided, additional columns with the lower and upper
+              bounds of the prediction intervals for each model and confidence level.
         """
         fitted_vals = None
         for name, model in self.models_.items():
