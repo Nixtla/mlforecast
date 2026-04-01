@@ -1980,3 +1980,152 @@ def test_transfer_learning_with_sparse_horizons():
     # Only horizons 3 and 10 should be returned
     assert preds.shape[0] == n_series * 2
     assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
+
+
+def test_cross_validation_with_horizon_features(horizon_features_data):
+    """cross_validation() should work correctly with horizon_features."""
+    data = horizon_features_data
+    H, freq = data["H"], data["freq"]
+    train = data["train"]
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    cv = fcst.cross_validation(
+        train,
+        n_windows=2,
+        h=H,
+        static_features=[],
+        max_horizon=H,
+        horizon_features=data["horizon_features"],
+    )
+    cv_pd = _to_pandas(cv)
+    assert cv_pd.shape[0] > 0
+    assert "LinearRegression" in cv_pd.columns
+    assert cv_pd["LinearRegression"].notna().all()
+
+
+def test_horizon_features_all_horizon_specific():
+    """Fit and predict should work when every exog column is horizon-specific (no common_exog)."""
+    H = 2
+    n = 40
+    df = generate_daily_series(1, min_length=n, max_length=n)
+    df["feat_h1"] = df["y"] * 0.8
+    df["feat_h2"] = df["y"] * 0.6
+    exog_cols = ["unique_id", "ds", "feat_h1", "feat_h2"]
+    train = df.iloc[:-H]
+    future = df.iloc[-H:][exog_cols]
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features={1: ["feat_h1"], 2: ["feat_h2"]},
+    )
+    from mlforecast.core import TimeSeries  # noqa: F401 — verifying internal state
+    exog_cols_all = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
+    common, _ = fcst.ts._split_horizon_exog_cols(exog_cols_all, fcst.horizon_features_)
+    assert common == []
+    preds = fcst.predict(h=H, X_df=future)
+    assert _to_pandas(preds).shape[0] == H
+    assert _to_pandas(preds)["LinearRegression"].notna().all()
+
+
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_feature_templates_no_matches(df_engine):
+    """A template that matches no columns should raise ValueError."""
+    H = 2
+    df = generate_daily_series(1, min_length=30, max_length=30, engine=df_engine)
+    if df_engine == "polars":
+        df = df.with_columns(pl.lit(1.0).alias("some_feature"))
+        freq = "1d"
+    else:
+        df = df.copy()
+        df["some_feature"] = 1.0
+        freq = "D"
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    with pytest.raises(ValueError, match="No dynamic exogenous columns matched"):
+        fcst.fit(
+            df,
+            static_features=[],
+            max_horizon=H,
+            horizon_feature_templates=["nonexistent_{h}"],
+        )
+
+
+def test_horizon_features_save_load_templates(horizon_features_data):
+    """Save/load round-trip should preserve horizon_features_ when fit via templates."""
+    data = horizon_features_data
+    H, freq = data["H"], data["freq"]
+    train, future = data["train"], data["future"]
+
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_feature_templates=["bookings_horizon_{h}"],
+    )
+    preds = _to_pandas(fcst.predict(h=H, X_df=future))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        savedir = Path(tmpdir) / "fcst"
+        savedir.mkdir()
+        fcst.save(savedir)
+        loaded = MLForecast.load(savedir)
+
+    assert loaded.horizon_features_ == fcst.horizon_features_
+    preds_loaded = _to_pandas(loaded.predict(h=H, X_df=future))
+    pd.testing.assert_frame_equal(preds, preds_loaded)
+
+    # Loaded model should still validate missing horizon features
+    if isinstance(future, pl.DataFrame):
+        future_missing = future.drop("bookings_horizon_2")
+    else:
+        future_missing = future.drop(columns=["bookings_horizon_2"])
+    with pytest.raises(ValueError, match="missing the following exogenous features"):
+        loaded.predict(h=H, X_df=future_missing)
+
+
+@pytest.mark.parametrize("df_engine", ["pandas", "polars"])
+def test_horizon_feature_templates_conflicting_patterns(df_engine):
+    """A column matching two templates at different horizon numbers should raise ValueError."""
+    H = 2
+    # "feat_1_h2" matches "feat_{h}_h2" -> h=1 AND "feat_1_h{h}" -> h=2 (conflicting)
+    col_name = "feat_1_h2"
+    df = generate_daily_series(1, min_length=30, max_length=30, engine=df_engine)
+    if df_engine == "polars":
+        df = df.with_columns(pl.lit(1.0).alias(col_name))
+        freq = "1d"
+    else:
+        df = df.copy()
+        df[col_name] = 1.0
+        freq = "D"
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    with pytest.raises(ValueError, match="matches multiple horizon templates with conflicting horizons"):
+        fcst.fit(
+            df,
+            static_features=[],
+            max_horizon=H,
+            horizon_feature_templates=["feat_{h}_h2", "feat_1_h{h}"],
+        )
+
+
+def test_predict_x_df_missing_horizon_features(horizon_features_data):
+    """predict() should raise a clear error when X_df is missing a horizon-specific feature."""
+    data = horizon_features_data
+    H, freq = data["H"], data["freq"]
+    train, future = data["train"], data["future"]
+
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        max_horizon=H,
+        horizon_features=data["horizon_features"],
+    )
+    if isinstance(future, pl.DataFrame):
+        future_missing = future.drop("bookings_horizon_2")
+    else:
+        future_missing = future.drop(columns=["bookings_horizon_2"])
+
+    with pytest.raises(ValueError, match="missing the following exogenous features"):
+        fcst.predict(h=H, X_df=future_missing)

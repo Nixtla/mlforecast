@@ -1346,6 +1346,14 @@ class TimeSeries:
                         "Please re-run the fit step using the `static_features` argument to indicate which features are static. "
                         "If all your features are dynamic please provide an empty list (static_features=[])."
                     )
+                expected_exog = set(self._get_dynamic_exog_cols(self.features_order_))
+                if expected_exog:
+                    dynamics_set = set(dynamics)
+                    missing_exog = sorted(expected_exog - dynamics_set)
+                    if missing_exog:
+                        raise ValueError(
+                            f"X_df is missing the following exogenous features that were used during fit: {missing_exog}."
+                        )
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
                 ends = ufp.offset_times(self.last_dates, self.freq, horizon)
                 expected_rows_X = len(self.uids) * horizon
