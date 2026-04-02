@@ -315,7 +315,7 @@ Name | Type | Description | Default
 #### `AutoMLForecast.forecast_fitted_values`
 
 ```python
-forecast_fitted_values(level=None)
+forecast_fitted_values(level=None, *, h=1, train_df=None)
 ```
 
 Access in-sample predictions.
@@ -325,12 +325,20 @@ Access in-sample predictions.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
+`h` | <code>[int](#int)</code> | Forecast horizon for fitted values. Defaults to 1. | <code>1</code>
+`train_df` | <code>pandas or polars DataFrame</code> | Training data to use when computing recursive fitted values for ``h>1`` on demand. Defaults to None. | <code>None</code>
 
 **Returns:**
 
 Type | Description
 ---- | -----------
-<code>pandas or polars DataFrame</code> | Dataframe with predictions for the training set
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | pandas or polars DataFrame: DataFrame with the following columns:
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - ``id_col``: series identifier.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - ``time_col``: timestamp of the predicted observation.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - ``target_col``: actual observed value.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - ``h``: number of steps ahead the prediction was made. For recursive models this equals the ``h`` argument. For direct models (``max_horizon``) it reflects the specific horizon step (1-indexed) at which each row was predicted, ranging from 1 to ``max_horizon``.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - One column per model with the fitted (in-sample) predictions.
+<code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | - If ``level`` is provided, additional columns with the lower and upper bounds of the prediction intervals for each model and confidence level.
 
 
 ```python

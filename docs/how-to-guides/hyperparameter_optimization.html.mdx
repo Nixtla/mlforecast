@@ -9,6 +9,7 @@ title: Hyperparameter optimization | MLForecast
 ```python
 import os
 import tempfile
+import time
 
 import lightgbm as lgb
 import optuna
@@ -31,6 +32,11 @@ from mlforecast.auto import (
 from mlforecast.lag_transforms import ExponentiallyWeightedMean, RollingMean
 ```
 
+``` text
+/Users/janrathfelder/miniconda3/envs/mlforecast-dev/lib/python3.10/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
+  from .autonotebook import tqdm as notebook_tqdm
+```
+
 ## Data setup
 
 ```python
@@ -43,6 +49,11 @@ def get_data(group, horizon):
 group = 'Hourly'
 horizon = M4Info[group].horizon
 train = get_data(group, horizon)
+```
+
+``` text
+/var/folders/nk/kvcs64mn4nbfqfw1ff_czjn80000gn/T/ipykernel_89215/3410956497.py:5: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  return df.groupby('unique_id').head(-horizon).copy()
 ```
 
 ## Optimization
@@ -145,9 +156,9 @@ evaluate(preds, group)
 
 |       | my_lgb |
 |-------|--------|
-| SMAPE | 18.67  |
-| MASE  | 4.79   |
-| OWA   | 1.51   |
+| SMAPE | 18.64  |
+| MASE  | 4.76   |
+| OWA   | 1.50   |
 
 #### Tuning scikit-learn pipelines
 
@@ -226,6 +237,11 @@ preds = auto_mlf.predict(horizon)
 evaluate(preds, group)
 ```
 
+``` text
+/Users/janrathfelder/Documents/data_science/GitHub/mlforecast/mlforecast/auto.py:269: UserWarning: `season_length` is not used when `init_config` is provided.
+  warnings.warn("`season_length` is not used when `init_config` is provided.")
+```
+
 |       | AutoRidge |
 |-------|-----------|
 | SMAPE | 13.31     |
@@ -270,6 +286,201 @@ evaluate(preds, group)
 | MASE  | 5.07         |
 | OWA   | 1.57         |
 
+### M5 example: reuse CV splits + global/group rolling means
+
+This example shows both features in two small snippets:
+
+We can speed up the tuning process by reusing the cv splits. In
+traditional tuning, the cv splits are created inside each tuning round,
+which can be slow depending on data size and number of iterations. With
+reuse_cv_splits=True these splits are created once and consumed inside
+the tuning rounds without the need to split the data again.
+
+-   We benchmark `reuse_cv_splits=True` against `False` while keeping
+    the search space fixed to a single configuration. We still run
+    multiple Optuna trials, but every trial evaluates the exact same
+    model and feature settings, so the timing difference comes from
+    reusing the cached CV windows instead of rebuilding them on each
+    trial.
+-   For the example below, the speed up when setting
+    reuse_cv_splits=True is around 22% compared to reuse_cv_splits=True
+    (standard setting)
+-   We inspect the resulting feature values for
+    `RollingMean(..., global_=True)` and
+    `RollingMean(..., groupby=[...])` to see how the local, global, and
+    grouped aggregations differ.
+
+All rolling window functions support `global_` and `groupby`; here we
+only show `RollingMean`.
+
+```python
+from datasetsforecast.m5 import M5
+
+m5_static = ['item_id', 'dept_id', 'cat_id', 'store_id', 'state_id']
+
+
+def get_m5_subset(directory='data', n_series=100):
+    y_df, _, S_df = M5.load(directory=directory)
+    y_df['ds'] = pd.to_datetime(y_df['ds'])
+
+    # global_ lag transforms require aligned series ends
+    end_ds = y_df.groupby('unique_id')['ds'].max()
+    common_end = end_ds.mode().iat[0]
+    keep_ids = end_ds[end_ds == common_end].index[:n_series]
+
+    train = y_df[y_df['unique_id'].isin(keep_ids)].copy()
+    train = train.merge(S_df, on='unique_id')
+    return train
+
+m5_train = get_m5_subset()
+
+```
+
+``` text
+/var/folders/nk/kvcs64mn4nbfqfw1ff_czjn80000gn/T/ipykernel_89215/1808854623.py:11: FutureWarning: The default of observed=False is deprecated and will be changed to True in a future version of pandas. Pass observed=False to retain current behavior or observed=True to adopt the future default and silence this warning.
+  end_ds = y_df.groupby('unique_id')['ds'].max()
+```
+
+```python
+m5_benchmark_model = AutoModel(
+    model=make_pipeline(
+        ColumnTransformer(
+            [('encoder', OneHotEncoder(handle_unknown='ignore'), m5_static)],
+            remainder='passthrough',
+        ),
+        Ridge(),
+    ),
+    config=lambda trial: {'ridge__alpha': 1.0},
+)
+
+
+def m5_benchmark_init_config(trial: optuna.Trial):
+    return {
+        'lags': [1, 7, 28],
+        'lag_transforms': {
+            1: [
+                RollingMean(window_size=28),
+                RollingMean(window_size=28, global_=True),
+                RollingMean(window_size=28, groupby=['cat_id']),
+                RollingMean(window_size=28, groupby=['state_id', 'cat_id']),
+            ]
+        },
+    }
+
+
+def m5_benchmark_fit_config(trial: optuna.Trial):
+    return {'static_features': m5_static}
+
+
+def benchmark_m5_tuning(reuse_cv_splits: bool) -> float:
+    automl = AutoMLForecast(
+        models={'ridge': m5_benchmark_model},
+        freq='D',
+        init_config=m5_benchmark_init_config,
+        fit_config=m5_benchmark_fit_config,
+        reuse_cv_splits=reuse_cv_splits,
+    )
+    start = time.perf_counter()
+    automl.fit(
+        m5_train,
+        n_windows=20,
+        h=7,
+        num_samples=30,
+    )
+    return time.perf_counter() - start
+
+
+m5_timing = pd.DataFrame(
+    [
+        {'reuse_cv_splits': False, 'seconds': benchmark_m5_tuning(False)},
+        {'reuse_cv_splits': True, 'seconds': benchmark_m5_tuning(True)},
+    ]
+)
+
+baseline = m5_timing.loc[m5_timing["reuse_cv_splits"].eq(False), "seconds"].iloc[0]
+reuse = m5_timing.loc[m5_timing["reuse_cv_splits"].eq(True), "seconds"].iloc[0]
+
+pct_faster = (baseline / reuse - 1) * 100
+print(
+    f"Using reuse_cv_splits=True is {pct_faster:.1f}% faster than the traditional way of tuning "
+    f"(reuse_cv_splits=False): {baseline:.2f}s -> {reuse:.2f}s."
+)
+```
+
+``` text
+Using reuse_cv_splits=True is 22.5% faster than the traditional way of tuning (reuse_cv_splits=False): 46.25s -> 37.74s.
+```
+
+```python
+m5_feature_demo = MLForecast(
+    models=Ridge(),
+    freq='D',
+    lags=[1],
+    lag_transforms={
+        1: [
+            RollingMean(window_size=7),
+            RollingMean(window_size=7, global_=True),
+            RollingMean(window_size=7, groupby=['state_id']),
+            RollingMean(window_size=7, groupby=['state_id', 'store_id']),
+        ]
+    },
+)
+
+m5_feature_values = m5_feature_demo.preprocess(
+    m5_train,
+    static_features=m5_static,
+    dropna=False,
+)
+
+feature_cols = [
+    'rolling_mean_lag1_window_size7',
+    'global_rolling_mean_lag1_window_size7',
+    'groupby_state_id_rolling_mean_lag1_window_size7',
+    'groupby_state_id__store_id_rolling_mean_lag1_window_size7',
+]
+last_ds = m5_feature_values['ds'].max()
+
+(
+    m5_feature_values.loc[
+        m5_feature_values['ds'].eq(last_ds),
+        ['ds', 'unique_id', 'state_id', 'cat_id'] + feature_cols,
+    ]
+    .sort_values(['state_id', 'cat_id', 'unique_id'])
+    .head(12)
+)
+
+```
+
+|       | ds         | unique_id        | state_id | cat_id | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | groupby_state_id_rolling_mean_lag1_window_size7 | groupby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
+|-------|------------|------------------|----------|--------|--------------------------------|---------------------------------------|-------------------------------------------------|-------------------------------------------------------------|
+| 1968  | 2016-06-19 | FOODS_1_001_CA_1 | CA       | FOODS  | 0.857143                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
+| 3937  | 2016-06-19 | FOODS_1_001_CA_2 | CA       | FOODS  | 1.142857                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
+| 5906  | 2016-06-19 | FOODS_1_001_CA_3 | CA       | FOODS  | 1.714286                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
+| 7874  | 2016-06-19 | FOODS_1_001_CA_4 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
+| 21632 | 2016-06-19 | FOODS_1_002_CA_1 | CA       | FOODS  | 1.285714                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
+| 23601 | 2016-06-19 | FOODS_1_002_CA_2 | CA       | FOODS  | 0.714286                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
+| 25570 | 2016-06-19 | FOODS_1_002_CA_3 | CA       | FOODS  | 0.285714                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
+| 27538 | 2016-06-19 | FOODS_1_002_CA_4 | CA       | FOODS  | 0.571429                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
+| 41300 | 2016-06-19 | FOODS_1_003_CA_1 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
+| 43269 | 2016-06-19 | FOODS_1_003_CA_2 | CA       | FOODS  | 1.428571                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
+| 45238 | 2016-06-19 | FOODS_1_003_CA_3 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
+| 47206 | 2016-06-19 | FOODS_1_003_CA_4 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
+
+```python
+m5_feature_values.describe()
+```
+
+|       | ds                            | y             | lag1          | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | groupby_state_id_rolling_mean_lag1_window_size7 | groupby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
+|-------|-------------------------------|---------------|---------------|--------------------------------|---------------------------------------|-------------------------------------------------|-------------------------------------------------------------|
+| count | 181878                        | 181878.000000 | 181778.000000 | 181178.000000                  | 181552.000000                         | 181552.000000                                   | 181552.000000                                               |
+| mean  | 2013-12-12 09:05:38.112361216 | 1.341410      | 1.341383      | 1.338734                       | 128.771957                            | 44.179596                                       | 12.859269                                                   |
+| min   | 2011-01-29 00:00:00           | 0.000000      | 0.000000      | 0.000000                       | 32.857143                             | 5.285714                                        | 0.428571                                                    |
+| 25%   | 2012-09-22 00:00:00           | 0.000000      | 0.000000      | 0.142857                       | 92.285713                             | 29.142857                                       | 6.857143                                                    |
+| 50%   | 2013-12-23 00:00:00           | 0.000000      | 0.000000      | 0.428571                       | 129.071426                            | 41.571430                                       | 11.285714                                                   |
+| 75%   | 2015-03-23 00:00:00           | 1.000000      | 1.000000      | 1.142857                       | 162.000000                            | 57.000000                                       | 17.000000                                                   |
+| max   | 2016-06-19 00:00:00           | 116.000000    | 116.000000    | 49.285713                      | 298.714294                            | 149.571426                                      | 61.000000                                                   |
+| std   | NaN                           | 3.615288      | 3.615864      | 3.123487                       | 51.012020                             | 21.452202                                       | 7.960689                                                    |
+
 ## Accessing the optimization results
 
 After the process has finished the results are available under the
@@ -294,8 +505,8 @@ auto_mlf.results_['AutoLightGBM'].best_trial.user_attrs['config']
   'learning_rate': 0.05,
   'verbosity': -1,
   'n_estimators': 169,
-  'lambda_l1': 0.027334069690310565,
-  'lambda_l2': 0.0026599310838681858,
+  'lambda_l1': 0.02733406969031059,
+  'lambda_l2': 0.002659931083868188,
   'num_leaves': 112,
   'feature_fraction': 0.7118273996694524,
   'bagging_fraction': 0.8229470565333281,
