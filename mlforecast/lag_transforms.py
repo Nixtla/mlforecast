@@ -467,7 +467,7 @@ class Combine(_BaseLagTransform):
         # Build a shallow copy with tfm1/tfm2 cleared so deepcopy doesn't waste
         # time on attributes that are unconditionally overwritten below.
         stub = copy.copy(first)
-        stub.tfm1 = stub.tfm2 = None
+        stub.tfm1 = stub.tfm2 = None  # type: ignore[assignment]
         out = copy.deepcopy(stub)
         out.tfm1 = first.tfm1.stack([tfm.tfm1 for tfm in transforms])
         out.tfm2 = first.tfm2.stack([tfm.tfm2 for tfm in transforms])
