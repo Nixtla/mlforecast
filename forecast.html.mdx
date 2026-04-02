@@ -19,7 +19,7 @@ Forecasting pipeline
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `models` | <code>regressor or list of regressors</code> | Models that will be trained and used to compute the forecasts. | *required*
-`freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pandas.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
+`freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pd.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
@@ -30,7 +30,7 @@ Name | Type | Description | Default
 #### `MLForecast.fit`
 
 ```python
-fit(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, prediction_intervals=None, fitted=False, as_numpy=False, weight_col=None, models_fit_kwargs=None, validate_data=True, cache_train_df=True)
+fit(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, prediction_intervals=None, fitted=False, as_numpy=False, weight_col=None, models_fit_kwargs=None, validate_data=True)
 ```
 
 Apply the feature engineering and train the models.
@@ -54,7 +54,6 @@ Name | Type | Description | Default
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
-`cache_train_df` | <code>[bool](#bool)</code> | Cache a copy of the training data when `fitted=True` so `forecast_fitted_values(h>1)` can be called later for recursive models without passing `train_df`. Disable this to avoid the memory overhead and pass `train_df` directly to `forecast_fitted_values` when needed. Defaults to True. | <code>True</code>
 
 **Returns:**
 
