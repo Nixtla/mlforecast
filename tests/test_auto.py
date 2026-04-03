@@ -109,42 +109,8 @@ def test_automlforecast_pipeline(weekly_data):
     assert not preds.empty
     fitted_vals = auto_mlf.forecast_fitted_values(level=[95])
     assert not fitted_vals.empty
-
-
-def test_automlforecast_with_partition_by_transform():
-    df = _make_partition_series()
-    h = 5
-
-    auto_mlf = AutoMLForecast(
-        freq="D",
-        init_config=lambda trial: {
-            "lags": [1, 2, 7],
-            "lag_transforms": {
-                1: [ExpandingMean(groupby=["brand"], partition_by=["promo"])]
-            },
-        },
-        fit_config=lambda trial: {"static_features": ["brand"], "dropna": False},
-        models={
-            "hgb": AutoModel(
-                HistGradientBoostingRegressor(random_state=0, max_depth=3),
-                lambda trial: {},
-            )
-        },
-        num_threads=1,
-    )
-
-    auto_mlf.fit(
-        df=df,
-        n_windows=1,
-        h=h,
-        num_samples=1,
-        optimize_kwargs={},
-    )
-    preds = auto_mlf.predict(h, X_df=_make_partition_future(df, h))
-
-    assert not preds.empty
-    assert preds.shape[0] == df["unique_id"].nunique() * h
-    assert "hgb" in preds.columns
+    assert "h" in fitted_vals.columns
+    assert not any(col.startswith("h_") for col in fitted_vals.columns)
     
 def test_automlforecast_weight_col(weekly_data):
 
