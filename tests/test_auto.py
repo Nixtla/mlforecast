@@ -9,6 +9,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder
+from utilsforecast.losses import mae
 
 from mlforecast.auto import (
     AutoLightGBM,
@@ -18,6 +19,7 @@ from mlforecast.auto import (
     PredictionIntervals,
     ridge_space,
 )
+from mlforecast.lag_transforms import ExpandingMean
 
 from .conftest import assert_raises_with_message
 
@@ -316,3 +318,62 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
 
     assert preds_a.columns.tolist() == preds_b.columns.tolist()
     assert (preds_a["ridge"].to_numpy() == preds_b["ridge"].to_numpy()).all()
+
+
+def test_automlforecast_refit_false_with_grouped_expanding_mean():
+    rows = []
+    for uid, cat, vals in [
+        ("a", 0, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        ("b", 0, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+        ("c", 1, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]),
+        ("d", 1, [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]),
+    ]:
+        for i, y in enumerate(vals):
+            rows.append(
+                {
+                    "unique_id": uid,
+                    "ds": pd.Timestamp("2020-01-01") + pd.Timedelta(days=i),
+                    "y": y,
+                    "cat_code": cat,
+                }
+            )
+    df = pd.DataFrame(rows)
+    df["cat_code"] = df["cat_code"].astype("int32")
+
+    def init_config(trial):  # noqa: ARG001
+        return {
+            "lags": [1],
+            "lag_transforms": {1: [ExpandingMean(groupby=["cat_code"])]},
+        }
+
+    def fit_config(trial):  # noqa: ARG001
+        return {
+            "static_features": ["cat_code"],
+            "max_horizon": 2,
+        }
+
+    def model_config(trial):  # noqa: ARG001
+        return {}
+
+    def loss(df, train_df):  # noqa: ARG001
+        return mae(df, models=["model"])["model"].mean()
+
+    automl = AutoMLForecast(
+        models={"ridge": AutoModel(Ridge(), config=model_config)},
+        freq="D",
+        init_config=init_config,
+        fit_config=fit_config,
+        num_threads=1,
+    )
+
+    result = automl.fit(
+        df,
+        n_windows=2,
+        h=2,
+        num_samples=1,
+        step_size=2,
+        refit=False,
+        loss=loss,
+    )
+
+    assert result is automl

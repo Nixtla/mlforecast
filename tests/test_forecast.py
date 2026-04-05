@@ -705,6 +705,46 @@ def test_cv_weight_col(refit):
     assert not np.allclose(result_uniform['lr'].values, result_skewed['lr'].values)
 
 
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_cv_refit_false_with_grouped_expanding_mean(max_horizon):
+    rows = []
+    for uid, cat, vals in [
+        ("a", 0, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        ("b", 0, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+        ("c", 1, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]),
+        ("d", 1, [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]),
+    ]:
+        for i, y in enumerate(vals):
+            rows.append(
+                {
+                    "unique_id": uid,
+                    "ds": pd.Timestamp("2020-01-01") + pd.Timedelta(days=i),
+                    "y": y,
+                    "cat_code": cat,
+                }
+            )
+    df = pd.DataFrame(rows)
+    df["cat_code"] = df["cat_code"].astype("int32")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [ExpandingMean(groupby=["cat_code"])]},
+    )
+
+    cv = fcst.cross_validation(
+        df,
+        n_windows=2,
+        h=2,
+        static_features=["cat_code"],
+        refit=False,
+        max_horizon=max_horizon,
+    )
+
+    assert not cv.empty
+    assert "LinearRegression" in cv.columns
+
+
 def test_cv_input_size(setup_forecast_data, fcst):
     _, train, _ = setup_forecast_data
     horizon = 48
