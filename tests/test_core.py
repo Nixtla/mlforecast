@@ -1,4 +1,5 @@
 import copy
+import operator
 import datetime
 import tempfile
 import warnings
@@ -18,7 +19,9 @@ from mlforecast.core import (
     _name_models,
 )
 from mlforecast.lag_transforms import (
+    Combine,
     ExpandingMean,
+    Offset,
     RollingMean,
     RollingQuantile,
     RollingStd,
@@ -46,6 +49,39 @@ def _expanding_mean(x):
 
 def _rolling_mean(x, window_size):
     return pd.Series(x).rolling(window_size).mean().to_numpy()
+
+
+def _make_partition_df(engine, include_brand=False):
+    data = {
+        "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
+        "ds": [1, 2, 3, 4, 1, 2, 3, 4],
+        "y": [1, 2, 3, 4, 10, 20, 30, 40],
+        "promo": [True, True, False, True, False, True, False, True],
+    }
+    if include_brand:
+        data["brand"] = ["x"] * 8
+    if engine == "polars":
+        return pl.DataFrame(data).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    return pd.DataFrame(data)
+
+
+def _make_partition_future_df(engine, include_brand=False):
+    data = {
+        "unique_id": ["a", "a", "b", "b"],
+        "ds": [5, 6, 5, 6],
+        "promo": [False, True, True, False],
+    }
+    if include_brand:
+        data["brand"] = ["x"] * 4
+    if engine == "polars":
+        return pl.DataFrame(data).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    return pd.DataFrame(data)
+
+
+def _maybe_to_pandas(df):
+    if isinstance(df, pl.DataFrame):
+        return df.to_pandas()
+    return df
 
 def test_build_function_transform_name():
     assert _build_function_transform_name(_expanding_mean, 1) == "_expanding_mean_lag1"
@@ -672,6 +708,440 @@ def test_group_lag_transform(engine):
         expected,
         equal_nan=True,
     )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_lag_transform(engine):
+    df = _make_partition_df(engine)
+    tfm = RollingMean(3, min_samples=1, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    prep = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    expected_by_key = {
+        ("a", 1): np.nan,
+        ("a", 2): 1.0,
+        ("a", 3): np.nan,
+        ("a", 4): 1.5,
+        ("b", 1): np.nan,
+        ("b", 2): np.nan,
+        ("b", 3): 10.0,
+        ("b", 4): 20.0,
+    }
+    if engine == "polars":
+        expected = np.array(
+            [
+                expected_by_key[(uid, ds)]
+                for uid, ds in zip(prep["unique_id"].to_list(), prep["ds"].to_list())
+            ],
+            dtype=float,
+        )
+    else:
+        expected = np.array(
+            [expected_by_key[(uid, ds)] for uid, ds in zip(prep["unique_id"], prep["ds"])],
+            dtype=float,
+        )
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(prep[col].to_numpy(), expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_group_partition_lag_transform(engine):
+    df = _make_partition_df(engine, include_brand=True)
+    tfm = RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    prep = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    expected_by_key = {
+        ("a", 1): np.nan,
+        ("a", 2): 1.0,
+        ("a", 3): 10.0,
+        ("a", 4): 11.5,
+        ("b", 1): np.nan,
+        ("b", 2): 1.0,
+        ("b", 3): 10.0,
+        ("b", 4): 11.5,
+    }
+    if engine == "polars":
+        expected = np.array(
+            [
+                expected_by_key[(uid, ds)]
+                for uid, ds in zip(prep["unique_id"].to_list(), prep["ds"].to_list())
+            ],
+            dtype=float,
+        )
+    else:
+        expected = np.array(
+            [expected_by_key[(uid, ds)] for uid, ds in zip(prep["unique_id"], prep["ds"])],
+            dtype=float,
+        )
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(prep[col].to_numpy(), expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_global_partition_lag_transform(engine):
+    df = _make_partition_df(engine)
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    prep = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+    )
+    expected_by_key = {
+        ("a", 1): np.nan,
+        ("a", 2): 1.0,
+        ("a", 3): 10.0,
+        ("a", 4): 11.5,
+        ("b", 1): np.nan,
+        ("b", 2): 1.0,
+        ("b", 3): 10.0,
+        ("b", 4): 11.5,
+    }
+    if engine == "polars":
+        expected = np.array(
+            [
+                expected_by_key[(uid, ds)]
+                for uid, ds in zip(prep["unique_id"].to_list(), prep["ds"].to_list())
+            ],
+            dtype=float,
+        )
+    else:
+        expected = np.array(
+            [expected_by_key[(uid, ds)] for uid, ds in zip(prep["unique_id"], prep["ds"])],
+            dtype=float,
+        )
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(prep[col].to_numpy(), expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_lag_transform_predict(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = ExpandingMean(partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    feats = SaveFeatures()
+    ts.predict({"y": A()}, 2, X_df=future, before_predict_callback=feats)
+    features = _maybe_to_pandas(feats.get_features(with_step=True))
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(0), col].to_numpy(),
+        np.array([np.nan, 30.0]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(1), col].to_numpy(),
+        np.array([2.3333333333333335, 20.0]),
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_combine_lag_transform_predict(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = Combine(
+        ExpandingMean(partition_by=["promo"]),
+        Offset(ExpandingMean(partition_by=["promo"]), 1),
+        operator.add,
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    feats = SaveFeatures()
+    ts.predict({"y": A()}, 2, X_df=future, before_predict_callback=feats)
+    features = _maybe_to_pandas(feats.get_features(with_step=True))
+    col = tfm._get_name(1)
+
+    assert col in features.columns
+    assert not features[col].isna().all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_group_partition_lag_transform_predict(engine):
+    df = _make_partition_df(engine, include_brand=True)
+    future = _make_partition_future_df(engine)
+    tfm = ExpandingMean(groupby=["brand"], partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    feats = SaveFeatures()
+    ts.predict({"y": A()}, 2, X_df=future, before_predict_callback=feats)
+    features = _maybe_to_pandas(feats.get_features(with_step=True))
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(0), col].to_numpy(),
+        np.array([21.5, 22.333333333333332]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(1), col].to_numpy(),
+        np.array([16.75, 14.333333333333334]),
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_global_partition_lag_transform_predict(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = ExpandingMean(global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    feats = SaveFeatures()
+    ts.predict({"y": A()}, 2, X_df=future, before_predict_callback=feats)
+    features = _maybe_to_pandas(feats.get_features(with_step=True))
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(0), col].to_numpy(),
+        np.array([21.5, 22.333333333333332]),
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        features.loc[features["step"].eq(1), col].to_numpy(),
+        np.array([16.75, 14.333333333333334]),
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "engine, tfm, include_brand, static_features",
+    [
+        (
+            "pandas",
+            ExpandingMean(groupby=["brand"], partition_by=["promo"]),
+            True,
+            ["brand"],
+        ),
+        (
+            "polars",
+            ExpandingMean(groupby=["brand"], partition_by=["promo"]),
+            True,
+            ["brand"],
+        ),
+        (
+            "pandas",
+            ExpandingMean(global_=True, partition_by=["promo"]),
+            False,
+            [],
+        ),
+        (
+            "polars",
+            ExpandingMean(global_=True, partition_by=["promo"]),
+            False,
+            [],
+        ),
+    ],
+)
+def test_aggregated_partition_lag_transform_predict_ids_error(
+    engine, tfm, include_brand, static_features
+):
+    df = _make_partition_df(engine, include_brand=include_brand)
+    future = _make_partition_future_df(engine, include_brand=include_brand)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=static_features,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot use `ids` with global or group lag transforms",
+    ):
+        ts.predict({"y": A()}, 2, X_df=future, ids=["a"])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_local_partition_lag_transform_predict_ids(engine):
+    df = _make_partition_df(engine)
+    future = _make_partition_future_df(engine)
+    tfm = ExpandingMean(partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+
+    preds = ts.predict({"y": A()}, 2, X_df=future, ids=["a"])
+    preds = _maybe_to_pandas(preds)
+    assert preds["unique_id"].unique().tolist() == ["a"]
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_lag_transform_update(engine):
+    df = _make_partition_df(engine)
+    if engine == "polars":
+        update_df = pl.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [5, 5],
+                "y": [5, 50],
+                "promo": [False, True],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+        step_df = pl.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [6, 6],
+                "promo": [True, False],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    else:
+        update_df = pd.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [5, 5],
+                "y": [5, 50],
+                "promo": [False, True],
+            }
+        )
+        step_df = pd.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [6, 6],
+                "promo": [True, False],
+            }
+        )
+    tfm = ExpandingMean(partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    ts.update(update_df)
+    ts._predict_setup()
+    feats = ts._get_features_for_next_step(step_df)
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(
+        feats[col].to_numpy(),
+        np.array([2.3333333333333335, 20.0]),
+        equal_nan=True,
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    ("tfm", "fit_kwargs", "expected"),
+    [
+        (
+            ExpandingMean(groupby=["brand"], partition_by=["promo"]),
+            {"static_features": ["brand"]},
+            np.array([29.25, 16.0]),
+        ),
+        (
+            ExpandingMean(global_=True, partition_by=["promo"]),
+            {"static_features": []},
+            np.array([29.25, 16.0]),
+        ),
+    ],
+)
+def test_aggregated_partition_lag_transform_update(engine, tfm, fit_kwargs, expected):
+    include_brand = getattr(tfm, "groupby", None) is not None
+    df = _make_partition_df(engine, include_brand=include_brand)
+    if engine == "polars":
+        update_data = {
+            "unique_id": ["a", "b"],
+            "ds": [5, 5],
+            "y": [5, 50],
+            "promo": [False, True],
+        }
+        if include_brand:
+            update_data["brand"] = ["x", "x"]
+        update_df = pl.DataFrame(update_data).with_columns(
+            pl.col("unique_id").cast(pl.Categorical)
+        )
+        step_df = pl.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [6, 6],
+                "promo": [True, False],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    else:
+        update_data = {
+            "unique_id": ["a", "b"],
+            "ds": [5, 5],
+            "y": [5, 50],
+            "promo": [False, True],
+        }
+        if include_brand:
+            update_data["brand"] = ["x", "x"]
+        update_df = pd.DataFrame(update_data)
+        step_df = pd.DataFrame(
+            {
+                "unique_id": ["a", "b"],
+                "ds": [6, 6],
+                "promo": [True, False],
+            }
+        )
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        **fit_kwargs,
+    )
+    ts.update(update_df)
+    ts._predict_setup()
+    feats = ts._get_features_for_next_step(step_df)
+    col = tfm._get_name(1)
+    np.testing.assert_allclose(feats[col].to_numpy(), expected, equal_nan=True)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
