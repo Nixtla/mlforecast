@@ -294,7 +294,10 @@ class TimeSeries:
             self._compute_transforms(core_tfms, updates_only=False)
         global_tfms = self._get_global_tfms()
         if global_tfms:
-            assert self._global_ga is not None
+            if self._global_ga is None:
+                raise RuntimeError(
+                    "Global lag transform state is missing. This is likely a bug; please open an issue."
+                )
             self._global_ga.apply_transforms(
                 transforms=global_tfms, updates_only=False
             )
