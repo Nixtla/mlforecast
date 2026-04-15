@@ -320,26 +320,7 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     assert (preds_a["ridge"].to_numpy() == preds_b["ridge"].to_numpy()).all()
 
 
-def test_automlforecast_refit_false_with_grouped_expanding_mean():
-    rows = []
-    for uid, cat, vals in [
-        ("a", 0, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
-        ("b", 0, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
-        ("c", 1, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]),
-        ("d", 1, [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]),
-    ]:
-        for i, y in enumerate(vals):
-            rows.append(
-                {
-                    "unique_id": uid,
-                    "ds": pd.Timestamp("2020-01-01") + pd.Timedelta(days=i),
-                    "y": y,
-                    "cat_code": cat,
-                }
-            )
-    df = pd.DataFrame(rows)
-    df["cat_code"] = df["cat_code"].astype("int32")
-
+def test_automlforecast_refit_false_with_grouped_expanding_mean(grouped_expanding_mean_df):
     def init_config(trial):  # noqa: ARG001
         return {
             "lags": [1],
@@ -367,7 +348,7 @@ def test_automlforecast_refit_false_with_grouped_expanding_mean():
     )
 
     result = automl.fit(
-        df,
+        grouped_expanding_mean_df,
         n_windows=2,
         h=2,
         num_samples=1,
