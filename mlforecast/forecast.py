@@ -20,6 +20,7 @@ from typing import (
 
 import cloudpickle
 import fsspec
+import narwhals as nw
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
@@ -1573,10 +1574,7 @@ class MLForecast:
                 # Sparse horizons: expect only predictions for trained horizons <= h
                 assert internal_horizons is not None
                 n_trained_horizons = sum(th < h for th in internal_horizons)
-                if isinstance(valid, pd.DataFrame):
-                    n_series = valid[id_col].nunique()
-                else:
-                    n_series = valid[id_col].n_unique()
+                n_series = nw.from_native(valid[id_col], series_only=True).n_unique()
                 expected_rows = n_trained_horizons * n_series
             else:
                 expected_rows = valid.shape[0]
