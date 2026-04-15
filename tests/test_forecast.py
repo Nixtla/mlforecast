@@ -12,7 +12,6 @@ import pytest
 import utilsforecast.processing as ufp
 import xgboost as xgb
 from sklearn import set_config
-from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
 from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
@@ -36,22 +35,6 @@ from mlforecast.utils import (
 set_config(display='text')
 warnings.simplefilter('ignore', UserWarning)
 
-
-class DummyCatBoostRegressor(BaseEstimator):
-    fit_input_types = []
-    predict_input_types = []
-
-    def __init__(self, cat_features=None):
-        self.cat_features = cat_features
-
-    def fit(self, X, y, sample_weight=None):
-        type(self).fit_input_types.append(type(X))
-        self.mean_ = float(np.mean(y))
-        return self
-
-    def predict(self, X):
-        type(self).predict_input_types.append(type(X))
-        return np.full(len(X), self.mean_)
 
 
 def test_conformal_method():
@@ -1893,12 +1876,8 @@ def test_horizons_cross_validation_with_target_transforms():
     assert cv_results.shape[0] == n_series * n_windows * n_horizons
 
 
-def test_polars_catboost_cross_validation_converts_features_to_pandas(monkeypatch):
-    monkeypatch.setattr("mlforecast.forecast.CatBoostRegressor", DummyCatBoostRegressor)
-    monkeypatch.setattr("mlforecast.core.CatBoostRegressor", DummyCatBoostRegressor)
-    DummyCatBoostRegressor.fit_input_types = []
-    DummyCatBoostRegressor.predict_input_types = []
-
+def test_polars_catboost_cross_validation():
+    catboost = pytest.importorskip("catboost")
     df = generate_daily_series(
         3,
         min_length=80,
@@ -1907,7 +1886,7 @@ def test_polars_catboost_cross_validation_converts_features_to_pandas(monkeypatc
         engine="polars",
     )
     fcst = MLForecast(
-        models=[DummyCatBoostRegressor()],
+        models=[catboost.CatBoostRegressor(iterations=10, verbose=0)],
         freq="1d",
         lags=[1, 2, 7],
         date_features=["weekday"],
@@ -1921,11 +1900,35 @@ def test_polars_catboost_cross_validation_converts_features_to_pandas(monkeypatc
         refit=False,
     )
 
-    assert cv_results.shape[0] > 0
-    assert DummyCatBoostRegressor.fit_input_types
-    assert DummyCatBoostRegressor.predict_input_types
-    assert all(t is pd.DataFrame for t in DummyCatBoostRegressor.fit_input_types)
-    assert all(t is pd.DataFrame for t in DummyCatBoostRegressor.predict_input_types)
+    n_series = df["unique_id"].n_unique()
+    assert cv_results.shape[0] == n_series * 2 * 7
+
+
+def test_polars_catboost_horizons_cross_validation():
+    catboost = pytest.importorskip("catboost")
+    df = generate_daily_series(
+        3,
+        min_length=100,
+        max_length=100,
+        equal_ends=True,
+        engine="polars",
+    )
+    fcst = MLForecast(
+        models=[catboost.CatBoostRegressor(iterations=10, verbose=0)],
+        freq="1d",
+        lags=[1, 7, 14],
+    )
+
+    cv_results = fcst.cross_validation(
+        df=df,
+        h=14,
+        horizons=[7, 14],
+        n_windows=2,
+        refit=False,
+    )
+
+    n_series = df["unique_id"].n_unique()
+    assert cv_results.shape[0] == n_series * 2 * 2
 
 
 def test_horizons_cross_validation_polars_refit_false_as_numpy():
