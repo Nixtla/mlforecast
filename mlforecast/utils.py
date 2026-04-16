@@ -2,13 +2,83 @@ __all__ = ['generate_daily_series', 'generate_prices_for_series', 'PredictionInt
 
 
 from math import ceil, log10
+from typing import Dict, List
 import warnings
 
+import narwhals as nw
 import numpy as np
 import pandas as pd
 from joblib import cpu_count
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
+
+
+# Valid values for each date feature that can be dummy-encoded.
+# Features not listed here (e.g. year, week, dayofyear) are not supported
+# because they either have too many categories or narwhals has no direct method.
+_DUMMY_FEATURE_VALUES: Dict[str, List[int]] = {
+    "dayofweek":   list(range(7)),       # 0=Mon … 6=Sun (pandas convention)
+    "day_of_week": list(range(7)),
+    "weekday":     list(range(7)),
+    "month":       list(range(1, 13)),
+    "quarter":     list(range(1, 5)),
+    "day":         list(range(1, 32)),
+    "hour":        list(range(24)),
+    "minute":      list(range(60)),
+    "second":      list(range(60)),
+}
+
+# narwhals dt method name when it differs from the mlforecast feature name
+_NW_DT_ATTR: Dict[str, str] = {
+    "dayofweek":   "weekday",
+    "day_of_week": "weekday",
+    "weekday":     "weekday",
+    "quarter":     "month",   # special: quarter is derived from month
+}
+
+# additive offset applied after the narwhals call so values match the pandas convention
+_NW_OFFSET: Dict[str, int] = {
+    "dayofweek":   -1,   # narwhals weekday is 1-7; pandas dayofweek is 0-6
+    "day_of_week": -1,
+    "weekday":     -1,
+}
+
+
+def _compute_date_dummies(dates, feature: str) -> Dict[str, np.ndarray]:
+    """Compute one-hot indicator columns for a categorical date feature.
+
+    Uses narwhals for backend-agnostic datetime access, so the same code
+    works for both pandas and polars inputs.
+
+    Parameters
+    ----------
+    dates : pd.DatetimeIndex, pd.Series, or pl.Series
+        Datetime values (typically the unique timestamps in the DataFrame).
+    feature : str
+        Feature name — must be a key of :data:`_DUMMY_FEATURE_VALUES`.
+
+    Returns
+    -------
+    dict[str, np.ndarray]
+        Mapping ``{f"{feature}_{value}": uint8_array}`` for each valid value.
+    """
+    if isinstance(dates, (pd.DatetimeIndex, pd.Index)):
+        dates = pd.Series(dates.to_numpy())
+    dates_nw = nw.from_native(dates, series_only=True)
+
+    nw_attr = _NW_DT_ATTR.get(feature, feature)
+    raw_nw = getattr(dates_nw.dt, nw_attr)()
+    raw = raw_nw.to_numpy()
+
+    if feature == "quarter":
+        raw = ((raw - 1) // 3) + 1
+    else:
+        offset = _NW_OFFSET.get(feature, 0)
+        if offset:
+            raw = raw + offset
+
+    values = _DUMMY_FEATURE_VALUES[feature]
+    return {f"{feature}_{v}": (raw == v).astype(np.uint8) for v in values}
 
 
 def _resolve_num_threads(num_threads: int) -> int:
