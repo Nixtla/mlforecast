@@ -43,6 +43,7 @@ from mlforecast.target_transforms import (
     _BaseGroupedArrayTargetTransform,
 )
 
+from .compat import CatBoostRegressor
 from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
 from .utils import _ShortSeriesException, _resolve_num_threads
@@ -279,6 +280,33 @@ class TimeSeries:
                 continue
             local[name] = tfm
         return local
+
+    def _initialize_lag_transform_states(self) -> None:
+        """Materialize lag transform state for subsequent update-based prediction.
+
+        This is needed when a new ``TimeSeries`` instance is created from historical
+        data right before calling ``predict(new_df=...)``. Local, global and grouped
+        transforms all need to see a full ``transform`` pass so stateful transforms
+        like ``ExpandingMean`` can initialize their internal buffers before the
+        first ``update(...)`` call.
+        """
+        core_tfms = self._get_core_lag_tfms()
+        if core_tfms:
+            self._compute_transforms(core_tfms, updates_only=False)
+        global_tfms = self._get_global_tfms()
+        if global_tfms:
+            if self._global_ga is None:
+                raise RuntimeError(
+                    "Global lag transform state is missing. This is likely a bug; please open an issue."
+                )
+            self._global_ga.apply_transforms(
+                transforms=global_tfms, updates_only=False
+            )
+        group_tfms = self._get_group_tfms()
+        if group_tfms:
+            for group_cols, tfms in group_tfms.items():
+                state = self._group_states[group_cols]
+                state["ga"].apply_transforms(transforms=tfms, updates_only=False)
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using global/group transforms."""
@@ -1126,7 +1154,10 @@ class TimeSeries:
                     new_x = self._get_features_for_next_step(X_df)
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
-                    predictions = model.predict(new_x)
+                    model_x = new_x
+                    if isinstance(model, CatBoostRegressor) and isinstance(new_x, pl_DataFrame):
+                        model_x = new_x.to_pandas()
+                    predictions = model.predict(model_x)
                     if after_predict_callback is not None:
                         predictions = after_predict_callback(predictions)
                     self._update_y(predictions)
@@ -1253,6 +1284,8 @@ class TimeSeries:
                             )
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
+                    if isinstance(horizon_model, CatBoostRegressor) and isinstance(model_x, pl_DataFrame):
+                        model_x = model_x.to_pandas()
                     preds = horizon_model.predict(model_x)
                     if len(preds) != len(self.uids):
                         raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")
