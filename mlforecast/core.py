@@ -48,7 +48,6 @@ from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
 from .utils import (
     _DUMMY_FEATURE_VALUES,
-    _NW_MISSING,
     _ShortSeriesException,
     _compute_date_dummies,
     _resolve_num_threads,
