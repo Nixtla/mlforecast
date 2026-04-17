@@ -351,7 +351,10 @@ class TimeSeries:
         """Identify user-provided exogenous columns that need time-alignment."""
         static_cols = set(self.static_features_.columns)
         lag_cols = set(self.transforms.keys())
-        date_cols = set(self._date_feature_names)
+        date_cols = set(self._date_feature_names) | {
+            f for f in self.date_features
+            if self.date_features_as_dummies and isinstance(f, str) and f in _DUMMY_FEATURE_VALUES
+        }
         exclude = static_cols | lag_cols | date_cols | {self.id_col, self.time_col, self.target_col}
         if self.weight_col is not None:
             exclude.add(self.weight_col)
@@ -508,7 +511,11 @@ class TimeSeries:
                     "are dynamic please set `static_features=[]`."
                 )
         self.static_features_ = statics_on_ends
-        self.features_order_ = [c for c in df.columns if c not in to_drop] + [
+        raw_date_sources = {
+            f for f in self.date_features
+            if self.date_features_as_dummies and isinstance(f, str) and f in _DUMMY_FEATURE_VALUES
+        }
+        self.features_order_ = [c for c in df.columns if c not in to_drop and c not in raw_date_sources] + [
             f for f in self.features if f not in df.columns
         ]
         self._group_states: Dict[Tuple[str, ...], Dict[str, Any]] = {}
