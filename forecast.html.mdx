@@ -151,7 +151,7 @@ Type | Description
 #### `MLForecast.predict`
 
 ```python
-predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None, transfer_conformal_method='recalibrate')
+predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None, transfer_conformal_method='recalibrate', covariate_shift_weights=None, dre_estimator='logistic')
 ```
 
 Compute the predictions for the next `h` steps.
@@ -167,7 +167,9 @@ Name | Type | Description | Default
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `X_df` | <code>pandas or polars DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
 `ids` | <code>list of str</code> | List with subset of ids seen during training for which the forecasts should be computed. Defaults to None. | <code>None</code>
-`transfer_conformal_method` | <code>[str](#str)</code> | Strategy for recalibrating conformal scores on new_df when both `new_df` and `level` are provided. Currently supports 'recalibrate' (re-runs cross-validation on new_df). Defaults to 'recalibrate'. | <code>'recalibrate'</code>
+`transfer_conformal_method` | <code>[str](#str)</code> | Strategy for recalibrating conformal scores on new_df when both `new_df` and `level` are provided. Supports 'recalibrate' (re-runs cross-validation on new_df) and 'weighted_conformal' (reweights source residuals via density-ratio estimation using all model covariates). Defaults to 'recalibrate'. | <code>'recalibrate'</code>
+`covariate_shift_weights` | <code>[ndarray](#numpy.ndarray) or [callable](#callable)</code> | Pre-computed likelihood-ratio weights for each source calibration point (shape matching ``_cs_df`` rows), or a callable that receives the source feature matrix (extracted from ``_cs_df``) and returns a weights array. When provided, applies weighted conformal quantiles regardless of the PredictionIntervals method. Defaults to None. | <code>None</code>
+`dre_estimator` | <code>[str](#str)</code> | Sklearn estimator used for built-in density-ratio estimation when ``transfer_conformal_method='weighted_conformal'``. Either ``'logistic'`` (default) or ``'gradient_boosting'``. | <code>'logistic'</code>
 
 **Returns:**
 
