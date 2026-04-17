@@ -47,94 +47,15 @@ if TYPE_CHECKING:
 from .data_validation import validate_df
 from .compat import CatBoostRegressor
 from .target_transforms import _BaseGroupedArrayTargetTransform
-from .utils import PredictionIntervals, _resolve_num_threads
+from .utils import _resolve_num_threads
+from .conformal_prediction import (
+    PredictionIntervals,
+    get_conformal_method,
+    get_transfer_conformal_method,
+    compute_conformity_scores,
+)
 
-
-def _add_conformal_distribution_intervals(
-    fcst_df: DFType,
-    cs_df: DFType,
-    model_names: List[str],
-    level: List[Union[int, float]],
-    cs_n_windows: int,
-    cs_h: int,
-    n_series: int,
-    horizon: int,
-) -> DFType:
-    """
-    Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
-    `level` should be already sorted. This strategy creates forecasts paths
-    based on errors and calculate quantiles using those paths.
-    """
-    fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
-    alphas = [100 - lv for lv in level]
-    cuts = [alpha / 200 for alpha in reversed(alphas)]
-    cuts.extend(1 - alpha / 200 for alpha in alphas)
-    for model in model_names:
-        scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
-        # restrict scores to horizon
-        scores = scores[:, :, :horizon]
-        mean = fcst_df[model].to_numpy().reshape(1, n_series, -1)
-        scores = np.vstack([mean - scores, mean + scores])
-        quantiles = np.quantile(
-            scores,
-            cuts,
-            axis=0,
-        )
-        quantiles = quantiles.reshape(len(cuts), -1).T
-        lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
-        hi_cols = [f"{model}-hi-{lv}" for lv in level]
-        out_cols = lo_cols + hi_cols
-        fcst_df = ufp.assign_columns(fcst_df, out_cols, quantiles)
-    return fcst_df
-
-
-def _add_conformal_error_intervals(
-    fcst_df: DFType,
-    cs_df: DFType,
-    model_names: List[str],
-    level: List[Union[int, float]],
-    cs_n_windows: int,
-    cs_h: int,
-    n_series: int,
-    horizon: int,
-) -> DFType:
-    """
-    Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
-    `level` should be already sorted. This startegy creates prediction intervals
-    based on the absolute errors.
-    """
-    fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
-    cuts = [lv / 100 for lv in level]
-    for model in model_names:
-        mean = fcst_df[model].to_numpy().ravel()
-        scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
-        # restrict scores to horizon
-        scores = scores[:, :, :horizon]
-        quantiles = np.quantile(
-            scores,
-            cuts,
-            axis=0,
-        )
-        quantiles = quantiles.reshape(len(cuts), -1)
-        lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
-        hi_cols = [f"{model}-hi-{lv}" for lv in level]
-        quantiles = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
-        columns = lo_cols + hi_cols
-        fcst_df = ufp.assign_columns(fcst_df, columns, quantiles)
-    return fcst_df
-
-
-def _get_conformal_method(method: str):
-    available_methods = {
-        "conformal_distribution": _add_conformal_distribution_intervals,
-        "conformal_error": _add_conformal_error_intervals,
-    }
-    if method not in available_methods.keys():
-        raise ValueError(
-            f"prediction intervals method {method} not supported "
-            f"please choose one of {', '.join(available_methods.keys())}"
-        )
-    return available_methods[method]
+_get_conformal_method = get_conformal_method  # backward compat
 
 
 class MLForecast:
@@ -562,12 +483,29 @@ class MLForecast:
             prediction_intervals=None,
             as_numpy=as_numpy,
         )
-        # conformity score for each model
-        for model in self.models.keys():
-            # compute absolute error for each model
-            abs_err = abs(cv_results[model] - cv_results[target_col])
-            cv_results = ufp.assign_columns(cv_results, model, abs_err)
-        return ufp.drop_columns(cv_results, target_col)
+        # For weighted conformal methods, also store full model covariates so
+        # that the DRE can use all lag/rolling/date/exogenous features.
+        feature_cols = None
+        from .conformal_prediction import PredictionIntervals as _PI
+        _pi = getattr(self, 'prediction_intervals', None)
+        if _pi is not None and _pi.method.startswith("weighted_conformal"):
+            preprocessed = self.preprocess(
+                df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                validate_data=False,
+            )
+            non_feat = {id_col, time_col, target_col}
+            feature_cols = [c for c in preprocessed.columns if c not in non_feat]
+            feat_df = preprocessed[[id_col, time_col] + feature_cols]
+            cv_results = ufp.join(cv_results, feat_df, on=[id_col, time_col], how="left")
+        return compute_conformity_scores(
+            cv_results, list(self.models.keys()), target_col, feature_cols=feature_cols
+        )
 
     def _invert_transforms_fitted(self, df: DFType) -> DFType:
         if self.ts.target_transforms is None:
@@ -1239,6 +1177,9 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
+        transfer_conformal_method: str = "recalibrate",
+        covariate_shift_weights: Optional[Union[np.ndarray, Callable]] = None,
+        dre_estimator: str = "logistic",
     ) -> DFType:
         """Compute the predictions for the next `h` steps.
 
@@ -1250,6 +1191,9 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
             ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Defaults to None.
+            transfer_conformal_method (str): Strategy for recalibrating conformal scores on new_df when both `new_df` and `level` are provided. Supports 'recalibrate' (re-runs cross-validation on new_df) and 'weighted_conformal' (reweights source residuals via density-ratio estimation using all model covariates). Defaults to 'recalibrate'.
+            covariate_shift_weights (np.ndarray or callable, optional): Pre-computed likelihood-ratio weights for each source calibration point (shape matching ``_cs_df`` rows), or a callable that receives the source feature matrix (extracted from ``_cs_df``) and returns a weights array. When provided, applies weighted conformal quantiles regardless of the PredictionIntervals method. Defaults to None.
+            dre_estimator (str): Sklearn estimator used for built-in density-ratio estimation when ``transfer_conformal_method='weighted_conformal'``. Either ``'logistic'`` (default) or ``'gradient_boosting'``.
 
         Returns:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
@@ -1277,10 +1221,6 @@ class MLForecast:
 
         new_ts: Optional[TimeSeries] = None
         if new_df is not None:
-            if level is not None:
-                raise ValueError(
-                    "Prediction intervals are not supported in transfer learning."
-                )
             new_ts = TimeSeries(
                 freq=self.ts.freq,
                 lags=self.ts.lags,
@@ -1309,85 +1249,145 @@ class MLForecast:
             ts = new_ts
         else:
             ts = self.ts
-        forecasts = ts.predict(
-            models=self.models_,
-            horizon=h,
-            before_predict_callback=before_predict_callback,
-            after_predict_callback=after_predict_callback,
-            X_df=X_df,
-            ids=ids,
-        )
-        if new_ts is not None:
-            # Persist transfer-learning state only after a successful prediction.
-            self.ts = new_ts
-        if level is not None:
-            if self._cs_df is None:
-                warn_msg = (
-                    "Please rerun the `fit` method passing a proper value "
-                    "to prediction intervals to compute them."
-                )
-                warnings.warn(warn_msg, UserWarning)
+        # Resolve covariate-shift weights for weighted conformal prediction.
+        _cs_weights = None
+        if level is not None and self._cs_df is not None and covariate_shift_weights is not None:
+            if callable(covariate_shift_weights):
+                model_cols = set(self.models.keys())
+                non_feat = {self.ts.id_col, self.ts.time_col, "cutoff"} | model_cols
+                feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
+                if feat_cols:
+                    src = np.column_stack(
+                        [self._cs_df[c].to_numpy() for c in feat_cols]
+                    ).astype(float)
+                else:
+                    src = None
+                _cs_weights = covariate_shift_weights(src)
             else:
-                if isinstance(self._cs_df, pl_DataFrame):
-                    cs_ids = set(self._cs_df[self.ts.id_col].unique().to_list())
-                else:
-                    cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
-                if ids is None:
-                    active_ids = set(self.ts.uids)
-                    if cs_ids != active_ids:
-                        raise ValueError(
-                            "Prediction intervals were calibrated on a different set of series "
-                            "than the current forecasting state. Please rerun `fit` before "
-                            "requesting intervals."
-                        )
-                else:
-                    missing_ids = set(ids) - cs_ids
-                    if missing_ids:
-                        raise ValueError(
-                            "Prediction intervals are only available for series seen during "
-                            "interval calibration. Missing ids: "
-                            f"{missing_ids}."
-                        )
-                if (self.prediction_intervals.h != 1) and (
-                    self.prediction_intervals.h < h
-                ):
-                    raise ValueError(
-                        "The `h` argument of PredictionIntervals "
-                        "should be equal to one or greater or equal to `h`. "
-                        "Please rerun the `fit` method passing a proper value "
-                        "to prediction intervals."
-                    )
-                if self.prediction_intervals.h == 1 and h > 1:
+                _cs_weights = np.asarray(covariate_shift_weights, dtype=float)
+
+        _saved_cs_df = None
+        if new_df is not None and level is not None:
+            if self._cs_df is None or self.prediction_intervals is None:
+                raise ValueError(
+                    "Transfer-learning prediction intervals require that the model was "
+                    "fit with `prediction_intervals=PredictionIntervals(...)`."
+                )
+            transfer_fn = get_transfer_conformal_method(transfer_conformal_method)
+            # cross_validation calls self.fit() internally, clobbering models_, ts,
+            # _cs_df, and prediction_intervals. Save all four and restore after.
+            _saved_models_ = self.models_
+            _saved_ts_for_cv = self.ts
+            _saved_cs_df_pre = self._cs_df
+            _saved_pi = self.prediction_intervals
+            try:
+                new_cs_df = transfer_fn(
+                    new_df=new_df,
+                    prediction_intervals=self.prediction_intervals,
+                    cv_fn=self.cross_validation,
+                    model_names=list(self.models.keys()),
+                    target_col=self.ts.target_col,
+                    id_col=self.ts.id_col,
+                    time_col=self.ts.time_col,
+                    preprocess_fn=self.preprocess if transfer_conformal_method == "weighted_conformal" else None,
+                    dre_estimator=dre_estimator,
+                    source_cs_df=self._cs_df if transfer_conformal_method == "weighted_conformal" else None,
+                )
+            finally:
+                self.models_ = _saved_models_
+                self.ts = _saved_ts_for_cv
+                self._cs_df = _saved_cs_df_pre
+                self.prediction_intervals = _saved_pi
+            if transfer_conformal_method == "weighted_conformal":
+                # DRE weights were stored on prediction_intervals; source _cs_df unchanged.
+                _cs_weights = getattr(self.prediction_intervals, "_cs_weights", None)
+            else:
+                _saved_cs_df = self._cs_df
+                self._cs_df = new_cs_df
+        try:
+            forecasts = ts.predict(
+                models=self.models_,
+                horizon=h,
+                before_predict_callback=before_predict_callback,
+                after_predict_callback=after_predict_callback,
+                X_df=X_df,
+                ids=ids,
+            )
+            if new_ts is not None:
+                # Persist transfer-learning state only after a successful prediction.
+                self.ts = new_ts
+            if level is not None:
+                if self._cs_df is None:
                     warn_msg = (
-                        "Prediction intervals are calculated using 1-step ahead cross-validation, "
-                        "with a constant width for all horizons. To vary the error by horizon, "
-                        "pass PredictionIntervals(h=h) to the `prediction_intervals` "
-                        "argument when refitting the model."
+                        "Please rerun the `fit` method passing a proper value "
+                        "to prediction intervals to compute them."
                     )
                     warnings.warn(warn_msg, UserWarning)
-                level_ = sorted(level)
-                model_names = self.models.keys()
-                conformal_method = _get_conformal_method(
-                    self.prediction_intervals.method
-                )
-                if ids is not None:
-                    ids_mask = ufp.is_in(self._cs_df[self.ts.id_col], ids)
-                    cs_df = ufp.filter_with_mask(self._cs_df, ids_mask)
-                    n_series = len(ids)
                 else:
-                    cs_df = self._cs_df
-                    n_series = self.ts.ga.n_groups
-                forecasts = conformal_method(
-                    forecasts,
-                    cs_df,
-                    model_names=list(model_names),
-                    level=level_,
-                    cs_h=self.prediction_intervals.h,
-                    cs_n_windows=self.prediction_intervals.n_windows,
-                    n_series=n_series,
-                    horizon=h,
-                )
-        return forecasts
+                    if isinstance(self._cs_df, pl_DataFrame):
+                        cs_ids = set(self._cs_df[self.ts.id_col].unique().to_list())
+                    else:
+                        cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
+                    if ids is None:
+                        active_ids = set(self.ts.uids)
+                        if cs_ids != active_ids:
+                            raise ValueError(
+                                "Prediction intervals were calibrated on a different set of series "
+                                "than the current forecasting state. Please rerun `fit` before "
+                                "requesting intervals."
+                            )
+                    else:
+                        missing_ids = set(ids) - cs_ids
+                        if missing_ids:
+                            raise ValueError(
+                                "Prediction intervals are only available for series seen during "
+                                "interval calibration. Missing ids: "
+                                f"{missing_ids}."
+                            )
+                    if (self.prediction_intervals.h != 1) and (
+                        self.prediction_intervals.h < h
+                    ):
+                        raise ValueError(
+                            "The `h` argument of PredictionIntervals "
+                            "should be equal to one or greater or equal to `h`. "
+                            "Please rerun the `fit` method passing a proper value "
+                            "to prediction intervals."
+                        )
+                    if self.prediction_intervals.h == 1 and h > 1:
+                        warn_msg = (
+                            "Prediction intervals are calculated using 1-step ahead cross-validation, "
+                            "with a constant width for all horizons. To vary the error by horizon, "
+                            "pass PredictionIntervals(h=h) to the `prediction_intervals` "
+                            "argument when refitting the model."
+                        )
+                        warnings.warn(warn_msg, UserWarning)
+                    level_ = sorted(level)
+                    model_names = self.models.keys()
+                    conformal_method = _get_conformal_method(
+                        self.prediction_intervals.method
+                    )
+                    if ids is not None:
+                        ids_mask = ufp.is_in(self._cs_df[self.ts.id_col], ids)
+                        cs_df = ufp.filter_with_mask(self._cs_df, ids_mask)
+                        n_series = len(ids)
+                    else:
+                        cs_df = self._cs_df
+                        n_series = self.ts.ga.n_groups
+                    forecasts = conformal_method(
+                        forecasts,
+                        cs_df,
+                        model_names=list(model_names),
+                        level=level_,
+                        cs_h=self.prediction_intervals.h,
+                        cs_n_windows=self.prediction_intervals.n_windows,
+                        n_series=n_series,
+                        horizon=h,
+                        weights=_cs_weights,
+                    )
+            return forecasts
+        finally:
+            if _saved_cs_df is not None:
+                self._cs_df = _saved_cs_df
 
     def cross_validation(
         self,
