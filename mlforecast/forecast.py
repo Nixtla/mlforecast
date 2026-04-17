@@ -483,7 +483,29 @@ class MLForecast:
             prediction_intervals=None,
             as_numpy=as_numpy,
         )
-        return compute_conformity_scores(cv_results, list(self.models.keys()), target_col)
+        # For weighted conformal methods, also store full model covariates so
+        # that the DRE can use all lag/rolling/date/exogenous features.
+        feature_cols = None
+        from .conformal_prediction import PredictionIntervals as _PI
+        _pi = getattr(self, 'prediction_intervals', None)
+        if _pi is not None and _pi.method.startswith("weighted_conformal"):
+            preprocessed = self.preprocess(
+                df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                validate_data=False,
+            )
+            non_feat = {id_col, time_col, target_col}
+            feature_cols = [c for c in preprocessed.columns if c not in non_feat]
+            feat_df = preprocessed[[id_col, time_col] + feature_cols]
+            cv_results = ufp.join(cv_results, feat_df, on=[id_col, time_col], how="left")
+        return compute_conformity_scores(
+            cv_results, list(self.models.keys()), target_col, feature_cols=feature_cols
+        )
 
     def _invert_transforms_fitted(self, df: DFType) -> DFType:
         if self.ts.target_transforms is None:
@@ -1156,6 +1178,8 @@ class MLForecast:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
         transfer_conformal_method: str = "recalibrate",
+        covariate_shift_weights: Optional[Union[np.ndarray, Callable]] = None,
+        dre_estimator: str = "logistic",
     ) -> DFType:
         """Compute the predictions for the next `h` steps.
 
@@ -1167,7 +1191,9 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
             ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Defaults to None.
-            transfer_conformal_method (str): Strategy for recalibrating conformal scores on new_df when both `new_df` and `level` are provided. Currently supports 'recalibrate' (re-runs cross-validation on new_df). Defaults to 'recalibrate'.
+            transfer_conformal_method (str): Strategy for recalibrating conformal scores on new_df when both `new_df` and `level` are provided. Supports 'recalibrate' (re-runs cross-validation on new_df) and 'weighted_conformal' (reweights source residuals via density-ratio estimation using all model covariates). Defaults to 'recalibrate'.
+            covariate_shift_weights (np.ndarray or callable, optional): Pre-computed likelihood-ratio weights for each source calibration point (shape matching ``_cs_df`` rows), or a callable that receives the source feature matrix (extracted from ``_cs_df``) and returns a weights array. When provided, applies weighted conformal quantiles regardless of the PredictionIntervals method. Defaults to None.
+            dre_estimator (str): Sklearn estimator used for built-in density-ratio estimation when ``transfer_conformal_method='weighted_conformal'``. Either ``'logistic'`` (default) or ``'gradient_boosting'``.
 
         Returns:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
@@ -1223,6 +1249,23 @@ class MLForecast:
             ts = new_ts
         else:
             ts = self.ts
+        # Resolve covariate-shift weights for weighted conformal prediction.
+        _cs_weights = None
+        if level is not None and self._cs_df is not None and covariate_shift_weights is not None:
+            if callable(covariate_shift_weights):
+                model_cols = set(self.models.keys())
+                non_feat = {self.ts.id_col, self.ts.time_col, "cutoff"} | model_cols
+                feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
+                if feat_cols:
+                    src = np.column_stack(
+                        [self._cs_df[c].to_numpy() for c in feat_cols]
+                    ).astype(float)
+                else:
+                    src = None
+                _cs_weights = covariate_shift_weights(src)
+            else:
+                _cs_weights = np.asarray(covariate_shift_weights, dtype=float)
+
         _saved_cs_df = None
         if new_df is not None and level is not None:
             if self._cs_df is None or self.prediction_intervals is None:
@@ -1246,14 +1289,21 @@ class MLForecast:
                     target_col=self.ts.target_col,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
+                    preprocess_fn=self.preprocess if transfer_conformal_method == "weighted_conformal" else None,
+                    dre_estimator=dre_estimator,
+                    source_cs_df=self._cs_df if transfer_conformal_method == "weighted_conformal" else None,
                 )
             finally:
                 self.models_ = _saved_models_
                 self.ts = _saved_ts_for_cv
                 self._cs_df = _saved_cs_df_pre
                 self.prediction_intervals = _saved_pi
-            _saved_cs_df = self._cs_df
-            self._cs_df = new_cs_df
+            if transfer_conformal_method == "weighted_conformal":
+                # DRE weights were stored on prediction_intervals; source _cs_df unchanged.
+                _cs_weights = getattr(self.prediction_intervals, "_cs_weights", None)
+            else:
+                _saved_cs_df = self._cs_df
+                self._cs_df = new_cs_df
         try:
             forecasts = ts.predict(
                 models=self.models_,
@@ -1332,6 +1382,7 @@ class MLForecast:
                         cs_n_windows=self.prediction_intervals.n_windows,
                         n_series=n_series,
                         horizon=h,
+                        weights=_cs_weights,
                     )
             return forecasts
         finally:
