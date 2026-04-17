@@ -2322,6 +2322,55 @@ def test_transfer_learning_with_sparse_horizons():
     assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
 
 
+def test_transfer_learning_intervals():
+    """Transfer learning with level= should produce valid prediction intervals."""
+    train_ab = generate_daily_series(4, min_length=50, max_length=50, n_static_features=0)
+    train_ef = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_ef["unique_id"] = train_ef["unique_id"].cat.rename_categories(
+        {c: f"transfer_{c}" for c in train_ef["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
+    fcst.fit(train_ab, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
+
+    saved_cs_df = fcst._cs_df
+
+    preds = fcst.predict(h=5, level=[80, 95], new_df=train_ef)
+
+    # interval columns exist
+    assert "LinearRegression-lo-80" in preds.columns
+    assert "LinearRegression-hi-80" in preds.columns
+    assert "LinearRegression-lo-95" in preds.columns
+    assert "LinearRegression-hi-95" in preds.columns
+
+    # lo <= point <= hi
+    pd_preds = _to_pandas(preds)
+    assert (pd_preds["LinearRegression-lo-80"] <= pd_preds["LinearRegression"]).all()
+    assert (pd_preds["LinearRegression"] <= pd_preds["LinearRegression-hi-80"]).all()
+
+    # _cs_df restored after predict (same object — finally block ran)
+    assert fcst._cs_df is saved_cs_df
+
+    # invalid transfer_conformal_method raises ValueError
+    with pytest.raises(ValueError, match="transfer conformal method"):
+        fcst.predict(h=5, level=[80], new_df=train_ef, transfer_conformal_method="bogus")
+
+
+def test_transfer_learning_intervals_no_prediction_intervals_raises():
+    """Transfer CP without fitting with PredictionIntervals raises a clear error."""
+    train_ab = generate_daily_series(3, min_length=50, max_length=50, n_static_features=0)
+    train_ef = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_ef["unique_id"] = train_ef["unique_id"].cat.rename_categories(
+        {c: f"transfer_{c}" for c in train_ef["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
+    fcst.fit(train_ab)
+
+    with pytest.raises(ValueError, match="Transfer-learning prediction intervals require"):
+        fcst.predict(h=5, level=[80], new_df=train_ef)
+
+
 def test_cross_validation_with_horizon_features(horizon_features_data):
     """cross_validation() should work correctly with horizon_features."""
     data = horizon_features_data
