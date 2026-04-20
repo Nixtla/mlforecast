@@ -173,3 +173,26 @@ def test_dask_distributed_forecast_with_x_df():
         preds_pandas.sort_values(["unique_id", "ds"]).reset_index(drop=True),
         preds_dask.sort_values(["unique_id", "ds"]).reset_index(drop=True),
     )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Distributed tests are not supported on Windows")
+@pytest.mark.skipif(sys.version_info <= (3, 9), reason="Distributed tests are not supported on Python < 3.10")
+def test_dask_distributed_forecast_with_new_df():
+    """predict() with new_df must produce predictions for all series without errors."""
+    series = generate_daily_series(5, equal_ends=True, min_length=50, max_length=50)
+    partitioned = _make_partitioned_series(series, npartitions=2)
+
+    fcst = DistributedMLForecast(
+        models=[DaskLGBMForecast(verbosity=-1, random_state=0)],
+        freq="D",
+        lags=[1, 2, 7],
+    )
+    fcst.fit(partitioned, static_features=[])
+
+    # Provide updated observations (same data here) as new_df
+    preds = fcst.predict(5, new_df=partitioned).compute()
+
+    assert preds.shape[0] == 5 * 5
+    assert set(preds["unique_id"]) == set(series["unique_id"])
+
+
