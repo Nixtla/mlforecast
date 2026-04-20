@@ -593,6 +593,7 @@ class DistributedMLForecast:
         # x_df_packed is a tiny pandas DataFrame (N rows) so this is a broadcast join.
         return fa.join(
             partition_results, x_df_packed, how="left_outer", on=["first_uid"],
+            engine=self.engine,
         )
 
     def predict(
