@@ -602,13 +602,19 @@ class DistributedMLForecast:
         # x_df_packed is a tiny pandas DataFrame. Convert it to the same backend as
         # partition_results so fugue doesn't fall back to pandas when engine=None
         # (fugue only infers the distributed engine when both inputs share a type).
-        if RAY_INSTALLED and isinstance(partition_results, RayDataset):
+        # Use fa.get_native_as_df to detect the real backend: partition_results may be
+        # a Fugue-wrapped DataFrame (as_fugue=True in _preprocess_partitions), so a
+        # direct isinstance check against RayDataset/dd.DataFrame/SparkDataFrame would
+        # always fail and x_df_packed would remain as pandas, causing predict() to
+        # return a pandas DataFrame instead of the expected distributed type.
+        _native_pr = fa.get_native_as_df(partition_results)
+        if RAY_INSTALLED and isinstance(_native_pr, RayDataset):
             import ray as _ray
             x_df_packed = _ray.data.from_pandas(x_df_packed)
-        elif DASK_INSTALLED and isinstance(partition_results, dd.DataFrame):
+        elif DASK_INSTALLED and isinstance(_native_pr, dd.DataFrame):
             x_df_packed = dd.from_pandas(x_df_packed, npartitions=1)
-        elif SPARK_INSTALLED and isinstance(partition_results, SparkDataFrame):
-            x_df_packed = partition_results.sparkSession.createDataFrame(x_df_packed)
+        elif SPARK_INSTALLED and isinstance(_native_pr, SparkDataFrame):
+            x_df_packed = _native_pr.sparkSession.createDataFrame(x_df_packed)
         return fa.join(
             partition_results, x_df_packed, how="left_outer", on=["first_uid"],
             engine=self.engine,
