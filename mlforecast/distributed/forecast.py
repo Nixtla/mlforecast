@@ -599,7 +599,16 @@ class DistributedMLForecast:
         )
 
         # Step 4 — join binary blobs into partition_results (N-row join, negligible cost).
-        # x_df_packed is a tiny pandas DataFrame (N rows) so this is a broadcast join.
+        # x_df_packed is a tiny pandas DataFrame. Convert it to the same backend as
+        # partition_results so fugue doesn't fall back to pandas when engine=None
+        # (fugue only infers the distributed engine when both inputs share a type).
+        if RAY_INSTALLED and isinstance(partition_results, RayDataset):
+            import ray as _ray
+            x_df_packed = _ray.data.from_pandas(x_df_packed)
+        elif DASK_INSTALLED and isinstance(partition_results, dd.DataFrame):
+            x_df_packed = dd.from_pandas(x_df_packed, npartitions=1)
+        elif SPARK_INSTALLED and isinstance(partition_results, SparkDataFrame):
+            x_df_packed = partition_results.sparkSession.createDataFrame(x_df_packed)
         return fa.join(
             partition_results, x_df_packed, how="left_outer", on=["first_uid"],
             engine=self.engine,
