@@ -75,6 +75,7 @@ class DistributedMLForecast:
         engine=None,
         num_partitions: Optional[int] = None,
         lag_transforms_namer: Optional[Callable] = None,
+        date_features_as_dummies: bool = False,
     ):
         """Create distributed forecast object
 
@@ -96,6 +97,7 @@ class DistributedMLForecast:
                 will be done by the `id_col`. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name.
                 Defaults to None.
+            date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -121,6 +123,7 @@ class DistributedMLForecast:
             num_threads=num_threads,
             target_transforms=target_transforms,
             lag_transforms_namer=lag_transforms_namer,
+            date_features_as_dummies=date_features_as_dummies,
         )
         self.engine = engine
         self.num_partitions = num_partitions
