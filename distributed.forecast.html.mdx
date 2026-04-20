@@ -10,7 +10,7 @@ description: Distributed pipeline encapsulation
 ### `DistributedMLForecast`
 
 ```python
-DistributedMLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, engine=None, num_partitions=None, lag_transforms_namer=None)
+DistributedMLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, engine=None, num_partitions=None, lag_transforms_namer=None, date_features_as_dummies=False)
 ```
 
 Multi backend distributed pipeline
@@ -31,6 +31,7 @@ Name | Type | Description | Default
 `engine` | <code>fugue execution engine</code> | Dask Client, Spark Session, etc to use for the distributed computation. If None will infer depending on the input type. Defaults to None. | <code>None</code>
 `num_partitions` | <code>number of data partitions to use</code> | If None, the default partitions provided by the AnyDataFrame used by the `fit` and `cross_validation` methods will be used. If a Ray Dataset is provided and `num_partitions` is None, the partitioning will be done by the `id_col`. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
+`date_features_as_dummies` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
 
 #### `DistributedMLForecast.fit`
 
@@ -74,7 +75,7 @@ Name | Type | Description | Default
 `h` | <code>[int](#int)</code> | Forecast horizon. | *required*
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`X_df` | <code>pandas, Dask, Spark or Ray DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Distributed DataFrames (Dask, Spark, Ray) are processed per-partition so that no single node needs to hold the entire X_df in memory at once. Defaults to None. | <code>None</code>
+`X_df` | <code>pandas DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
 `new_df` | <code>dask or spark DataFrame</code> | Series data of new observations for which forecasts are to be generated. This dataframe should have the same structure as the one used to fit the model, including any features and time series data. If `new_df` is not None, the method will generate forecasts for the new observations. Defaults to None. | <code>None</code>
 `ids` | <code>list of str</code> | List with subset of ids seen during training for which the forecasts should be computed. Defaults to None. | <code>None</code>
 

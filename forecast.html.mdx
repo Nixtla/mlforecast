@@ -9,7 +9,7 @@ title: MLForecast
 ### `MLForecast`
 
 ```python
-MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None)
+MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False)
 ```
 
 Forecasting pipeline
@@ -26,6 +26,7 @@ Name | Type | Description | Default
 `num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
+`date_features_as_dummies` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
 
 #### `MLForecast.fit`
 
