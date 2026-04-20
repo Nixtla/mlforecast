@@ -77,12 +77,14 @@ def test_spark_distributed_forecast_with_x_df(spark_session):
 
 def test_spark_distributed_forecast_weight_col(spark_session):
     """fit() with weight_col must produce different predictions from unweighted fit."""
-    series = generate_daily_series(5, equal_ends=True, min_length=50, max_length=50)
-    series["weight"] = np.tile([1.0, 1.0, 1.0, 1.0, 100.0], len(series) // 5 + 1)[: len(series)]
-    spark_series = spark_session.createDataFrame(series)
+    base_series = generate_daily_series(5, equal_ends=True, min_length=50, max_length=50)
+    weights = np.tile([1.0, 1.0, 1.0, 1.0, 100.0], len(base_series) // 5 + 1)[: len(base_series)]
 
     def _fit_predict(weighted: bool) -> pd.DataFrame:
-        spark_df = spark_session.createDataFrame(series)
+        data = base_series.copy()
+        if weighted:
+            data["weight"] = weights
+        spark_df = spark_session.createDataFrame(data)
         fcst = DistributedMLForecast(
             models=[SparkXGBForecast(random_state=0)],
             freq="D",

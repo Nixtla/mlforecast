@@ -246,6 +246,12 @@ class DistributedMLForecast:
             # If a Dataset is partitioned using `.repartition(num_partitions)`
             # we will have akward results.
             partition = dict(by=id_col)
+        elif SPARK_INSTALLED and isinstance(data, SparkDataFrame):
+            # Spark DataFrames are not pre-partitioned by id_col (unlike Dask
+            # DataFrames which callers typically set up with unique_id as index).
+            # Without explicit grouping, rows for the same series can land in
+            # different Spark partitions, causing duplicate series in predictions.
+            partition = dict(by=id_col)
         else:
             partition = None
         res = fa.transform(
