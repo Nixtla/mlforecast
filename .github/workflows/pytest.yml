@@ -61,7 +61,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ['3.14']
+        python-version: ['3.13']
     steps:
       - name: Clone repo
         uses: actions/checkout@v6
