@@ -169,6 +169,7 @@ class DistributedMLForecast:
                     cloudpickle.dumps(None),
                     cloudpickle.dumps(None),
                     str(ts.uids[0]),
+                    cloudpickle.dumps(list(ts.uids)),
                 ]
             ]
         if window_info is None:
@@ -209,12 +210,13 @@ class DistributedMLForecast:
                 cloudpickle.dumps(transformed),
                 cloudpickle.dumps(valid),
                 str(ts.uids[0]),
+                cloudpickle.dumps(list(ts.uids)),
             ]
         ]
 
     @staticmethod
     def _retrieve_df(items: List[List[Any]]) -> Iterable[pd.DataFrame]:
-        for _, serialized_train, _, _ in items:
+        for _, serialized_train, _, _, _ in items:
             yield cloudpickle.loads(serialized_train)
 
     def _preprocess_partitions(
@@ -258,7 +260,7 @@ class DistributedMLForecast:
                 "fit_ts_only": fit_ts_only,
                 "weight_col": weight_col,
             },
-            schema="ts:binary,train:binary,valid:binary,first_uid:str",
+            schema="ts:binary,train:binary,valid:binary,first_uid:str,all_uids:binary",
             engine=self.engine,
             as_fugue=True,
             partition=partition,
@@ -480,10 +482,15 @@ class DistributedMLForecast:
     ) -> Iterable[pd.DataFrame]:
         for row in items:
             serialized_ts, _, serialized_valid = row[0], row[1], row[2]
-            # x_df is at index 4 when predict was called with X_df (5-element rows);
+            # x_df is at index 5 when predict was called with X_df (6-element rows);
             # stored as a base64-encoded string to survive Dask/Spark type inference.
-            # For CV and plain predict without X_df the row has 4 elements.
-            x_df_b64 = row[4] if len(row) > 4 else None
+            # For CV and plain predict without X_df the row has 5 elements.
+            x_df_b64 = row[5] if len(row) > 5 else None
+            # After a left join in _build_x_df_per_partition, partitions with no
+            # matching X_df rows get NaN (not None) in the x_df column. NaN is not
+            # None, so the decode below would raise a TypeError without this guard.
+            if x_df_b64 is not None and pd.isna(x_df_b64):
+                x_df_b64 = None
 
             valid = cloudpickle.loads(serialized_valid)
             ts = cloudpickle.loads(serialized_ts)
@@ -498,9 +505,10 @@ class DistributedMLForecast:
             else:
                 X_df_for_ts = x_df
 
+            partition_ids = ids
             if ids is not None:
-                ids = ts.uids.intersection(ids).tolist()
-                if not ids:
+                partition_ids = ts.uids.intersection(ids).tolist()
+                if not partition_ids:
                     yield pd.DataFrame(
                         {
                             field.name: pd.Series(dtype=field.type.to_pandas_dtype())
@@ -514,7 +522,7 @@ class DistributedMLForecast:
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
                 X_df=X_df_for_ts,
-                ids=ids,
+                ids=partition_ids,
             )
             if valid is not None:
                 res = res.merge(valid, how="left")
@@ -544,14 +552,16 @@ class DistributedMLForecast:
         """
         id_col = self._base_ts.id_col
 
-        # Step 1 — build uid → first_uid mapping on the driver (ts column only, small).
-        ts_df = fa.as_pandas(fa.select_columns(partition_results, ["ts", "first_uid"]))
-        uid_rows = []
-        for _, row in ts_df.iterrows():
-            ts = cloudpickle.loads(row["ts"])
-            for uid in ts.uids:
-                uid_rows.append({id_col: uid, "__partition_key__": row["first_uid"]})
-        uid_map_df = pd.DataFrame(uid_rows)
+        # Step 1 — build uid → first_uid mapping on the driver (all_uids column only, small).
+        ts_df = fa.as_pandas(fa.select_columns(partition_results, ["all_uids", "first_uid"]))
+        uid_map_df = (
+            ts_df
+            .assign(all_uids=ts_df["all_uids"].apply(cloudpickle.loads))
+            .explode("all_uids")
+            .rename(columns={"all_uids": id_col, "first_uid": "__partition_key__"})
+            [[id_col, "__partition_key__"]]
+            .reset_index(drop=True)
+        )
 
         # Step 2 — distributed join: tag every X_df row with its partition key.
         # Pass engine so the join runs on the right backend (Dask / Spark / Ray / pandas).
@@ -578,7 +588,7 @@ class DistributedMLForecast:
         # Step 4 — join binary blobs into partition_results (N-row join, negligible cost).
         # x_df_packed is a tiny pandas DataFrame (N rows) so this is a broadcast join.
         return fa.join(
-            partition_results, x_df_packed, how="inner", on=["first_uid"],
+            partition_results, x_df_packed, how="left", on=["first_uid"],
         )
 
     def predict(
@@ -751,7 +761,7 @@ class DistributedMLForecast:
 
     @staticmethod
     def _save_ts(items: List[List[Any]], path: str) -> Iterable[pd.DataFrame]:
-        for serialized_ts, _, _, _ in items:
+        for serialized_ts, _, _, _, _ in items:
             ts = cloudpickle.loads(serialized_ts)
             first_uid = ts.uids[0]
             last_uid = ts.uids[-1]
@@ -787,6 +797,7 @@ class DistributedMLForecast:
                     "train": [cloudpickle.dumps(None)],
                     "valid": [cloudpickle.dumps(None)],
                     "first_uid": [str(ts.uids[0])],
+                    "all_uids": [cloudpickle.dumps(list(ts.uids))],
                 }
             )
 
@@ -806,7 +817,7 @@ class DistributedMLForecast:
         partition_results = fa.transform(
             names_df,
             DistributedMLForecast._load_ts,
-            schema="ts:binary,train:binary,valid:binary,first_uid:str",
+            schema="ts:binary,train:binary,valid:binary,first_uid:str,all_uids:binary",
             partition="per_row",
             params={"protocol": protocol},
             engine=engine,
@@ -827,12 +838,12 @@ class DistributedMLForecast:
 
     @staticmethod
     def _update(items: List[List[Any]], new_df) -> Iterable[List[Any]]:
-        for serialized_ts, serialized_transformed, serialized_valid, _ in items:
+        for serialized_ts, serialized_transformed, serialized_valid, _, _ in items:
             ts = cloudpickle.loads(serialized_ts)
             partition_mask = ufp.is_in(new_df[ts.id_col], ts.uids)
             partition_df = ufp.filter_with_mask(new_df, partition_mask)
             ts.update(partition_df)
-            yield [cloudpickle.dumps(ts), serialized_transformed, serialized_valid, str(ts.uids[0])]
+            yield [cloudpickle.dumps(ts), serialized_transformed, serialized_valid, str(ts.uids[0]), cloudpickle.dumps(list(ts.uids))]
 
     def update(self, df: pd.DataFrame) -> None:
         """Update the values of the stored series.
@@ -846,7 +857,7 @@ class DistributedMLForecast:
             self._partition_results,
             DistributedMLForecast._update,
             params={"new_df": df},
-            schema="ts:binary,train:binary,valid:binary,first_uid:str",
+            schema="ts:binary,train:binary,valid:binary,first_uid:str,all_uids:binary",
             engine=self.engine,
             as_fugue=True,
         )
