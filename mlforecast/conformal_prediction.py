@@ -578,11 +578,61 @@ def _scale_aligned_weighted_transfer(
     return source_cs_df
 
 
+def _error_scaled_transfer(
+    new_df: DFType,
+    prediction_intervals: PredictionIntervals,
+    cv_fn: Callable,
+    model_names: List[str],
+    target_col: str,
+    id_col: str = "unique_id",
+    time_col: str = "ds",
+    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
+    dre_estimator: str = "logistic",  # noqa: ARG001
+    source_cs_df: Optional[DFType] = None,
+) -> DFType:
+    """Scale source conformity scores by the ratio of target to source prediction error stds.
+
+    Runs cross-validation on new_df to estimate target-domain error magnitude, then
+    scales source conformity scores by sigma_target / sigma_source per model.
+    Unlike scale_aligned (which uses y-history variance), this uses actual prediction
+    error variance and therefore requires inference on new_df.
+    """
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal_method='error_scaled' requires source_cs_df; "
+            "ensure the model was fit with prediction_intervals."
+        )
+
+    cv_results = cv_fn(
+        df=new_df,
+        n_windows=prediction_intervals.n_windows,
+        h=prediction_intervals.h,
+        refit=False,
+        prediction_intervals=None,
+        id_col=id_col,
+        time_col=time_col,
+        target_col=target_col,
+    )
+    target_cs_df = compute_conformity_scores(cv_results, model_names, target_col)
+
+    scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
+    for model in model_names:
+        src = source_cs_df[model].to_numpy().astype(float)
+        tgt = target_cs_df[model].to_numpy().astype(float)
+        sigma_src = float(np.std(src)) if len(src) > 1 else 1.0
+        sigma_tgt = float(np.std(tgt)) if len(tgt) > 1 else 1.0
+        scale = sigma_tgt / max(sigma_src, 1e-10)
+        scaled = ufp.assign_columns(scaled, model, src * scale)
+
+    return scaled
+
+
 _TRANSFER_METHODS = {
     "recalibrate": _recalibrate_transfer,
     "weighted_conformal": _weighted_conformal_transfer,
     "scale_aligned": _scale_aligned_transfer,
     "scale_aligned_weighted": _scale_aligned_weighted_transfer,
+    "error_scaled": _error_scaled_transfer,
 }
 
 

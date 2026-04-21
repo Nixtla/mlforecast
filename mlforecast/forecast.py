@@ -1306,7 +1306,7 @@ class MLForecast:
                     dre_estimator=dre_estimator,
                     source_cs_df=(
                         self._cs_df
-                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned", "scale_aligned_weighted")
+                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned", "scale_aligned_weighted", "error_scaled")
                         else None
                     ),
                 )
@@ -1318,7 +1318,7 @@ class MLForecast:
             if transfer_conformal_method in ("weighted_conformal", "scale_aligned_weighted"):
                 # DRE weights were stored on prediction_intervals; source _cs_df unchanged.
                 _cs_weights = getattr(self.prediction_intervals, "_cs_weights", None)
-            if transfer_conformal_method == "recalibrate":
+            if transfer_conformal_method in ("recalibrate", "error_scaled"):
                 _saved_cs_df = self._cs_df
                 self._cs_df = new_cs_df
             # scale_aligned / scale_aligned_weighted: source _cs_df kept as-is;
