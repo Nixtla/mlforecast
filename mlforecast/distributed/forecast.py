@@ -466,6 +466,22 @@ class DistributedMLForecast:
         )
 
     @staticmethod
+    def _attach_x_df(
+        part: pd.DataFrame, uid_to_xdf: dict
+    ) -> Iterable[pd.DataFrame]:
+        """Attach each partition's packed X_df blob to its rows, matched on first_uid.
+
+        Used in place of ``fa.join`` for Step 4 of ``_build_x_df_per_partition``:
+        on Ray, ``fa.join`` is routed through DuckDB and materialises the result
+        locally (DuckDataFrame -> ArrowDataFrame), which breaks distributed
+        execution. ``fa.transform`` with this function stays on the engine's
+        native map runtime (RayMapEngine, DaskMapEngine, etc.).
+        """
+        part = part.copy()
+        part["x_df"] = part["first_uid"].map(uid_to_xdf)
+        yield part
+
+    @staticmethod
     def _pack_x_df(part: pd.DataFrame, partition_key_col: str) -> Iterable[pd.DataFrame]:
         """Serialize one partition's X_df rows as a base64 string, keyed by first_uid.
 
@@ -598,26 +614,25 @@ class DistributedMLForecast:
             )
         )
 
-        # Step 4 — join binary blobs into partition_results (N-row join, negligible cost).
-        # x_df_packed is a tiny pandas DataFrame. Convert it to the same backend as
-        # partition_results so fugue doesn't fall back to pandas when engine=None
-        # (fugue only infers the distributed engine when both inputs share a type).
-        # Use fa.get_native_as_df to detect the real backend: partition_results may be
-        # a Fugue-wrapped DataFrame (as_fugue=True in _preprocess_partitions), so a
-        # direct isinstance check against RayDataset/dd.DataFrame/SparkDataFrame would
-        # always fail and x_df_packed would remain as pandas, causing predict() to
-        # return a pandas DataFrame instead of the expected distributed type.
-        _native_pr = fa.get_native_as_df(partition_results)
-        if RAY_INSTALLED and isinstance(_native_pr, RayDataset):
-            import ray as _ray
-            x_df_packed = _ray.data.from_pandas(x_df_packed)
-        elif DASK_INSTALLED and isinstance(_native_pr, dd.DataFrame):
-            x_df_packed = dd.from_pandas(x_df_packed, npartitions=1)
-        elif SPARK_INSTALLED and isinstance(_native_pr, SparkDataFrame):
-            x_df_packed = _native_pr.sparkSession.createDataFrame(x_df_packed)
-        return fa.join(
-            partition_results, x_df_packed, how="left_outer", on=["first_uid"],
+        # Step 4 — attach each partition's packed X_df blob to partition_results.
+        # We avoid ``fa.join`` here because Fugue's Ray engine routes joins
+        # through DuckDB and materialises the result as an ArrowDataFrame,
+        # which takes the pipeline off Ray. ``fa.transform`` with the
+        # ``_attach_x_df`` mapper stays on the engine's native map runtime on
+        # all backends (Ray / Dask / Spark / pandas) and preserves the
+        # distributed type of ``partition_results``.
+        #
+        # ``x_df_packed`` is tiny (one row per partition) so we materialise the
+        # uid→blob lookup on the driver and broadcast it via ``params``.
+        uid_to_xdf = dict(zip(x_df_packed["first_uid"], x_df_packed["x_df"]))
+        return fa.transform(
+            partition_results,
+            DistributedMLForecast._attach_x_df,
+            schema="ts:binary,train:binary,valid:binary,first_uid:str,"
+            "all_uids:binary,x_df:str",
+            params={"uid_to_xdf": uid_to_xdf},
             engine=self.engine,
+            as_fugue=True,
         )
 
     def predict(
