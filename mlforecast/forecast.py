@@ -486,10 +486,9 @@ class MLForecast:
         # For weighted conformal methods, also store full model covariates so
         # that the DRE can use all lag/rolling/date/exogenous features.
         feature_cols = None
-        from .conformal_prediction import PredictionIntervals as _PI
         _pi = getattr(self, 'prediction_intervals', None)
         if _pi is not None and _pi.method.startswith("weighted_conformal"):
-            preprocessed = self.preprocess(
+            preprocessed_result = self.preprocess(
                 df,
                 id_col=id_col,
                 time_col=time_col,
@@ -499,9 +498,10 @@ class MLForecast:
                 keep_last_n=keep_last_n,
                 validate_data=False,
             )
+            assert not isinstance(preprocessed_result, tuple)
             non_feat = {id_col, time_col, target_col}
-            feature_cols = [c for c in preprocessed.columns if c not in non_feat]
-            feat_df = preprocessed[[id_col, time_col] + feature_cols]
+            feature_cols = [c for c in preprocessed_result.columns if c not in non_feat]
+            feat_df = preprocessed_result[[id_col, time_col] + feature_cols]
             cv_results = ufp.join(cv_results, feat_df, on=[id_col, time_col], how="left")
         return compute_conformity_scores(
             cv_results, list(self.models.keys()), target_col, feature_cols=feature_cols
@@ -922,6 +922,15 @@ class MLForecast:
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
+            if prediction_intervals.scale_estimator is not None:
+                from .conformal_prediction import _compute_series_scales
+                prediction_intervals._source_scales = _compute_series_scales(
+                    df=df,
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    method=prediction_intervals.scale_estimator,
+                )
         # When max_horizon or horizons is set, use generator factory approach
         if max_horizon is not None or horizons is not None:
             # Preprocess to get DataFrame with expanded targets
@@ -1289,21 +1298,31 @@ class MLForecast:
                     target_col=self.ts.target_col,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
-                    preprocess_fn=self.preprocess if transfer_conformal_method == "weighted_conformal" else None,
+                    preprocess_fn=(
+                        self.preprocess
+                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned_weighted")
+                        else None
+                    ),
                     dre_estimator=dre_estimator,
-                    source_cs_df=self._cs_df if transfer_conformal_method == "weighted_conformal" else None,
+                    source_cs_df=(
+                        self._cs_df
+                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned", "scale_aligned_weighted")
+                        else None
+                    ),
                 )
             finally:
                 self.models_ = _saved_models_
                 self.ts = _saved_ts_for_cv
                 self._cs_df = _saved_cs_df_pre
                 self.prediction_intervals = _saved_pi
-            if transfer_conformal_method == "weighted_conformal":
+            if transfer_conformal_method in ("weighted_conformal", "scale_aligned_weighted"):
                 # DRE weights were stored on prediction_intervals; source _cs_df unchanged.
                 _cs_weights = getattr(self.prediction_intervals, "_cs_weights", None)
-            else:
+            if transfer_conformal_method == "recalibrate":
                 _saved_cs_df = self._cs_df
                 self._cs_df = new_cs_df
+            # scale_aligned / scale_aligned_weighted: source _cs_df kept as-is;
+            # _apply_scale_alignment is applied dynamically in the quantile step below.
         try:
             forecasts = ts.predict(
                 models=self.models_,
@@ -1373,6 +1392,23 @@ class MLForecast:
                     else:
                         cs_df = self._cs_df
                         n_series = self.ts.ga.n_groups
+                    _target_scales = (
+                        getattr(self.prediction_intervals, "_target_scales", None)
+                        if self.prediction_intervals is not None
+                        else None
+                    )
+                    if (
+                        _target_scales is not None
+                        and self.prediction_intervals._source_scales is not None
+                    ):
+                        from .conformal_prediction import _apply_scale_alignment
+                        cs_df = _apply_scale_alignment(
+                            cs_df=cs_df,
+                            model_names=list(model_names),
+                            id_col=self.ts.id_col,
+                            source_scales=self.prediction_intervals._source_scales,
+                            target_scales=_target_scales,
+                        )
                     forecasts = conformal_method(
                         forecasts,
                         cs_df,
@@ -1388,6 +1424,11 @@ class MLForecast:
         finally:
             if _saved_cs_df is not None:
                 self._cs_df = _saved_cs_df
+            if (
+                hasattr(self, "prediction_intervals")
+                and self.prediction_intervals is not None
+            ):
+                self.prediction_intervals._target_scales = None
 
     def cross_validation(
         self,

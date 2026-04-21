@@ -1,6 +1,6 @@
 __all__ = ["PredictionIntervals", "estimate_density_ratio"]
 
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Literal, Optional, Union
 
 import numpy as np
 import utilsforecast.processing as ufp
@@ -15,6 +15,7 @@ class PredictionIntervals:
         n_windows: int = 2,
         h: int = 1,
         method: str = "conformal_distribution",
+        scale_estimator: Optional[Literal["mad", "std"]] = None,
     ):
         if n_windows < 2:
             raise ValueError(
@@ -28,13 +29,98 @@ class PredictionIntervals:
         ]
         if method not in allowed_methods:
             raise ValueError(f"method must be one of {allowed_methods}")
+        if scale_estimator is not None and scale_estimator not in ("mad", "std"):
+            raise ValueError(
+                f"scale_estimator must be 'mad', 'std', or None, got '{scale_estimator}'"
+            )
         self.n_windows = n_windows
         self.h = h
         self.method = method
+        self.scale_estimator = scale_estimator
+        self._source_scales: Optional[Dict] = None
+        self._target_scales: Optional[np.ndarray] = None
         self._cs_weights: Optional[np.ndarray] = None
 
     def __repr__(self):
-        return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
+        return (
+            f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, "
+            f"method='{self.method}', scale_estimator={self.scale_estimator!r})"
+        )
+
+
+def _compute_series_scales(
+    df: DFType,
+    id_col: str,
+    time_col: str,
+    target_col: str,
+    method: str,
+    floor_factor: float = 1e-3,
+) -> Dict:
+    """Compute per-series scale estimates on first differences for trend invariance.
+
+    Uses MAD(Δy) or std(Δy). A data-relative floor (floor_factor × global median)
+    with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
+    short series.
+    """
+    import warnings
+
+    raw: Dict = {}
+    unique_ids = np.unique(df[id_col].to_numpy())
+    for uid in unique_ids:
+        mask = ufp.is_in(df[id_col], [uid])
+        sub = ufp.filter_with_mask(df, mask)
+        t_arr = sub[time_col].to_numpy()
+        y_arr = sub[target_col].to_numpy().astype(float)
+        sort_idx = np.argsort(t_arr, kind="stable")
+        y = y_arr[sort_idx]
+        if len(y) < 2:
+            raw[uid] = float(np.fabs(y).mean()) if len(y) > 0 else 1.0
+            continue
+        dy = np.diff(y)
+        if method == "mad":
+            raw[uid] = float(np.median(np.abs(dy - np.median(dy))))
+        else:  # "std"
+            raw[uid] = float(np.std(dy, ddof=1) if len(dy) > 1 else np.fabs(dy[0]))
+
+    vals = np.array(list(raw.values()), dtype=float)
+    global_median = float(np.median(vals)) if len(vals) > 0 else 1.0
+    floor = max(floor_factor * global_median, 1e-8)
+    floored: Dict = {}
+    for uid, v in raw.items():
+        effective = max(v, floor)
+        if effective > v:
+            warnings.warn(
+                f"Series '{uid}' has near-zero scale estimate ({v:.2e}); "
+                f"applying floor {floor:.2e}. Check for flat or constant series.",
+                UserWarning,
+                stacklevel=4,
+            )
+        floored[uid] = effective
+    return floored
+
+
+def _apply_scale_alignment(
+    cs_df: DFType,
+    model_names: List[str],
+    id_col: str,
+    source_scales: Dict,
+    target_scales: np.ndarray,
+) -> DFType:
+    """Rescale cs_df residuals from source domain to target domain scale.
+
+    For each source series row: residual → residual × (σ̂_target_global / σ̂_source_i).
+    Returns a copy; the input is not mutated.
+    """
+    sigma_target_global = float(np.median(target_scales))
+    cs_df = ufp.copy_if_pandas(cs_df, deep=False)
+    uid_arr = cs_df[id_col].to_numpy()
+    for model in model_names:
+        vals = cs_df[model].to_numpy().astype(float).copy()
+        for uid, sigma_src in source_scales.items():
+            mask = uid_arr == uid
+            vals[mask] *= sigma_target_global / sigma_src
+        cs_df = ufp.assign_columns(cs_df, model, vals)
+    return cs_df
 
 
 def _add_conformal_distribution_intervals(
@@ -46,7 +132,7 @@ def _add_conformal_distribution_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    weights: Optional[np.ndarray] = None,
+    weights: Optional[np.ndarray] = None,  # noqa: ARG001
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -85,7 +171,7 @@ def _add_conformal_error_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    weights: Optional[np.ndarray] = None,
+    weights: Optional[np.ndarray] = None,  # noqa: ARG001
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -322,9 +408,9 @@ def _recalibrate_transfer(
     target_col: str,
     id_col: str = "unique_id",
     time_col: str = "ds",
-    preprocess_fn: Optional[Callable] = None,
-    dre_estimator: str = "logistic",
-    source_cs_df: Optional[DFType] = None,
+    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
+    dre_estimator: str = "logistic",  # noqa: ARG001
+    source_cs_df: Optional[DFType] = None,  # noqa: ARG001
 ) -> DFType:
     """Recompute conformity scores via cross_validation on new_df."""
     cv_results = cv_fn(
@@ -343,9 +429,9 @@ def _recalibrate_transfer(
 def _weighted_conformal_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
-    cv_fn: Callable,
+    cv_fn: Callable,  # noqa: ARG001
     model_names: List[str],
-    target_col: str,
+    target_col: str,  # noqa: ARG001
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,
@@ -397,9 +483,106 @@ def _weighted_conformal_transfer(
     return source_cs_df
 
 
+def _scale_aligned_transfer(
+    new_df: DFType,
+    prediction_intervals: PredictionIntervals,
+    cv_fn: Callable,  # noqa: ARG001
+    model_names: List[str],  # noqa: ARG001
+    target_col: str,
+    id_col: str = "unique_id",
+    time_col: str = "ds",
+    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
+    dre_estimator: str = "logistic",  # noqa: ARG001
+    source_cs_df: Optional[DFType] = None,
+) -> DFType:
+    """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
+
+    Requires the model to have been fit with
+    ``PredictionIntervals(scale_estimator='mad' or 'std')``.
+    The source conformity scores (``source_cs_df``) are returned unchanged;
+    ``prediction_intervals._target_scales`` is populated as a side-effect so
+    that ``predict()`` can apply ``_apply_scale_alignment`` before the quantile
+    step.
+    """
+    if (
+        prediction_intervals._source_scales is None
+        or prediction_intervals.scale_estimator is None
+        or source_cs_df is None
+    ):
+        raise ValueError(
+            "transfer_conformal_method='scale_aligned' requires the model to have "
+            "been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
+        )
+    target_scale_dict = _compute_series_scales(
+        new_df,
+        id_col=id_col,
+        time_col=time_col,
+        target_col=target_col,
+        method=prediction_intervals.scale_estimator,
+    )
+    target_uid_order = list(np.unique(new_df[id_col].to_numpy()))
+    prediction_intervals._target_scales = np.array(
+        [target_scale_dict[uid] for uid in target_uid_order], dtype=float
+    )
+    return source_cs_df
+
+
+def _scale_aligned_weighted_transfer(
+    new_df: DFType,
+    prediction_intervals: PredictionIntervals,
+    cv_fn: Callable,
+    model_names: List[str],
+    target_col: str,
+    id_col: str = "unique_id",
+    time_col: str = "ds",
+    preprocess_fn: Optional[Callable] = None,
+    dre_estimator: str = "logistic",
+    source_cs_df: Optional[DFType] = None,
+) -> DFType:
+    """Compose scale alignment with DRE weighting.
+
+    Requires fitting with ``weighted_conformal_error`` or
+    ``weighted_conformal_distribution`` (for feature columns) AND
+    ``scale_estimator`` set on ``PredictionIntervals``.
+    Stores both ``_cs_weights`` (DRE) and ``_target_scales`` (scale) on
+    ``prediction_intervals`` as side-effects.
+    """
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal_method='scale_aligned_weighted' requires source_cs_df."
+        )
+    _weighted_conformal_transfer(
+        new_df,
+        prediction_intervals,
+        cv_fn,
+        model_names,
+        target_col,
+        id_col,
+        time_col,
+        preprocess_fn,
+        dre_estimator,
+        source_cs_df,
+    )
+    _scale_aligned_transfer(
+        new_df,
+        prediction_intervals,
+        cv_fn,
+        model_names,
+        target_col,
+        id_col,
+        time_col,
+        preprocess_fn,
+        dre_estimator,
+        source_cs_df,
+    )
+    return source_cs_df
+
+
 _TRANSFER_METHODS = {
     "recalibrate": _recalibrate_transfer,
     "weighted_conformal": _weighted_conformal_transfer,
+    "scale_aligned": _scale_aligned_transfer,
+    "scale_aligned_weighted": _scale_aligned_weighted_transfer,
 }
 
 
