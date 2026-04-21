@@ -89,5 +89,5 @@ jobs:
       - name: Run pytest
         env:
           RAY_ENABLE_UV_RUN_RUNTIME_ENV: 0
-        run: uv run pytest tests/test_distributed_forecast.py tests/distributed_ray/ tests/distributed_spark/ --reruns=2 --reruns-delay=2 --only-rerun="Socket recv error"
+        run: uv run pytest --reruns=2 --reruns-delay=2 --only-rerun="Socket recv error"
 
