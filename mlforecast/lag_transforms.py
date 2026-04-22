@@ -92,6 +92,36 @@ class _BaseLagTransform(BaseEstimator):
             result += "_" + "_".join(changed_params)
         return result
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,  # noqa: ARG002
+        ts_arr: np.ndarray, # noqa: ARG002
+        y_arr: np.ndarray, # noqa: ARG002
+    ) -> Optional[np.ndarray]:
+        """Compute the feature for a non-local (group/global) partition bucket.
+
+        Called during ``_transform`` when ``partition_by`` transforms run in group
+        or global mode.  ``bid_arr``, ``ts_arr``, ``y_arr`` are aligned numpy arrays
+        over the sorted bucket DataFrame (ordered by bucket_id, timestamp, id).
+
+        Returns a feature array of length ``len(bid_arr)``, or ``None`` to fall back
+        to the default: position-based GroupedArray transform followed by
+        same-timestamp correction (all observations sharing a ``(bucket_id, ts)``
+        receive the feature value of the first observation in that group, which was
+        computed from strictly earlier timestamps only).
+
+        The default ``None`` is correct for unbounded (expanding) transforms because
+        position-based expanding over observations sorted by timestamp is equivalent
+        to a timestamp-based expanding window.  It is also used as a temporary
+        fallback for transforms whose RANGE semantics have not yet been implemented
+        (e.g. :class:`_Seasonal_RollingBase`, :class:`ExponentiallyWeightedMean`).
+
+        Subclasses override this method when the position-based fallback produces
+        semantically wrong results — primarily bounded rolling windows
+        (:class:`_RollingBase`) where multiple series can share a timestamp.
+        """
+        return None
+
     def transform(self, ga: CoreGroupedArray) -> np.ndarray:
         return self._core_tfm.transform(ga)
 
@@ -187,16 +217,112 @@ class _RollingBase(_BaseLagTransform):
         return self._lag + self.window_size
 
 
-class RollingMean(_RollingBase): ...
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+    ) -> np.ndarray:
+        """RANGE-based rolling for non-local partition modes.
+
+        For each row at ``(bucket_id, ds=T)`` collects all observations in the same
+        bucket with ``ts ∈ [T - lag - window_size + 1, T - lag]`` and applies
+        :meth:`_window_stat`.  This matches SQL
+        ``RANGE BETWEEN (lag + window_size - 1) PRECEDING AND lag PRECEDING``.
+
+        The default loop is O(n × w).  Subclasses may override this method with a
+        more efficient algorithm when the statistic supports it (e.g. ``RollingMean``
+        uses cumulative sums for O(n log n) performance).
+        """
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ts_b = ts_arr[idxs]
+            y_b = y_arr[idxs]
+            unique_ts, inv = np.unique(ts_b, return_inverse=True)
+            feat_u = np.full(len(unique_ts), np.nan)
+            for k, T in enumerate(unique_ts):
+                lower, upper = T - lag - w + 1, T - lag
+                mask = (ts_b >= lower) & (ts_b <= upper)
+                vals = y_b[mask]
+                if len(vals) >= min_samples:
+                    feat_u[k] = self._window_stat(vals)
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _window_stat(self, vals: np.ndarray) -> float:
+        """Compute the statistic over ``vals``, the individual observations in the window.
+
+        Subclasses must implement this; it is called by :meth:`_compute_bucket_feature`.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement `_window_stat` to support "
+            "RANGE-based rolling in non-local partition modes."
+        )
 
 
-class RollingStd(_RollingBase): ...
+class RollingMean(_RollingBase):
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+    ) -> np.ndarray:
+        """O(m log m) override using cumulative per-bucket sums, where m = unique timestamps.
+
+        Computes each feature value once per unique timestamp in the bucket, then
+        broadcasts back to all rows sharing that timestamp via the ``inv`` index
+        from ``np.unique``.
+        """
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ts = ts_arr[idxs]
+            y = y_arr[idxs]
+            unique_ts, inv, counts = np.unique(
+                ts, return_inverse=True, return_counts=True
+            )
+            ts_sums = np.bincount(inv, weights=y, minlength=len(unique_ts))
+            cum_sum = np.cumsum(ts_sums)
+            cum_cnt = np.cumsum(counts).astype(float)
+            upper_ts_u = unique_ts - lag
+            lower_ts_u = unique_ts - lag - w
+            upper_idxs = np.searchsorted(unique_ts, upper_ts_u, side="right") - 1
+            lower_idxs = np.searchsorted(unique_ts, lower_ts_u, side="right") - 1
+            upper_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+            upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+            lower_sum = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
+            lower_cnt = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
+            win_sum = upper_sum - lower_sum
+            win_cnt = upper_cnt - lower_cnt
+            feat_u = np.where(win_cnt >= min_samples, win_sum / win_cnt, np.nan)
+            result[idxs] = feat_u[inv]
+        return result
 
 
-class RollingMin(_RollingBase): ...
+class RollingStd(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
 
-class RollingMax(_RollingBase): ...
+class RollingMin(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.min(vals))
+
+
+class RollingMax(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.max(vals))
 
 
 class RollingQuantile(_RollingBase):
@@ -228,6 +354,9 @@ class RollingQuantile(_RollingBase):
             min_samples=self.min_samples,
         )
         return self
+
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.quantile(vals, self.p))
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
