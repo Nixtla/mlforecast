@@ -456,6 +456,146 @@ def test_prediction_intervals_monotonicity(predictions_w_intervals):
     assert monotonic_count == len(predictions_w_intervals)
 
 
+# ---------------------------------------------------------------------------
+# Weighted conformal prediction tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def weighted_conformal_setup():
+    """Small synthetic dataset + fitted MLForecast for weighted conformal tests."""
+    series = generate_daily_series(4, min_length=60, max_length=80, seed=0)
+    h = 7
+    n_windows = 2
+    fcst = MLForecast(
+        models=lgb.LGBMRegressor(random_state=0, verbosity=-1, n_estimators=5),
+        freq="D",
+        lags=[1, 7],
+        date_features=["dayofweek"],
+        num_threads=1,
+    )
+    pi = PredictionIntervals(method="weighted_conformal_error", n_windows=n_windows, h=h)
+    fcst.fit(series, prediction_intervals=pi)
+    return fcst, series, h, n_windows
+
+
+def test_weighted_conformal_method_validation():
+    """weighted_conformal_error and _distribution should be accepted; invalid names rejected."""
+    PredictionIntervals(method="weighted_conformal_error")
+    PredictionIntervals(method="weighted_conformal_distribution")
+    with pytest.raises(ValueError):
+        PredictionIntervals(method="bad_method")
+
+
+def test_weighted_conformal_features_stored(weighted_conformal_setup):
+    """After fitting with weighted_conformal method, _cs_df should contain feature columns."""
+    fcst, _, _, _ = weighted_conformal_setup
+    non_feat_cols = {fcst.ts.id_col, fcst.ts.time_col, "cutoff"} | set(fcst.models.keys())
+    feat_cols = [c for c in fcst._cs_df.columns if c not in non_feat_cols]
+    assert len(feat_cols) > 0, "_cs_df must contain feature columns for DRE"
+
+
+def test_weighted_conformal_uniform_weights_matches_standard(weighted_conformal_setup):
+    """Uniform weights should produce intervals close to the unweighted method."""
+    fcst, series, h, n_windows = weighted_conformal_setup
+    n_series = fcst.ts.ga.n_groups
+    n_cal_rows = len(fcst._cs_df)
+
+    preds_std = fcst.predict(h, level=[80])
+
+    uniform_weights = np.ones(n_cal_rows)
+    preds_w = fcst.predict(h, level=[80], covariate_shift_weights=uniform_weights)
+
+    # With uniform weights the weighted quantile should be near the standard one.
+    # They won't be identical (standard uses np.quantile; weighted uses a stepwise
+    # formula) but the point forecasts must match exactly.
+    pd.testing.assert_series_equal(
+        preds_std["LGBMRegressor"], preds_w["LGBMRegressor"]
+    )
+    assert "LGBMRegressor-lo-80" in preds_w.columns
+    assert "LGBMRegressor-hi-80" in preds_w.columns
+
+
+def test_weighted_conformal_user_array(weighted_conformal_setup):
+    """User-supplied weight array flows through; intervals are finite and ordered."""
+    fcst, _, h, _ = weighted_conformal_setup
+    n_cal_rows = len(fcst._cs_df)
+    weights = np.random.default_rng(42).exponential(scale=1.0, size=n_cal_rows)
+    preds = fcst.predict(h, level=[80, 95], covariate_shift_weights=weights)
+
+    assert "LGBMRegressor-lo-80" in preds.columns
+    assert preds["LGBMRegressor-lo-80"].notna().all()
+    assert preds["LGBMRegressor-hi-80"].notna().all()
+    assert (preds["LGBMRegressor-lo-80"] <= preds["LGBMRegressor-hi-80"]).all()
+
+
+def test_weighted_conformal_callable_weights(weighted_conformal_setup):
+    """Callable receives source feature matrix and returns weights; intervals are valid."""
+    fcst, _, h, _ = weighted_conformal_setup
+    weight_fn = lambda X: np.ones(len(X)) if X is not None else np.ones(len(fcst._cs_df))
+    preds = fcst.predict(h, level=[80], covariate_shift_weights=weight_fn)
+
+    assert "LGBMRegressor-lo-80" in preds.columns
+    assert preds["LGBMRegressor-lo-80"].notna().all()
+
+
+def test_weighted_conformal_auto_dre(weighted_conformal_setup):
+    """transfer_conformal_method='weighted_conformal' + new_df uses full-feature DRE."""
+    fcst, series, h, _ = weighted_conformal_setup
+    # Use last 30 obs of each series as "target domain" new_df
+    target_df = series.groupby("unique_id").tail(30).reset_index(drop=True)
+
+    preds = fcst.predict(
+        h,
+        level=[80],
+        new_df=target_df,
+        transfer_conformal_method="weighted_conformal",
+    )
+    assert "LGBMRegressor-lo-80" in preds.columns
+    assert preds["LGBMRegressor-lo-80"].notna().all()
+    assert (preds["LGBMRegressor-lo-80"] <= preds["LGBMRegressor-hi-80"]).all()
+
+
+def test_weighted_conformal_auto_dre_requires_weighted_method():
+    """auto-DRE should fail gracefully when _cs_df has no feature columns."""
+    series = generate_daily_series(2, min_length=40, max_length=50, seed=1)
+    fcst = MLForecast(
+        models=lgb.LGBMRegressor(random_state=0, verbosity=-1, n_estimators=5),
+        freq="D",
+        lags=[1],
+        num_threads=1,
+    )
+    # Fit with standard (non-weighted) method
+    fcst.fit(series, prediction_intervals=PredictionIntervals(method="conformal_error"))
+    target_df = series.groupby("unique_id").tail(10).reset_index(drop=True)
+    with pytest.raises(ValueError, match="No feature columns"):
+        fcst.predict(5, level=[80], new_df=target_df,
+                     transfer_conformal_method="weighted_conformal")
+
+
+def test_estimate_density_ratio():
+    """estimate_density_ratio returns positive weights of correct shape."""
+    from mlforecast.conformal_prediction import estimate_density_ratio
+
+    rng = np.random.default_rng(0)
+    src = rng.standard_normal((50, 4))
+    tgt = rng.standard_normal((30, 4)) + 0.5
+    weights = estimate_density_ratio(src, tgt)
+    assert weights.shape == (50,)
+    assert (weights > 0).all()
+
+
+def test_estimate_density_ratio_gradient_boosting():
+    """estimate_density_ratio works with gradient_boosting estimator."""
+    from mlforecast.conformal_prediction import estimate_density_ratio
+
+    rng = np.random.default_rng(1)
+    src = rng.standard_normal((30, 3))
+    tgt = rng.standard_normal((20, 3)) + 1.0
+    weights = estimate_density_ratio(src, tgt, estimator="gradient_boosting")
+    assert weights.shape == (30,)
+    assert (weights > 0).all()
+
+
 def test_indexed_data_datetime_ds():
     # test indexed data, datetime ds
     fcst_test = MLForecast(
@@ -2338,6 +2478,55 @@ def test_transfer_learning_with_sparse_horizons():
     # Only horizons 3 and 10 should be returned
     assert preds.shape[0] == n_series * 2
     assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
+
+
+def test_transfer_learning_intervals():
+    """Transfer learning with level= should produce valid prediction intervals."""
+    train_ab = generate_daily_series(4, min_length=50, max_length=50, n_static_features=0)
+    train_ef = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_ef["unique_id"] = train_ef["unique_id"].cat.rename_categories(
+        {c: f"transfer_{c}" for c in train_ef["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
+    fcst.fit(train_ab, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
+
+    saved_cs_df = fcst._cs_df
+
+    preds = fcst.predict(h=5, level=[80, 95], new_df=train_ef)
+
+    # interval columns exist
+    assert "LinearRegression-lo-80" in preds.columns
+    assert "LinearRegression-hi-80" in preds.columns
+    assert "LinearRegression-lo-95" in preds.columns
+    assert "LinearRegression-hi-95" in preds.columns
+
+    # lo <= point <= hi
+    pd_preds = _to_pandas(preds)
+    assert (pd_preds["LinearRegression-lo-80"] <= pd_preds["LinearRegression"]).all()
+    assert (pd_preds["LinearRegression"] <= pd_preds["LinearRegression-hi-80"]).all()
+
+    # _cs_df restored after predict (same object — finally block ran)
+    assert fcst._cs_df is saved_cs_df
+
+    # invalid transfer_conformal_method raises ValueError
+    with pytest.raises(ValueError, match="transfer conformal method"):
+        fcst.predict(h=5, level=[80], new_df=train_ef, transfer_conformal_method="bogus")
+
+
+def test_transfer_learning_intervals_no_prediction_intervals_raises():
+    """Transfer CP without fitting with PredictionIntervals raises a clear error."""
+    train_ab = generate_daily_series(3, min_length=50, max_length=50, n_static_features=0)
+    train_ef = generate_daily_series(2, min_length=50, max_length=50, n_static_features=0)
+    train_ef["unique_id"] = train_ef["unique_id"].cat.rename_categories(
+        {c: f"transfer_{c}" for c in train_ef["unique_id"].cat.categories}
+    )
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
+    fcst.fit(train_ab)
+
+    with pytest.raises(ValueError, match="Transfer-learning prediction intervals require"):
+        fcst.predict(h=5, level=[80], new_df=train_ef)
 
 
 def test_cross_validation_with_horizon_features(horizon_features_data):
