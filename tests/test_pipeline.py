@@ -187,12 +187,22 @@ def test_drop_auxiliary_columns_predict_excludes_column(series):
 
 
 def test_drop_auxiliary_columns_cross_validation(series):
-    """drop_auxiliary_columns should work consistently inside cross_validation."""
+    """drop_auxiliary_columns should exclude groupby columns from the feature matrix during cross_validation."""
     statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
     groupby_col = statics[0]
+    class FeatureRecorder(BaseEstimator):
+        def __init__(self):
+            self.fit_feature_names_ = None
+
+        def fit(self, X, y=None):  # noqa: ARG002
+            self.fit_feature_names_ = list(X.columns) if hasattr(X, "columns") else None
+            return self
+
+        def predict(self, X):  # noqa: ARG002
+            return np.zeros(len(X))
 
     fcst = MLForecast(
-        models=LinearRegression(),
+        models={"rec": FeatureRecorder()},
         freq="D",
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
@@ -200,6 +210,10 @@ def test_drop_auxiliary_columns_cross_validation(series):
     cv_result = fcst.cross_validation(series, n_windows=2, h=7, static_features=statics)
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
+    for i in range(2):
+        fitted_model = fcst.cv_models_[i]["rec"]
+        assert fitted_model.fit_feature_names_ is not None
+        assert groupby_col not in fitted_model.fit_feature_names_
 
 
 def test_drop_auxiliary_columns_unknown_warns(series):
