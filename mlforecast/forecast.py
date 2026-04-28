@@ -1349,7 +1349,7 @@ class MLForecast:
                         cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
                     if ids is None:
                         active_ids = set(self.ts.uids)
-                        if cs_ids != active_ids:
+                        if cs_ids != active_ids and new_df is None:
                             raise ValueError(
                                 "Prediction intervals were calibrated on a different set of series "
                                 "than the current forecasting state. Please rerun `fit` before "
@@ -1391,7 +1391,12 @@ class MLForecast:
                         n_series = len(ids)
                     else:
                         cs_df = self._cs_df
-                        n_series = self.ts.ga.n_groups
+                        if new_df is not None and transfer_conformal_method != "recalibrate":
+                            n_series = len(cs_df) // (
+                                self.prediction_intervals.n_windows * self.prediction_intervals.h
+                            )
+                        else:
+                            n_series = self.ts.ga.n_groups
                     _target_scales = (
                         getattr(self.prediction_intervals, "_target_scales", None)
                         if self.prediction_intervals is not None
