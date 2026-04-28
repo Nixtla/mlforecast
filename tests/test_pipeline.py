@@ -102,28 +102,8 @@ def test_predict(benchmark, fcst, series, use_exog, series_with_exog, exogs, sta
     assert summary["lr"] < summary["seas_naive"]
 
 
-def test_drop_features_excluded_from_model(series):
-    """Dropped features should not appear in features_order_ or be passed to the model."""
-    statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    drop = statics[:2]
-
-    fcst = MLForecast(
-        models=LinearRegression(),
-        freq="D",
-        lags=[1, 7],
-        drop_features=drop,
-    )
-    fcst.fit(series, static_features=statics)
-
-    for col in drop:
-        assert col not in fcst.ts.features_order_
-    # The remaining static features are still present
-    for col in statics[2:]:
-        assert col in fcst.ts.features_order_
-
-
-def test_drop_features_groupby_still_works(series):
-    """A column used in groupby can be dropped from the model feature matrix."""
+def test_drop_auxiliary_columns_default_drops_groupby(series):
+    """Default True should auto-drop all groupby columns but keep computed lag features."""
     statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
     groupby_col = statics[0]
 
@@ -132,36 +112,70 @@ def test_drop_features_groupby_still_works(series):
         freq="D",
         lags=[1],
         lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
-        drop_features=[groupby_col],
     )
     fcst.fit(series, static_features=statics)
 
     assert groupby_col not in fcst.ts.features_order_
-    # The computed grouped lag feature IS present
     assert any("rolling_mean" in f for f in fcst.ts.features_order_)
 
     preds = fcst.predict(7)
     assert groupby_col not in preds.columns
 
 
-def test_drop_features_predict_excludes_column(series):
-    """Dropped features must not appear in the prediction feature matrix."""
+def test_drop_auxiliary_columns_false_keeps_groupby(series):
+    """False should keep groupby columns in the model feature matrix."""
     statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    drop = [statics[0]]
+    groupby_col = statics[0]
+
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
+        drop_auxiliary_columns=False,
+    )
+    fcst.fit(series, static_features=statics)
+
+    assert groupby_col in fcst.ts.features_order_
+
+
+def test_drop_auxiliary_columns_explicit_list(series):
+    """An explicit list should drop exactly those columns regardless of groupby."""
+    statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
+    drop = statics[:2]
+
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 7],
+        drop_auxiliary_columns=drop,
+    )
+    fcst.fit(series, static_features=statics)
+
+    for col in drop:
+        assert col not in fcst.ts.features_order_
+    for col in statics[2:]:
+        assert col in fcst.ts.features_order_
+
+
+def test_drop_auxiliary_columns_predict_excludes_column(series):
+    """Dropped columns must not appear in the prediction feature matrix."""
+    statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
+    groupby_col = statics[0]
 
     class FeatureRecorder(BaseEstimator):
         def fit(self, X, y=None):  # noqa: ARG002
             return self
 
-        def predict(self, X):
+        def predict(self, X):  # noqa: ARG002
             self.predict_feature_names_ = list(X.columns) if hasattr(X, "columns") else None
             return np.zeros(len(X))
 
     fcst = MLForecast(
         models={"rec": FeatureRecorder()},
         freq="D",
-        lags=[1, 7],
-        drop_features=drop,
+        lags=[1],
+        lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
     )
     fcst.fit(series, static_features=statics)
     fcst.predict(3)
@@ -169,36 +183,34 @@ def test_drop_features_predict_excludes_column(series):
     fitted_model = fcst.models_["rec"]
     assert hasattr(fitted_model, "predict_feature_names_")
     assert fitted_model.predict_feature_names_ is not None
-    for col in drop:
-        assert col not in fitted_model.predict_feature_names_
+    assert groupby_col not in fitted_model.predict_feature_names_
 
 
-def test_drop_features_cross_validation(series):
-    """drop_features should work consistently inside cross_validation."""
+def test_drop_auxiliary_columns_cross_validation(series):
+    """drop_auxiliary_columns should work consistently inside cross_validation."""
     statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    drop = statics[:1]
+    groupby_col = statics[0]
 
     fcst = MLForecast(
         models=LinearRegression(),
         freq="D",
         lags=[1, 7],
-        drop_features=drop,
+        lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
     )
     cv_result = fcst.cross_validation(series, n_windows=2, h=7, static_features=statics)
     assert cv_result is not None
-    for col in drop:
-        assert col not in cv_result.columns
+    assert groupby_col not in cv_result.columns
 
 
-def test_drop_features_unknown_warns(series):
-    """A UserWarning should be emitted when a drop_feature name doesn't exist."""
+def test_drop_auxiliary_columns_unknown_warns(series):
+    """A UserWarning should be emitted when an explicit column name doesn't exist."""
     statics = series.columns.drop(["unique_id", "ds", "y"]).tolist()
 
     fcst = MLForecast(
         models=LinearRegression(),
         freq="D",
         lags=[1],
-        drop_features=["nonexistent_column"],
+        drop_auxiliary_columns=["nonexistent_column"],
     )
-    with pytest.warns(UserWarning, match="drop_features"):
+    with pytest.warns(UserWarning, match="drop_auxiliary_columns"):
         fcst.fit(series, static_features=statics)

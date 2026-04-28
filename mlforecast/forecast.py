@@ -14,6 +14,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -149,7 +150,7 @@ class MLForecast:
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
-        drop_features: Optional[List[str]] = None,
+        drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         """Forecasting pipeline
 
@@ -163,7 +164,7 @@ class MLForecast:
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
-            drop_features (list of str, optional): Column names to exclude from the model feature matrix. These columns are still available for computing lag transforms (e.g. groupby/partition_by), but will not be passed to the model during fit or predict. Defaults to None.
+            drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -183,7 +184,7 @@ class MLForecast:
             target_transforms=target_transforms,
             lag_transforms_namer=lag_transforms_namer,
             date_features_as_dummies=date_features_as_dummies,
-            drop_features=drop_features,
+            drop_auxiliary_columns=drop_auxiliary_columns,
         )
 
     @property
@@ -859,6 +860,7 @@ class MLForecast:
                 target_transforms=copy.deepcopy(self.ts.target_transforms),
                 lag_transforms_namer=self.ts.lag_transforms_namer,
                 date_features_as_dummies=self.ts.date_features_as_dummies,
+                drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             temp_ts._fit(
                 hist,
@@ -1297,7 +1299,7 @@ class MLForecast:
                 target_transforms=self.ts.target_transforms,
                 lag_transforms_namer=self.ts.lag_transforms_namer,
                 date_features_as_dummies=self.ts.date_features_as_dummies,
-                drop_features=self.ts.drop_features,
+                drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             new_ts._fit(
                 new_df,
