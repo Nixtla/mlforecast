@@ -7,10 +7,10 @@ import polars as pl
 import pytest
 from datasetsforecast.m4 import M4, M4Info
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder
+from utilsforecast.losses import mae
 
 from mlforecast.auto import (
     AutoLightGBM,
@@ -92,7 +92,7 @@ def test_automlforecast_pipeline(weekly_data):
         freq=1,
         season_length=season_length,
         models={"lgb": AutoLightGBM(), "ridge": auto_ridge},
-        fit_config=lambda trial: {"static_features": ["unique_id"]},
+        fit_config=lambda trial: {"static_features": ["unique_id"]},  # noqa: ARG005
         num_threads=2,
     )
 
@@ -114,7 +114,7 @@ def test_automlforecast_pipeline(weekly_data):
     
 def test_automlforecast_weight_col(weekly_data):
 
-    def custom_loss(val_df, train_df, weight_col):
+    def custom_loss(val_df, train_df, weight_col):  # noqa: ARG001
         error = (val_df['y'] - val_df['model']).abs()
         indices = val_df.index
         weights = train.loc[indices, weight_col].values
@@ -140,8 +140,8 @@ def test_automlforecast_weight_col(weekly_data):
     auto_mlf = AutoMLForecast(
         freq=1,
         season_length=season_length,
-        models={"ridge": auto_ridge},  
-        fit_config=lambda trial: {'static_features': []}
+        models={"ridge": auto_ridge},
+        fit_config=lambda trial: {'static_features': []}  # noqa: ARG005
     )
 
     auto_mlf.fit(
@@ -316,11 +316,11 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     n_windows = 2
     num_samples = 5 
     
-    def ridge_config(trial):  
+    def ridge_config(trial):  # noqa: ARG001
         return {"alpha": 1.0, "fit_intercept": True, "solver": "svd"}
-    def fit_config(trial):  
+    def fit_config(trial):  # noqa: ARG001
         return {"dropna": True}
-    def init_config(trial):  
+    def init_config(trial):  # noqa: ARG001
         return {
             "lags": [1, 2, 3],
         }
@@ -352,3 +352,43 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
 
     assert preds_a.columns.tolist() == preds_b.columns.tolist()
     assert (preds_a["ridge"].to_numpy() == preds_b["ridge"].to_numpy()).all()
+
+
+def test_automlforecast_refit_false_with_grouped_expanding_mean(grouped_expanding_mean_df):
+    def init_config(trial):  # noqa: ARG001
+        return {
+            "lags": [1],
+            "lag_transforms": {1: [ExpandingMean(groupby=["cat_code"])]},
+        }
+
+    def fit_config(trial):  # noqa: ARG001
+        return {
+            "static_features": ["cat_code"],
+            "max_horizon": 2,
+        }
+
+    def model_config(trial):  # noqa: ARG001
+        return {}
+
+    def loss(df, train_df):  # noqa: ARG001
+        return mae(df, models=["model"])["model"].mean()
+
+    automl = AutoMLForecast(
+        models={"ridge": AutoModel(Ridge(), config=model_config)},
+        freq="D",
+        init_config=init_config,
+        fit_config=fit_config,
+        num_threads=1,
+    )
+
+    result = automl.fit(
+        grouped_expanding_mean_df,
+        n_windows=2,
+        h=2,
+        num_samples=1,
+        step_size=2,
+        refit=False,
+        loss=loss,
+    )
+
+    assert result is automl

@@ -37,6 +37,7 @@ set_config(display='text')
 warnings.simplefilter('ignore', UserWarning)
 
 
+
 def test_conformal_method():
     with pytest.raises(ValueError):
         _get_conformal_method('my_method')
@@ -760,6 +761,29 @@ def test_cv_weight_col(refit):
     assert not np.allclose(result_uniform['lr'].values, result_skewed['lr'].values)
 
 
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_cv_refit_false_with_grouped_expanding_mean(max_horizon, grouped_expanding_mean_df):
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [ExpandingMean(groupby=["cat_code"])]},
+    )
+
+    cv = fcst.cross_validation(
+        grouped_expanding_mean_df,
+        n_windows=2,
+        h=2,
+        static_features=["cat_code"],
+        refit=False,
+        max_horizon=max_horizon,
+    )
+
+    assert not cv.empty
+    assert "LinearRegression" in cv.columns
+    assert cv["LinearRegression"].notna().all()
+
+
 def test_cv_input_size(setup_forecast_data, fcst):
     _, train, _ = setup_forecast_data
     horizon = 48
@@ -1298,6 +1322,24 @@ def test_direct_forecasting_perfect_exogenous_fit():
     )
 
 
+def test_date_feature_dummies_raw_source_column_not_required_as_exog():
+    """Raw source column (e.g. 'dayofweek') is excluded from required exog when dummies are used."""
+    df = generate_daily_series(2, n_static_features=0)
+    df["dayofweek"] = df["ds"].dt.dayofweek
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_dummies=True,
+    )
+    fcst.fit(df, static_features=[])
+    assert fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_) == []
+    assert "dayofweek" not in fcst.ts.features_order_
+    preds = fcst.predict(h=2)
+    assert preds["LinearRegression"].notna().all()
+
+
 @pytest.mark.parametrize("horizons", [
     [1, 3],
     [1, 3, 5, 7],
@@ -1438,7 +1480,6 @@ def test_direct_forecasting_perfect_exogenous_fit_multiple_series():
 
     # Add exogenous feature X to future dataframe
     # X continues from where training left off (20, 21, 22, ...)
-    last_train_idx = df.groupby('unique_id', observed=True)['X'].transform('max')
     future_df = future_df.sort_values(['unique_id', 'ds']).reset_index(drop=True)
     future_df['X'] = future_df.groupby('unique_id', observed=True).cumcount() + 20.0
 
@@ -1930,6 +1971,89 @@ def test_horizons_cross_validation_with_target_transforms():
     assert cv_results.shape[0] == n_series * n_windows * n_horizons
 
 
+def test_polars_catboost_cross_validation():
+    catboost = pytest.importorskip("catboost")
+    df = generate_daily_series(
+        3,
+        min_length=80,
+        max_length=80,
+        equal_ends=True,
+        engine="polars",
+    )
+    fcst = MLForecast(
+        models=[catboost.CatBoostRegressor(iterations=10, verbose=0)],
+        freq="1d",
+        lags=[1, 2, 7],
+        date_features=["weekday"],
+    )
+
+    cv_results = fcst.cross_validation(
+        df=df,
+        h=7,
+        n_windows=2,
+        step_size=7,
+        refit=False,
+    )
+
+    n_series = df["unique_id"].n_unique()
+    assert cv_results.shape[0] == n_series * 2 * 7
+
+
+def test_polars_catboost_horizons_cross_validation():
+    catboost = pytest.importorskip("catboost")
+    df = generate_daily_series(
+        3,
+        min_length=100,
+        max_length=100,
+        equal_ends=True,
+        engine="polars",
+    )
+    fcst = MLForecast(
+        models=[catboost.CatBoostRegressor(iterations=10, verbose=0)],
+        freq="1d",
+        lags=[1, 7, 14],
+    )
+
+    cv_results = fcst.cross_validation(
+        df=df,
+        h=14,
+        horizons=[7, 14],
+        n_windows=2,
+        refit=False,
+    )
+
+    n_series = df["unique_id"].n_unique()
+    assert cv_results.shape[0] == n_series * 2 * 2
+
+
+def test_horizons_cross_validation_polars_refit_false_as_numpy():
+    df = generate_daily_series(
+        4,
+        min_length=100,
+        max_length=100,
+        equal_ends=True,
+        engine="polars",
+    )
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="1d",
+        lags=[1, 7, 14],
+    )
+
+    cv_results = fcst.cross_validation(
+        df=df,
+        n_windows=2,
+        h=14,
+        horizons=[7, 14],
+        refit=False,
+        as_numpy=True,
+    )
+
+    n_series = df["unique_id"].n_unique()
+    assert cv_results.shape[0] == n_series * 2 * 2
+    assert "LinearRegression" in cv_results.columns
+
+
 def test_fit_with_validate_data_clean():
     """Test that fit with validate_data=True works on clean data without warnings."""
     # Use equal_ends=True to ensure all series have the same length
@@ -2069,7 +2193,7 @@ def test_cross_validation_with_validate_data():
 
     # Should produce warning when validate_data=True
     with pytest.raises(ValueError, match="missing"):
-        cv_results = fcst.cross_validation(
+        fcst.cross_validation(
             df,
             n_windows=2,
             h=5,
@@ -2084,7 +2208,7 @@ def test_cross_validation_with_validate_data():
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        cv_results2 = fcst2.cross_validation(
+        fcst2.cross_validation(
             df,
             n_windows=2,
             h=5,

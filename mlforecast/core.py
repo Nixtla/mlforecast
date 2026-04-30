@@ -45,9 +45,15 @@ from mlforecast.target_transforms import (
     _BaseGroupedArrayTargetTransform,
 )
 
+from .compat import CatBoostRegressor
 from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
-from .utils import _ShortSeriesException, _resolve_num_threads
+from .utils import (
+    _DUMMY_FEATURE_VALUES,
+    _ShortSeriesException,
+    _compute_date_dummies,
+    _resolve_num_threads,
+)
 
 date_features_dtypes = {
     "year": np.uint16,
@@ -214,8 +220,11 @@ class TimeSeries:
         num_threads: int = 1,
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
+        date_features_as_dummies: bool = False,
+        drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         self.freq = freq
+        self.date_features_as_dummies = date_features_as_dummies
         num_threads = _resolve_num_threads(num_threads)
         if not isinstance(num_threads, int) or num_threads < 1:
             warnings.warn("Setting num_threads to 1.")
@@ -241,6 +250,7 @@ class TimeSeries:
                     "Can't use a lambda as a date feature because the function name gets used as the feature name."
                 )
         self.lag_transforms_namer = lag_transforms_namer
+        self.drop_auxiliary_columns = drop_auxiliary_columns
         self.transforms = _parse_transforms(
             lags=self.lags,
             lag_transforms=self.lag_transforms,
@@ -531,6 +541,33 @@ class TimeSeries:
                 new_groups=new_groups,
             )
 
+    def _initialize_lag_transform_states(self) -> None:
+        """Materialize lag transform state for subsequent update-based prediction.
+
+        This is needed when a new ``TimeSeries`` instance is created from historical
+        data right before calling ``predict(new_df=...)``. Local, global and grouped
+        transforms all need to see a full ``transform`` pass so stateful transforms
+        like ``ExpandingMean`` can initialize their internal buffers before the
+        first ``update(...)`` call.
+        """
+        core_tfms = self._get_core_lag_tfms()
+        if core_tfms:
+            self._compute_transforms(core_tfms, updates_only=False)
+        global_tfms = self._get_global_tfms()
+        if global_tfms:
+            if self._global_ga is None:
+                raise RuntimeError(
+                    "Global lag transform state is missing. This is likely a bug; please open an issue."
+                )
+            self._global_ga.apply_transforms(
+                transforms=global_tfms, updates_only=False
+            )
+        group_tfms = self._get_group_tfms()
+        if group_tfms:
+            for group_cols, tfms in group_tfms.items():
+                state = self._group_states[group_cols]
+                state["ga"].apply_transforms(transforms=tfms, updates_only=False)
+
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using global/group transforms."""
         if not (
@@ -549,8 +586,18 @@ class TimeSeries:
             )
 
     @property
-    def _date_feature_names(self):
-        return [f.__name__ if callable(f) else f for f in self.date_features]
+    def _date_feature_names(self) -> List[str]:
+        names: List[str] = []
+        for f in self.date_features:
+            if (self.date_features_as_dummies
+                    and isinstance(f, str)
+                    and f in _DUMMY_FEATURE_VALUES):
+                names.extend(f"{f}_{v}" for v in _DUMMY_FEATURE_VALUES[f])
+            elif callable(f):
+                names.append(f.__name__)
+            else:
+                names.append(f)
+        return names
 
     @property
     def features(self) -> List[str]:
@@ -561,7 +608,10 @@ class TimeSeries:
         """Identify user-provided exogenous columns that need time-alignment."""
         static_cols = set(self.static_features_.columns)
         lag_cols = set(self.transforms.keys())
-        date_cols = {f.__name__ if callable(f) else f for f in self.date_features}
+        date_cols = set(self._date_feature_names) | {
+            f for f in self.date_features
+            if self.date_features_as_dummies and isinstance(f, str) and f in _DUMMY_FEATURE_VALUES
+        }
         exclude = static_cols | lag_cols | date_cols | {self.id_col, self.time_col, self.target_col}
         if self.weight_col is not None:
             exclude.add(self.weight_col)
@@ -729,16 +779,36 @@ class TimeSeries:
                     "are dynamic please set `static_features=[]`."
                 )
         self.static_features_ = statics_on_ends
-        self.features_order_ = [c for c in df.columns if c not in to_drop] + [
+        raw_date_sources = {
+            f for f in self.date_features
+            if self.date_features_as_dummies and isinstance(f, str) and f in _DUMMY_FEATURE_VALUES
+        }
+        self.features_order_ = [c for c in df.columns if c not in to_drop and c not in raw_date_sources] + [
             f for f in self.features if f not in df.columns
         ]
+        if self.drop_auxiliary_columns is True:
+            to_exclude = {
+                col
+                for tfm in self.transforms.values()
+                if isinstance(tfm, _BaseLagTransform)
+                for col in (getattr(tfm, "groupby", None) or [])
+            }
+        elif self.drop_auxiliary_columns is False:
+            to_exclude = set()
+        else:
+            to_exclude = set(self.drop_auxiliary_columns)
+            unknown = [f for f in to_exclude if f not in self.features_order_]
+            if unknown:
+                warnings.warn(
+                    f"The following drop_auxiliary_columns were not found in the feature set: {unknown}",
+                    UserWarning,
+                )
+        self.features_order_ = [f for f in self.features_order_ if f not in to_exclude]
         df_for_special = df
         if self.target_transforms is not None and (partition_tfms or group_tfms):
             transformed_target = ga.data
             if self._restore_idxs is not None:
                 transformed_target = transformed_target[self._restore_idxs]
-            # Keep the caller's dataframe untouched when building aggregated or
-            # partitioned states from the transformed target.
             df_for_special = ufp.copy_if_pandas(df, deep=True)
             df_for_special = ufp.assign_columns(
                 df_for_special, target_col, transformed_target
@@ -907,24 +977,36 @@ class TimeSeries:
             )
         return out
 
-    def _compute_date_feature(self, dates, feature):
+    def _compute_date_feature(self, dates, feature) -> Dict[str, Any]:
+        """Compute date feature(s) and return as a ``{col_name: values}`` dict."""
+        if (self.date_features_as_dummies
+                and isinstance(feature, str)
+                and feature in _DUMMY_FEATURE_VALUES):
+            return _compute_date_dummies(dates, feature)
+
         if callable(feature):
             feat_name = feature.__name__
             feat_vals = feature(dates)
+            if isinstance(feat_vals, pd.DataFrame):
+                return {col: np.asarray(feat_vals[col]) for col in feat_vals.columns}
+            if isinstance(feat_vals, (pd.Index, pd.Series)):
+                feat_vals = np.asarray(feat_vals)
+            return {feat_name: feat_vals}
+
+        # regular string feature
+        feat_name = feature
+        if isinstance(dates, pd.DatetimeIndex):
+            if feature in ("week", "weekofyear"):
+                dates = dates.isocalendar()
+            feat_vals = getattr(dates, feature)
+            if isinstance(feat_vals, (pd.Index, pd.Series)):
+                feat_vals = np.asarray(feat_vals)
+                feat_dtype = date_features_dtypes.get(feature)
+                if feat_dtype is not None:
+                    feat_vals = feat_vals.astype(feat_dtype)
         else:
-            feat_name = feature
-            if isinstance(dates, pd.DatetimeIndex):
-                if feature in ("week", "weekofyear"):
-                    dates = dates.isocalendar()
-                feat_vals = getattr(dates, feature)
-            else:
-                feat_vals = getattr(dates.dt, feature)()
-        if isinstance(feat_vals, (pd.Index, pd.Series)):
-            feat_vals = np.asarray(feat_vals)
-            feat_dtype = date_features_dtypes.get(feature)
-            if feat_dtype is not None:
-                feat_vals = feat_vals.astype(feat_dtype)
-        return feat_name, feat_vals
+            feat_vals = getattr(dates.dt, feature)()
+        return {feat_name: feat_vals}
 
     def _transform(
         self,
@@ -1149,9 +1231,19 @@ class TimeSeries:
                 df = ufp.assign_columns(df, feat, features[feat])
 
         # date features
-        names = [f.__name__ if callable(f) else f for f in self.date_features]
+        def _feature_in_df(f, cols):
+            if (self.date_features_as_dummies
+                    and isinstance(f, str)
+                    and f in _DUMMY_FEATURE_VALUES):
+                return all(
+                    f"{f}_{v}" in cols for v in _DUMMY_FEATURE_VALUES[f]
+                )
+            name = f.__name__ if callable(f) else f
+            return name in cols
+
+        df_cols = set(df.columns)
         date_features = [
-            f for f, name in zip(self.date_features, names) if name not in df
+            f for f in self.date_features if not _feature_in_df(f, df_cols)
         ]
         if date_features:
             unique_dates = df[self.time_col].unique()
@@ -1161,16 +1253,30 @@ class TimeSeries:
                 date2pos = {date: i for i, date in enumerate(unique_dates)}
                 restore_idxs = df[self.time_col].map(date2pos)
                 for feature in date_features:
-                    feat_name, feat_vals = self._compute_date_feature(
+                    for feat_name, feat_vals in self._compute_date_feature(
                         unique_dates, feature
-                    )
-                    df[feat_name] = feat_vals[restore_idxs]
+                    ).items():
+                        df[feat_name] = feat_vals[restore_idxs]
             elif isinstance(df, pl_DataFrame):
                 exprs = []
+                nw_feats: Dict[str, Any] = {}
                 for feat in date_features:  # type: ignore
-                    name, vals = self._compute_date_feature(pl.col(self.time_col), feat)
-                    exprs.append(vals.alias(name))
-                feats = unique_dates.to_frame().with_columns(*exprs)
+                    if (self.date_features_as_dummies
+                            and isinstance(feat, str)
+                            and feat in _DUMMY_FEATURE_VALUES):
+                        nw_feats.update(_compute_date_dummies(unique_dates, feat))
+                    else:
+                        for name, vals in self._compute_date_feature(
+                            pl.col(self.time_col), feat
+                        ).items():
+                            exprs.append(vals.alias(name))
+                feats = unique_dates.to_frame()
+                if exprs:
+                    feats = feats.with_columns(*exprs)
+                for col_name, col_vals in nw_feats.items():
+                    feats = feats.with_columns(
+                        pl.Series(name=col_name, values=col_vals)
+                    )
                 df = df.join(feats, on=self.time_col, how="left")
 
         # assemble return
@@ -1424,8 +1530,10 @@ class TimeSeries:
         features.update(self._compute_partition_features(step_df))
 
         for feature in self.date_features:
-            feat_name, feat_vals = self._compute_date_feature(self.curr_dates, feature)
-            features[feat_name] = feat_vals
+            for feat_name, feat_vals in self._compute_date_feature(
+                self.curr_dates, feature
+            ).items():
+                features[feat_name] = feat_vals
 
         if isinstance(self.last_dates, pl_Series):
             df_constructor = pl_DataFrame
@@ -1547,7 +1655,10 @@ class TimeSeries:
                     new_x = self._get_features_for_next_step(X_df)
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
-                    predictions = model.predict(new_x)
+                    model_x = new_x
+                    if isinstance(model, CatBoostRegressor) and isinstance(new_x, pl_DataFrame):
+                        model_x = new_x.to_pandas()
+                    predictions = model.predict(model_x)
                     if after_predict_callback is not None:
                         predictions = after_predict_callback(predictions)
                     self._update_y(predictions)
@@ -1674,6 +1785,8 @@ class TimeSeries:
                             )
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
+                    if isinstance(horizon_model, CatBoostRegressor) and isinstance(model_x, pl_DataFrame):
+                        model_x = model_x.to_pandas()
                     preds = horizon_model.predict(model_x)
                     if len(preds) != len(self.uids):
                         raise ValueError(f"Model returned {len(preds)} predictions but expected {len(self.uids)}")

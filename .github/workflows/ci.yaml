@@ -36,11 +36,11 @@ jobs:
         run: uv sync --group dev
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # 4.12.1
+        uses: CodSpeedHQ/action@658a901452bb54c799643e060733b7afe9121b8d # 4.14.0
         with:
           mode: simulation
           token: ${{ secrets.CODESPEED_TOKEN }}
-          run: uv run pytest tests/test_pipeline.py --codspeed -n 2 --no-cov
+          run: uv run pytest tests/test_pipeline.py --codspeed -n 2 --no-cov -p no:rerunfailures
 
   performance-tests:
     runs-on: ubuntu-latest

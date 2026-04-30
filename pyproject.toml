@@ -70,12 +70,14 @@ dev = [
     "setuptools",
     "statsmodels",
     "xgboost",
+    "catboost",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",
     "pip-licenses",
     "pytest-xdist",
     "pytest-codspeed",
+    "pytest-rerunfailures",
     "mkdocstrings-parser @ git+https://github.com/Nixtla/mkdocstrings-parser@main"
 ]
 
@@ -107,5 +109,5 @@ addopts = [
     "--cov=mlforecast",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=75" #TODO: adds tests to increase coverage to 80
+    "--cov-fail-under=75", #TODO: adds tests to increase coverage to 80
 ]
