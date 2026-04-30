@@ -1,5 +1,6 @@
 import time
 
+import numpy as np
 import optuna
 import pandas as pd
 import polars as pl
@@ -20,6 +21,7 @@ from mlforecast.auto import (
     ridge_space,
 )
 from mlforecast.lag_transforms import ExpandingMean
+from mlforecast.utils import generate_daily_series
 
 from .conftest import assert_raises_with_message
 
@@ -38,6 +40,35 @@ def weekly_data():
     train["unique_id"] = train["unique_id"].astype("category")
     valid["unique_id"] = valid["unique_id"].astype(train["unique_id"].dtype)
     return train, valid, M4Info[group]
+
+
+def _make_partition_series(n_series: int = 4, length: int = 50) -> pd.DataFrame:
+    df = generate_daily_series(
+        n_series=n_series,
+        min_length=length,
+        max_length=length,
+        n_static_features=0,
+    )
+    brand_map = {
+        uid: i % 2
+        for i, uid in enumerate(df["unique_id"].cat.categories)
+    }
+    df["brand"] = df["unique_id"].map(brand_map).astype("int8")
+    df["promo"] = (df["ds"].dt.dayofweek >= 5).astype("int8")
+    return df
+
+
+def _make_partition_future(df: pd.DataFrame, h: int) -> pd.DataFrame:
+    last_dates = df.groupby("unique_id", observed=True)["ds"].max().reset_index()
+    future = last_dates.loc[last_dates.index.repeat(h)].copy()
+    future["step"] = np.tile(np.arange(1, h + 1), last_dates.shape[0])
+    future["ds"] = future["ds"] + pd.to_timedelta(future["step"], unit="D")
+    future["promo"] = (future["ds"].dt.dayofweek >= 5).astype("int8")
+    return future[["unique_id", "ds", "promo"]].reset_index(drop=True)
+
+
+def _ridge_init_config(trial):  # noqa: ARG001
+    return {"lags": [1, 2, 4]}
 
 
 def test_automlforecast_pipeline(weekly_data):
@@ -61,7 +92,7 @@ def test_automlforecast_pipeline(weekly_data):
         freq=1,
         season_length=season_length,
         models={"lgb": AutoLightGBM(), "ridge": auto_ridge},
-        fit_config=lambda trial: {"static_features": ["unique_id"]},
+        fit_config=lambda trial: {"static_features": ["unique_id"]},  # noqa: ARG005
         num_threads=2,
     )
 
@@ -83,7 +114,7 @@ def test_automlforecast_pipeline(weekly_data):
     
 def test_automlforecast_weight_col(weekly_data):
 
-    def custom_loss(val_df, train_df, weight_col):
+    def custom_loss(val_df, train_df, weight_col):  # noqa: ARG001
         error = (val_df['y'] - val_df['model']).abs()
         indices = val_df.index
         weights = train.loc[indices, weight_col].values
@@ -109,8 +140,8 @@ def test_automlforecast_weight_col(weekly_data):
     auto_mlf = AutoMLForecast(
         freq=1,
         season_length=season_length,
-        models={"ridge": auto_ridge},  
-        fit_config=lambda trial: {'static_features': []}
+        models={"ridge": auto_ridge},
+        fit_config=lambda trial: {'static_features': []}  # noqa: ARG005
     )
 
     auto_mlf.fit(
@@ -151,12 +182,11 @@ def test_automlforecast_errors_and_warnings():
 def test_polars_input_compatibility(weekly_data):
     train, _, info = weekly_data
     h = info.horizon
-    season_length = info.seasonality
     train_pl = pl.from_pandas(train.astype({"unique_id": "str"}))
 
     auto_mlf = AutoMLForecast(
         freq=1,
-        season_length=season_length,
+        init_config=_ridge_init_config,
         models={"ridge": AutoRidge()},
         num_threads=2,
     )
@@ -179,12 +209,11 @@ def test_polars_input_compatibility(weekly_data):
 def test_step_size_impact(weekly_data):
     train, _, info = weekly_data
     h = info.horizon
-    season_length = info.seasonality
     train_pl = pl.from_pandas(train.astype({"unique_id": "str"}))
 
     base = AutoMLForecast(
         freq=1,
-        season_length=season_length,
+        init_config=_ridge_init_config,
         models={"ridge": AutoRidge()},
         num_threads=2,
     )
@@ -200,7 +229,7 @@ def test_step_size_impact(weekly_data):
     )
     base2 = AutoMLForecast(
         freq=1,
-        season_length=season_length,
+        init_config=_ridge_init_config,
         models={"ridge": AutoRidge()},
         num_threads=2,
     )
@@ -222,7 +251,6 @@ def test_step_size_impact(weekly_data):
 def test_nonstandard_column_names(weekly_data):
     train, _, info = weekly_data
     h = info.horizon
-    season_length = info.seasonality
 
     fit_kwargs = dict(
         n_windows=2,
@@ -232,7 +260,9 @@ def test_nonstandard_column_names(weekly_data):
         optimize_kwargs={"timeout": 60},
     )
     model = AutoMLForecast(
-        freq=1, season_length=season_length, models={"ridge": AutoRidge()}
+        freq=1,
+        init_config=_ridge_init_config,
+        models={"ridge": AutoRidge()},
     )
     preds = model.fit(train, **fit_kwargs).predict(5)
 
@@ -254,9 +284,13 @@ def test_nonstandard_column_names(weekly_data):
 def test_input_size_speedup(weekly_data):
     train, _, info = weekly_data
     h = info.horizon
-    season_length = info.seasonality
     model = AutoMLForecast(
-        freq=1, season_length=season_length, models={"ridge": AutoRidge()}
+        freq=1,
+        init_config=lambda trial: {  # noqa: ARG005
+            "lags": list(range(1, 25)),
+            "lag_transforms": {1: [ExpandingMean()]},
+        },
+        models={"ridge": AutoRidge()},
     )
     fit_kwargs = dict(
         n_windows=3,
@@ -282,11 +316,11 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     n_windows = 2
     num_samples = 5 
     
-    def ridge_config(trial):  
+    def ridge_config(trial):  # noqa: ARG001
         return {"alpha": 1.0, "fit_intercept": True, "solver": "svd"}
-    def fit_config(trial):  
+    def fit_config(trial):  # noqa: ARG001
         return {"dropna": True}
-    def init_config(trial):  
+    def init_config(trial):  # noqa: ARG001
         return {
             "lags": [1, 2, 3],
         }

@@ -12,6 +12,7 @@ import pytest
 import utilsforecast.processing as ufp
 import xgboost as xgb
 from sklearn import set_config
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
@@ -98,6 +99,37 @@ def predictions(fitted_fcst):
     # train, valid = setup_forecast_data
     horizon = 48
     return fitted_fcst.predict(horizon)
+
+
+def _make_partition_series(
+    n_series: int = 4, length: int = 50, uid_prefix: str = ""
+) -> pd.DataFrame:
+    df = generate_daily_series(
+        n_series=n_series,
+        min_length=length,
+        max_length=length,
+        n_static_features=0,
+    )
+    if uid_prefix:
+        df["unique_id"] = df["unique_id"].cat.rename_categories(
+            {c: f"{uid_prefix}{c}" for c in df["unique_id"].cat.categories}
+        )
+    brand_map = {
+        uid: i % 2
+        for i, uid in enumerate(df["unique_id"].cat.categories)
+    }
+    df["brand"] = df["unique_id"].map(brand_map).astype(np.int8)
+    df["promo"] = (df["ds"].dt.dayofweek >= 5).astype(np.int8)
+    return df
+
+
+def _make_partition_future(df: pd.DataFrame, h: int) -> pd.DataFrame:
+    last_dates = df.groupby("unique_id", observed=True)["ds"].max().reset_index()
+    future = last_dates.loc[last_dates.index.repeat(h)].copy()
+    future["step"] = np.tile(np.arange(1, h + 1), last_dates.shape[0])
+    future["ds"] = future["ds"] + pd.to_timedelta(future["step"], unit="D")
+    future["promo"] = (future["ds"].dt.dayofweek >= 5).astype(np.int8)
+    return future[["unique_id", "ds", "promo"]].reset_index(drop=True)
 
 
 def test_missing_future(fcst, setup_forecast_data):
@@ -454,6 +486,29 @@ def test_prediction_intervals_monotonicity(predictions_w_intervals):
         axis=1
     ).sum()
     assert monotonic_count == len(predictions_w_intervals)
+
+
+def test_partition_by_cross_validation_refit_false():
+    df = _make_partition_series()
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(random_state=0, max_depth=3)],
+        freq="D",
+        lags=[1, 2, 7],
+        lag_transforms={1: [ExpandingMean(groupby=["brand"], partition_by=["promo"])]},
+    )
+
+    cv_results = fcst.cross_validation(
+        df,
+        n_windows=2,
+        h=5,
+        static_features=["brand"],
+        refit=False,
+        dropna=False,
+    )
+
+    assert "HistGradientBoostingRegressor" in cv_results.columns
+    assert cv_results.shape[0] == df["unique_id"].nunique() * 2 * 5
+    assert cv_results["HistGradientBoostingRegressor"].notna().all()
 
 
 def test_indexed_data_datetime_ds():
@@ -1425,7 +1480,6 @@ def test_direct_forecasting_perfect_exogenous_fit_multiple_series():
 
     # Add exogenous feature X to future dataframe
     # X continues from where training left off (20, 21, 22, ...)
-    last_train_idx = df.groupby('unique_id', observed=True)['X'].transform('max')
     future_df = future_df.sort_values(['unique_id', 'ds']).reset_index(drop=True)
     future_df['X'] = future_df.groupby('unique_id', observed=True).cumcount() + 20.0
 
@@ -2139,7 +2193,7 @@ def test_cross_validation_with_validate_data():
 
     # Should produce warning when validate_data=True
     with pytest.raises(ValueError, match="missing"):
-        cv_results = fcst.cross_validation(
+        fcst.cross_validation(
             df,
             n_windows=2,
             h=5,
@@ -2154,7 +2208,7 @@ def test_cross_validation_with_validate_data():
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        cv_results2 = fcst2.cross_validation(
+        fcst2.cross_validation(
             df,
             n_windows=2,
             h=5,
@@ -2340,6 +2394,24 @@ def test_transfer_learning_with_sparse_horizons():
     assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
 
 
+def test_transfer_learning_with_partition_by_group_transform():
+    train_a = _make_partition_series(n_series=3, length=60)
+    train_b = _make_partition_series(n_series=2, length=60, uid_prefix="new_")
+    future_b = _make_partition_future(train_b, h=5)
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(random_state=0, max_depth=3)],
+        freq="D",
+        lags=[1, 2, 7],
+        lag_transforms={1: [ExpandingMean(groupby=["brand"], partition_by=["promo"])]},
+    )
+    fcst.fit(train_a, static_features=["brand"], dropna=False)
+
+    preds = fcst.predict(h=5, new_df=train_b, X_df=future_b)
+
+    assert preds.shape[0] == train_b["unique_id"].nunique() * 5
+    assert set(preds["unique_id"].unique()) == set(train_b["unique_id"].unique())
+    assert preds["HistGradientBoostingRegressor"].notna().all()
 def test_cross_validation_with_horizon_features(horizon_features_data):
     """cross_validation() should work correctly with horizon_features."""
     data = horizon_features_data
