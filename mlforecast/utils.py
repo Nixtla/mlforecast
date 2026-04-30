@@ -12,6 +12,8 @@ from joblib import cpu_count
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
 
+from .conformal_prediction import PredictionIntervals  # noqa: F401
+
 
 # Valid values for each date feature that can be dummy-encoded.
 # Features not listed here (e.g. year) are not supported because they have an
@@ -235,30 +237,6 @@ def generate_prices_for_series(
         dfs.append(product_df)
     prices_catalog = pd.concat(dfs).reset_index()
     return prices_catalog
-
-
-class PredictionIntervals:
-    """Class for storing prediction intervals metadata information."""
-
-    def __init__(
-        self,
-        n_windows: int = 2,
-        h: int = 1,
-        method: str = "conformal_distribution",
-    ):
-        if n_windows < 2:
-            raise ValueError(
-                "You need at least two windows to compute conformal intervals"
-            )
-        allowed_methods = ["conformal_error", "conformal_distribution"]
-        if method not in allowed_methods:
-            raise ValueError(f"method must be one of {allowed_methods}")
-        self.n_windows = n_windows
-        self.h = h
-        self.method = method
-
-    def __repr__(self):
-        return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
 
 
 class _ShortSeriesException(Exception):
