@@ -34,16 +34,16 @@ from sklearn.base import BaseEstimator
 def _pascal2camel(pascal_str: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", pascal_str).lower()
 
-def _normalize_groupby(groupby):
-    if groupby is None:
+def _normalize_columns(columns):
+    if columns is None:
         return None
-    if isinstance(groupby, str):
-        groupby = [groupby]
+    if isinstance(columns, str):
+        columns = [columns]
     else:
-        groupby = list(groupby)
-    if not groupby:
+        columns = list(columns)
+    if not columns:
         return None
-    return groupby
+    return list(dict.fromkeys(columns))
 
 
 class _BaseLagTransform(BaseEstimator):
@@ -83,6 +83,18 @@ class _BaseLagTransform(BaseEstimator):
         if changed_params:
             result += "_" + "_".join(changed_params)
         return result
+
+    def _compute_bucket_feature(
+        self,
+        _bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        _y_arr: np.ndarray,
+        _ord_arr: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        return None
+
+    def _get_configured_lag(self) -> int:
+        return self._core_tfm.lag
 
     def transform(self, ga: CoreGroupedArray) -> np.ndarray:
         return self._core_tfm.transform(ga)
@@ -161,7 +173,7 @@ class _RollingBase(_BaseLagTransform):
         self.window_size = window_size
         self.min_samples = min_samples
         self.global_ = global_
-        self.groupby = _normalize_groupby(groupby)
+        self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -169,17 +181,98 @@ class _RollingBase(_BaseLagTransform):
     def update_samples(self) -> int:
         return self._lag + self.window_size
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ord_b = ord_arr[idxs]
+            y_b = y_arr[idxs]
+            unique_ord = np.unique(ord_b)
+            inv = np.searchsorted(unique_ord, ord_b)
+            feat_u = np.full(len(unique_ord), np.nan)
+            for k, o in enumerate(unique_ord):
+                upper = o - lag
+                lower = o - lag - w + 1
+                mask = (ord_b >= lower) & (ord_b <= upper)
+                vals = y_b[mask]
+                vals = vals[~np.isnan(vals)]
+                if len(vals) >= min_samples:
+                    feat_u[k] = self._window_stat(vals)
+            result[idxs] = feat_u[inv]
+        return result
 
-class RollingMean(_RollingBase): ...
+    def _window_stat(self, vals: np.ndarray) -> float:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement `_window_stat`."
+        )
 
 
-class RollingStd(_RollingBase): ...
+class RollingMean(_RollingBase):
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ord_b = ord_arr[idxs]
+            y = y_arr[idxs]
+            valid = ~np.isnan(y)
+            y_clean = np.where(valid, y, 0.0)
+            unique_ord, inv = np.unique(ord_b, return_inverse=True)
+            m = len(unique_ord)
+            ord_sums = np.bincount(inv, weights=y_clean, minlength=m)
+            valid_counts = np.bincount(inv, weights=valid.astype(float), minlength=m)
+            cum_sum = np.cumsum(ord_sums)
+            cum_cnt = np.cumsum(valid_counts)
+            upper_ord = unique_ord - lag
+            lower_ord = unique_ord - lag - w
+            upper_idxs = np.searchsorted(unique_ord, upper_ord, side="right") - 1
+            lower_idxs = np.searchsorted(unique_ord, lower_ord, side="right") - 1
+            upper_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+            upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+            lower_sum = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
+            lower_cnt = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
+            win_sum = upper_sum - lower_sum
+            win_cnt = upper_cnt - lower_cnt
+            safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
+            feat_u = np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+            result[idxs] = feat_u[inv]
+        return result
 
 
-class RollingMin(_RollingBase): ...
+class RollingStd(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
 
-class RollingMax(_RollingBase): ...
+class RollingMin(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.min(vals))
+
+
+class RollingMax(_RollingBase):
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.max(vals))
 
 
 class RollingQuantile(_RollingBase):
@@ -209,6 +302,9 @@ class RollingQuantile(_RollingBase):
             min_samples=self.min_samples,
         )
         return self
+
+    def _window_stat(self, vals: np.ndarray) -> float:
+        return float(np.quantile(vals, self.p))
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
@@ -244,7 +340,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.window_size = window_size
         self.min_samples = min_samples
         self.global_ = global_
-        self.groupby = _normalize_groupby(groupby)
+        self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -252,17 +348,64 @@ class _Seasonal_RollingBase(_BaseLagTransform):
     def update_samples(self) -> int:
         return self._lag + self.season_length * self.window_size
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ord_b = ord_arr[idxs]
+            y_b = y_arr[idxs]
+            unique_ord = np.unique(ord_b)
+            inv = np.searchsorted(unique_ord, ord_b)
+            feat_u = np.full(len(unique_ord), np.nan)
+            for k, o in enumerate(unique_ord):
+                target_ords = [o - lag - i * sl for i in range(w)]
+                target_ords = [t for t in target_ords if t >= 0]
+                if not target_ords:
+                    continue
+                mask = np.isin(ord_b, target_ords)
+                vals = y_b[mask]
+                vals = vals[~np.isnan(vals)]
+                if len(vals) >= min_samples:
+                    feat_u[k] = self._seasonal_stat(vals)
+            result[idxs] = feat_u[inv]
+        return result
 
-class SeasonalRollingMean(_Seasonal_RollingBase): ...
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement `_seasonal_stat`."
+        )
 
 
-class SeasonalRollingStd(_Seasonal_RollingBase): ...
+class SeasonalRollingMean(_Seasonal_RollingBase):
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        return float(np.mean(vals))
 
 
-class SeasonalRollingMin(_Seasonal_RollingBase): ...
+class SeasonalRollingStd(_Seasonal_RollingBase):
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
 
-class SeasonalRollingMax(_Seasonal_RollingBase): ...
+class SeasonalRollingMin(_Seasonal_RollingBase):
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        return float(np.min(vals))
+
+
+class SeasonalRollingMax(_Seasonal_RollingBase):
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        return float(np.max(vals))
 
 
 class SeasonalRollingQuantile(_Seasonal_RollingBase):
@@ -285,6 +428,9 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
             **kwargs,
         )
         self.p = p
+
+    def _seasonal_stat(self, vals: np.ndarray) -> float:
+        return float(np.quantile(vals, self.p))
 
 
 class _ExpandingBase(_BaseLagTransform):
@@ -310,7 +456,7 @@ class _ExpandingBase(_BaseLagTransform):
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.global_ = global_
-        self.groupby = _normalize_groupby(groupby)
+        self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -318,17 +464,60 @@ class _ExpandingBase(_BaseLagTransform):
     def update_samples(self) -> int:
         return 1
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ord_b = ord_arr[idxs]
+            y_b = y_arr[idxs]
+            unique_ord = np.unique(ord_b)
+            inv = np.searchsorted(unique_ord, ord_b)
+            feat_u = np.full(len(unique_ord), np.nan)
+            for k, o in enumerate(unique_ord):
+                upper = o - lag
+                if upper < 0:
+                    continue
+                mask = ord_b <= upper
+                vals = y_b[mask]
+                vals = vals[~np.isnan(vals)]
+                if len(vals) > 0:
+                    feat_u[k] = self._expanding_stat(vals)
+            result[idxs] = feat_u[inv]
+        return result
 
-class ExpandingMean(_ExpandingBase): ...
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement `_expanding_stat`."
+        )
 
 
-class ExpandingStd(_ExpandingBase): ...
+class ExpandingMean(_ExpandingBase):
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        return float(np.mean(vals))
 
 
-class ExpandingMin(_ExpandingBase): ...
+class ExpandingStd(_ExpandingBase):
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
 
-class ExpandingMax(_ExpandingBase): ...
+class ExpandingMin(_ExpandingBase):
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        return float(np.min(vals))
+
+
+class ExpandingMax(_ExpandingBase):
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        return float(np.max(vals))
 
 
 class ExpandingQuantile(_ExpandingBase):
@@ -345,6 +534,9 @@ class ExpandingQuantile(_ExpandingBase):
     @property
     def update_samples(self) -> int:
         return -1
+
+    def _expanding_stat(self, vals: np.ndarray) -> float:
+        return float(np.quantile(vals, self.p))
 
 
 class ExponentiallyWeightedMean(_BaseLagTransform):
@@ -373,13 +565,51 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.alpha = alpha
         self.global_ = global_
-        self.groupby = _normalize_groupby(groupby)
+        self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
     @property
     def update_samples(self) -> int:
         return 1
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        alpha = self.alpha
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            ord_b = ord_arr[idxs]
+            y_b = y_arr[idxs]
+            unique_ord = np.unique(ord_b)
+            inv = np.searchsorted(unique_ord, ord_b)
+            mean_per_ord = np.full(len(unique_ord), np.nan)
+            for k, o in enumerate(unique_ord):
+                mask = ord_b == o
+                vals = y_b[mask]
+                vals = vals[~np.isnan(vals)]
+                if len(vals) > 0:
+                    mean_per_ord[k] = np.mean(vals)
+            feat_u = np.full(len(unique_ord), np.nan)
+            ewm = np.nan
+            for k in range(len(unique_ord)):
+                if unique_ord[k] > unique_ord[0] + lag - 1:
+                    feat_u[k] = ewm
+                if not np.isnan(mean_per_ord[k]):
+                    if np.isnan(ewm):
+                        ewm = mean_per_ord[k]
+                    else:
+                        ewm = alpha * mean_per_ord[k] + (1 - alpha) * ewm
+            result[idxs] = feat_u[inv]
+        return result
 
 
 class Offset(_BaseLagTransform):
@@ -404,9 +634,21 @@ class Offset(_BaseLagTransform):
         self._core_tfm = self.tfm._core_tfm
         return self
 
+    def _get_configured_lag(self) -> int:
+        return self.tfm._get_configured_lag() - self.n
+
     @property
     def update_samples(self) -> int:
         return self.tfm.update_samples + self.n
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        return self.tfm._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
 
 
 class Combine(_BaseLagTransform):
@@ -454,6 +696,26 @@ class Combine(_BaseLagTransform):
     @property
     def update_samples(self):
         return max(self.tfm1.update_samples, self.tfm2.update_samples)
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        v1 = self.tfm1._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        v2 = self.tfm2._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        if v1 is not None and v2 is not None:
+            return self.operator(v1, v2)
+        return None
+
+    def _get_configured_lag(self) -> int:
+        lag1 = self.tfm1._get_configured_lag()
+        lag2 = self.tfm2._get_configured_lag()
+        if lag1 != lag2:
+            raise ValueError("Combined transforms must share the same configured lag.")
+        return lag1
 
     def take(self, idxs: np.ndarray) -> "Combine":
         out = copy.deepcopy(self)
