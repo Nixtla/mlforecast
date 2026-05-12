@@ -260,7 +260,7 @@ fig = plot_series(forecasts_df=results)
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-18-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-18-output-1.png)
 
 ### Prediction intervals
 
@@ -320,7 +320,7 @@ fig = plot_series(forecasts_df=results, level=[50, 80, 95])
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-21-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-21-output-1.png)
 
 If you want to reduce the computational time and produce intervals with
 the same width for the whole forecast horizon, simple pass `h=1` to the
@@ -349,7 +349,7 @@ fig = plot_series(forecasts_df=results, level=[90])
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-24-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-24-output-1.png)
 
 ### Forecast using a pretrained model
 
@@ -376,7 +376,7 @@ fig = plot_series(ercot_df, ercot_fcsts, max_insample_length=48 * 2)
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-25-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-25-output-1.png)
 
 ### Preprocess
 
@@ -574,14 +574,14 @@ fig = plot_series(forecasts_df=cv_results.drop(columns='cutoff'))
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-34-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-34-output-1.png)
 
 ```python
 fig = plot_series(forecasts_df=cv_results_intervals.drop(columns='cutoff'), level=[90])
 fig
 ```
 
-![](m4_files/figure-markdown_strict/cell-35-output-1.png)
+![](./m4_files/figure-markdown_strict/cell-35-output-1.png)
 
 ### Using LightGBMCV to tune your forecasts
 

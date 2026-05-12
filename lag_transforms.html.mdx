@@ -9,9 +9,7 @@ title: Lag transforms
 ### `RollingQuantile`
 
 ```python
-RollingQuantile(
-    p, window_size, min_samples=None, global_=False, groupby=None, **kwargs
-)
+RollingQuantile(p, window_size, min_samples=None, global_=False, groupby=None, **kwargs)
 ```
 
 Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
@@ -50,15 +48,7 @@ Rolling statistic
 ### `SeasonalRollingQuantile`
 
 ```python
-SeasonalRollingQuantile(
-    p,
-    season_length,
-    window_size,
-    min_samples=None,
-    global_=False,
-    groupby=None,
-    **kwargs
-)
+SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_=False, groupby=None, **kwargs)
 ```
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
