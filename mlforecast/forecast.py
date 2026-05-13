@@ -1171,7 +1171,11 @@ class MLForecast:
             if h == 1:
                 res = self.fcst_fitted_values_
             else:
-                if self.ts._get_global_tfms() or self.ts._get_group_tfms():
+                has_nonlocal = any(
+                    mode != "local"
+                    for mode, _, _ in self.ts._pooled_states
+                )
+                if has_nonlocal:
                     raise ValueError(
                         "On-demand recursive fitted values for `h>1` are not supported when using "
                         "global or grouped lag transforms."

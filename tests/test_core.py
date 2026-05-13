@@ -877,7 +877,7 @@ def test_group_update_new_group_order(engine):
         static_features=["brand"],
     )
     ts.update(update_df)
-    state = ts._pooled_groups[("brand",)]
+    state = ts._pooled_states[("groupby", ("brand",), ())]
     groups = state.groups
     full_df = ufp.vertical_concat([df, update_df])
     if engine == "polars":
@@ -941,11 +941,11 @@ def test_global_update_y_appends_observations():
     )
     ts._predict_setup()
     ts._update_features()
-    assert ts._pooled_global is not None
-    orig_len = len(ts._pooled_global.time)
+    global_state = ts._pooled_states[("global", (), ())]
+    orig_len = len(global_state.time)
     n_series = len(ts.uids)
     ts._update_y(np.zeros(n_series))
-    assert len(ts._pooled_global.time) == orig_len + n_series
+    assert len(global_state.time) == orig_len + n_series
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])

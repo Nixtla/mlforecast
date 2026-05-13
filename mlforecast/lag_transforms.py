@@ -59,6 +59,7 @@ class _BaseLagTransform(BaseEstimator):
         init_args.pop("global_", None)
         init_args.pop("global", None)
         init_args.pop("groupby", None)
+        init_args.pop("partition_by", None)
         self._core_tfm = getattr(core_tfms, self.__class__.__name__)(
             lag=lag, **init_args
         )
@@ -68,17 +69,21 @@ class _BaseLagTransform(BaseEstimator):
         init_params = self._get_init_signature()
         prefix = ""
         groupby = getattr(self, "groupby", None)
+        partition_by = getattr(self, "partition_by", None)
         if getattr(self, "global_", False):
             prefix = "global_"
         elif groupby:
             group_str = "__".join(groupby)
             prefix = f"groupby_{group_str}_"
+        if partition_by:
+            part_str = "__".join(partition_by)
+            prefix += f"partby_{part_str}_"
         result = f"{prefix}{_pascal2camel(self.__class__.__name__)}_lag{lag}"
         changed_params = [
             f"{name}{getattr(self, name)}"
             for name, arg in init_params.items()
             if arg.default != getattr(self, name)
-            and name not in {"global_", "groupby"}
+            and name not in {"global_", "groupby", "partition_by"}
         ]
         if changed_params:
             result += "_" + "_".join(changed_params)
@@ -87,9 +92,8 @@ class _BaseLagTransform(BaseEstimator):
     def _compute_bucket_feature(
         self,
         _bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        _y_arr: np.ndarray,
         _ord_arr: np.ndarray,
+        _y_arr: np.ndarray,
     ) -> Optional[np.ndarray]:
         return None
 
@@ -152,6 +156,7 @@ class _RollingBase(_BaseLagTransform):
         min_samples: Optional[int] = None,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         """
@@ -163,17 +168,23 @@ class _RollingBase(_BaseLagTransform):
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+            partition_by (Sequence[str], optional): Column names to partition by.
+                Each unique combination of partition values creates a separate bucket
+                within the global/groupby scope. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
         if "groupby" in kwargs:
             groupby = kwargs.pop("groupby")
+        if "partition_by" in kwargs:
+            partition_by = kwargs.pop("partition_by")
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.window_size = window_size
         self.min_samples = min_samples
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
+        self.partition_by = _normalize_columns(partition_by)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -184,9 +195,8 @@ class _RollingBase(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -222,9 +232,8 @@ class RollingMean(_RollingBase):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -283,6 +292,7 @@ class RollingQuantile(_RollingBase):
         min_samples: Optional[int] = None,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -290,6 +300,7 @@ class RollingQuantile(_RollingBase):
             min_samples=min_samples,
             global_=global_,
             groupby=groupby,
+            partition_by=partition_by,
             **kwargs,
         )
         self.p = p
@@ -317,6 +328,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         min_samples: Optional[int] = None,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         """
@@ -329,11 +341,16 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+            partition_by (Sequence[str], optional): Column names to partition by.
+                Each unique combination of partition values creates a separate bucket
+                within the global/groupby scope. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
         if "groupby" in kwargs:
             groupby = kwargs.pop("groupby")
+        if "partition_by" in kwargs:
+            partition_by = kwargs.pop("partition_by")
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.season_length = season_length
@@ -341,6 +358,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.min_samples = min_samples
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
+        self.partition_by = _normalize_columns(partition_by)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -351,9 +369,8 @@ class _Seasonal_RollingBase(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -417,6 +434,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         min_samples: Optional[int] = None,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -425,6 +443,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
             min_samples=min_samples,
             global_=global_,
             groupby=groupby,
+            partition_by=partition_by,
             **kwargs,
         )
         self.p = p
@@ -441,22 +460,29 @@ class _ExpandingBase(_BaseLagTransform):
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+        partition_by (Sequence[str], optional): Column names to partition by.
+            Each unique combination of partition values creates a separate bucket
+            within the global/groupby scope. Defaults to None.
     """
 
     def __init__(
         self,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         if "global" in kwargs:
             global_ = kwargs.pop("global")
         if "groupby" in kwargs:
             groupby = kwargs.pop("groupby")
+        if "partition_by" in kwargs:
+            partition_by = kwargs.pop("partition_by")
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
+        self.partition_by = _normalize_columns(partition_by)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -467,9 +493,8 @@ class _ExpandingBase(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         n = len(bid_arr)
@@ -526,9 +551,10 @@ class ExpandingQuantile(_ExpandingBase):
         p: float,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
-        super().__init__(global_=global_, groupby=groupby, **kwargs)
+        super().__init__(global_=global_, groupby=groupby, partition_by=partition_by, **kwargs)
         self.p = p
 
     @property
@@ -548,6 +574,9 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+        partition_by (Sequence[str], optional): Column names to partition by.
+            Each unique combination of partition values creates a separate bucket
+            within the global/groupby scope. Defaults to None.
     """
 
     def __init__(
@@ -555,17 +584,21 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         alpha: float,
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
+        partition_by: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         if "global" in kwargs:
             global_ = kwargs.pop("global")
         if "groupby" in kwargs:
             groupby = kwargs.pop("groupby")
+        if "partition_by" in kwargs:
+            partition_by = kwargs.pop("partition_by")
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.alpha = alpha
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
+        self.partition_by = _normalize_columns(partition_by)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
 
@@ -576,9 +609,8 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        _ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         alpha = self.alpha
@@ -625,6 +657,7 @@ class Offset(_BaseLagTransform):
         self.n = n
         self.global_ = getattr(tfm, "global_", False)
         self.groupby = getattr(tfm, "groupby", None)
+        self.partition_by = getattr(tfm, "partition_by", None)
 
     def _get_name(self, lag: int) -> str:
         return self.tfm._get_name(lag + self.n)
@@ -644,11 +677,10 @@ class Offset(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> Optional[np.ndarray]:
-        return self.tfm._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        return self.tfm._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
 
 class Combine(_BaseLagTransform):
@@ -676,6 +708,11 @@ class Combine(_BaseLagTransform):
             raise ValueError("Can't combine transforms with different groupby settings.")
         self.global_ = global_1
         self.groupby = groupby_1
+        partition_by_1 = getattr(tfm1, "partition_by", None)
+        partition_by_2 = getattr(tfm2, "partition_by", None)
+        if (partition_by_1 or partition_by_2) and partition_by_1 != partition_by_2:
+            raise ValueError("Can't combine transforms with different partition_by settings.")
+        self.partition_by = partition_by_1
 
     def _set_core_tfm(self, lag: int) -> "Combine":
         self.tfm1 = copy.deepcopy(self.tfm1)._set_core_tfm(lag)
@@ -700,12 +737,11 @@ class Combine(_BaseLagTransform):
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
-        ts_arr: np.ndarray,
-        y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        y_arr: np.ndarray,
     ) -> Optional[np.ndarray]:
-        v1 = self.tfm1._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
-        v2 = self.tfm2._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        v1 = self.tfm1._compute_bucket_feature(bid_arr, ord_arr, y_arr)
+        v2 = self.tfm2._compute_bucket_feature(bid_arr, ord_arr, y_arr)
         if v1 is not None and v2 is not None:
             return self.operator(v1, v2)
         return None
