@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -251,3 +253,56 @@ def test_compute_pooled_features_raises_for_unsupported():
     )
     with pytest.raises(NotImplementedError, match="does not support pooled"):
         compute_pooled_features(state, {"dummy": DummyTransform()})
+
+
+class TestValidateDataWarning:
+    """Warning when validate_data=False with pooled transforms."""
+
+    def _make_fcst(self, transforms):
+        from sklearn.linear_model import LinearRegression
+        from mlforecast.forecast import MLForecast
+
+        return MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms=transforms,
+        )
+
+    def _make_simple_df(self):
+        return pd.DataFrame(
+            {
+                "unique_id": ["a"] * 4 + ["b"] * 4,
+                "ds": [1, 2, 3, 4] * 2,
+                "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0],
+                "brand": ["x"] * 4 + ["x"] * 4,
+            }
+        )
+
+    def test_warns_global(self):
+        fcst = self._make_fcst({1: [RollingMean(window_size=2, global_=True)]})
+        df = self._make_simple_df()
+        with pytest.warns(UserWarning, match="Pooled.*validate_data"):
+            fcst.preprocess(df, static_features=["brand"], validate_data=False)
+
+    def test_warns_groupby(self):
+        fcst = self._make_fcst(
+            {1: [RollingMean(window_size=2, groupby=["brand"])]}
+        )
+        df = self._make_simple_df()
+        with pytest.warns(UserWarning, match="Pooled.*validate_data"):
+            fcst.preprocess(df, static_features=["brand"], validate_data=False)
+
+    def test_no_warning_when_validated(self):
+        fcst = self._make_fcst({1: [RollingMean(window_size=2, global_=True)]})
+        df = self._make_simple_df()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fcst.preprocess(df, static_features=["brand"], validate_data=True)
+
+    def test_no_warning_without_pooled(self):
+        fcst = self._make_fcst({1: [RollingMean(window_size=2)]})
+        df = self._make_simple_df()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fcst.preprocess(df, validate_data=False)
