@@ -159,6 +159,13 @@ class _RollingBase(_BaseLagTransform):
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
                 If `None`, will be set to `window_size`. Defaults to None.
+                In local (per-series) mode, ``min_samples`` is capped at ``window_size``
+                by coreforecast.  In pooled mode (``global_=True`` or ``groupby``),
+                ``min_samples`` counts total non-NaN observations across **all series**
+                in the bucket within the rolling window, with no capping.  For example,
+                ``RollingMean(window_size=1, min_samples=2, groupby=["brand"])`` produces
+                a non-null result at timestamps where at least 2 series in the brand
+                group contribute observations.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
@@ -325,6 +332,14 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
                 If `None`, will be set to `window_size`. Defaults to None.
+                In local (per-series) mode, ``min_samples`` is capped at ``window_size``
+                by coreforecast.  In pooled mode (``global_=True`` or ``groupby``),
+                ``min_samples`` counts total non-NaN observations across **all series**
+                in the bucket within the rolling window, with no capping.  For example,
+                ``SeasonalRollingMean(season_length=7, window_size=1, min_samples=2,
+                groupby=["brand"])`` produces a non-null result at the target seasonal
+                timestamp when at least 2 series in the brand group contribute
+                observations.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
