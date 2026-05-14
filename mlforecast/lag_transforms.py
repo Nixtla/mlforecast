@@ -23,7 +23,7 @@ __all__ = [
 import copy
 import inspect
 import re
-from typing import Callable, Optional, Sequence
+from typing import Callable, Dict, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
@@ -92,6 +92,17 @@ class _BaseLagTransform(BaseEstimator):
         _ord_arr: np.ndarray,
         _ts_aggs=None,
     ) -> Optional[np.ndarray]:
+        return None
+
+    def _compute_latest_from_aggs(
+        self, _ts_aggs, _target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        """Compute feature value at the target timestamp per bucket from cached aggregates.
+
+        ``_target_ords`` maps bucket_id to the time-index ordinal at which to
+        evaluate the statistic (typically ``next_time_index_by_bucket``).
+        Returns None if this transform doesn't support the fast path.
+        """
         return None
 
     def _get_configured_lag(self) -> int:
@@ -230,6 +241,31 @@ class _RollingBase(_BaseLagTransform):
 
 
 class RollingMean(_RollingBase):
+    def _compute_latest_from_aggs(
+        self, ts_aggs, target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            cum_sum = np.cumsum(agg.sums)
+            cum_cnt = np.cumsum(agg.counts)
+            t = target_ords[bid]
+            upper = t - lag
+            lower = t - lag - w
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            li = int(np.searchsorted(agg.unique_times, lower, side="right")) - 1
+            s = (cum_sum[ui] if ui >= 0 else 0.0) - (cum_sum[li] if li >= 0 else 0.0)
+            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li] if li >= 0 else 0.0)
+            result[bid] = s / c if c >= min_samples else float("nan")
+        return result
+
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,

@@ -1047,31 +1047,60 @@ class TimeSeries:
             assert self._pooled_global is not None
             state = self._pooled_global
             n_series = len(self.uids)
-            query = state.build_query_arrays(self.curr_dates, n_series)
-            bucket_vals = compute_pooled_features(state, global_tfms, query_arrays=query)
-            for name, vals in bucket_vals.items():
-                features[name] = np.full(n_series, vals[-1])
+            slow_tfms: dict = {}
+            for name, tfm in global_tfms.items():
+                latest = tfm._compute_latest_from_aggs(
+                    state._ts_aggs, state.next_time_index_by_bucket,
+                )
+                if latest is not None:
+                    features[name] = np.full(n_series, latest[0])
+                else:
+                    slow_tfms[name] = tfm
+            if slow_tfms:
+                query = state.build_query_arrays(self.curr_dates, n_series)
+                bucket_vals = compute_pooled_features(
+                    state, slow_tfms, query_arrays=query,
+                )
+                for name, vals in bucket_vals.items():
+                    features[name] = np.full(n_series, vals[-1])
         group_tfms = self._get_group_tfms()
         if group_tfms:
             for group_cols, tfms in group_tfms.items():
                 state = self._pooled_groups[group_cols]
                 n_series = len(self.uids)
-                query = state.build_query_arrays(self.curr_dates, n_series)
-                tmp_bid, tmp_ts, tmp_y, tmp_idx = query
-                bucket_vals = compute_pooled_features(state, tfms, query_arrays=query)
-                n_orig = len(state.time)
-                for name, vals in bucket_vals.items():
-                    out = np.full(n_series, np.nan)
-                    new_vals = vals[n_orig:]
-                    new_bid_vals = tmp_bid[n_orig:]
-                    val_map = {}
-                    for bv, v in zip(new_bid_vals, new_vals):
-                        val_map[bv] = v
-                    for i in range(n_series):
-                        gid = state.series_bucket_id[i]
-                        if gid in val_map:
-                            out[i] = val_map[gid]
-                    features[name] = out
+                slow_tfms = {}
+                for name, tfm in tfms.items():
+                    latest = tfm._compute_latest_from_aggs(
+                        state._ts_aggs, state.next_time_index_by_bucket,
+                    )
+                    if latest is not None:
+                        out = np.full(n_series, np.nan)
+                        for i in range(n_series):
+                            gid = state.series_bucket_id[i]
+                            if gid in latest:
+                                out[i] = latest[gid]
+                        features[name] = out
+                    else:
+                        slow_tfms[name] = tfm
+                if slow_tfms:
+                    query = state.build_query_arrays(self.curr_dates, n_series)
+                    tmp_bid = query[0]
+                    bucket_vals = compute_pooled_features(
+                        state, slow_tfms, query_arrays=query,
+                    )
+                    n_orig = len(state.time)
+                    for name, vals in bucket_vals.items():
+                        out = np.full(n_series, np.nan)
+                        new_vals = vals[n_orig:]
+                        new_bid_vals = tmp_bid[n_orig:]
+                        val_map = {}
+                        for bv, v in zip(new_bid_vals, new_vals):
+                            val_map[bv] = v
+                        for i in range(n_series):
+                            gid = state.series_bucket_id[i]
+                            if gid in val_map:
+                                out[i] = val_map[gid]
+                        features[name] = out
 
         for feature in self.date_features:
             for feat_name, feat_vals in self._compute_date_feature(
