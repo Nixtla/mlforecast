@@ -90,6 +90,7 @@ class _BaseLagTransform(BaseEstimator):
         _ts_arr: np.ndarray,
         _y_arr: np.ndarray,
         _ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> Optional[np.ndarray]:
         return None
 
@@ -194,7 +195,10 @@ class _RollingBase(_BaseLagTransform):
         _ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> np.ndarray:
+        # TODO: use _ts_aggs fast path (needs per-timestamp aggregates
+        # specific to each subclass stat: sum_sq for Std, min/max for Min/Max)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -232,7 +236,40 @@ class RollingMean(_RollingBase):
         _ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return self._compute_row_level(bid_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            cum_sum = np.cumsum(agg.sums)
+            cum_cnt = np.cumsum(agg.counts)
+            upper_ord = agg.unique_times - lag
+            lower_ord = agg.unique_times - lag - w
+            upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+            lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="right") - 1
+            upper_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+            upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+            lower_sum = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
+            lower_cnt = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
+            win_sum = upper_sum - lower_sum
+            win_cnt = upper_cnt - lower_cnt
+            safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
+            feat_u = np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_row_level(self, bid_arr, y_arr, ord_arr):
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -369,7 +406,9 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         _ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> np.ndarray:
+        # TODO: use _ts_aggs fast path (needs per-season aggregation)
         lag = self._core_tfm.lag
         sl = self.season_length
         w = self.window_size
@@ -485,7 +524,9 @@ class _ExpandingBase(_BaseLagTransform):
         _ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> np.ndarray:
+        # TODO: use _ts_aggs fast path (cumsum of sums/counts)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.empty(n)
@@ -594,7 +635,9 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         _ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> np.ndarray:
+        # TODO: use _ts_aggs fast path (sequential update on timestamp-level means)
         lag = self._core_tfm.lag
         alpha = self.alpha
         n = len(bid_arr)
@@ -662,8 +705,11 @@ class Offset(_BaseLagTransform):
         ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> Optional[np.ndarray]:
-        return self.tfm._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        return self.tfm._compute_bucket_feature(
+            bid_arr, ts_arr, y_arr, ord_arr, _ts_aggs=_ts_aggs,
+        )
 
 
 class Combine(_BaseLagTransform):
@@ -718,9 +764,14 @@ class Combine(_BaseLagTransform):
         ts_arr: np.ndarray,
         y_arr: np.ndarray,
         ord_arr: np.ndarray,
+        _ts_aggs=None,
     ) -> Optional[np.ndarray]:
-        v1 = self.tfm1._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
-        v2 = self.tfm2._compute_bucket_feature(bid_arr, ts_arr, y_arr, ord_arr)
+        v1 = self.tfm1._compute_bucket_feature(
+            bid_arr, ts_arr, y_arr, ord_arr, _ts_aggs=_ts_aggs,
+        )
+        v2 = self.tfm2._compute_bucket_feature(
+            bid_arr, ts_arr, y_arr, ord_arr, _ts_aggs=_ts_aggs,
+        )
         if v1 is not None and v2 is not None:
             return self.operator(v1, v2)
         return None
