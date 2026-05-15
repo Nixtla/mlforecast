@@ -1089,12 +1089,11 @@ class TimeSeries:
                         state._ts_aggs, state.next_time_index_by_bucket,
                     )
                     if latest is not None:
-                        out = np.full(n_series, np.nan)
-                        for i in range(n_series):
-                            gid = state.series_bucket_id[i]
-                            if gid in latest:
-                                out[i] = latest[gid]
-                        features[name] = out
+                        max_bid = max(max(latest.keys(), default=-1), int(state.series_bucket_id.max()))
+                        lookup = np.full(max_bid + 1, np.nan)
+                        for bid, val in latest.items():
+                            lookup[bid] = val
+                        features[name] = lookup[state.series_bucket_id]
                     else:
                         slow_tfms[name] = tfm
                 if slow_tfms:
@@ -1105,17 +1104,16 @@ class TimeSeries:
                     )
                     n_orig = len(state.time)
                     for name, vals in bucket_vals.items():
-                        out = np.full(n_series, np.nan)
                         new_vals = vals[n_orig:]
                         new_bid_vals = tmp_bid[n_orig:]
                         val_map = {}
                         for bv, v in zip(new_bid_vals, new_vals):
                             val_map[bv] = v
-                        for i in range(n_series):
-                            gid = state.series_bucket_id[i]
-                            if gid in val_map:
-                                out[i] = val_map[gid]
-                        features[name] = out
+                        max_bid = max(max(val_map.keys(), default=-1), int(state.series_bucket_id.max()))
+                        lookup = np.full(max_bid + 1, np.nan)
+                        for bid, val in val_map.items():
+                            lookup[bid] = val
+                        features[name] = lookup[state.series_bucket_id]
 
         for feature in self.date_features:
             for feat_name, feat_vals in self._compute_date_feature(
