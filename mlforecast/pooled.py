@@ -59,6 +59,9 @@ class _TimestampAggregates:
     counts: np.ndarray
     n_rows: np.ndarray
     is_balanced: bool
+    sum_sq: np.ndarray
+    mins: np.ndarray
+    maxs: np.ndarray
 
 
 def _build_ts_aggs(
@@ -74,16 +77,31 @@ def _build_ts_aggs(
         unique_ord, inv = np.unique(ord_b, return_inverse=True)
         m = len(unique_ord)
         valid = ~np.isnan(y_b)
-        sums = np.bincount(inv, weights=np.where(valid, y_b, 0.0), minlength=m)
+        y_valid = np.where(valid, y_b, 0.0)
+        sums = np.bincount(inv, weights=y_valid, minlength=m)
         counts = np.bincount(inv, weights=valid.astype(float), minlength=m)
         n_rows = np.bincount(inv, minlength=m).astype(float)
         is_balanced = bool(n_rows.size > 0 and np.all(n_rows == n_rows[0]))
+        sum_sq = np.bincount(inv, weights=np.where(valid, y_b**2, 0.0), minlength=m)
+        mins = np.full(m, np.inf)
+        maxs = np.full(m, -np.inf)
+        valid_inv = inv[valid]
+        valid_y = y_b[valid]
+        if len(valid_y) > 0:
+            np.minimum.at(mins, valid_inv, valid_y)
+            np.maximum.at(maxs, valid_inv, valid_y)
+        no_valid = mins == np.inf
+        mins[no_valid] = np.nan
+        maxs[no_valid] = np.nan
         aggs[int(bid)] = _TimestampAggregates(
             unique_times=unique_ord,
             sums=sums,
             counts=counts,
             n_rows=n_rows,
             is_balanced=is_balanced,
+            sum_sq=sum_sq,
+            mins=mins,
+            maxs=maxs,
         )
     return aggs
 
@@ -306,6 +324,10 @@ class PooledState:
                 nr = float(n_series)
                 agg.n_rows = np.append(agg.n_rows, nr)
                 agg.is_balanced = agg.is_balanced and (nr == agg.n_rows[0])
+                agg.sum_sq = np.append(agg.sum_sq, np.sum(np.where(valid, new_y**2, 0.0)))
+                valid_vals = new_y[valid]
+                agg.mins = np.append(agg.mins, np.min(valid_vals) if len(valid_vals) > 0 else np.nan)
+                agg.maxs = np.append(agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan)
             new_sizes = np.array([n_series], dtype=np.int32)
             new_values = new_arr.astype(self.ga.data.dtype)
             self.ga = self.ga.append_several(
@@ -355,6 +377,10 @@ class PooledState:
                     nr = float(len(y_bid))
                     agg.n_rows = np.append(agg.n_rows, nr)
                     agg.is_balanced = agg.is_balanced and (nr == agg.n_rows[0])
+                    agg.sum_sq = np.append(agg.sum_sq, np.sum(np.where(valid, y_bid**2, 0.0)))
+                    valid_vals = y_bid[valid]
+                    agg.mins = np.append(agg.mins, np.min(valid_vals) if len(valid_vals) > 0 else np.nan)
+                    agg.maxs = np.append(agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan)
 
     def append_observations(
         self,
