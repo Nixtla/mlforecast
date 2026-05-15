@@ -623,9 +623,71 @@ class _ExpandingBase(_BaseLagTransform):
         )
 
 
+def _expanding_mean_from_agg(agg, lag):
+    cum_sum = np.cumsum(agg.sums)
+    cum_cnt = np.cumsum(agg.counts)
+    upper_ord = agg.unique_times - lag
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    win_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+    win_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
+    return np.where(win_cnt > 0, win_sum / safe_cnt, np.nan)
+
+
 class ExpandingMean(_ExpandingBase):
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.mean(vals))
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _expanding_mean_from_agg(agg, lag)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            cum_sum = np.cumsum(agg.sums)
+            cum_cnt = np.cumsum(agg.counts)
+            t = target_ords[bid]
+            upper = t - lag
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            s = cum_sum[ui] if ui >= 0 else 0.0
+            c = cum_cnt[ui] if ui >= 0 else 0.0
+            result[bid] = s / c if c > 0 else float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        return {
+            bid: _expanding_mean_from_agg(agg, lag)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class ExpandingStd(_ExpandingBase):
@@ -660,6 +722,22 @@ class ExpandingQuantile(_ExpandingBase):
 
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+
+def _ewm_from_agg(agg, lag, alpha):
+    mean_per_ord = np.full(len(agg.counts), np.nan)
+    np.divide(agg.sums, agg.counts, out=mean_per_ord, where=agg.counts > 0)
+    feat_u = np.full(len(agg.unique_times), np.nan)
+    ewm = np.nan
+    for k in range(len(agg.unique_times)):
+        if agg.unique_times[k] > agg.unique_times[0] + lag - 1:
+            feat_u[k] = ewm
+        if not np.isnan(mean_per_ord[k]):
+            if np.isnan(ewm):
+                ewm = mean_per_ord[k]
+            else:
+                ewm = alpha * mean_per_ord[k] + (1 - alpha) * ewm
+    return feat_u
 
 
 class ExponentiallyWeightedMean(_BaseLagTransform):
@@ -704,7 +782,8 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         ord_arr: np.ndarray,
         _ts_aggs=None,
     ) -> np.ndarray:
-        # TODO: use _ts_aggs fast path (sequential update on timestamp-level means)
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
         lag = self._core_tfm.lag
         alpha = self.alpha
         n = len(bid_arr)
@@ -735,6 +814,53 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
                         ewm = alpha * mean_per_ord[k] + (1 - alpha) * ewm
             result[idxs] = feat_u[inv]
         return result
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        alpha = self.alpha
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _ewm_from_agg(agg, lag, alpha)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        alpha = self.alpha
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            t = target_ords[bid]
+            mean_per_ord = np.full(len(agg.counts), np.nan)
+            np.divide(agg.sums, agg.counts, out=mean_per_ord, where=agg.counts > 0)
+            ewm = np.nan
+            latest_val = np.nan
+            for k in range(len(agg.unique_times)):
+                if agg.unique_times[k] > agg.unique_times[0] + lag - 1:
+                    latest_val = ewm
+                if not np.isnan(mean_per_ord[k]):
+                    ewm = mean_per_ord[k] if np.isnan(ewm) else alpha * mean_per_ord[k] + (1 - alpha) * ewm
+            if t > agg.unique_times[0] + lag - 1:
+                latest_val = ewm
+            result[bid] = float(latest_val)
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        alpha = self.alpha
+        return {
+            bid: _ewm_from_agg(agg, lag, alpha)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class Offset(_BaseLagTransform):
@@ -768,6 +894,9 @@ class Offset(_BaseLagTransform):
 
     def _compute_ts_level_from_aggs(self, ts_aggs):
         return self.tfm._compute_ts_level_from_aggs(ts_aggs)
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        return self.tfm._compute_latest_from_aggs(ts_aggs, target_ords)
 
     def _compute_bucket_feature(
         self,
@@ -831,6 +960,17 @@ class Combine(_BaseLagTransform):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         r1 = self.tfm1._compute_ts_level_from_aggs(ts_aggs)
         r2 = self.tfm2._compute_ts_level_from_aggs(ts_aggs)
+        if r1 is not None and r2 is not None:
+            return {
+                bid: self.operator(r1[bid], r2[bid])
+                for bid in r1
+                if bid in r2
+            }
+        return None
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        r1 = self.tfm1._compute_latest_from_aggs(ts_aggs, target_ords)
+        r2 = self.tfm2._compute_latest_from_aggs(ts_aggs, target_ords)
         if r1 is not None and r2 is not None:
             return {
                 bid: self.operator(r1[bid], r2[bid])
