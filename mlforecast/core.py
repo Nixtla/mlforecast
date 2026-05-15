@@ -691,10 +691,25 @@ class TimeSeries:
         if global_tfms:
             assert self._pooled_global is not None
             state = self._pooled_global
-            bucket_vals = compute_pooled_features(state, global_tfms)
-            self._join_bucket_features(
-                features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
-            )
+            fast_features: Dict[str, np.ndarray] = {}
+            slow_tfms: Dict[str, _BaseLagTransform] = {}
+            for name, tfm in global_tfms.items():
+                ts_vals = tfm._compute_ts_level_from_aggs(state._ts_aggs)
+                if ts_vals is not None:
+                    fast_features[name] = ts_vals[0]
+                else:
+                    slow_tfms[name] = tfm
+            if fast_features:
+                unique_times = np.unique(state.time)
+                time_vals = df_sorted[self.time_col].to_numpy()
+                row_ords = np.searchsorted(unique_times, time_vals)
+                for name, ts_vals in fast_features.items():
+                    features[name] = ts_vals[row_ords]
+            if slow_tfms:
+                bucket_vals = compute_pooled_features(state, slow_tfms)
+                self._join_bucket_features(
+                    features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
+                )
         if group_tfms:
             for group_cols, tfms in group_tfms.items():
                 state = self._pooled_groups[group_cols]

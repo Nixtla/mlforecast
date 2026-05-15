@@ -105,6 +105,9 @@ class _BaseLagTransform(BaseEstimator):
         """
         return None
 
+    def _compute_ts_level_from_aggs(self, _ts_aggs):
+        return None
+
     def _get_configured_lag(self) -> int:
         return self._core_tfm.lag
 
@@ -240,6 +243,23 @@ class _RollingBase(_BaseLagTransform):
         )
 
 
+def _rolling_mean_from_agg(agg, lag, window_size, min_samples):
+    cum_sum = np.cumsum(agg.sums)
+    cum_cnt = np.cumsum(agg.counts)
+    upper_ord = agg.unique_times - lag
+    lower_ord = agg.unique_times - lag - window_size
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="right") - 1
+    upper_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+    upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    lower_sum = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
+    lower_cnt = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
+    win_sum = upper_sum - lower_sum
+    win_cnt = upper_cnt - lower_cnt
+    safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
+    return np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+
+
 class RollingMean(_RollingBase):
     def _compute_latest_from_aggs(
         self, ts_aggs, target_ords: Dict[int, int],
@@ -266,6 +286,17 @@ class RollingMean(_RollingBase):
             result[bid] = s / c if c >= min_samples else float("nan")
         return result
 
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        return {
+            bid: _rolling_mean_from_agg(agg, lag, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
+
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
@@ -287,20 +318,7 @@ class RollingMean(_RollingBase):
         result[:] = np.nan
         for bid, agg in ts_aggs.items():
             idxs = np.where(bid_arr == bid)[0]
-            cum_sum = np.cumsum(agg.sums)
-            cum_cnt = np.cumsum(agg.counts)
-            upper_ord = agg.unique_times - lag
-            lower_ord = agg.unique_times - lag - w
-            upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
-            lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="right") - 1
-            upper_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
-            upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
-            lower_sum = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
-            lower_cnt = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
-            win_sum = upper_sum - lower_sum
-            win_cnt = upper_cnt - lower_cnt
-            safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
-            feat_u = np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+            feat_u = _rolling_mean_from_agg(agg, lag, w, min_samples)
             inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
             result[idxs] = feat_u[inv]
         return result
@@ -735,6 +753,9 @@ class Offset(_BaseLagTransform):
     def update_samples(self) -> int:
         return self.tfm.update_samples + self.n
 
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        return self.tfm._compute_ts_level_from_aggs(ts_aggs)
+
     def _compute_bucket_feature(
         self,
         bid_arr: np.ndarray,
@@ -793,6 +814,17 @@ class Combine(_BaseLagTransform):
     @property
     def update_samples(self):
         return max(self.tfm1.update_samples, self.tfm2.update_samples)
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        r1 = self.tfm1._compute_ts_level_from_aggs(ts_aggs)
+        r2 = self.tfm2._compute_ts_level_from_aggs(ts_aggs)
+        if r1 is not None and r2 is not None:
+            return {
+                bid: self.operator(r1[bid], r2[bid])
+                for bid in r1
+                if bid in r2
+            }
+        return None
 
     def _compute_bucket_feature(
         self,
