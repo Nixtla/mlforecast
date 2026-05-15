@@ -23,6 +23,7 @@ __all__ = [
 import copy
 import inspect
 import re
+import warnings
 from typing import Callable, Dict, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
@@ -198,6 +199,12 @@ class _RollingBase(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        if min_samples is not None and min_samples == 0 and (self.global_ or self.groupby):
+            warnings.warn(
+                "min_samples=0 with pooled transforms (global_/groupby) "
+                "produces NaN for timestamps with no observations in the window.",
+                stacklevel=2,
+            )
 
     @property
     def update_samples(self) -> int:
@@ -232,7 +239,7 @@ class _RollingBase(_BaseLagTransform):
                 mask = (ord_b >= lower) & (ord_b <= upper)
                 vals = y_b[mask]
                 vals = vals[~np.isnan(vals)]
-                if len(vals) >= min_samples:
+                if len(vals) >= min_samples and len(vals) > 0:
                     feat_u[k] = self._window_stat(vals)
             result[idxs] = feat_u[inv]
         return result
@@ -257,7 +264,7 @@ def _rolling_mean_from_agg(agg, lag, window_size, min_samples):
     win_sum = upper_sum - lower_sum
     win_cnt = upper_cnt - lower_cnt
     safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
-    return np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 0), win_sum / safe_cnt, np.nan)
 
 
 class RollingMean(_RollingBase):
@@ -283,7 +290,7 @@ class RollingMean(_RollingBase):
             li = int(np.searchsorted(agg.unique_times, lower, side="right")) - 1
             s = (cum_sum[ui] if ui >= 0 else 0.0) - (cum_sum[li] if li >= 0 else 0.0)
             c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li] if li >= 0 else 0.0)
-            result[bid] = s / c if c >= min_samples else float("nan")
+            result[bid] = s / c if c >= min_samples and c > 0 else float("nan")
         return result
 
     def _compute_ts_level_from_aggs(self, ts_aggs):
@@ -353,7 +360,7 @@ class RollingMean(_RollingBase):
             win_sum = upper_sum - lower_sum
             win_cnt = upper_cnt - lower_cnt
             safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
-            feat_u = np.where(win_cnt >= min_samples, win_sum / safe_cnt, np.nan)
+            feat_u = np.where((win_cnt >= min_samples) & (win_cnt > 0), win_sum / safe_cnt, np.nan)
             result[idxs] = feat_u[inv]
         return result
 
@@ -449,6 +456,12 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        if min_samples is not None and min_samples == 0 and (self.global_ or self.groupby):
+            warnings.warn(
+                "min_samples=0 with pooled transforms (global_/groupby) "
+                "produces NaN for timestamps with no observations in the window.",
+                stacklevel=2,
+            )
 
     @property
     def update_samples(self) -> int:
@@ -485,7 +498,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 mask = np.isin(ord_b, target_ords)
                 vals = y_b[mask]
                 vals = vals[~np.isnan(vals)]
-                if len(vals) >= min_samples:
+                if len(vals) >= min_samples and len(vals) > 0:
                     feat_u[k] = self._seasonal_stat(vals)
             result[idxs] = feat_u[inv]
         return result
