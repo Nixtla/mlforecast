@@ -729,14 +729,14 @@ def _ewm_from_agg(agg, lag, alpha):
     np.divide(agg.sums, agg.counts, out=mean_per_ord, where=agg.counts > 0)
     feat_u = np.full(len(agg.unique_times), np.nan)
     ewm = np.nan
+    consume_idx = 0
     for k in range(len(agg.unique_times)):
-        if agg.unique_times[k] > agg.unique_times[0] + lag - 1:
-            feat_u[k] = ewm
-        if not np.isnan(mean_per_ord[k]):
-            if np.isnan(ewm):
-                ewm = mean_per_ord[k]
-            else:
-                ewm = alpha * mean_per_ord[k] + (1 - alpha) * ewm
+        upper = agg.unique_times[k] - lag
+        while consume_idx < len(agg.unique_times) and agg.unique_times[consume_idx] <= upper:
+            if not np.isnan(mean_per_ord[consume_idx]):
+                ewm = mean_per_ord[consume_idx] if np.isnan(ewm) else alpha * mean_per_ord[consume_idx] + (1 - alpha) * ewm
+            consume_idx += 1
+        feat_u[k] = ewm
     return feat_u
 
 
@@ -804,14 +804,14 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
                     mean_per_ord[k] = np.mean(vals)
             feat_u = np.full(len(unique_ord), np.nan)
             ewm = np.nan
+            consume_idx = 0
             for k in range(len(unique_ord)):
-                if unique_ord[k] > unique_ord[0] + lag - 1:
-                    feat_u[k] = ewm
-                if not np.isnan(mean_per_ord[k]):
-                    if np.isnan(ewm):
-                        ewm = mean_per_ord[k]
-                    else:
-                        ewm = alpha * mean_per_ord[k] + (1 - alpha) * ewm
+                upper = unique_ord[k] - lag
+                while consume_idx < len(unique_ord) and unique_ord[consume_idx] <= upper:
+                    if not np.isnan(mean_per_ord[consume_idx]):
+                        ewm = mean_per_ord[consume_idx] if np.isnan(ewm) else alpha * mean_per_ord[consume_idx] + (1 - alpha) * ewm
+                    consume_idx += 1
+                feat_u[k] = ewm
             result[idxs] = feat_u[inv]
         return result
 
@@ -841,15 +841,13 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             mean_per_ord = np.full(len(agg.counts), np.nan)
             np.divide(agg.sums, agg.counts, out=mean_per_ord, where=agg.counts > 0)
             ewm = np.nan
-            latest_val = np.nan
+            upper = t - lag
             for k in range(len(agg.unique_times)):
-                if agg.unique_times[k] > agg.unique_times[0] + lag - 1:
-                    latest_val = ewm
+                if agg.unique_times[k] > upper:
+                    break
                 if not np.isnan(mean_per_ord[k]):
                     ewm = mean_per_ord[k] if np.isnan(ewm) else alpha * mean_per_ord[k] + (1 - alpha) * ewm
-            if t > agg.unique_times[0] + lag - 1:
-                latest_val = ewm
-            result[bid] = float(latest_val)
+            result[bid] = float(ewm) if not np.isnan(ewm) else float("nan")
         return result
 
     def _compute_ts_level_from_aggs(self, ts_aggs):
