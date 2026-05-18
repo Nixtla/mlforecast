@@ -47,6 +47,37 @@ def _normalize_columns(columns):
     return list(dict.fromkeys(columns))
 
 
+def _build_sparse_table(arr, op):
+    n = len(arr)
+    if n == 0:
+        return np.empty((1, 0))
+    K = max(1, int(np.log2(n)) + 1)
+    table = np.full((K, n), np.nan)
+    table[0] = arr
+    for j in range(1, K):
+        step = 1 << (j - 1)
+        valid = n - (1 << j) + 1
+        if valid <= 0:
+            break
+        table[j, :valid] = op(table[j-1, :valid], table[j-1, step:step+valid])
+    return table
+
+
+def _query_sparse_table(table, lefts, rights, op):
+    lengths = rights - lefts + 1
+    valid = lengths > 0
+    k = np.zeros_like(lengths)
+    k[valid] = np.floor(np.log2(lengths[valid])).astype(int)
+    result = np.full(len(lefts), np.nan)
+    v = valid & (lefts >= 0)
+    if v.any():
+        left_vals = table[k[v], lefts[v]]
+        right_idx = rights[v] - (1 << k[v]) + 1
+        right_vals = table[k[v], right_idx]
+        result[v] = op(left_vals, right_vals)
+    return result
+
+
 class _BaseLagTransform(BaseEstimator):
     def _get_init_signature(self):
         return {
@@ -365,19 +396,268 @@ class RollingMean(_RollingBase):
         return result
 
 
+def _rolling_std_from_agg(agg, lag, window_size, min_samples):
+    cum_sum = np.cumsum(agg.sums)
+    cum_cnt = np.cumsum(agg.counts)
+    cum_sum_sq = np.cumsum(agg.sum_sq)
+    upper_ord = agg.unique_times - lag
+    lower_ord = agg.unique_times - lag - window_size
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="right") - 1
+    upper_s = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+    lower_s = np.where(lower_idxs >= 0, cum_sum[lower_idxs], 0.0)
+    upper_sq = np.where(upper_idxs >= 0, cum_sum_sq[upper_idxs], 0.0)
+    lower_sq = np.where(lower_idxs >= 0, cum_sum_sq[lower_idxs], 0.0)
+    upper_c = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    lower_c = np.where(lower_idxs >= 0, cum_cnt[lower_idxs], 0.0)
+    win_sum = upper_s - lower_s
+    win_sq = upper_sq - lower_sq
+    win_cnt = upper_c - lower_c
+    safe_n = np.where(win_cnt > 0, win_cnt, 1.0)
+    den = np.where(win_cnt > 1, win_cnt - 1, 1.0)
+    var = (win_sq - win_sum**2 / safe_n) / den
+    var = np.maximum(var, 0.0)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 1), np.sqrt(var), np.nan)
+
+
 class RollingStd(_RollingBase):
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.empty(n)
+        result[:] = np.nan
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _rolling_std_from_agg(agg, lag, w, min_samples)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(
+        self, ts_aggs, target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            cum_sum = np.cumsum(agg.sums)
+            cum_cnt = np.cumsum(agg.counts)
+            cum_sum_sq = np.cumsum(agg.sum_sq)
+            t = target_ords[bid]
+            upper = t - lag
+            lower = t - lag - w
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            li = int(np.searchsorted(agg.unique_times, lower, side="right")) - 1
+            s = (cum_sum[ui] if ui >= 0 else 0.0) - (cum_sum[li] if li >= 0 else 0.0)
+            sq = (cum_sum_sq[ui] if ui >= 0 else 0.0) - (cum_sum_sq[li] if li >= 0 else 0.0)
+            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li] if li >= 0 else 0.0)
+            if c >= min_samples and c > 1:
+                var = (sq - s**2 / c) / (c - 1)
+                var = max(var, 0.0)
+                result[bid] = float(np.sqrt(var))
+            else:
+                result[bid] = float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        return {
+            bid: _rolling_std_from_agg(agg, lag, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
+
+
+def _rolling_min_from_agg(agg, lag, window_size, min_samples):
+    sparse = _build_sparse_table(agg.mins, np.fmin)
+    cum_cnt = np.cumsum(agg.counts)
+    upper_ord = agg.unique_times - lag
+    lower_ord = agg.unique_times - lag - window_size + 1
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="left")
+    upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    lower_cnt = np.where(lower_idxs > 0, cum_cnt[lower_idxs - 1], 0.0)
+    win_cnt = upper_cnt - lower_cnt
+    result = _query_sparse_table(sparse, lower_idxs, upper_idxs, np.fmin)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 0), result, np.nan)
+
+
+def _rolling_max_from_agg(agg, lag, window_size, min_samples):
+    sparse = _build_sparse_table(agg.maxs, np.fmax)
+    cum_cnt = np.cumsum(agg.counts)
+    upper_ord = agg.unique_times - lag
+    lower_ord = agg.unique_times - lag - window_size + 1
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    lower_idxs = np.searchsorted(agg.unique_times, lower_ord, side="left")
+    upper_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    lower_cnt = np.where(lower_idxs > 0, cum_cnt[lower_idxs - 1], 0.0)
+    win_cnt = upper_cnt - lower_cnt
+    result = _query_sparse_table(sparse, lower_idxs, upper_idxs, np.fmax)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 0), result, np.nan)
 
 
 class RollingMin(_RollingBase):
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _rolling_min_from_agg(agg, lag, w, min_samples)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(
+        self, ts_aggs, target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            sparse = _build_sparse_table(agg.mins, np.fmin)
+            cum_cnt = np.cumsum(agg.counts)
+            t = target_ords[bid]
+            upper = t - lag
+            lower = t - lag - w + 1
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            li = int(np.searchsorted(agg.unique_times, lower, side="left"))
+            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li - 1] if li > 0 else 0.0)
+            if c >= min_samples and c > 0:
+                val = _query_sparse_table(sparse, np.array([li]), np.array([ui]), np.fmin)
+                result[bid] = float(val[0])
+            else:
+                result[bid] = float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        return {
+            bid: _rolling_min_from_agg(agg, lag, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
+
 
 class RollingMax(_RollingBase):
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _rolling_max_from_agg(agg, lag, w, min_samples)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(
+        self, ts_aggs, target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            sparse = _build_sparse_table(agg.maxs, np.fmax)
+            cum_cnt = np.cumsum(agg.counts)
+            t = target_ords[bid]
+            upper = t - lag
+            lower = t - lag - w + 1
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            li = int(np.searchsorted(agg.unique_times, lower, side="left"))
+            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li - 1] if li > 0 else 0.0)
+            if c >= min_samples and c > 0:
+                val = _query_sparse_table(sparse, np.array([li]), np.array([ui]), np.fmax)
+                result[bid] = float(val[0])
+            else:
+                result[bid] = float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = self.min_samples if self.min_samples is not None else w
+        return {
+            bid: _rolling_max_from_agg(agg, lag, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class RollingQuantile(_RollingBase):
@@ -690,19 +970,203 @@ class ExpandingMean(_ExpandingBase):
         }
 
 
+def _expanding_std_from_agg(agg, lag):
+    cum_sum = np.cumsum(agg.sums)
+    cum_cnt = np.cumsum(agg.counts)
+    cum_sum_sq = np.cumsum(agg.sum_sq)
+    upper_ord = agg.unique_times - lag
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    win_sum = np.where(upper_idxs >= 0, cum_sum[upper_idxs], 0.0)
+    win_sq = np.where(upper_idxs >= 0, cum_sum_sq[upper_idxs], 0.0)
+    win_cnt = np.where(upper_idxs >= 0, cum_cnt[upper_idxs], 0.0)
+    safe_n = np.where(win_cnt > 0, win_cnt, 1.0)
+    den = np.where(win_cnt > 1, win_cnt - 1, 1.0)
+    var = (win_sq - win_sum**2 / safe_n) / den
+    var = np.maximum(var, 0.0)
+    return np.where((win_cnt > 1), np.sqrt(var), np.nan)
+
+
 class ExpandingStd(_ExpandingBase):
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _expanding_std_from_agg(agg, lag)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            cum_sum = np.cumsum(agg.sums)
+            cum_cnt = np.cumsum(agg.counts)
+            cum_sum_sq = np.cumsum(agg.sum_sq)
+            t = target_ords[bid]
+            upper = t - lag
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            s = cum_sum[ui] if ui >= 0 else 0.0
+            c = cum_cnt[ui] if ui >= 0 else 0.0
+            sq = cum_sum_sq[ui] if ui >= 0 else 0.0
+            if c > 1:
+                var = (sq - s**2 / c) / (c - 1)
+                var = max(var, 0.0)
+                result[bid] = float(np.sqrt(var))
+            else:
+                result[bid] = float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        return {
+            bid: _expanding_std_from_agg(agg, lag)
+            for bid, agg in ts_aggs.items()
+        }
+
+
+def _expanding_min_from_agg(agg, lag):
+    prefix_min = np.fmin.accumulate(agg.mins)
+    upper_ord = agg.unique_times - lag
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    return np.where(upper_idxs >= 0, prefix_min[upper_idxs], np.nan)
+
+
+def _expanding_max_from_agg(agg, lag):
+    prefix_max = np.fmax.accumulate(agg.maxs)
+    upper_ord = agg.unique_times - lag
+    upper_idxs = np.searchsorted(agg.unique_times, upper_ord, side="right") - 1
+    return np.where(upper_idxs >= 0, prefix_max[upper_idxs], np.nan)
 
 
 class ExpandingMin(_ExpandingBase):
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _expanding_min_from_agg(agg, lag)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            prefix_min = np.fmin.accumulate(agg.mins)
+            t = target_ords[bid]
+            upper = t - lag
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            result[bid] = float(prefix_min[ui]) if ui >= 0 else float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        return {
+            bid: _expanding_min_from_agg(agg, lag)
+            for bid, agg in ts_aggs.items()
+        }
+
 
 class ExpandingMax(_ExpandingBase):
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        _ts_arr: np.ndarray,
+        y_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        if _ts_aggs:
+            return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        return super()._compute_bucket_feature(bid_arr, _ts_arr, y_arr, ord_arr)
+
+    def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        n = len(bid_arr)
+        result = np.full(n, np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _expanding_max_from_agg(agg, lag)
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) == 0:
+                result[bid] = float("nan")
+                continue
+            prefix_max = np.fmax.accumulate(agg.maxs)
+            t = target_ords[bid]
+            upper = t - lag
+            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
+            result[bid] = float(prefix_max[ui]) if ui >= 0 else float("nan")
+        return result
+
+    def _compute_ts_level_from_aggs(self, ts_aggs):
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        return {
+            bid: _expanding_max_from_agg(agg, lag)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class ExpandingQuantile(_ExpandingBase):
