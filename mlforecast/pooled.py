@@ -164,6 +164,7 @@ class PooledState:
     next_time_index_by_bucket: Dict[int, int]
     join_cols: List[str]
     _ts_aggs: Dict[int, _TimestampAggregates] = field(default_factory=dict)
+    _idsorted_to_bucket_pos: Optional[np.ndarray] = None
 
     @property
     def group_uids(self):

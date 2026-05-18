@@ -556,7 +556,7 @@ class TimeSeries:
                         "Groupby columns must be static features. "
                         f"Missing from static_features: {missing}."
                     )
-                self._pooled_groups[group_cols] = PooledState.from_groupby(
+                state = PooledState.from_groupby(
                     df_for_group,
                     group_cols_list=group_cols_list,
                     id_col=id_col,
@@ -565,6 +565,21 @@ class TimeSeries:
                     ga_data_dtype=ga.data.dtype,
                     static_features=self.static_features_,
                 )
+                n = len(state.bucket_id)
+                _pos_col = "_idsorted_tmp_pos"
+                if isinstance(state.bucket_df, pd.DataFrame):
+                    tmp = state.bucket_df[[id_col, time_col]].copy()
+                    tmp[_pos_col] = np.arange(n)
+                    idsorted = ufp.sort(tmp, by=[id_col, time_col])
+                    state._idsorted_to_bucket_pos = idsorted[_pos_col].to_numpy()
+                else:
+                    import polars as pl
+                    tmp = state.bucket_df.select([id_col, time_col]).with_columns(
+                        pl.Series(name=_pos_col, values=np.arange(n))
+                    )
+                    idsorted = ufp.sort(tmp, by=[id_col, time_col])
+                    state._idsorted_to_bucket_pos = idsorted[_pos_col].to_numpy()
+                self._pooled_groups[group_cols] = state
         return self
 
     def _compute_transforms(
@@ -713,10 +728,31 @@ class TimeSeries:
         if group_tfms:
             for group_cols, tfms in group_tfms.items():
                 state = self._pooled_groups[group_cols]
-                bucket_vals = compute_pooled_features(state, tfms)
-                self._join_bucket_features(
-                    features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
-                )
+                fast_grp: Dict[str, Dict[int, np.ndarray]] = {}
+                slow_grp: Dict[str, _BaseLagTransform] = {}
+                for name, tfm in tfms.items():
+                    ts_vals = tfm._compute_ts_level_from_aggs(state._ts_aggs)
+                    if ts_vals is not None:
+                        fast_grp[name] = ts_vals
+                    else:
+                        slow_grp[name] = tfm
+                if fast_grp and state._idsorted_to_bucket_pos is not None:
+                    pos = state._idsorted_to_bucket_pos
+                    bid_in_df_order = state.bucket_id[pos]
+                    ord_in_df_order = state.time_index[pos]
+                    for name, ts_vals_by_bucket in fast_grp.items():
+                        out = np.full(len(pos), np.nan)
+                        for bid, ts_vals in ts_vals_by_bucket.items():
+                            mask = bid_in_df_order == bid
+                            out[mask] = ts_vals[ord_in_df_order[mask]]
+                        features[name] = out
+                elif fast_grp:
+                    slow_grp.update({n: tfms[n] for n in fast_grp})
+                if slow_grp:
+                    bucket_vals = compute_pooled_features(state, slow_grp)
+                    self._join_bucket_features(
+                        features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
+                    )
         # filter out the features that already exist in df to avoid overwriting them
         features = {k: v for k, v in features.items() if k not in df}
         if self._restore_idxs is not None:
