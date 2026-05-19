@@ -573,11 +573,16 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
     )
     fast_pre = result_fast[col].values
 
-    ts._pooled_global._ts_aggs = {}
-    result_slow = ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y",
-        dropna=False, static_features=["grp"],
+    ts_slow = TimeSeries(
+        freq=1,
+        lag_transforms={lag: [tfm_factory({"global_": True})]},
     )
+    ts_slow._fit(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        static_features=["grp"],
+    )
+    ts_slow._pooled_global._ts_aggs = {}
+    result_slow = ts_slow._transform(df=df, dropna=False)
     slow_pre = result_slow[col].values
     np.testing.assert_allclose(
         fast_pre, slow_pre, atol=1e-10, equal_nan=True,
@@ -594,13 +599,18 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
     col_grp = tfm_grp._get_name(lag)
     fast_grp_pre = result_grp[col_grp].values
 
-    for st in ts_grp._pooled_groups.values():
+    ts_grp_slow = TimeSeries(
+        freq=1,
+        lag_transforms={lag: [tfm_factory({"groupby": ["grp"]})]},
+    )
+    ts_grp_slow._fit(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        static_features=["grp"],
+    )
+    for st in ts_grp_slow._pooled_groups.values():
         st._ts_aggs = {}
         st._idsorted_to_bucket_pos = None
-    result_grp_slow = ts_grp.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y",
-        dropna=False, static_features=["grp"],
-    )
+    result_grp_slow = ts_grp_slow._transform(df=df, dropna=False)
     slow_grp_pre = result_grp_slow[col_grp].values
     np.testing.assert_allclose(
         fast_grp_pre, slow_grp_pre, atol=1e-10, equal_nan=True,
