@@ -1579,3 +1579,113 @@ def test_prediction_fast_path_partition(engine):
         vals = features[col].to_numpy()
         assert not np.all(np.isnan(vals)), f"step {step}: all NaN for {col}"
         ts._update_y(vals)
+
+
+def test_partition_ewm_skips_missing_parent_ordinals():
+    """EWM on a partition bucket with gapped parent ordinals [0,1,4,5]
+    decays only across observed bucket timestamps, not across missing
+    parent ordinals 2 and 3."""
+    df = pd.DataFrame({
+        "unique_id": ["a"] * 8 + ["b"] * 8,
+        "ds": list(range(8)) * 2,
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0,
+              12.0, 22.0, 32.0, 42.0, 52.0, 62.0, 72.0, 82.0],
+        "promo": [0, 0, 1, 1, 0, 0, 1, 1] * 2,
+    })
+
+    alpha = 0.5
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tfm = ExponentiallyWeightedMean(alpha=alpha, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    result = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    col = tfm._get_name(1)
+    vals = result[col].values
+
+    # promo=0 bucket: parent ordinals [0,1,4,5], aggregate means [11,21,51,61]
+    # Two-pointer EWM (lag=1, alpha=0.5):
+    #   ord 0: upper=-1 → NaN
+    #   ord 1: consume ord 0 (mean=11) → 11.0
+    #   ord 4: consume ord 1 (mean=21) → 0.5*21 + 0.5*11 = 16.0
+    #          ords 2,3 are missing — NOT consumed, no extra decay
+    #   ord 5: consume ord 4 (mean=51) → 0.5*51 + 0.5*16 = 33.5
+    expected_p0 = [np.nan, 11.0, 16.0, 33.5]
+
+    # promo=1 bucket: parent ordinals [2,3,6,7], aggregate means [31,41,71,81]
+    #   ord 2: upper=1, nothing observed ≤ 1 in this bucket → NaN
+    #   ord 3: consume ord 2 (mean=31) → 31.0
+    #   ord 6: consume ord 3 (mean=41) → 0.5*41 + 0.5*31 = 36.0
+    #   ord 7: consume ord 6 (mean=71) → 0.5*71 + 0.5*36 = 53.5
+    expected_p1 = [np.nan, 31.0, 36.0, 53.5]
+
+    promo = df["promo"].values
+    for start in range(0, len(df), 8):
+        chunk = vals[start : start + 8]
+        p = promo[start : start + 8]
+        np.testing.assert_allclose(
+            chunk[p == 0], expected_p0, atol=1e-10, equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            chunk[p == 1], expected_p1, atol=1e-10, equal_nan=True,
+        )
+
+
+def test_global_partition_ewm_uses_timestamp_mean_once():
+    """Multiple series in the same partition bucket at the same timestamp
+    contribute their aggregate mean once to EWM, not once per row."""
+    df = pd.DataFrame({
+        "unique_id": ["a"] * 5 + ["b"] * 5 + ["c"] * 5,
+        "ds": list(range(5)) * 3,
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0,
+              12.0, 22.0, 32.0, 42.0, 52.0,
+              14.0, 24.0, 34.0, 44.0, 54.0],
+        "promo": [0] * 15,
+    })
+
+    alpha = 0.5
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tfm = ExponentiallyWeightedMean(alpha=alpha, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    result = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    col = tfm._get_name(1)
+    vals = result[col].values
+
+    # Per-timestamp means: [12, 22, 32, 42, 52]
+    # EWM (lag=1, alpha=0.5):
+    #   ord 0: NaN
+    #   ord 1: 12.0
+    #   ord 2: 0.5*22 + 0.5*12 = 17.0
+    #   ord 3: 0.5*32 + 0.5*17 = 24.5
+    #   ord 4: 0.5*42 + 0.5*24.5 = 33.25
+    expected = [np.nan, 12.0, 17.0, 24.5, 33.25]
+
+    # If each row contributed individually (3 rows at each timestamp):
+    # ord 0 would consume 10→12→14 with three EWM steps, giving a different
+    # final ewm at ord 0 that propagates differently. The expected values
+    # above only hold when each timestamp contributes its mean once.
+    for i in range(3):
+        np.testing.assert_allclose(
+            vals[i * 5 : (i + 1) * 5], expected, atol=1e-10, equal_nan=True,
+        )
+
+
+def test_partition_ewm_warning():
+    """ExponentiallyWeightedMean emits a warning when partition_by is set,
+    and does not warn without partition_by."""
+    with pytest.warns(UserWarning, match="Partitioned EWM"):
+        ExponentiallyWeightedMean(alpha=0.3, partition_by=["promo"])
+    with pytest.warns(UserWarning, match="Partitioned EWM"):
+        ExponentiallyWeightedMean(alpha=0.3, global_=True, partition_by=["promo"])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ExponentiallyWeightedMean(alpha=0.3)
+        ExponentiallyWeightedMean(alpha=0.3, global_=True)
+        ExponentiallyWeightedMean(alpha=0.3, groupby=["grp"])
