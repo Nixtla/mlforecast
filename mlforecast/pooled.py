@@ -1,6 +1,6 @@
 __all__ = ["PooledState", "compute_pooled_features"]
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -48,6 +48,62 @@ def lookup_bucket_ids(data, groups, cols):
         groups_copy = groups_copy.with_columns(s2)
     joined = data_slice.join(groups_copy, on=cols, how="left")
     return joined["_bucket_id"].to_numpy()
+
+
+@dataclass
+class _TimestampAggregates:
+    """Per-timestamp aggregates for a single bucket."""
+
+    unique_times: np.ndarray
+    sums: np.ndarray
+    counts: np.ndarray
+    n_rows: np.ndarray
+    is_balanced: bool
+    sum_sq: np.ndarray
+    mins: np.ndarray
+    maxs: np.ndarray
+
+
+def _build_ts_aggs(
+    bid_arr: np.ndarray,
+    ord_arr: np.ndarray,
+    y_arr: np.ndarray,
+) -> Dict[int, _TimestampAggregates]:
+    aggs: Dict[int, _TimestampAggregates] = {}
+    for bid in np.unique(bid_arr):
+        mask = bid_arr == bid
+        ord_b = ord_arr[mask]
+        y_b = y_arr[mask]
+        unique_ord, inv = np.unique(ord_b, return_inverse=True)
+        m = len(unique_ord)
+        valid = ~np.isnan(y_b)
+        y_valid = np.where(valid, y_b, 0.0)
+        sums = np.bincount(inv, weights=y_valid, minlength=m)
+        counts = np.bincount(inv, weights=valid.astype(float), minlength=m)
+        n_rows = np.bincount(inv, minlength=m).astype(float)
+        is_balanced = bool(n_rows.size > 0 and np.all(n_rows == n_rows[0]))
+        sum_sq = np.bincount(inv, weights=np.where(valid, y_b**2, 0.0), minlength=m)
+        mins = np.full(m, np.inf)
+        maxs = np.full(m, -np.inf)
+        valid_inv = inv[valid]
+        valid_y = y_b[valid]
+        if len(valid_y) > 0:
+            np.minimum.at(mins, valid_inv, valid_y)
+            np.maximum.at(maxs, valid_inv, valid_y)
+        no_valid = mins == np.inf
+        mins[no_valid] = np.nan
+        maxs[no_valid] = np.nan
+        aggs[int(bid)] = _TimestampAggregates(
+            unique_times=unique_ord,
+            sums=sums,
+            counts=counts,
+            n_rows=n_rows,
+            is_balanced=is_balanced,
+            sum_sq=sum_sq,
+            mins=mins,
+            maxs=maxs,
+        )
+    return aggs
 
 
 def _compute_time_index(bid_arr, ts_arr):
@@ -106,6 +162,24 @@ def _compute_time_index_from_parent(bid_arr, ts_arr, parent_grids):
     return idx_arr, next_by_bucket
 
 
+def _compute_idsorted_to_bucket_pos(bucket_df, id_col, time_col):
+    if isinstance(bucket_df, pd.DataFrame):
+        n = len(bucket_df)
+        _pos_col = "_idsorted_tmp_pos"
+        tmp = bucket_df[[id_col, time_col]].copy()
+        tmp[_pos_col] = np.arange(n)
+        idsorted = ufp.sort(tmp, by=[id_col, time_col])
+        return idsorted[_pos_col].to_numpy()
+    else:
+        n = bucket_df.height
+        _pos_col = "_idsorted_tmp_pos"
+        tmp = bucket_df.select([id_col, time_col]).with_columns(
+            pl.Series(name=_pos_col, values=np.arange(n))
+        )
+        idsorted = ufp.sort(tmp, by=[id_col, time_col])
+        return idsorted[_pos_col].to_numpy()
+
+
 @dataclass
 class PooledState:
     """Holds all arrays and metadata for a pooled bucket.
@@ -154,6 +228,9 @@ class PooledState:
     _bucket_to_parent_id: Optional[Dict[int, int]] = None
     _parent_to_buckets: Optional[Dict[int, List[int]]] = None
     _scope_key_to_parent_id: Optional[Dict[tuple, int]] = None
+    # aggregate cache and fast-path fields
+    _ts_aggs: Dict[int, _TimestampAggregates] = field(default_factory=dict)
+    _idsorted_to_bucket_pos: Optional[np.ndarray] = None
 
     @property
     def group_uids(self):
@@ -204,18 +281,21 @@ class PooledState:
         ga = GroupedArray(processed.data[:, 0], processed.indptr)
         unique_ts = np.unique(ts_raw)
         ord_raw = np.searchsorted(unique_ts, ts_raw).astype(np.int64)
+        bid_arr = np.zeros(len(global_df), dtype=np.int64)
+        y_float = y_raw.astype(float)
         return cls(
             ga=ga,
             bucket_df=global_df,
             groups=None,
             group_cols=None,
             series_bucket_id=np.zeros(n_series, dtype=np.int64),
-            bucket_id=np.zeros(len(global_df), dtype=np.int64),
+            bucket_id=bid_arr,
             time=ts_raw,
             time_index=ord_raw,
-            y=y_raw.astype(float),
+            y=y_float,
             next_time_index_by_bucket={0: len(unique_ts)},
             join_cols=[id_col, time_col],
+            _ts_aggs=_build_ts_aggs(bid_arr, ord_raw, y_float),
         )
 
     @classmethod
@@ -272,6 +352,7 @@ class PooledState:
         series_bucket_id = lookup_bucket_ids(
             static_features, groups, group_cols_list
         ).astype(np.int64, copy=False)
+        y_float = y_raw.astype(float)
         return cls(
             ga=ga,
             bucket_df=bucket_df,
@@ -281,9 +362,10 @@ class PooledState:
             bucket_id=bid_arr,
             time=ts_raw,
             time_index=ord_arr,
-            y=y_raw.astype(float),
+            y=y_float,
             next_time_index_by_bucket=next_by_bucket,
             join_cols=[id_col, time_col],
+            _ts_aggs=_build_ts_aggs(bid_arr, ord_arr, y_float),
         )
 
     @classmethod
@@ -453,6 +535,7 @@ class PooledState:
         else:
             series_bucket_id = np.zeros(n_series, dtype=np.int64)
 
+        y_float = y_raw.astype(float)
         return cls(
             ga=ga,
             bucket_df=bucket_df,
@@ -462,7 +545,7 @@ class PooledState:
             bucket_id=bid_arr,
             time=ts_raw,
             time_index=ord_arr,
-            y=y_raw.astype(float),
+            y=y_float,
             next_time_index_by_bucket=next_by_bucket,
             join_cols=join_cols,
             mode=mode,
@@ -473,6 +556,7 @@ class PooledState:
             _bucket_to_parent_id=bucket_to_parent,
             _parent_to_buckets=parent_to_buckets,
             _scope_key_to_parent_id=scope_key_to_parent,
+            _ts_aggs=_build_ts_aggs(bid_arr, ord_arr, y_float),
         )
 
     def update_series_bucket_id(self, context_df, _id_col: str):
@@ -502,7 +586,7 @@ class PooledState:
         )
         new_bid = context_with_bid["_bucket_id"].to_numpy().astype(np.int64)
         self.series_bucket_id = new_bid
-        # Ensure next_time_index_by_bucket has entries for new buckets
+        # Ensure next_time_index_by_bucket and _ts_aggs have entries for new buckets
         for bid in np.unique(new_bid):
             bid_int = int(bid)
             if bid_int not in self.next_time_index_by_bucket:
@@ -513,6 +597,17 @@ class PooledState:
                     )
                 else:
                     self.next_time_index_by_bucket[bid_int] = 0
+            if bid_int not in self._ts_aggs:
+                self._ts_aggs[bid_int] = _TimestampAggregates(
+                    unique_times=np.array([], dtype=np.intp),
+                    sums=np.array([], dtype=np.float64),
+                    counts=np.array([], dtype=np.intp),
+                    n_rows=np.array([], dtype=np.float64),
+                    is_balanced=True,
+                    sum_sq=np.array([], dtype=np.float64),
+                    mins=np.array([], dtype=np.float64),
+                    maxs=np.array([], dtype=np.float64),
+                )
 
     def _resolve_parent_for_bucket(self, bid: int) -> Optional[int]:
         """Find or create the parent_id for a bucket from its scope columns."""
@@ -604,6 +699,19 @@ class PooledState:
             self.bucket_id = np.concatenate([self.bucket_id, new_bid])
             self.time_index = np.concatenate([self.time_index, new_ord])
             self.next_time_index_by_bucket[0] = next_ord + 1
+            if 0 in self._ts_aggs:
+                agg = self._ts_aggs[0]
+                valid = ~np.isnan(new_y)
+                agg.unique_times = np.append(agg.unique_times, next_ord)
+                agg.sums = np.append(agg.sums, np.sum(np.where(valid, new_y, 0.0)))
+                agg.counts = np.append(agg.counts, np.sum(valid))
+                nr = float(n_series)
+                agg.n_rows = np.append(agg.n_rows, nr)
+                agg.is_balanced = agg.is_balanced and (nr == agg.n_rows[0])
+                agg.sum_sq = np.append(agg.sum_sq, np.sum(np.where(valid, new_y**2, 0.0)))
+                valid_vals = new_y[valid]
+                agg.mins = np.append(agg.mins, np.min(valid_vals) if len(valid_vals) > 0 else np.nan)
+                agg.maxs = np.append(agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan)
             new_sizes = np.array([n_series], dtype=np.int32)
             new_values = new_arr.astype(self.ga.data.dtype)
             self.ga = self.ga.append_several(
@@ -642,6 +750,24 @@ class PooledState:
                 dtype=np.int64,
             )
             self.time_index = np.concatenate([self.time_index, new_ords])
+            for bid in np.unique(sorted_bids):
+                bid_int = int(bid)
+                new_ord = self.next_time_index_by_bucket[bid_int]
+                if bid_int in self._ts_aggs:
+                    agg = self._ts_aggs[bid_int]
+                    bid_mask = sorted_bids == bid
+                    y_bid = new_arr[sort_order][bid_mask].astype(float)
+                    valid = ~np.isnan(y_bid)
+                    agg.unique_times = np.append(agg.unique_times, new_ord)
+                    agg.sums = np.append(agg.sums, np.sum(np.where(valid, y_bid, 0.0)))
+                    agg.counts = np.append(agg.counts, np.sum(valid))
+                    nr = float(len(y_bid))
+                    agg.n_rows = np.append(agg.n_rows, nr)
+                    agg.is_balanced = agg.is_balanced and (nr == agg.n_rows[0])
+                    agg.sum_sq = np.append(agg.sum_sq, np.sum(np.where(valid, y_bid**2, 0.0)))
+                    valid_vals = y_bid[valid]
+                    agg.mins = np.append(agg.mins, np.min(valid_vals) if len(valid_vals) > 0 else np.nan)
+                    agg.maxs = np.append(agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan)
             if self._parent_time_grids is not None:
                 self._advance_parent_calendars(new_ts_val)
             else:
@@ -674,6 +800,7 @@ class PooledState:
             self.bucket_id = np.concatenate([self.bucket_id, new_bid])
             self.time_index = np.concatenate([old_idx, new_idx])
             self.next_time_index_by_bucket[0] = len(unique_all)
+            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
             new_values = new_df[target_col].to_numpy().astype(ga_data_dtype)
             new_sizes = np.array([len(new_values)], dtype=np.int32)
             self.ga = self.ga.append_several(
@@ -790,6 +917,7 @@ class PooledState:
                 new_ord_arr, new_next = _compute_time_index(all_bid, all_ts)
             self.time_index = new_ord_arr
             self.next_time_index_by_bucket = new_next
+            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
             old_len = len(self.bucket_df)
             if isinstance(bucket_df, pd.DataFrame):
                 new_rows = bucket_df.copy()
@@ -805,6 +933,10 @@ class PooledState:
                 )
             cols = list(self.bucket_df.columns)
             self.bucket_df = ufp.vertical_concat([self.bucket_df, new_rows[cols]])
+            if self._idsorted_to_bucket_pos is not None:
+                self._idsorted_to_bucket_pos = _compute_idsorted_to_bucket_pos(
+                    self.bucket_df, id_col, time_col,
+                )
             if static_features is not None:
                 lookup_cols = self.key_cols or group_cols_list
                 sf_cols = set(
@@ -923,13 +1055,17 @@ def compute_pooled_features(
 ) -> Dict[str, np.ndarray]:
     if query_arrays is not None:
         bid_arr, idx_arr, y_arr = query_arrays
+        ts_aggs = _build_ts_aggs(bid_arr, idx_arr, y_arr)
     else:
         bid_arr = state.bucket_id
         idx_arr = state.time_index
         y_arr = state.y
+        ts_aggs = state._ts_aggs
     bucket_vals: Dict[str, np.ndarray] = {}
     for name, tfm in transforms.items():
-        computed = tfm._compute_bucket_feature(bid_arr, idx_arr, y_arr)
+        computed = tfm._compute_bucket_feature(
+            bid_arr, idx_arr, y_arr, _ts_aggs=ts_aggs,
+        )
         if computed is None:
             raise NotImplementedError(
                 f"Transform {type(tfm).__name__!r} does not support pooled "

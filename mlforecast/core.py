@@ -616,6 +616,12 @@ class TimeSeries:
                         static_features=self.static_features_,
                         n_series=len(ga.indptr) - 1,
                     )
+            for key, state in self._pooled_states.items():
+                if state.groups is not None:
+                    from .pooled import _compute_idsorted_to_bucket_pos
+                    state._idsorted_to_bucket_pos = _compute_idsorted_to_bucket_pos(
+                        state.bucket_df, id_col, time_col,
+                    )
         return self
 
     def _compute_transforms(
@@ -738,10 +744,41 @@ class TimeSeries:
                 df_sorted = df
             for key, tfms in pooled_tfms.items():
                 state = self._pooled_states[key]
-                bucket_vals = compute_pooled_features(state, tfms)
-                self._join_bucket_features(
-                    features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
-                )
+                fast_features: Dict[str, Any] = {}
+                slow_tfms: Dict[str, _BaseLagTransform] = {}
+                for name, tfm in tfms.items():
+                    ts_vals = tfm._compute_ts_level_from_aggs(state._ts_aggs)
+                    if ts_vals is not None:
+                        fast_features[name] = ts_vals
+                    else:
+                        slow_tfms[name] = tfm
+                if fast_features:
+                    if state.groups is None:
+                        unique_times = np.unique(state.time)
+                        time_vals = df_sorted[self.time_col].to_numpy()
+                        row_ords = np.searchsorted(unique_times, time_vals)
+                        for name, ts_vals_by_bucket in fast_features.items():
+                            features[name] = ts_vals_by_bucket[0][row_ords]
+                    elif state._idsorted_to_bucket_pos is not None:
+                        pos = state._idsorted_to_bucket_pos
+                        bid_df = state.bucket_id[pos]
+                        ord_df = state.time_index[pos]
+                        for name, ts_vals_by_bucket in fast_features.items():
+                            out = np.full(len(pos), np.nan)
+                            for bid, ts_vals in ts_vals_by_bucket.items():
+                                mask = bid_df == bid
+                                bucket_ords = ord_df[mask]
+                                agg = state._ts_aggs[bid]
+                                dense_pos = np.searchsorted(agg.unique_times, bucket_ords)
+                                out[mask] = ts_vals[dense_pos]
+                            features[name] = out
+                    else:
+                        slow_tfms.update({n: tfms[n] for n in fast_features})
+                if slow_tfms:
+                    bucket_vals = compute_pooled_features(state, slow_tfms)
+                    self._join_bucket_features(
+                        features, df_sorted, state.bucket_df, bucket_vals, state.join_cols,
+                    )
         # filter out the features that already exist in df to avoid overwriting them
         features = {k: v for k, v in features.items() if k not in df}
         if self._restore_idxs is not None:
@@ -1077,26 +1114,50 @@ class TimeSeries:
         for key, tfms in pooled_tfms.items():
             state = self._pooled_states[key]
             n_series = len(self.uids)
-            query = state.build_query_arrays(self.curr_dates, n_series)
-            bucket_vals = compute_pooled_features(state, tfms, query_arrays=query)
-            if state.groups is None:
-                for name, vals in bucket_vals.items():
-                    features[name] = np.full(n_series, vals[-1])
-            else:
-                tmp_bid = query[0]
-                n_orig = len(state.y)
-                for name, vals in bucket_vals.items():
-                    out = np.full(n_series, np.nan)
-                    new_vals = vals[n_orig:]
-                    new_bid_vals = tmp_bid[n_orig:]
-                    val_map = {}
-                    for bv, v in zip(new_bid_vals, new_vals):
-                        val_map[bv] = v
-                    for i in range(n_series):
-                        gid = state.series_bucket_id[i]
-                        if gid in val_map:
-                            out[i] = val_map[gid]
-                    features[name] = out
+            slow_tfms: Dict[str, _BaseLagTransform] = {}
+            for name, tfm in tfms.items():
+                latest = tfm._compute_latest_from_aggs(
+                    state._ts_aggs, state.next_time_index_by_bucket,
+                )
+                if latest is not None:
+                    if state.groups is None:
+                        features[name] = np.full(n_series, latest[0])
+                    else:
+                        max_bid = max(
+                            max(latest.keys(), default=-1),
+                            int(state.series_bucket_id.max()),
+                        )
+                        lookup = np.full(max_bid + 1, np.nan)
+                        for bid, val in latest.items():
+                            lookup[bid] = val
+                        features[name] = lookup[state.series_bucket_id]
+                else:
+                    slow_tfms[name] = tfm
+            if slow_tfms:
+                query = state.build_query_arrays(self.curr_dates, n_series)
+                bucket_vals = compute_pooled_features(
+                    state, slow_tfms, query_arrays=query,
+                )
+                if state.groups is None:
+                    for name, vals in bucket_vals.items():
+                        features[name] = np.full(n_series, vals[-1])
+                else:
+                    tmp_bid = query[0]
+                    n_orig = len(state.y)
+                    for name, vals in bucket_vals.items():
+                        new_vals = vals[n_orig:]
+                        new_bid_vals = tmp_bid[n_orig:]
+                        val_map = {}
+                        for bv, v in zip(new_bid_vals, new_vals):
+                            val_map[bv] = v
+                        max_bid = max(
+                            max(val_map.keys(), default=-1),
+                            int(state.series_bucket_id.max()),
+                        )
+                        lookup = np.full(max_bid + 1, np.nan)
+                        for bid, val in val_map.items():
+                            lookup[bid] = val
+                        features[name] = lookup[state.series_bucket_id]
 
         for feature in self.date_features:
             for feat_name, feat_vals in self._compute_date_feature(
