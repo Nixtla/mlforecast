@@ -888,8 +888,34 @@ def test_partition_assignment_missing_key_error(engine):
         "ds": [5],
         "other_feature": [1.0],
     })
-    with pytest.raises(ValueError, match="Partition/group key column"):
+    with pytest.raises(ValueError, match="X_df is missing future values"):
         fcst.predict(h=1, X_df=future_df)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_predict_requires_x_df(engine):
+    """predict(h) without X_df must error when partition_by is configured."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 4,
+        "ds": [1, 2, 3, 4],
+        "y": [1.0, 2.0, 3.0, 4.0],
+        "promo": [0, 1, 0, 1],
+    })
+    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        static_features=[],
+    )
+    with pytest.raises(ValueError, match="X_df is required for prediction"):
+        fcst.predict(h=1)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])

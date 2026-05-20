@@ -1531,6 +1531,15 @@ class TimeSeries:
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
+        if X_df is None:
+            required_future_cols = set(self._get_dynamic_exog_cols(self.features_order_))
+            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            if required_future_cols:
+                raise ValueError(
+                    "X_df is required for prediction because future values are needed "
+                    "for feature generation or model inputs used during training: "
+                    f"{sorted(required_future_cols)}."
+                )
         with self._maybe_subset(idxs):
             if X_df is not None:
                 if self.id_col not in X_df or self.time_col not in X_df:
@@ -1545,19 +1554,22 @@ class TimeSeries:
                 ]
                 common = [c for c in dynamics if c in statics]
                 if common:
-                    raise ValueError(
-                        f"The following features were provided through `X_df` but were considered as static during fit: {common}.\n"
-                        "Please re-run the fit step using the `static_features` argument to indicate which features are static. "
-                        "If all your features are dynamic please provide an empty list (static_features=[])."
+                    warnings.warn(
+                        "The following columns were provided through X_df but were considered "
+                        f"static during fit and will be ignored: {common}. "
+                        "If any of these columns should vary over the forecast horizon, refit "
+                        "with static_features=[] or exclude them from static_features.",
+                        UserWarning,
+                        stacklevel=2,
                     )
-                expected_exog = set(self._get_dynamic_exog_cols(self.features_order_))
-                if expected_exog:
-                    dynamics_set = set(dynamics)
-                    missing_exog = sorted(expected_exog - dynamics_set)
-                    if missing_exog:
-                        raise ValueError(
-                            f"X_df is missing the following exogenous features that were used during fit: {missing_exog}."
-                        )
+                required_future_cols = set(self._get_dynamic_exog_cols(self.features_order_))
+                required_future_cols.update(getattr(self, "_partition_cols", set()))
+                missing = sorted(required_future_cols - set(dynamics))
+                if missing:
+                    raise ValueError(
+                        "X_df is missing future values required for feature generation or "
+                        f"model inputs used during training: {missing}."
+                    )
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
                 ends = ufp.offset_times(self.last_dates, self.freq, horizon)
                 expected_rows_X = len(self.uids) * horizon
@@ -1586,7 +1598,7 @@ class TimeSeries:
                         "Features will be reused for missing horizon steps. "
                         "Use `make_future_dataframe(h)` or `get_missing_future(h, X_df)` to generate complete features."
                     )
-                drop_cols = [self.id_col, self.time_col, "_start", "_end"]
+                drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)
             if getattr(self, "max_horizon", None) is None:

@@ -1425,7 +1425,6 @@ def test_direct_forecasting_perfect_exogenous_fit_multiple_series():
 
     # Add exogenous feature X to future dataframe
     # X continues from where training left off (20, 21, 22, ...)
-    last_train_idx = df.groupby('unique_id', observed=True)['X'].transform('max')
     future_df = future_df.sort_values(['unique_id', 'ds']).reset_index(drop=True)
     future_df['X'] = future_df.groupby('unique_id', observed=True).cumcount() + 20.0
 
@@ -2139,7 +2138,7 @@ def test_cross_validation_with_validate_data():
 
     # Should produce warning when validate_data=True
     with pytest.raises(ValueError, match="missing"):
-        cv_results = fcst.cross_validation(
+        fcst.cross_validation(
             df,
             n_windows=2,
             h=5,
@@ -2154,7 +2153,7 @@ def test_cross_validation_with_validate_data():
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        cv_results2 = fcst2.cross_validation(
+        fcst2.cross_validation(
             df,
             n_windows=2,
             h=5,
@@ -2439,7 +2438,7 @@ def test_horizon_features_save_load_templates(horizon_features_data):
         future_missing = future.drop("bookings_horizon_2")
     else:
         future_missing = future.drop(columns=["bookings_horizon_2"])
-    with pytest.raises(ValueError, match="missing the following exogenous features"):
+    with pytest.raises(ValueError, match="X_df is missing future values"):
         loaded.predict(h=H, X_df=future_missing)
 
 
@@ -2485,5 +2484,5 @@ def test_predict_x_df_missing_horizon_features(horizon_features_data):
     else:
         future_missing = future.drop(columns=["bookings_horizon_2"])
 
-    with pytest.raises(ValueError, match="missing the following exogenous features"):
+    with pytest.raises(ValueError, match="X_df is missing future values"):
         fcst.predict(h=H, X_df=future_missing)
