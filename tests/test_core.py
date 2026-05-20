@@ -1694,10 +1694,8 @@ def test_omit_static_features(series):
     ts.fit_transform(
         train, id_col="unique_id", time_col="ds", target_col="y", keep_last_n=10
     )
-    with pytest.raises(Exception) as exec:
+    with pytest.warns(UserWarning, match="static during fit and will be ignored"):
         ts.predict({"y": NaiveModel()}, 1, X_df=valid.drop(columns=["y"]))
-
-    assert "['static_0', 'static_1']" in str(exec.value)
 
 
 def test_pd_vs_pl():
