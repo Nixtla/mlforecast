@@ -1,0 +1,257 @@
+---
+title: Pooled lag transforms
+---
+
+> Compute lag features across all series, or within groups of series,
+> using SQL-style RANGE semantics.
+
+Most lag transforms in `mlforecast` are computed **independently per
+series**: a rolling mean for series `A` only ever sees `A`’s own
+history. That works well when every series carries enough signal on its
+own, but it breaks down in two common situations:
+
+-   **Short-history series.** A newly launched product, store, or SKU
+    has too little history for per-series rolling statistics to
+    stabilise.
+-   **Cross-series signals.** Total demand across a brand, region, or
+    category at a given timestamp is often a stronger feature than any
+    one series’ lag.
+
+**Pooled lag transforms** address both. By passing `global_=True`
+(across all series) or `groupby=["col", ...]` (within a static-feature
+group) to any rolling, expanding, seasonal, or exponentially weighted
+transform, you ask `mlforecast` to compute the statistic over a **bucket
+of series** aggregated by timestamp. The result is a single value per
+timestamp per bucket that every series in the bucket then receives as a
+feature.
+
+## Data setup
+
+```python
+import warnings
+
+import numpy as np
+import pandas as pd
+
+from mlforecast import MLForecast
+from mlforecast.lag_transforms import (
+    ExpandingMean,
+    ExponentiallyWeightedMean,
+    RollingMean,
+)
+from mlforecast.utils import generate_daily_series
+```
+
+We’ll start from a small synthetic panel and attach a static `brand`
+column so we have something to group by.
+
+```python
+series = generate_daily_series(
+    n_series=6,
+    min_length=60,
+    max_length=60,
+    equal_ends=True,
+    static_as_categorical=False,
+    seed=0,
+)
+brand_map = {f'id_{i}': 'A' if i < 3 else 'B' for i in range(6)}
+series['brand'] = series['unique_id'].map(brand_map)
+series.head()
+```
+
+## Global features with `global_=True`
+
+Set `global_=True` on any built-in lag transform to compute the
+statistic **across all series**, aggregated by timestamp. Every series
+receives the same value at a given timestamp.
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [RollingMean(window_size=7, global_=True)],
+    },
+)
+prep = fcst.preprocess(series, static_features=['brand'])
+prep[prep['ds'] == prep['ds'].min()].head(6)
+```
+
+Notice that `global_rolling_mean_lag1_window_size7` is identical for
+every `unique_id` at a given `ds`: it’s the rolling mean of the
+**pooled** observations across all series, lagged by one day. The
+feature name is automatically prefixed with `global_` to make the
+pooling explicit.
+
+## Group features with `groupby=[...]`
+
+Use `groupby` to compute the statistic **within each level of one or
+more static features**. Series in the same group share the feature value
+at each timestamp; series in different groups get different values.
+
+Any column used in `groupby` must be declared as a static feature when
+fitting.
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [RollingMean(window_size=7, groupby=['brand'])],
+    },
+)
+prep = fcst.preprocess(series, static_features=['brand'])
+prep[prep['ds'] == prep['ds'].min()].sort_values(['brand', 'unique_id']).head(6)
+```
+
+Series within brand `A` share one rolling-mean value; series within
+brand `B` share another. The column name is prefixed with
+`groupby_brand_` to record which static feature drove the pooling.
+
+## RANGE semantics: staggered series and gaps
+
+Pooled transforms use **`RANGE BETWEEN ... PRECEDING`** semantics, the
+same model SQL window functions use. The window is defined by
+**timestamp distance**, not row position, and only **actual
+observations** are aggregated — no synthetic zeros are injected for
+series that haven’t started yet.
+
+Concretely, with `RollingMean(window_size=2, global_=True)` over the
+data below:
+
+| `unique_id` | `ds` | `y`  |
+|-------------|------|------|
+| a           | 1    | 1.0  |
+| a           | 2    | 2.0  |
+| a           | 3    | 3.0  |
+| b           | 2    | 20.0 |
+| b           | 3    | 30.0 |
+
+Series `b` starts at `ds=2`; it does **not** contribute a phantom zero
+at `ds=1`. At each timestamp the window looks back over the last two
+days of *real* values across all series, applied at lag 1.
+
+```python
+staggered = pd.DataFrame({
+    'unique_id': ['a', 'a', 'a', 'b', 'b'],
+    'ds': pd.to_datetime(['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-02', '2024-01-03']),
+    'y': [1.0, 2.0, 3.0, 20.0, 30.0],
+})
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=2, global_=True, min_samples=1)]},
+)
+fcst.preprocess(staggered, dropna=False)
+```
+
+Because pooled transforms assume a **continuous, gap-free time grid**
+within each series, you should validate your data (the default) before
+relying on these features. We come back to this in the `validate_data`
+section below.
+
+## `min_samples` in pooled mode
+
+There’s an important semantic divergence between local and pooled modes:
+
+-   **Local mode** (per series): `min_samples` is capped at
+    `window_size` by `coreforecast`. It controls how many *non-NaN
+    values in the window* the series needs.
+-   **Pooled mode** (`global_=True` or `groupby=...`): `min_samples`
+    counts the **total non-NaN observations across all series in the
+    bucket**, with no capping at `window_size`.
+
+This makes it useful as a *coverage threshold*. For example,
+`RollingMean(window_size=1, min_samples=2, groupby=['brand'])` only
+produces a value when at least two series in the brand contributed an
+observation in the window — useful to suppress noise from sparsely
+populated groups.
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={
+        1: [RollingMean(window_size=1, min_samples=2, groupby=['brand'])],
+    },
+)
+prep = fcst.preprocess(series, static_features=['brand'], dropna=False)
+prep[['unique_id', 'ds', 'brand', 'groupby_brand_rolling_mean_lag1_window_size1_min_samples2']].head(6)
+```
+
+## Disabling validation: the `validate_data=False` warning
+
+Pooled transforms are correctness-sensitive to timestamp gaps because
+they rely on the *actual* timestamps when computing RANGE windows. If
+you bypass validation (`validate_data=False`) and your data has gaps,
+the features will be silently wrong.
+
+To make this hazard explicit, `mlforecast` emits a `UserWarning` when
+you combine `validate_data=False` with any pooled transform:
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=7, global_=True)]},
+)
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    fcst.preprocess(series, static_features=['brand'], validate_data=False)
+[str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+```
+
+If you genuinely need to skip validation (e.g. on a very large
+pre-cleaned dataset), make sure your time grid is continuous and
+gap-free before doing so.
+
+## Constraints to keep in mind
+
+-   `global_=True` and `groupby=[...]` are **mutually exclusive** on the
+    same transform. Use two separate transforms if you want both feature
+    families.
+-   Columns in `groupby` must be declared in `static_features` when you
+    call `fit` / `preprocess`.
+-   `min_samples=0` in pooled mode produces NaN for timestamps with no
+    observations in the window and triggers a warning at construction
+    time — prefer `min_samples=1` if you want “as soon as there is any
+    observation”.
+-   All supported rolling, expanding, seasonal-rolling, and
+    exponentially weighted transforms accept `global_` and `groupby`.
+    `Offset` and `Combine` delegate to their wrapped transforms.
+
+## End-to-end example
+
+Pooled transforms behave like any other lag transform in the full
+`MLForecast` lifecycle: `fit`, `predict`, and `cross_validation` all
+carry the pooled features through automatically.
+
+```python
+from sklearn.linear_model import LinearRegression
+
+fcst = MLForecast(
+    models=[LinearRegression()],
+    freq='D',
+    lags=[1, 7],
+    lag_transforms={
+        1: [
+            RollingMean(window_size=7, global_=True),
+            RollingMean(window_size=7, groupby=['brand']),
+            ExpandingMean(groupby=['brand']),
+            ExponentiallyWeightedMean(alpha=0.3, global_=True),
+        ],
+    },
+)
+fcst.fit(series, static_features=['brand'])
+fcst.predict(h=7).head(6)
+```
+
+## Where to next
+
+-   The general [Lag transformations](./lag_transforms_guide.html) guide
+    covers the built-in transforms, `Combine`, `Offset`, and custom
+    numba-based transforms.
+-   The [`mlforecast.lag_transforms`](../../lag_transforms.html) API
+    reference documents every parameter, including `global_`, `groupby`,
+    and `min_samples`, for each transform class.
+

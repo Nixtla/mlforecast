@@ -141,6 +141,21 @@ np.testing.assert_allclose(
 )
 ```
 
+## Cross-series features: `global_` and `groupby`
+
+Every built-in rolling, expanding, seasonal-rolling, and exponentially
+weighted transform also accepts `global_=True` (compute across all
+series) or `groupby=["col", ...]` (compute within a static-feature
+group). This is useful when a single series has too little history to
+support per-series rolling statistics, or when cross-series aggregates
+carry more signal than any single series’ lag.
+
+These **pooled** transforms use SQL `RANGE BETWEEN ... PRECEDING`
+semantics over actual timestamps, so they handle staggered series starts
+correctly and treat `min_samples` as a coverage threshold across the
+bucket. See the [Pooled lag transforms](./pooled_lag_transforms.html)
+guide for a full walkthrough.
+
 ## numba-based transformations
 
 The [window-ops package](https://github.com/jmoralez/window_ops)
