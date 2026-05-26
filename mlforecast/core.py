@@ -1666,10 +1666,7 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        has_nonlocal = any(
-            mode != "local" for mode, _, _ in self._pooled_states
-        )
-        if has_nonlocal:
+        if self._pooled_states:
             if isinstance(df, pd.DataFrame):
                 expected_ids = pd.Index(uids).union(pd.Index(new_ids))
                 expected_count = len(expected_ids)
@@ -1677,7 +1674,7 @@ class TimeSeries:
                 bad_times = counts[counts != expected_count]
                 if not bad_times.empty:
                     raise ValueError(
-                        "Global and group lag transforms require updates to include all series for each timestamp."
+                        "Pooled lag transforms require updates to include all series for each timestamp."
                     )
             else:
                 expected_ids = pl.concat([pl.Series(uids), pl.Series(new_ids)]).unique()
@@ -1689,7 +1686,7 @@ class TimeSeries:
                 bad_times = counts.filter(pl.col("_n_ids") != expected_count)
                 if bad_times.height:
                     raise ValueError(
-                        "Global and group lag transforms require updates to include all series for each timestamp."
+                        "Pooled lag transforms require updates to include all series for each timestamp."
                     )
         if validate_new_data:   
             self._validate_new_df(df=df) 
