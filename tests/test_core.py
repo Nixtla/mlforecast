@@ -686,7 +686,7 @@ def test_global_lag_transform_requires_aligned_ends(engine):
     ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, global_=True)]})
     with pytest.raises(
         ValueError,
-        match="Global and group lag transforms require all series to end at the same timestamp",
+        match="Pooled lag transforms require all series to end at the same timestamp",
     ):
         ts.fit_transform(
             df,
@@ -720,7 +720,7 @@ def test_group_lag_transform_requires_aligned_ends(engine):
     ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["brand"])]})
     with pytest.raises(
         ValueError,
-        match="Global and group lag transforms require all series to end at the same timestamp",
+        match="Pooled lag transforms require all series to end at the same timestamp",
     ):
         ts.fit_transform(
             df,
@@ -729,6 +729,42 @@ def test_group_lag_transform_requires_aligned_ends(engine):
             target_col="y",
             dropna=False,
             static_features=["brand"],
+        )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_local_partition_lag_transform_requires_aligned_ends(engine):
+    if engine == "polars":
+        df = pl.DataFrame(
+            {
+                "unique_id": ["a", "a", "a", "b", "b", "b", "b"],
+                "ds": [1, 2, 3, 1, 2, 3, 4],
+                "y": [1, 2, 3, 10, 20, 30, 40],
+                "promo": [0, 1, 0, 1, 0, 1, 0],
+            }
+        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
+    else:
+        df = pd.DataFrame(
+            {
+                "unique_id": ["a", "a", "a", "b", "b", "b", "b"],
+                "ds": [1, 2, 3, 1, 2, 3, 4],
+                "y": [1, 2, 3, 10, 20, 30, 40],
+                "promo": [0, 1, 0, 1, 0, 1, 0],
+            }
+        )
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["promo"])]}
+    )
+    with pytest.raises(
+        ValueError,
+        match="Pooled lag transforms require all series to end at the same timestamp",
+    ):
+        ts.fit_transform(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            dropna=False,
         )
 
 

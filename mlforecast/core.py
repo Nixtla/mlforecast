@@ -330,12 +330,8 @@ class TimeSeries:
             state.ga.apply_transforms(transforms=tfms, updates_only=False)
 
     def _check_aligned_ends(self) -> None:
-        """Check that all series end at the same timestamp when using nonlocal pooled transforms."""
-        pooled_tfms = self._get_pooled_tfms()
-        has_nonlocal = any(
-            mode != "local" for mode, _, _ in pooled_tfms
-        )
-        if not has_nonlocal:
+        """Check that all series end at the same timestamp when using pooled lag transforms."""
+        if not self._get_pooled_tfms():
             return
         if isinstance(self.last_dates, pd.Index):
             aligned = self.last_dates.nunique() == 1
@@ -343,7 +339,7 @@ class TimeSeries:
             aligned = self.last_dates.n_unique() == 1
         if not aligned:
             raise ValueError(
-                "Global and group lag transforms require all series to end at the same timestamp."
+                "Pooled lag transforms require all series to end at the same timestamp."
             )
 
     @property
