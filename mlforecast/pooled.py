@@ -3,10 +3,9 @@ __all__ = ["PooledState", "compute_pooled_features"]
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import narwhals as nw
 import numpy as np
-import pandas as pd
 import utilsforecast.processing as ufp
-from utilsforecast.compat import pl
 
 from .grouped_array import GroupedArray
 from .lag_transforms import _BaseLagTransform
@@ -18,36 +17,32 @@ def _dedupe_preserve_order(items):
 
 def add_bucket_id(data, cols):
     cols = list(cols)
-    if isinstance(data, pd.DataFrame):
-        groups = data[cols].drop_duplicates().reset_index(drop=True)
-        groups["_bucket_id"] = np.arange(len(groups), dtype=np.int64)
-        merged = data.merge(groups, on=cols, how="left")
-    else:
-        groups = data.select(cols).unique(maintain_order=True)
-        groups = groups.with_row_index(name="_bucket_id")
-        merged = data.join(groups, on=cols, how="left")
-    return ufp.drop_index_if_pandas(merged), ufp.drop_index_if_pandas(groups)
+    data_nw = nw.from_native(data)
+    groups_nw = data_nw.select(cols).unique(maintain_order=True)
+    groups_nw = groups_nw.with_row_index(name="_bucket_id").with_columns(
+        nw.col("_bucket_id").cast(nw.Int64)
+    )
+    merged_nw = data_nw.join(groups_nw, on=cols, how="left")
+    return (
+        ufp.drop_index_if_pandas(nw.to_native(merged_nw)),
+        ufp.drop_index_if_pandas(nw.to_native(groups_nw)),
+    )
 
 
 def lookup_bucket_ids(data, groups, cols):
     cols = list(cols)
-    if isinstance(data, pd.DataFrame):
-        data_slice = data[cols].copy()
-        groups_copy = groups.copy()
-        for col in cols:
-            s1, s2 = ufp.match_if_categorical(data_slice[col], groups_copy[col])
-            data_slice[col] = s1
-            groups_copy[col] = s2
-        joined = data_slice.merge(groups_copy, on=cols, how="left")
-        return joined["_bucket_id"].to_numpy()
-    data_slice = data.select(cols)
-    groups_copy = groups
+    data_nw = nw.from_native(data)
+    groups_nw = nw.from_native(groups)
+    data_slice = data_nw.select(cols)
     for col in cols:
-        s1, s2 = ufp.match_if_categorical(data_slice[col], groups_copy[col])
-        data_slice = data_slice.with_columns(s1)
-        groups_copy = groups_copy.with_columns(s2)
-    joined = data_slice.join(groups_copy, on=cols, how="left")
-    return joined["_bucket_id"].to_numpy()
+        s1, s2 = ufp.match_if_categorical(
+            nw.to_native(data_slice.get_column(col)),
+            nw.to_native(groups_nw.get_column(col)),
+        )
+        data_slice = data_slice.with_columns(nw.from_native(s1, series_only=True))
+        groups_nw = groups_nw.with_columns(nw.from_native(s2, series_only=True))
+    joined = data_slice.join(groups_nw, on=cols, how="left")
+    return joined.get_column("_bucket_id").to_numpy()
 
 
 @dataclass
@@ -113,7 +108,7 @@ def _compute_time_index(bid_arr, ts_arr):
     the bucket's sorted unique timestamps. Because the input grid is validated
     as regular (no gaps within a series), this is equivalent to SQL RANGE
     interval semantics. Series that start later simply have no rows at earlier
-    periods -- no synthetic zeros are injected.
+    periods — no synthetic zeros are injected.
     """
     idx_arr = np.empty(len(ts_arr), dtype=np.int64)
     next_by_bucket = {}
@@ -163,21 +158,15 @@ def _compute_time_index_from_parent(bid_arr, ts_arr, parent_grids):
 
 
 def _compute_idsorted_to_bucket_pos(bucket_df, id_col, time_col):
-    if isinstance(bucket_df, pd.DataFrame):
-        n = len(bucket_df)
-        _pos_col = "_idsorted_tmp_pos"
-        tmp = bucket_df[[id_col, time_col]].copy()
-        tmp[_pos_col] = np.arange(n)
-        idsorted = ufp.sort(tmp, by=[id_col, time_col])
-        return idsorted[_pos_col].to_numpy()
-    else:
-        n = bucket_df.height
-        _pos_col = "_idsorted_tmp_pos"
-        tmp = bucket_df.select([id_col, time_col]).with_columns(
-            pl.Series(name=_pos_col, values=np.arange(n))
-        )
-        idsorted = ufp.sort(tmp, by=[id_col, time_col])
-        return idsorted[_pos_col].to_numpy()
+    _pos_col = "_idsorted_tmp_pos"
+    df_nw = nw.from_native(bucket_df)
+    df_nw = (
+        df_nw.select([id_col, time_col])
+        .with_row_index(name=_pos_col)
+        .with_columns(nw.col(_pos_col).cast(nw.Int64))
+    )
+    idsorted = ufp.sort(nw.to_native(df_nw), by=[id_col, time_col])
+    return idsorted[_pos_col].to_numpy()
 
 
 @dataclass
@@ -219,8 +208,7 @@ class PooledState:
     y: np.ndarray
     next_time_index_by_bucket: Dict[int, int]
     join_cols: List[str]
-    # partition_by fields (defaults for backward compat with global/groupby)
-    mode: str = "nonlocal"  # "local" or "nonlocal"
+    mode: str = "nonlocal"
     partition_cols: Optional[List[str]] = None
     key_cols: Optional[List[str]] = None
     parent_scope_cols: Optional[List[str]] = None
@@ -228,19 +216,15 @@ class PooledState:
     _bucket_to_parent_id: Optional[Dict[int, int]] = None
     _parent_to_buckets: Optional[Dict[int, List[int]]] = None
     _scope_key_to_parent_id: Optional[Dict[tuple, int]] = None
-    # aggregate cache and fast-path fields
     _ts_aggs: Dict[int, _TimestampAggregates] = field(default_factory=dict)
     _idsorted_to_bucket_pos: Optional[np.ndarray] = None
 
     @property
     def group_uids(self):
         if self.groups is None:
-            if isinstance(self.bucket_df, pd.DataFrame):
-                return pd.Index([0], name="_bucket_id")
-            return pl.Series("_bucket_id", [0])
-        if isinstance(self.groups, pd.DataFrame):
-            return pd.Index(sorted(self.groups["_bucket_id"].unique()), name="_bucket_id")
-        return self.groups["_bucket_id"].sort()
+            ns = nw.get_native_namespace(self.bucket_df)
+            return nw.to_native(nw.new_series("_bucket_id", [0], dtype=nw.Int64, backend=ns))
+        return nw.to_native(nw.from_native(self.groups).get_column("_bucket_id").sort())
 
     @classmethod
     def from_global(
@@ -258,20 +242,17 @@ class PooledState:
         global_df = ufp.drop_index_if_pandas(global_df)
         ts_raw = global_df[time_col].to_numpy()
         y_raw = global_df[target_col].to_numpy().astype(ga_data_dtype)
-        if isinstance(global_df, pd.DataFrame):
-            global_df = global_df.copy()
-            global_df["_bucket_pos"] = np.arange(len(global_df), dtype=np.int64)
-            process_df = global_df[["_bucket_pos", target_col]].copy()
-            process_df.insert(0, "_bucket_id", 0)
-        else:
-            global_df = global_df.with_row_index(name="_bucket_pos")
-            process_df = global_df.select(
-                [
-                    pl.lit(0).alias("_bucket_id").cast(pl.Int64),
-                    "_bucket_pos",
-                    target_col,
-                ]
-            )
+        global_df_nw = nw.from_native(global_df)
+        global_df_nw = global_df_nw.with_row_index(name="_bucket_pos").with_columns(
+            nw.col("_bucket_pos").cast(nw.Int64)
+        )
+        process_df_nw = global_df_nw.select([
+            nw.lit(0).cast(nw.Int64).alias("_bucket_id"),
+            "_bucket_pos",
+            target_col,
+        ])
+        global_df = nw.to_native(global_df_nw)
+        process_df = nw.to_native(process_df_nw)
         processed = ufp.process_df(
             process_df,
             id_col="_bucket_id",
@@ -319,21 +300,24 @@ class PooledState:
         ts_raw = bucket_df[time_col].to_numpy()
         y_raw = bucket_df[target_col].to_numpy().astype(ga_data_dtype)
         bid_raw = bucket_df["_bucket_id"].to_numpy()
-        if isinstance(bucket_df, pd.DataFrame):
-            bucket_df = bucket_df.copy()
-            bucket_df["_bucket_pos"] = (
-                bucket_df.groupby("_bucket_id", sort=False)
-                .cumcount()
-                .astype(np.int64)
+        bucket_df_nw = nw.from_native(bucket_df)
+        bucket_df_nw = bucket_df_nw.with_columns(
+            (nw.col("_bucket_id").cum_count() - 1).cast(nw.Int64).alias("_global_idx")
+        )
+        group_starts = bucket_df_nw.group_by("_bucket_id").agg(
+            nw.col("_global_idx").min().alias("_group_start")
+        )
+        bucket_df_nw = (
+            bucket_df_nw
+            .join(group_starts, on="_bucket_id", how="left")
+            .with_columns(
+                (nw.col("_global_idx") - nw.col("_group_start")).cast(nw.Int64).alias("_bucket_pos")
             )
-            process_df = bucket_df[["_bucket_id", "_bucket_pos", target_col]]
-        else:
-            bucket_df = bucket_df.with_columns(
-                pl.int_range(pl.len()).over("_bucket_id").alias("_bucket_pos")
-            )
-            process_df = bucket_df.select(
-                ["_bucket_id", "_bucket_pos", target_col]
-            )
+            .drop(["_global_idx", "_group_start"])
+        )
+        process_df_nw = bucket_df_nw.select(["_bucket_id", "_bucket_pos", target_col])
+        bucket_df = nw.to_native(bucket_df_nw)
+        process_df = nw.to_native(process_df_nw)
         processed = ufp.process_df(
             process_df,
             id_col="_bucket_id",
@@ -422,21 +406,24 @@ class PooledState:
         y_raw = bucket_df[target_col].to_numpy().astype(ga_data_dtype)
         bid_raw = bucket_df["_bucket_id"].to_numpy()
 
-        if isinstance(bucket_df, pd.DataFrame):
-            bucket_df = bucket_df.copy()
-            bucket_df["_bucket_pos"] = (
-                bucket_df.groupby("_bucket_id", sort=False)
-                .cumcount()
-                .astype(np.int64)
+        bucket_df_nw = nw.from_native(bucket_df)
+        bucket_df_nw = bucket_df_nw.with_columns(
+            (nw.col("_bucket_id").cum_count() - 1).cast(nw.Int64).alias("_global_idx")
+        )
+        group_starts = bucket_df_nw.group_by("_bucket_id").agg(
+            nw.col("_global_idx").min().alias("_group_start")
+        )
+        bucket_df_nw = (
+            bucket_df_nw
+            .join(group_starts, on="_bucket_id", how="left")
+            .with_columns(
+                (nw.col("_global_idx") - nw.col("_group_start")).cast(nw.Int64).alias("_bucket_pos")
             )
-            process_df = bucket_df[["_bucket_id", "_bucket_pos", target_col]]
-        else:
-            bucket_df = bucket_df.with_columns(
-                pl.int_range(pl.len()).over("_bucket_id").alias("_bucket_pos")
-            )
-            process_df = bucket_df.select(
-                ["_bucket_id", "_bucket_pos", target_col]
-            )
+            .drop(["_global_idx", "_group_start"])
+        )
+        process_df_nw = bucket_df_nw.select(["_bucket_id", "_bucket_pos", target_col])
+        bucket_df = nw.to_native(bucket_df_nw)
+        process_df = nw.to_native(process_df_nw)
 
         processed = ufp.process_df(
             process_df,
@@ -453,10 +440,6 @@ class PooledState:
         ga = GroupedArray(processed.data[:, 0], processed.indptr)
         bid_arr = bid_raw.astype(np.int64)
 
-        # Determine parent scope for ordinal computation.
-        # local: parent = individual series (id_col)
-        # nonlocal + groupby: parent = groupby columns
-        # nonlocal + global: parent = entire dataset (None)
         if mode == "local":
             parent_scope_cols = [id_col]
         elif group_cols_list:
@@ -464,36 +447,30 @@ class PooledState:
         else:
             parent_scope_cols = None
 
-        # Build parent time grids keyed by parent_id (not bucket_id).
-        # Multiple sibling buckets under the same parent share one grid.
         parent_id_map: Dict[tuple, int] = {}
         bucket_to_parent: Dict[int, int] = {}
         parent_grids: Dict[int, np.ndarray] = {}
         next_pid = 0
 
         if parent_scope_cols is not None:
+            groups_nw = nw.from_native(groups)
+            sorted_nw = nw.from_native(sorted_df)
             for bid in np.unique(bid_arr):
-                if isinstance(groups, pd.DataFrame):
-                    row = groups[groups["_bucket_id"] == bid].iloc[0]
-                    scope_key = tuple(row[c] for c in parent_scope_cols)
-                else:
-                    row = groups.filter(pl.col("_bucket_id") == bid).row(0, named=True)
-                    scope_key = tuple(row[c] for c in parent_scope_cols)
+                row_nw = groups_nw.filter(nw.col("_bucket_id") == int(bid))
+                scope_key = row_nw.select(parent_scope_cols).row(0)
 
                 if scope_key not in parent_id_map:
                     pid = next_pid
                     next_pid += 1
                     parent_id_map[scope_key] = pid
-                    if isinstance(sorted_df, pd.DataFrame):
-                        mask = np.ones(len(sorted_df), dtype=bool)
-                        for c, v in zip(parent_scope_cols, scope_key):
-                            mask &= sorted_df[c].values == v
-                        parent_ts = np.sort(np.unique(sorted_df[time_col].to_numpy()[mask]))
-                    else:
-                        expr = pl.lit(True)
-                        for c, v in zip(parent_scope_cols, scope_key):
-                            expr = expr & (pl.col(c) == v)
-                        parent_ts = np.sort(sorted_df.filter(expr)[time_col].unique().to_numpy())
+                    exprs = [nw.col(c) == v for c, v in zip(parent_scope_cols, scope_key)]
+                    combined = exprs[0]
+                    for e in exprs[1:]:
+                        combined = combined & e
+                    filtered = sorted_nw.filter(combined)
+                    parent_ts = np.sort(
+                        filtered.get_column(time_col).unique().to_numpy()
+                    )
                     parent_grids[pid] = parent_ts
 
                 bucket_to_parent[int(bid)] = parent_id_map[scope_key]
@@ -521,12 +498,7 @@ class PooledState:
             bid_arr, ts_raw, per_bucket_grids
         )
 
-        # series_bucket_id: initial assignment from static features if possible
-        sf_cols = set(
-            static_features.columns
-            if isinstance(static_features, pd.DataFrame)
-            else static_features.columns
-        )
+        sf_cols = set(static_features.columns)
         can_lookup = all(c in sf_cols for c in key_cols)
         if can_lookup:
             series_bucket_id = lookup_bucket_ids(
@@ -578,15 +550,12 @@ class PooledState:
         if self.key_cols is None:
             return
         key_cols = self.key_cols
-        # Attach bucket IDs from the existing groups mapping
         context_with_bid = _attach_bucket_id(context_df, self.groups, key_cols)
-        # Extend groups for any new key combinations
         context_with_bid, self.groups = _extend_groups(
             context_with_bid, self.groups, key_cols
         )
         new_bid = context_with_bid["_bucket_id"].to_numpy().astype(np.int64)
         self.series_bucket_id = new_bid
-        # Ensure next_time_index_by_bucket and _ts_aggs have entries for new buckets
         for bid in np.unique(new_bid):
             bid_int = int(bid)
             if bid_int not in self.next_time_index_by_bucket:
@@ -625,18 +594,11 @@ class PooledState:
         if self.parent_scope_cols is None:
             scope_key = ()
         else:
-            if isinstance(self.groups, pd.DataFrame):
-                row = self.groups[self.groups["_bucket_id"] == bid]
-                if len(row) == 0:
-                    return None
-                row = row.iloc[0]
-                scope_key = tuple(row[c] for c in self.parent_scope_cols)
-            else:
-                row = self.groups.filter(pl.col("_bucket_id") == bid)
-                if len(row) == 0:
-                    return None
-                row = row.row(0, named=True)
-                scope_key = tuple(row[c] for c in self.parent_scope_cols)
+            groups_nw = nw.from_native(self.groups)
+            row_nw = groups_nw.filter(nw.col("_bucket_id") == bid)
+            if len(row_nw) == 0:
+                return None
+            scope_key = row_nw.select(self.parent_scope_cols).row(0)
 
         if scope_key in self._scope_key_to_parent_id:
             pid = self._scope_key_to_parent_id[scope_key]
@@ -644,7 +606,6 @@ class PooledState:
             self._parent_to_buckets[pid].append(bid)
             return pid
 
-        # New parent scope — create a new parent with empty grid
         pid = max(self._parent_time_grids.keys()) + 1 if self._parent_time_grids else 0
         dtype = (
             next(iter(self._parent_time_grids.values())).dtype
@@ -664,13 +625,6 @@ class PooledState:
         calendar grows by that timestamp and ALL sibling buckets under
         each parent update their ``next_time_index_by_bucket`` to the
         new parent grid length.
-
-        This assumes all series predict at the same timestamp per step.
-        For nonlocal transforms this is enforced by ``_check_aligned_ends()``
-        at fit/predict time and by timestamp validation in ``update()``.
-        For local partition transforms with staggered series this is
-        structurally guaranteed by ``_update_features()`` advancing all
-        series by the same freq step.
         """
         if self._parent_time_grids is None or self._parent_to_buckets is None:
             return
@@ -723,14 +677,8 @@ class PooledState:
             sort_order = np.argsort(self.series_bucket_id, kind="stable")
             sorted_bids = self.series_bucket_id[sort_order]
             new_values = new_arr[sort_order].astype(self.ga.data.dtype, copy=False)
-            # _extend_groups appends new bucket IDs contiguously starting
-            # from the previous group count, so IDs >= ga_n_groups are new.
             ga_n_groups = len(self.ga.indptr) - 1
-            n_groups = len(
-                self.groups["_bucket_id"].unique()
-                if isinstance(self.groups, pd.DataFrame)
-                else self.groups["_bucket_id"]
-            )
+            n_groups = len(nw.from_native(self.groups))
             new_sizes = np.zeros(n_groups, dtype=np.int32)
             np.add.at(new_sizes, self.series_bucket_id[sort_order], 1)
             new_groups_mask = np.arange(n_groups) >= ga_n_groups
@@ -809,18 +757,11 @@ class PooledState:
                 new_groups=np.array([False]),
             )
             old_len = len(self.bucket_df)
-            if isinstance(new_df, pd.DataFrame):
-                new_rows = new_df.copy()
-                new_rows["_bucket_pos"] = np.arange(
-                    old_len, old_len + len(new_df), dtype=np.int64
-                )
-            else:
-                pos_dtype = self.bucket_df["_bucket_pos"].dtype
-                new_rows = new_df.with_columns(
-                    pl.int_range(old_len, old_len + len(new_df))
-                    .cast(pos_dtype)
-                    .alias("_bucket_pos")
-                )
+            new_df_nw = nw.from_native(new_df)
+            new_rows_nw = new_df_nw.with_row_index(name="_bucket_pos").with_columns(
+                (nw.col("_bucket_pos") + old_len).cast(nw.Int64).alias("_bucket_pos")
+            )
+            new_rows = nw.to_native(new_rows_nw)
             cols = list(self.bucket_df.columns)
             self.bucket_df = ufp.vertical_concat([self.bucket_df, new_rows[cols]])
         else:
@@ -843,8 +784,6 @@ class PooledState:
             self.groups = groups
             id_counts = ufp.counts_by_id(bucket_df, "_bucket_id")
             uids = old_uids
-            if isinstance(uids, pd.Index):
-                uids = pd.Series(uids)
             uids, new_ids = ufp.match_if_categorical(
                 uids, bucket_df["_bucket_id"]
             )
@@ -882,12 +821,10 @@ class PooledState:
                 and self._bucket_to_parent_id is not None
                 and self._parent_to_buckets is not None
             ):
-                # Register any new buckets from _extend_groups
                 for bid in np.unique(new_bid):
                     bid_int = int(bid)
                     if bid_int not in self._bucket_to_parent_id:
                         self._resolve_parent_for_bucket(bid_int)
-                # Update parent grids per-parent (not per-bucket)
                 affected_parents: set[int] = set()
                 for bid in np.unique(new_bid):
                     pid = self._bucket_to_parent_id.get(int(bid))
@@ -919,18 +856,11 @@ class PooledState:
             self.next_time_index_by_bucket = new_next
             self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
             old_len = len(self.bucket_df)
-            if isinstance(bucket_df, pd.DataFrame):
-                new_rows = bucket_df.copy()
-                new_rows["_bucket_pos"] = np.arange(
-                    old_len, old_len + len(bucket_df), dtype=np.int64
-                )
-            else:
-                pos_dtype = self.bucket_df["_bucket_pos"].dtype
-                new_rows = bucket_df.with_columns(
-                    pl.int_range(old_len, old_len + len(bucket_df))
-                    .cast(pos_dtype)
-                    .alias("_bucket_pos")
-                )
+            bucket_df_nw = nw.from_native(bucket_df)
+            new_rows_nw = bucket_df_nw.with_row_index(name="_bucket_pos").with_columns(
+                (nw.col("_bucket_pos") + old_len).cast(nw.Int64).alias("_bucket_pos")
+            )
+            new_rows = nw.to_native(new_rows_nw)
             cols = list(self.bucket_df.columns)
             self.bucket_df = ufp.vertical_concat([self.bucket_df, new_rows[cols]])
             if self._idsorted_to_bucket_pos is not None:
@@ -939,11 +869,7 @@ class PooledState:
                 )
             if static_features is not None:
                 lookup_cols = self.key_cols or group_cols_list
-                sf_cols = set(
-                    static_features.columns
-                    if isinstance(static_features, pd.DataFrame)
-                    else static_features.columns
-                )
+                sf_cols = set(static_features.columns)
                 if all(c in sf_cols for c in lookup_cols):
                     self.series_bucket_id = lookup_bucket_ids(
                         static_features, groups, lookup_cols
@@ -982,69 +908,53 @@ class PooledState:
 
 
 def _attach_bucket_id(bucket_df, groups, group_cols_list):
-    if isinstance(bucket_df, pd.DataFrame):
-        bucket_df = bucket_df.copy()
-        groups = groups.copy()
-        for col in group_cols_list:
-            s1, s2 = ufp.match_if_categorical(bucket_df[col], groups[col])
-            bucket_df[col] = s1
-            groups[col] = s2
-        return bucket_df.merge(groups, on=group_cols_list, how="left")
+    bucket_df_nw = nw.from_native(bucket_df)
+    groups_nw = nw.from_native(groups)
     for col in group_cols_list:
-        s1, s2 = ufp.match_if_categorical(bucket_df[col], groups[col])
-        bucket_df = bucket_df.with_columns(s1)
-        groups = groups.with_columns(s2)
-    return bucket_df.join(groups, on=group_cols_list, how="left")
+        s1, s2 = ufp.match_if_categorical(
+            nw.to_native(bucket_df_nw.get_column(col)),
+            nw.to_native(groups_nw.get_column(col)),
+        )
+        bucket_df_nw = bucket_df_nw.with_columns(nw.from_native(s1, series_only=True))
+        groups_nw = groups_nw.with_columns(nw.from_native(s2, series_only=True))
+    return nw.to_native(bucket_df_nw.join(groups_nw, on=group_cols_list, how="left"))
 
 
-def _reconcile_cats(df1, df2, cols):
-    if isinstance(df1, pd.DataFrame):
-        df1 = df1.copy()
-        df2 = df2.copy()
-        for col in cols:
-            s1, s2 = ufp.match_if_categorical(df1[col], df2[col])
-            df1[col] = s1
-            df2[col] = s2
-    else:
-        for col in cols:
-            s1, s2 = ufp.match_if_categorical(df1[col], df2[col])
-            df1 = df1.with_columns(s1)
-            df2 = df2.with_columns(s2)
-    return df1, df2
+def _reconcile_cats(df1_nw, df2_nw, cols):
+    for col in cols:
+        s1, s2 = ufp.match_if_categorical(
+            df1_nw.get_column(col).to_native(),
+            df2_nw.get_column(col).to_native(),
+        )
+        df1_nw = df1_nw.with_columns(nw.from_native(s1, series_only=True))
+        df2_nw = df2_nw.with_columns(nw.from_native(s2, series_only=True))
+    return df1_nw, df2_nw
 
 
 def _extend_groups(bucket_df, groups, group_cols_list):
-    if isinstance(bucket_df, pd.DataFrame):
-        missing = bucket_df["_bucket_id"].isna()
-        if missing.any():
-            new_groups = (
-                bucket_df.loc[missing, group_cols_list].drop_duplicates()
-            )
-            new_groups = new_groups.reset_index(drop=True)
-            start = len(groups)
-            new_groups["_bucket_id"] = np.arange(
-                start, start + len(new_groups), dtype=np.int64
-            )
-            groups = ufp.vertical_concat([groups, new_groups])
-            tmp = bucket_df.drop(columns="_bucket_id")
-            tmp, groups_r = _reconcile_cats(tmp, groups, group_cols_list)
-            bucket_df = tmp.merge(groups_r, on=group_cols_list, how="left")
-    else:
-        missing = bucket_df["_bucket_id"].is_null()
-        if missing.any():
-            new_groups = (
-                bucket_df.filter(missing)
-                .select(group_cols_list)
-                .unique(maintain_order=True)
-            )
-            start = groups.height
-            new_groups = new_groups.with_row_index(
-                name="_bucket_id", offset=start
-            )
-            groups = ufp.vertical_concat([groups, new_groups])
-            tmp = bucket_df.drop("_bucket_id")
-            tmp, groups_r = _reconcile_cats(tmp, groups, group_cols_list)
-            bucket_df = tmp.join(groups_r, on=group_cols_list, how="left")
+    bucket_df_nw = nw.from_native(bucket_df)
+    groups_nw = nw.from_native(groups)
+    missing = bucket_df_nw.get_column("_bucket_id").is_null()
+    if missing.any():
+        new_groups_nw = (
+            bucket_df_nw.filter(missing)
+            .select(group_cols_list)
+            .unique(maintain_order=True)
+        )
+        start = len(groups_nw)
+        new_groups_nw = new_groups_nw.with_row_index(name="_bucket_id").with_columns(
+            (nw.col("_bucket_id") + start).cast(nw.Int64).alias("_bucket_id")
+        )
+        groups = ufp.vertical_concat([
+            nw.to_native(groups_nw),
+            nw.to_native(new_groups_nw),
+        ])
+        tmp_nw, groups_r_nw = _reconcile_cats(
+            bucket_df_nw.drop("_bucket_id"),
+            nw.from_native(groups),
+            group_cols_list,
+        )
+        bucket_df = nw.to_native(tmp_nw.join(groups_r_nw, on=group_cols_list, how="left"))
     return bucket_df, groups
 
 
