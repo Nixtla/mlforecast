@@ -223,8 +223,12 @@ class _RollingBase(_BaseLagTransform):
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
-                Each unique combination of partition values creates a separate bucket
-                within the global/groupby scope. Defaults to None.
+                Each unique combination of partition values creates a separate bucket.
+                Unlike ``groupby``, partition columns may vary over time and must be
+                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                aggregates within each partition), ``groupby`` (group aggregates within each
+                partition), or stands alone (per-(id, partition) buckets, *local* mode).
+                See the Pooled lag transforms guide for details. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -730,8 +734,12 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
-                Each unique combination of partition values creates a separate bucket
-                within the global/groupby scope. Defaults to None.
+                Each unique combination of partition values creates a separate bucket.
+                Unlike ``groupby``, partition columns may vary over time and must be
+                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                aggregates within each partition), ``groupby`` (group aggregates within each
+                partition), or stands alone (per-(id, partition) buckets, *local* mode).
+                See the Pooled lag transforms guide for details. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -856,8 +864,12 @@ class _ExpandingBase(_BaseLagTransform):
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
-            Each unique combination of partition values creates a separate bucket
-            within the global/groupby scope. Defaults to None.
+            Each unique combination of partition values creates a separate bucket.
+            Unlike ``groupby``, partition columns may vary over time and must be
+            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            aggregates within each partition), ``groupby`` (group aggregates within each
+            partition), or stands alone (per-(id, partition) buckets, *local* mode).
+            See the Pooled lag transforms guide for details. Defaults to None.
     """
 
     def __init__(
@@ -1229,8 +1241,12 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
-            Each unique combination of partition values creates a separate bucket
-            within the global/groupby scope. Defaults to None.
+            Each unique combination of partition values creates a separate bucket.
+            Unlike ``groupby``, partition columns may vary over time and must be
+            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            aggregates within each partition), ``groupby`` (group aggregates within each
+            partition), or stands alone (per-(id, partition) buckets, *local* mode).
+            See the Pooled lag transforms guide for details. Defaults to None.
     """
 
     def __init__(
