@@ -556,10 +556,11 @@ class PooledState:
         )
         new_bid = context_with_bid["_bucket_id"].to_numpy().astype(np.int64)
         self.series_bucket_id = new_bid
+        groups_nw = nw.from_native(self.groups)
         for bid in np.unique(new_bid):
             bid_int = int(bid)
             if bid_int not in self.next_time_index_by_bucket:
-                pid = self._resolve_parent_for_bucket(bid_int)
+                pid = self._resolve_parent_for_bucket(bid_int, groups_nw=groups_nw)
                 if pid is not None and self._parent_time_grids is not None:
                     self.next_time_index_by_bucket[bid_int] = len(
                         self._parent_time_grids[pid]
@@ -578,8 +579,13 @@ class PooledState:
                     maxs=np.array([], dtype=np.float64),
                 )
 
-    def _resolve_parent_for_bucket(self, bid: int) -> Optional[int]:
-        """Find or create the parent_id for a bucket from its scope columns."""
+    def _resolve_parent_for_bucket(self, bid: int, groups_nw=None) -> Optional[int]:
+        """Find or create the parent_id for a bucket from its scope columns.
+
+        ``groups_nw`` is an optional pre-wrapped Narwhals view of ``self.groups``;
+        callers that resolve many buckets in a loop pass it once to avoid
+        re-wrapping per bucket. When omitted it is wrapped internally.
+        """
         if (
             self._bucket_to_parent_id is None
             or self._parent_to_buckets is None
@@ -594,7 +600,8 @@ class PooledState:
         if self.parent_scope_cols is None:
             scope_key = ()
         else:
-            groups_nw = nw.from_native(self.groups)
+            if groups_nw is None:
+                groups_nw = nw.from_native(self.groups)
             row_nw = groups_nw.filter(nw.col("_bucket_id") == bid)
             if len(row_nw) == 0:
                 return None
@@ -678,7 +685,7 @@ class PooledState:
             sorted_bids = self.series_bucket_id[sort_order]
             new_values = new_arr[sort_order].astype(self.ga.data.dtype, copy=False)
             ga_n_groups = len(self.ga.indptr) - 1
-            n_groups = len(nw.from_native(self.groups))
+            n_groups = len(self.groups)
             new_sizes = np.zeros(n_groups, dtype=np.int32)
             np.add.at(new_sizes, self.series_bucket_id[sort_order], 1)
             new_groups_mask = np.arange(n_groups) >= ga_n_groups
@@ -821,10 +828,11 @@ class PooledState:
                 and self._bucket_to_parent_id is not None
                 and self._parent_to_buckets is not None
             ):
+                groups_nw = nw.from_native(self.groups)
                 for bid in np.unique(new_bid):
                     bid_int = int(bid)
                     if bid_int not in self._bucket_to_parent_id:
-                        self._resolve_parent_for_bucket(bid_int)
+                        self._resolve_parent_for_bucket(bid_int, groups_nw=groups_nw)
                 affected_parents: set[int] = set()
                 for bid in np.unique(new_bid):
                     pid = self._bucket_to_parent_id.get(int(bid))
