@@ -522,6 +522,68 @@ def test_partition_ordinals_have_parent_gaps(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_range_semantics_with_gaps(engine):
+    """RANGE (not ROWS) windowing on a partition bucket with timestamp gaps.
+
+    Single series, parent calendar [1,2,3,4,5]. The promo=1 bucket is observed
+    only at ts [1,3,5] -> parent ordinals [0,2,4]. With RollingMean(window_size=2)
+    at lag 1, the window at ts=5 (ordinal 4) spans parent ordinals [2,3]; only
+    ordinal 2 (ts=3) is observed, so the mean is y[ts=3]=30. ROWS semantics would
+    instead average the two preceding *observations* (ts=1 and ts=3) -> 20, which
+    is what this guards against.
+    """
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 5,
+        "ds": [1, 2, 3, 4, 5],
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+        "promo": [1, 0, 1, 0, 1],
+    })
+    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    col = tfm._get_name(1)
+    if engine == "polars":
+        out = out.to_pandas()
+    vals = out[out["promo"] == 1].sort_values("ds")[col].to_numpy()
+    # ts=1 -> empty window (NaN); ts=3 -> only ts=1 (10); ts=5 -> only ts=3 (RANGE=30, not ROWS=20)
+    np.testing.assert_array_equal(np.isnan(vals), [True, False, False])
+    np.testing.assert_allclose(vals[1:], [10.0, 30.0])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_expanding_with_parent_gaps(engine):
+    """ExpandingMean over a gapped partition bucket accumulates by parent ordinal.
+
+    Same gap setup as the RANGE test. With lag 1 the expanding mean at each
+    observation averages all bucket observations at parent ordinals strictly
+    below the current one: ts=3 -> {ts=1}=10; ts=5 -> {ts=1,ts=3}=20. The lag
+    offset is applied in parent-ordinal space, so the gap at ordinal 3 (ts=4,
+    unobserved) does not change which observations fall inside the window.
+    """
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 5,
+        "ds": [1, 2, 3, 4, 5],
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+        "promo": [1, 0, 1, 0, 1],
+    })
+    tfm = ExpandingMean(partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    col = tfm._get_name(1)
+    if engine == "polars":
+        out = out.to_pandas()
+    vals = out[out["promo"] == 1].sort_values("ds")[col].to_numpy()
+    np.testing.assert_array_equal(np.isnan(vals), [True, False, False])
+    np.testing.assert_allclose(vals[1:], [10.0, 20.0])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_by_dynamic_keys_multistep(engine):
     """Multi-step prediction with changing promo values in X_df."""
     from mlforecast.forecast import MLForecast
@@ -1512,12 +1574,20 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
 @pytest.mark.parametrize("tfm_factory", [
     lambda m: RollingMean(window_size=4, **m),
     lambda m: RollingStd(window_size=4, **m),
+    lambda m: RollingMin(window_size=4, **m),
+    lambda m: RollingMax(window_size=4, **m),
     lambda m: ExpandingMean(**m),
+    lambda m: ExpandingStd(**m),
+    lambda m: ExpandingMin(**m),
+    lambda m: ExpandingMax(**m),
     lambda m: ExponentiallyWeightedMean(alpha=0.3, **m),
-], ids=["RollingMean", "RollingStd", "ExpandingMean", "EWM"])
+], ids=[
+    "RollingMean", "RollingStd", "RollingMin", "RollingMax",
+    "ExpandingMean", "ExpandingStd", "ExpandingMin", "ExpandingMax", "EWM",
+])
 @pytest.mark.parametrize("lag", _LAGS)
 def test_fast_vs_slow_partition(tfm_factory, lag):
-    """Fast path matches slow path for partition_by (global+partition and local partition)."""
+    """Fast path matches slow path for partition_by (global+partition and groupby+partition)."""
     from mlforecast.pooled import compute_pooled_features
 
     rng = np.random.default_rng(99)
@@ -1526,7 +1596,8 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
     times = np.tile(range(n_times), n_series)
     y = rng.standard_normal(n_series * n_times)
     promo = np.tile(np.where(np.arange(n_times) % 3 == 0, "Y", "N"), n_series)
-    df = pd.DataFrame({"unique_id": ids, "ds": times, "y": y, "promo": promo})
+    grp = np.repeat(["A"] * (n_series // 2) + ["B"] * (n_series // 2), n_times)
+    df = pd.DataFrame({"unique_id": ids, "ds": times, "y": y, "promo": promo, "grp": grp})
 
     # --- global + partition_by: fit path ---
     tfm_gp = tfm_factory({"global_": True, "partition_by": ["promo"]})
@@ -1573,6 +1644,32 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
     np.testing.assert_allclose(
         fast_pre, slow_pre, atol=1e-10, equal_nan=True,
         err_msg=f"preprocess global+partition fast vs slow for {col}",
+    )
+
+    # --- groupby + partition_by: preprocess path ---
+    tfm_grp = tfm_factory({"groupby": ["grp"], "partition_by": ["promo"]})
+    ts_grp = TimeSeries(freq=1, lag_transforms={lag: [tfm_grp]})
+    col_grp = tfm_grp._get_name(lag)
+    fast_grp = ts_grp.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=["grp"],
+    )[col_grp].values
+
+    ts_grp_slow = TimeSeries(
+        freq=1,
+        lag_transforms={lag: [tfm_factory({"groupby": ["grp"], "partition_by": ["promo"]})]},
+    )
+    ts_grp_slow._fit(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        static_features=["grp"],
+    )
+    for st in ts_grp_slow._pooled_states.values():
+        st._ts_aggs = {}
+        st._idsorted_to_bucket_pos = None
+    slow_grp = ts_grp_slow._transform(df=df, dropna=False)[col_grp].values
+    np.testing.assert_allclose(
+        fast_grp, slow_grp, atol=1e-10, equal_nan=True,
+        err_msg=f"preprocess groupby+partition fast vs slow for {col_grp}",
     )
 
 
