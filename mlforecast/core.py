@@ -339,7 +339,8 @@ class TimeSeries:
             aligned = self.last_dates.n_unique() == 1
         if not aligned:
             raise ValueError(
-                "Pooled lag transforms require all series to end at the same timestamp."
+                "Pooled lag transforms require all series to end at the same timestamp "
+                "(recursive prediction advances all series in lockstep)."
             )
 
     @property
