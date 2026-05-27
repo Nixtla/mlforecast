@@ -1406,6 +1406,93 @@ def test_partition_update_sparse_then_dense(engine):
         {pid: grid.tolist() for pid, grid in ss._parent_time_grids.items()}
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_static_features_explicit_with_partition_cols(engine):
+    """Explicit static_features are honored while partition columns are excluded.
+
+    With static_features=["brand","region"] and partition_by=["promo"], the
+    fitted static set keeps brand/region but drops promo (it is dynamic and
+    re-supplied via X_df at predict), and promo never enters features_order_.
+    """
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 4 + ["b"] * 4,
+        "ds": [1, 2, 3, 4] * 2,
+        "y": [1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0],
+        "brand": ["x"] * 4 + ["y"] * 4,
+        "region": ["N"] * 4 + ["S"] * 4,
+        "promo": [0, 1, 0, 1, 1, 0, 1, 0],
+    })
+    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=["brand", "region"],
+    )
+    static_cols = set(ts.static_features_.columns)
+    assert {"brand", "region"} <= static_cols
+    assert "promo" not in static_cols
+    assert "promo" not in ts.features_order_
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_rolling_min_samples_boundary(engine):
+    """min_samples is the exact coverage threshold inside a partition bucket.
+
+    RollingMean(window_size=3, min_samples=2) at lag 1 over a single promo=1
+    bucket: at ds=2 the window holds 1 observation (< min_samples) -> NaN; at
+    ds=3 it holds exactly 2 (== min_samples) -> the mean (10+20)/2 = 15.
+    """
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 5,
+        "ds": [1, 2, 3, 4, 5],
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+        "promo": [1, 1, 1, 1, 1],
+    })
+    tfm = RollingMean(3, min_samples=2, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    col = tfm._get_name(1)
+    if engine == "polars":
+        out = out.to_pandas()
+    vals = out.sort_values("ds")[col].to_numpy()
+    # ds=1,2 below threshold -> NaN; ds=3 hits exactly min_samples -> value
+    assert np.isnan(vals[0]) and np.isnan(vals[1])
+    np.testing.assert_allclose(vals[2], 15.0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_cv_fold_independent(engine):
+    """cross_validation runs across folds with partition_by and does not leak
+    dynamic buckets between folds.
+    """
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    n_times = 12
+    df = _make_df(engine, {
+        "unique_id": ["a"] * n_times + ["b"] * n_times,
+        "ds": list(range(1, n_times + 1)) * 2,
+        "y": [float(i) for i in range(1, n_times + 1)]
+           + [float(i * 10) for i in range(1, n_times + 1)],
+        "promo": ([0, 1] * (n_times // 2)) * 2,
+    })
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=5)],
+        freq=1,
+        lag_transforms={1: [RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])]},
+    )
+    cv = fcst.cross_validation(df, n_windows=2, h=2, static_features=[])
+    assert len(cv) == 2 * 2 * 2  # n_windows * h * n_series
+    pred_vals = cv["HistGradientBoostingRegressor"].to_numpy()
+    assert not np.any(np.isnan(pred_vals))
+    # no bucket bleed across folds: only promo {0, 1} ever exists
+    state = fcst.ts._pooled_states[("nonlocal", (), ("promo",))]
+    assert len(state.groups) == 2
+
+
 # === Tests ported from feature/groupby_with_range_semantics ===
 
 
