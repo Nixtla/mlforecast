@@ -1214,6 +1214,198 @@ def test_partition_backup_restore_with_dynamic_buckets(engine):
         assert len(state_after._parent_time_grids[pid]) == length
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_predict_multi_horizon_multiple_unseen(engine):
+    """h=4 prediction where X_df introduces several never-seen partition values.
+
+    Each new promo value spawns a fresh bucket on the fly; the shared global
+    parent calendar keeps every bucket aligned, so the brand-new buckets start
+    empty (NaN feature) yet predictions stay finite across all horizons.
+    """
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 5 + ["b"] * 5,
+        "ds": list(range(1, 6)) * 2,
+        "y": [float(i) for i in range(1, 6)] + [float(i * 10) for i in range(1, 6)],
+        "promo": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+    })
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    # promo values 2 and 3 are never seen during fit; alternate across 4 horizons
+    future_df = _make_df(engine, {
+        "unique_id": ["a"] * 4 + ["b"] * 4,
+        "ds": [6, 7, 8, 9] * 2,
+        "promo": [2, 3, 2, 3, 2, 3, 2, 3],
+    })
+    preds = fcst.predict(h=4, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 8
+    # step 0 hits the brand-new promo=2 bucket with no history -> NaN feature
+    assert np.all(np.isnan(captured[0]))
+    if engine == "pandas":
+        pred_vals = preds.iloc[:, -1].to_numpy()
+    else:
+        pred_vals = preds[:, -1].to_numpy()
+    assert not np.any(np.isnan(pred_vals))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_local_partition_recursive_h3_consistency(engine):
+    """Local partition recursive predict slides the rolling window correctly.
+
+    Single series, constant promo=1, RollingMean(window_size=2, lag=1). Each
+    horizon's feature must equal the mean of the two most recent values (real,
+    then predicted), so the window advances over the appended predictions
+    rather than resetting or jumping.
+    """
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 5,
+        "ds": [1, 2, 3, 4, 5],
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+        "promo": [1, 1, 1, 1, 1],
+    })
+    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    col = tfm._get_name(1)
+    feats = []
+
+    def save_features(x):
+        feats.append(float(x[col].to_numpy()[0]))
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future_df = _make_df(engine, {
+        "unique_id": ["a"] * 3,
+        "ds": [6, 7, 8],
+        "promo": [1, 1, 1],
+    })
+    preds = fcst.predict(h=3, X_df=future_df, before_predict_callback=save_features)
+    if engine == "pandas":
+        p = preds.iloc[:, -1].to_numpy()
+    else:
+        p = preds[:, -1].to_numpy()
+    # h1 uses real y[ds4],y[ds5]; h2 uses y[ds5],pred[ds6]; h3 uses pred[ds6],pred[ds7]
+    np.testing.assert_allclose(feats[0], (40.0 + 50.0) / 2)
+    np.testing.assert_allclose(feats[1], (50.0 + p[0]) / 2)
+    np.testing.assert_allclose(feats[2], (p[0] + p[1]) / 2)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_update_batch_multiple_ids_new_buckets(engine):
+    """A single update() carrying several series, each with an unseen partition
+    value, registers one new bucket per value and advances every parent calendar.
+    """
+    df = _make_df(engine, {
+        "unique_id": ["a", "a", "a", "b", "b", "b", "c", "c", "c"],
+        "ds": [1, 2, 3, 1, 2, 3, 1, 2, 3],
+        "y": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0],
+        "promo": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    })
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    key = ("nonlocal", (), ("promo",))
+    state = ts._pooled_states[key]
+    assert len(state.groups) == 1  # only promo=0 seen at fit
+
+    # one batch at ds=4: three series, three never-seen promo values
+    update_df = _make_df(engine, {
+        "unique_id": ["a", "b", "c"],
+        "ds": [4, 4, 4],
+        "y": [4.0, 40.0, 400.0],
+        "promo": [1, 2, 3],
+    })
+    ts.update(update_df)
+    state = ts._pooled_states[key]
+    assert len(state.groups) == 4  # promo {0, 1, 2, 3}
+    # parent calendar advanced to [1,2,3,4]; every sibling bucket sees length 4
+    for bid in state.next_time_index_by_bucket:
+        assert state.next_time_index_by_bucket[bid] == 4
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_update_sparse_then_dense(engine):
+    """Fit on sparse partition transitions, then apply dense per-step updates;
+    the resulting state must match a from-scratch fit on the combined data
+    (same per-bucket aggregates and parent calendars).
+    """
+    def _aggs_by_key(state):
+        groups = state.groups.to_pandas() if hasattr(state.groups, "to_pandas") else state.groups
+        out = {}
+        for bid, agg in state._ts_aggs.items():
+            bkey = tuple(groups.iloc[bid].tolist())
+            out[bkey] = (
+                agg.unique_times.tolist(),
+                np.round(agg.sums, 6).tolist(),
+                agg.counts.tolist(),
+            )
+        return out
+
+    def _build():
+        return TimeSeries(
+            freq=1,
+            lag_transforms={1: [RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])]},
+        )
+
+    base = {
+        "unique_id": ["a", "a", "a", "b", "b", "b"], "ds": [1, 2, 3, 1, 2, 3],
+        "y": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0], "promo": [0, 0, 0, 0, 0, 0],
+    }
+    dense_steps = [
+        {"ds": 4, "promo": [1, 0], "y": [4.0, 40.0]},
+        {"ds": 5, "promo": [0, 1], "y": [5.0, 50.0]},
+        {"ds": 6, "promo": [1, 1], "y": [6.0, 60.0]},
+    ]
+
+    ts_incr = _build()
+    ts_incr.fit_transform(
+        _make_df(engine, base), id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    rows = [base]
+    for step in dense_steps:
+        u = {"unique_id": ["a", "b"], "ds": [step["ds"], step["ds"]],
+             "y": step["y"], "promo": step["promo"]}
+        ts_incr.update(_make_df(engine, u))
+        rows.append(u)
+
+    combined = {k: sum((r[k] for r in rows), []) for k in base}
+    ts_scratch = _build()
+    ts_scratch.fit_transform(
+        _make_df(engine, combined), id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+
+    key = ("nonlocal", (), ("promo",))
+    si, ss = ts_incr._pooled_states[key], ts_scratch._pooled_states[key]
+    assert _aggs_by_key(si) == _aggs_by_key(ss)
+    assert {pid: grid.tolist() for pid, grid in si._parent_time_grids.items()} == \
+        {pid: grid.tolist() for pid, grid in ss._parent_time_grids.items()}
+
+
 # === Tests ported from feature/groupby_with_range_semantics ===
 
 
