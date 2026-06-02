@@ -14,6 +14,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
@@ -69,6 +70,8 @@ class MLForecast:
         num_threads: int = 1,
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
+        date_features_as_dummies: bool = False,
+        drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         """Forecasting pipeline
 
@@ -81,6 +84,8 @@ class MLForecast:
             num_threads (int): Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1.
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
+            date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
+            drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -99,6 +104,8 @@ class MLForecast:
             num_threads=num_threads,
             target_transforms=target_transforms,
             lag_transforms_namer=lag_transforms_namer,
+            date_features_as_dummies=date_features_as_dummies,
+            drop_auxiliary_columns=drop_auxiliary_columns,
         )
 
     @property
@@ -333,6 +340,21 @@ class MLForecast:
         # Run data validations if requested
         if validate_data:
             self._validate_data(df, id_col, time_col)
+        else:
+            has_pooled = any(
+                getattr(v, "global_", False) or getattr(v, "groupby", None)
+                for v in self.ts.transforms.values()
+            )
+            if has_pooled:
+                warnings.warn(
+                    "Pooled (global/groupby) lag transforms assume a continuous, "
+                    "gap-free time grid. Data validation has been disabled "
+                    "(validate_data=False), so timestamp gaps may silently "
+                    "produce incorrect feature values. Consider enabling "
+                    "validation or pre-validating your data.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         self.ts.horizon_features_ = self._resolve_horizon_features(
             df=df,
             id_col=id_col,
@@ -790,6 +812,8 @@ class MLForecast:
                 num_threads=self.ts.num_threads,
                 target_transforms=copy.deepcopy(self.ts.target_transforms),
                 lag_transforms_namer=self.ts.lag_transforms_namer,
+                date_features_as_dummies=self.ts.date_features_as_dummies,
+                drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             temp_ts._fit(
                 hist,
@@ -1238,6 +1262,8 @@ class MLForecast:
                 num_threads=self.ts.num_threads,
                 target_transforms=self.ts.target_transforms,
                 lag_transforms_namer=self.ts.lag_transforms_namer,
+                date_features_as_dummies=self.ts.date_features_as_dummies,
+                drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             new_ts._fit(
                 new_df,
@@ -1518,24 +1544,30 @@ class MLForecast:
         for i_window, (cutoffs, train, valid) in enumerate(splits):
             should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
             if should_fit:
-                self.fit(
-                    train,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    static_features=static_features,
-                    dropna=dropna,
-                    keep_last_n=keep_last_n,
-                    max_horizon=max_horizon,
-                    horizons=horizons,
-                    horizon_features=horizon_features,
-                    horizon_feature_templates=horizon_feature_templates,
-                    prediction_intervals=prediction_intervals,
-                    fitted=fitted,
-                    as_numpy=as_numpy,
-                    weight_col=weight_col,
-                    validate_data=False,
-                )
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Pooled.*validate_data",
+                        category=UserWarning,
+                    )
+                    self.fit(
+                        train,
+                        id_col=id_col,
+                        time_col=time_col,
+                        target_col=target_col,
+                        static_features=static_features,
+                        dropna=dropna,
+                        keep_last_n=keep_last_n,
+                        max_horizon=max_horizon,
+                        horizons=horizons,
+                        horizon_features=horizon_features,
+                        horizon_feature_templates=horizon_feature_templates,
+                        prediction_intervals=prediction_intervals,
+                        fitted=fitted,
+                        as_numpy=as_numpy,
+                        weight_col=weight_col,
+                        validate_data=False,
+                    )
                 cv_models.append(self.models_)
                 if fitted:
                     cv_fitted_values.append(
@@ -1546,22 +1578,28 @@ class MLForecast:
                     for tfm in self.ts.target_transforms:
                         if hasattr(tfm, "store_fitted"):
                             tfm.store_fitted = True
-                prep = self.preprocess(
-                    train,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    static_features=static_features,
-                    dropna=dropna,
-                    keep_last_n=keep_last_n,
-                    max_horizon=max_horizon,
-                    horizons=horizons,
-                    horizon_features=horizon_features,
-                    horizon_feature_templates=horizon_feature_templates,
-                    return_X_y=False,
-                    weight_col=weight_col,
-                    validate_data=False,
-                )
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Pooled.*validate_data",
+                        category=UserWarning,
+                    )
+                    prep = self.preprocess(
+                        train,
+                        id_col=id_col,
+                        time_col=time_col,
+                        target_col=target_col,
+                        static_features=static_features,
+                        dropna=dropna,
+                        keep_last_n=keep_last_n,
+                        max_horizon=max_horizon,
+                        horizons=horizons,
+                        horizon_features=horizon_features,
+                        horizon_feature_templates=horizon_feature_templates,
+                        return_X_y=False,
+                        weight_col=weight_col,
+                        validate_data=False,
+                    )
                 assert not isinstance(prep, tuple)
                 effective_max_horizon = self.ts.max_horizon
                 base = prep[[id_col, time_col]]

@@ -24,7 +24,12 @@ from mlforecast.lag_transforms import (
     RollingStd,
 )
 from mlforecast.target_transforms import Differences, LocalStandardScaler
-from mlforecast.utils import generate_daily_series, generate_prices_for_series
+from mlforecast.utils import (
+    _DUMMY_FEATURE_VALUES,
+    generate_daily_series,
+    generate_prices_for_series,
+)
+from .conftest import make_groupby_df
 
 
 @pytest.fixture
@@ -594,7 +599,7 @@ def test_global_lag_transform(engine):
         target_col="y",
         dropna=False,
     )
-    expected_by_ds = {1: np.nan, 2: np.nan, 3: 16.5, 4: 27.5}
+    expected_by_ds = {1: np.nan, 2: 5.5, 3: 8.25, 4: 13.75}
     if engine == "polars":
         expected = (
             prep["ds"].to_pandas().map(expected_by_ds).to_numpy()
@@ -611,24 +616,11 @@ def test_global_lag_transform(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_lag_transform(engine):
-    if engine == "polars":
-        df = pl.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [1, 2, 3, 4, 10, 20, 30, 40],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
-    else:
-        df = pd.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [1, 2, 3, 4, 10, 20, 30, 40],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        )
+    df = make_groupby_df(engine, [
+        ("a", [1, 2, 3, 4], "x"),
+        ("c", [5, 6, 7, 8], "x"),
+        ("b", [10, 20, 30, 40], "y"),
+    ])
     tfm = RollingMean(2, groupby=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
@@ -639,31 +631,30 @@ def test_group_lag_transform(engine):
         dropna=False,
         static_features=["brand"],
     )
+    # Brand "x" has 2 series (a, c) — tests multi-series RANGE semantics:
+    # ds=2: window [0,1] → ts=1: {1,5} → mean=3.0
+    # ds=3: window [1,2] → {1,5,2,6} → mean=3.5
+    # ds=4: window [2,3] → {2,6,3,7} → mean=4.5
+    # Brand "y" has 1 series (b):
+    # ds=3: window [1,2] → {10,20} → mean=15.0
     expected_by_key = {
         ("x", 1): np.nan,
-        ("x", 2): np.nan,
-        ("x", 3): 1.5,
-        ("x", 4): 2.5,
+        ("x", 2): 3.0,
+        ("x", 3): 3.5,
+        ("x", 4): 4.5,
         ("y", 1): np.nan,
         ("y", 2): np.nan,
         ("y", 3): 15.0,
         ("y", 4): 25.0,
     }
     if engine == "polars":
-        expected = [
+        expected = np.array([
             expected_by_key[(b, d)]
-            for b, d in zip(
-                prep["brand"].to_list(),
-                prep["ds"].to_list(),
-            )
-        ]
-        expected = np.array(expected, dtype=float)
+            for b, d in zip(prep["brand"].to_list(), prep["ds"].to_list())
+        ], dtype=float)
     else:
         expected = np.array(
-            [
-                expected_by_key[(b, d)]
-                for b, d in zip(prep["brand"], prep["ds"])
-            ],
+            [expected_by_key[(b, d)] for b, d in zip(prep["brand"], prep["ds"])],
             dtype=float,
         )
     col = tfm._get_name(1)
@@ -886,102 +877,53 @@ def test_group_update_new_group_order(engine):
         static_features=["brand"],
     )
     ts.update(update_df)
-    state = ts._group_states[("brand",)]
-    groups = state["groups"]
+    state = ts._pooled_groups[("brand",)]
+    groups = state.groups
+    full_df = ufp.vertical_concat([df, update_df])
     if engine == "polars":
-        full_df = pl.concat([df, update_df], how="vertical")
-        agg = ufp.group_by_agg(
-            full_df, ["brand", "ds"], {"y": "sum"}, maintain_order=True
-        )
-        agg = agg.join(groups, on=["brand"], how="left")
-        agg = ufp.sort(agg, by=["_group_id", "ds"])
-        expected = agg["y"].to_numpy()
+        full_df = full_df.join(groups, on=["brand"], how="left")
+        full_df = ufp.sort(full_df, by=["_bucket_id", "ds", "unique_id"])
+        expected = full_df["y"].to_numpy()
     else:
-        full_df = pd.concat([df, update_df], ignore_index=True)
-        agg = (
-            full_df.groupby(["brand", "ds"], observed=True)["y"]
-            .sum()
-            .reset_index()
-        )
-        agg = agg.merge(groups, on=["brand"], how="left")
-        agg = agg.sort_values(["_group_id", "ds"])
-        expected = agg["y"].to_numpy()
-    np.testing.assert_allclose(state["ga"].data, expected)
+        full_df = full_df.merge(groups, on=["brand"], how="left")
+        full_df = full_df.sort_values(["_bucket_id", "ds", "unique_id"])
+        expected = full_df["y"].to_numpy()
+    np.testing.assert_allclose(state.ga.data, expected)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_lag_transform_uses_transformed_target(engine):
-    if engine == "polars":
-        df = pl.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "b", "b", "b"],
-                "ds": [1, 2, 3, 1, 2, 3],
-                "y": [1, 2, 3, 10, 20, 30],
-                "brand": ["x", "x", "x", "x", "x", "x"],
-            }
-        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
-    else:
-        df = pd.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "b", "b", "b"],
-                "ds": [1, 2, 3, 1, 2, 3],
-                "y": [1, 2, 3, 10, 20, 30],
-                "brand": ["x", "x", "x", "x", "x", "x"],
-            }
-        )
+    df = make_groupby_df(engine, [
+        ("a", [1, 2, 3], "x"),
+        ("b", [10, 20, 30], "x"),
+    ])
     tfm = RollingMean(1, groupby=["brand"])
     ts = TimeSeries(
         freq=1,
         lag_transforms={1: [tfm]},
         target_transforms=[Differences([1])],
     )
-    ts._fit(
+    prep = ts.fit_transform(
         df,
         id_col="unique_id",
         time_col="ds",
         target_col="y",
         static_features=["brand"],
+        dropna=False,
     )
-    assert ts._sort_idxs is None
-    if engine == "polars":
-        transformed_df = df.with_columns(pl.Series(name="y", values=ts.ga.data))
-        agg = (
-            transformed_df.group_by(["brand", "ds"])
-            .agg(pl.col("y").sum())
-            .sort(["brand", "ds"])
-            .with_columns(pl.col("y").shift(1).over("brand").alias("expected"))
-        )
-        expected = (
-            transformed_df.select(["brand", "ds"])
-            .join(agg.select(["brand", "ds", "expected"]), on=["brand", "ds"], how="left")[
-                "expected"
-            ]
-            .to_numpy()
-        )
-    else:
-        transformed_df = df.copy()
-        transformed_df["y"] = ts.ga.data
-        agg = (
-            transformed_df.groupby(["brand", "ds"], observed=True)["y"]
-            .sum()
-            .reset_index()
-        )
-        agg["expected"] = agg.groupby("brand", observed=True)["y"].shift(1)
-        expected = (
-            transformed_df[["brand", "ds"]]
-            .merge(agg[["brand", "ds", "expected"]], on=["brand", "ds"], how="left")[
-                "expected"
-            ]
-            .to_numpy()
-        )
-    mask = ~np.isnan(ts.ga.data)
-    expected = expected[mask]
-    prep = ts._transform(df, dropna=False)
     col = tfm._get_name(1)
-    np.testing.assert_allclose(prep[col].to_numpy(), expected, equal_nan=True)
+    result = prep[col].to_numpy()
+    # After Differences([1]): a=[NaN,1,1], b=[NaN,10,10]
+    # Rows with NaN target (ds=1 for both series) are always dropped.
+    # Remaining: a@ds=2, a@ds=3, b@ds=2, b@ds=3
+    # RollingMean(1, lag=1) with RANGE semantics across brand "x" (NaN excluded):
+    # ds=2: window ts=1 -> {NaN, NaN} -> no valid obs -> NaN
+    # ds=3: window ts=2 -> {1, 10} -> mean=5.5
+    expected = np.array([np.nan, 5.5, np.nan, 5.5])
+    np.testing.assert_allclose(result, expected, equal_nan=True)
 
 
-def test_global_update_y_appends_pandas_times():
+def test_global_update_y_appends_observations():
     df = pd.DataFrame(
         {
             "unique_id": ["a", "a", "b", "b"],
@@ -999,10 +941,11 @@ def test_global_update_y_appends_pandas_times():
     )
     ts._predict_setup()
     ts._update_features()
-    assert isinstance(ts._global_times, pd.Index)
-    orig_len = len(ts._global_times)
-    ts._update_y(np.zeros(len(ts.uids)))
-    assert len(ts._global_times) == orig_len + 1
+    assert ts._pooled_global is not None
+    orig_len = len(ts._pooled_global.time)
+    n_series = len(ts.uids)
+    ts._update_y(np.zeros(n_series))
+    assert len(ts._pooled_global.time) == orig_len + n_series
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -1032,7 +975,7 @@ def test_global_rolling_std(engine):
         target_col="y",
         dropna=False,
     )
-    expected_by_ds = {1: np.nan, 2: np.nan, 3: 0.0, 4: 0.0}
+    expected_by_ds = {1: np.nan, 2: 0.0, 3: 0.0, 4: 0.0}
     if engine == "polars":
         expected = np.array([expected_by_ds[d] for d in prep["ds"].to_list()])
     else:
@@ -1072,7 +1015,7 @@ def test_global_expanding_mean(engine):
         target_col="y",
         dropna=False,
     )
-    expected_by_ds = {1: np.nan, 2: 11.0, 3: 16.5, 4: 22.0}
+    expected_by_ds = {1: np.nan, 2: 5.5, 3: 8.25, 4: 11.0}
     if engine == "polars":
         expected = np.array([expected_by_ds[d] for d in prep["ds"].to_list()])
     else:
@@ -1112,7 +1055,7 @@ def test_global_rolling_quantile(engine):
         target_col="y",
         dropna=False,
     )
-    expected_by_ds = {1: np.nan, 2: np.nan, 3: np.nan, 4: 3.0, 5: 5.0}
+    expected_by_ds = {1: np.nan, 2: np.nan, 3: 1.0, 4: 1.0, 5: 1.5}
     if engine == "polars":
         expected = np.array([expected_by_ds[d] for d in prep["ds"].to_list()])
     else:
@@ -1127,24 +1070,11 @@ def test_global_rolling_quantile(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_rolling_std(engine):
-    if engine == "polars":
-        df = pl.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [2, 2, 2, 2, 4, 4, 4, 4],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
-    else:
-        df = pd.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [2, 2, 2, 2, 4, 4, 4, 4],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        )
+    df = make_groupby_df(engine, [
+        ("a", [1, 1, 1, 1], "x"),
+        ("c", [3, 3, 3, 3], "x"),
+        ("b", [4, 4, 4, 4], "y"),
+    ])
     tfm = RollingStd(2, groupby=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
@@ -1155,22 +1085,26 @@ def test_group_rolling_std(engine):
         dropna=False,
         static_features=["brand"],
     )
+    # Brand "x" has 2 series (a=[1,1,1,1], c=[3,3,3,3]):
+    # ds=2: window [0,1] → ts=1: {1,3} → std(ddof=1)=sqrt(2)
+    # ds=3: window [1,2] → {1,3,1,3} → std(ddof=1)=sqrt(4/3)
+    # Brand "y" has 1 series (b=[4,4,4,4]):
+    # ds=3,4: window has {4,4} → std=0
     expected_by_key = {
         ("x", 1): np.nan,
-        ("x", 2): np.nan,
-        ("x", 3): 0.0,
-        ("x", 4): 0.0,
+        ("x", 2): np.std([1, 3], ddof=1),
+        ("x", 3): np.std([1, 3, 1, 3], ddof=1),
+        ("x", 4): np.std([1, 3, 1, 3], ddof=1),
         ("y", 1): np.nan,
         ("y", 2): np.nan,
         ("y", 3): 0.0,
         ("y", 4): 0.0,
     }
     if engine == "polars":
-        expected = [
+        expected = np.array([
             expected_by_key[(b, d)]
             for b, d in zip(prep["brand"].to_list(), prep["ds"].to_list())
-        ]
-        expected = np.array(expected, dtype=float)
+        ], dtype=float)
     else:
         expected = np.array(
             [expected_by_key[(b, d)] for b, d in zip(prep["brand"], prep["ds"])],
@@ -1186,24 +1120,11 @@ def test_group_rolling_std(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_expanding_mean(engine):
-    if engine == "polars":
-        df = pl.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [1, 2, 3, 4, 10, 20, 30, 40],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
-    else:
-        df = pd.DataFrame(
-            {
-                "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
-                "ds": [1, 2, 3, 4, 1, 2, 3, 4],
-                "y": [1, 2, 3, 4, 10, 20, 30, 40],
-                "brand": ["x", "x", "x", "x", "y", "y", "y", "y"],
-            }
-        )
+    df = make_groupby_df(engine, [
+        ("a", [1, 2, 3, 4], "x"),
+        ("c", [5, 6, 7, 8], "x"),
+        ("b", [10, 20, 30, 40], "y"),
+    ])
     tfm = ExpandingMean(groupby=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
@@ -1214,22 +1135,25 @@ def test_group_expanding_mean(engine):
         dropna=False,
         static_features=["brand"],
     )
+    # Brand "x" has 2 series (a, c) — expanding sees all past observations:
+    # ds=2: ts<2 → {1,5} → mean=3.0
+    # ds=3: ts<3 → {1,5,2,6} → mean=3.5
+    # ds=4: ts<4 → {1,5,2,6,3,7} → mean=4.0
     expected_by_key = {
         ("x", 1): np.nan,
-        ("x", 2): 1.0,
-        ("x", 3): 1.5,
-        ("x", 4): 2.0,
+        ("x", 2): 3.0,
+        ("x", 3): 3.5,
+        ("x", 4): 4.0,
         ("y", 1): np.nan,
         ("y", 2): 10.0,
         ("y", 3): 15.0,
         ("y", 4): 20.0,
     }
     if engine == "polars":
-        expected = [
+        expected = np.array([
             expected_by_key[(b, d)]
             for b, d in zip(prep["brand"].to_list(), prep["ds"].to_list())
-        ]
-        expected = np.array(expected, dtype=float)
+        ], dtype=float)
     else:
         expected = np.array(
             [expected_by_key[(b, d)] for b, d in zip(prep["brand"], prep["ds"])],
@@ -1245,24 +1169,11 @@ def test_group_expanding_mean(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_rolling_quantile(engine):
-    if engine == "polars":
-        df = pl.DataFrame(
-            {
-                "unique_id": ["a"] * 5 + ["b"] * 5,
-                "ds": [1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
-                "y": [1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
-                "brand": ["x"] * 5 + ["y"] * 5,
-            }
-        ).with_columns(pl.col("unique_id").cast(pl.Categorical))
-    else:
-        df = pd.DataFrame(
-            {
-                "unique_id": ["a"] * 5 + ["b"] * 5,
-                "ds": [1, 2, 3, 4, 5, 1, 2, 3, 4, 5],
-                "y": [1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
-                "brand": ["x"] * 5 + ["y"] * 5,
-            }
-        )
+    df = make_groupby_df(engine, [
+        ("a", [1, 3, 5, 7, 9], "x"),
+        ("c", [0, 2, 4, 6, 8], "x"),
+        ("b", [2, 4, 6, 8, 10], "y"),
+    ])
     tfm = RollingQuantile(p=0.5, window_size=3, groupby=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
@@ -1273,12 +1184,16 @@ def test_group_rolling_quantile(engine):
         dropna=False,
         static_features=["brand"],
     )
+    # Brand "x" has 2 series (a, c) — RANGE median:
+    # ds=3: window [0,2] → ts=1,2: {1,0,3,2} → median=1.5
+    # ds=4: window [1,3] → ts=1,2,3: {1,0,3,2,5,4} → median=2.5
+    # ds=5: window [2,4] → ts=2,3,4: {3,2,5,4,7,6} → median=4.5
     expected_by_key = {
         ("x", 1): np.nan,
         ("x", 2): np.nan,
-        ("x", 3): np.nan,
-        ("x", 4): 3.0,
-        ("x", 5): 5.0,
+        ("x", 3): 1.5,
+        ("x", 4): 2.5,
+        ("x", 5): 4.5,
         ("y", 1): np.nan,
         ("y", 2): np.nan,
         ("y", 3): np.nan,
@@ -1963,3 +1878,143 @@ def test_timeseries_num_threads_minus_one(series):
     prep_single = ts_single.fit_transform(series, "unique_id", "ds", "y")
 
     pd.testing.assert_frame_equal(prep_multi, prep_single)
+
+
+# ---------------------------------------------------------------------------
+# date_features_as_dummies tests
+# ---------------------------------------------------------------------------
+
+def test_date_feature_dummies_column_names():
+    """_date_feature_names expands dummy features; non-dummy features stay ordinal."""
+    ts = TimeSeries(
+        freq="D",
+        date_features=["dayofweek", "year"],
+        date_features_as_dummies=True,
+    )
+    names = ts._date_feature_names
+    expected = [f"dayofweek_{i}" for i in range(7)] + ["year"]
+    assert names == expected
+
+
+def test_date_feature_dummies_pandas(series):
+    """dayofweek expands to 7 binary uint8 columns on a pandas DataFrame."""
+    ts = TimeSeries(
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_dummies=True,
+    )
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    for i in range(7):
+        col = f"dayofweek_{i}"
+        assert col in result.columns, f"missing column {col}"
+        assert result[col].isin([0, 1]).all(), f"{col} has values outside {{0, 1}}"
+    # Original ordinal column should not be present
+    assert "dayofweek" not in result.columns
+
+
+def test_date_feature_dummies_polars(series):
+    """dayofweek expands to 7 binary columns on a polars DataFrame."""
+    pl_series = pl.from_pandas(series)
+    ts = TimeSeries(
+        freq="1d",  # polars offset format
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_dummies=True,
+    )
+    result = ts.fit_transform(pl_series, id_col="unique_id", time_col="ds", target_col="y")
+    result_pd = result.to_pandas()
+    for i in range(7):
+        col = f"dayofweek_{i}"
+        assert col in result_pd.columns, f"missing column {col}"
+        assert result_pd[col].isin([0, 1]).all()
+    assert "dayofweek" not in result_pd.columns
+
+
+def test_date_feature_dummies_mixed(series):
+    """Features in _DUMMY_FEATURE_VALUES are dummified; others stay ordinal."""
+    ts = TimeSeries(
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek", "year"],  # year not in _DUMMY_FEATURE_VALUES
+        date_features_as_dummies=True,
+    )
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    assert "dayofweek_0" in result.columns  # dummy
+    assert "dayofweek" not in result.columns  # ordinal version removed
+    assert "year" in result.columns  # stays ordinal
+
+
+def test_date_feature_dummies_false_default(series):
+    """date_features_as_dummies=False (default) keeps ordinal behavior."""
+    ts = TimeSeries(freq="D", lags=[1], date_features=["dayofweek"])
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    assert "dayofweek" in result.columns
+    assert "dayofweek_0" not in result.columns
+
+
+def test_date_feature_dummies_predict(series):
+    """End-to-end fit + predict works with date_features_as_dummies=True."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import Ridge
+
+    fcst = MLForecast(
+        models={"ridge": Ridge()},
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek", "month"],
+        date_features_as_dummies=True,
+    )
+    fcst.fit(series)
+    preds = fcst.predict(7)
+    assert preds.shape[0] == series["unique_id"].nunique() * 7
+    assert "ridge" in preds.columns
+
+
+def test_date_feature_dummies_quarter(series):
+    """quarter dummy creates 4 binary columns (values 1-4)."""
+    ts = TimeSeries(
+        freq="D",
+        lags=[1],
+        date_features=["quarter"],
+        date_features_as_dummies=True,
+    )
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    for q in range(1, 5):
+        col = f"quarter_{q}"
+        assert col in result.columns, f"missing {col}"
+        assert result[col].isin([0, 1]).all()
+    # Exactly one quarter indicator is 1 per row
+    quarter_cols = [f"quarter_{q}" for q in range(1, 5)]
+    assert (result[quarter_cols].sum(axis=1) == 1).all()
+
+
+def test_date_feature_dummies_month_values(series):
+    """month dummy has 12 columns and exactly one is 1 per row."""
+    ts = TimeSeries(
+        freq="D",
+        lags=[1],
+        date_features=["month"],
+        date_features_as_dummies=True,
+    )
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    month_cols = [f"month_{m}" for m in range(1, 13)]
+    for col in month_cols:
+        assert col in result.columns
+    assert (result[month_cols].sum(axis=1) == 1).all()
+
+
+def test_date_feature_dummies_all_supported(series):
+    """Every feature in _DUMMY_FEATURE_VALUES can be dummified without error."""
+    # Use a series that covers all hours/minutes/seconds by overriding frequency
+    for feature in _DUMMY_FEATURE_VALUES:
+        ts = TimeSeries(
+            freq="D",
+            lags=[1],
+            date_features=[feature],
+            date_features_as_dummies=True,
+        )
+        result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+        expected_cols = [f"{feature}_{v}" for v in _DUMMY_FEATURE_VALUES[feature]]
+        for col in expected_cols:
+            assert col in result.columns, f"feature={feature}: missing {col}"
