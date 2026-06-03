@@ -1460,6 +1460,7 @@ class MLForecast:
                 and self.prediction_intervals is not None
             ):
                 self.prediction_intervals._target_scales = None
+                self.prediction_intervals._cs_weights = None
 
     def cross_validation(
         self,
