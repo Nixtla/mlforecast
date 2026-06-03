@@ -147,14 +147,23 @@ def _add_conformal_distribution_intervals(
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
-        mean = fcst_df[model].to_numpy().reshape(1, n_series, -1)
-        scores = np.vstack([mean - scores, mean + scores])
-        quantiles = np.quantile(
-            scores,
-            cuts,
-            axis=0,
-        )
-        quantiles = quantiles.reshape(len(cuts), -1).T
+        mean_flat = fcst_df[model].to_numpy().ravel()
+        n_target = len(mean_flat) // horizon
+        if n_target != n_series:
+            # Transfer scenario: pool all source calibration points globally.
+            # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
+            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
+            sym_scores = np.vstack([-scores_pooled, scores_pooled])
+            global_q = np.quantile(sym_scores, cuts, axis=0)  # (n_cuts, horizon)
+            mean_2d = mean_flat.reshape(n_target, horizon)
+            quantiles = (global_q[:, np.newaxis, :] + mean_2d[np.newaxis, :, :]).reshape(
+                len(cuts), -1
+            ).T  # (n_target * horizon, n_cuts)
+        else:
+            mean = mean_flat.reshape(1, n_series, -1)
+            paths = np.vstack([mean - scores, mean + scores])
+            quantiles = np.quantile(paths, cuts, axis=0)
+            quantiles = quantiles.reshape(len(cuts), -1).T
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         out_cols = lo_cols + hi_cols
@@ -185,12 +194,16 @@ def _add_conformal_error_intervals(
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
-        quantiles = np.quantile(
-            scores,
-            cuts,
-            axis=0,
-        )
-        quantiles = quantiles.reshape(len(cuts), -1)
+        n_target = len(mean) // horizon
+        if n_target != n_series:
+            # Transfer scenario: pool all source calibration points globally.
+            # Compute a single quantile per horizon step, then tile to all target series.
+            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
+            quantiles = np.quantile(scores_pooled, cuts, axis=0)  # (n_levels, horizon)
+            quantiles = np.tile(quantiles, (1, n_target))  # (n_levels, n_target * horizon)
+        else:
+            quantiles = np.quantile(scores, cuts, axis=0)
+            quantiles = quantiles.reshape(len(cuts), -1)
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         quantiles = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
@@ -243,7 +256,24 @@ def _add_weighted_conformal_error_intervals(
         mean = fcst_df[model].to_numpy().ravel()
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         scores = scores[:, :, :horizon]
-        if weights is None:
+        n_target = len(mean) // horizon
+        if n_target != n_series:
+            # Transfer scenario: pool all source calibration points globally.
+            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
+            if weights is None:
+                quantiles = np.quantile(scores_pooled, cuts, axis=0)  # (n_levels, horizon)
+                quantiles = np.tile(quantiles, (1, n_target))  # (n_levels, n_target * horizon)
+            else:
+                w_pooled = weights.reshape(cs_n_windows * n_series, cs_h)[:, :horizon]
+                w_test = float(w_pooled.mean())
+                quantiles = np.empty((len(cuts), n_target * horizon))
+                for h_i in range(horizon):
+                    s_h = scores_pooled[:, h_i]
+                    w_h = w_pooled[:, h_i]
+                    for li, alpha in enumerate([1 - c for c in cuts]):
+                        q = _weighted_quantile(s_h, w_h, alpha, w_test)
+                        quantiles[li, h_i::horizon] = q
+        elif weights is None:
             quantiles = np.quantile(scores, cuts, axis=0)
             quantiles = quantiles.reshape(len(cuts), -1)
         else:
@@ -286,22 +316,49 @@ def _add_weighted_conformal_distribution_intervals(
     for model in model_names:
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         scores = scores[:, :, :horizon]
-        mean = fcst_df[model].to_numpy().reshape(1, n_series, -1)
-        paths = np.vstack([mean - scores, mean + scores])  # (2*n_windows, n_series, horizon)
-        if weights is None:
-            quantiles = np.quantile(paths, cuts, axis=0)
-            quantiles = quantiles.reshape(len(cuts), -1).T
+        mean_flat = fcst_df[model].to_numpy().ravel()
+        n_target = len(mean_flat) // horizon
+        if n_target != n_series:
+            # Transfer scenario: pool all source calibration points globally.
+            # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
+            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
+            mean_2d = mean_flat.reshape(n_target, horizon)
+            if weights is None:
+                sym_scores = np.vstack([-scores_pooled, scores_pooled])
+                global_q = np.quantile(sym_scores, cuts, axis=0)  # (n_cuts, horizon)
+                quantiles = (global_q[:, np.newaxis, :] + mean_2d[np.newaxis, :, :]).reshape(
+                    len(cuts), -1
+                ).T  # (n_target * horizon, n_cuts)
+            else:
+                w_pooled = weights.reshape(cs_n_windows * n_series, cs_h)[:, :horizon]
+                w_double = np.vstack([w_pooled, w_pooled])
+                w_test = float(w_pooled.mean())
+                # Offsets: {-s_i, +s_i} for each horizon step
+                sym_scores = np.vstack([-scores_pooled, scores_pooled])
+                quantiles = np.empty((n_target * horizon, len(cuts)))
+                for h_i in range(horizon):
+                    p_h = sym_scores[:, h_i]
+                    w_h = w_double[:, h_i]
+                    for li, cut in enumerate(cuts):
+                        q_offset = _weighted_quantile(p_h, w_h, 1.0 - cut, w_test)
+                        quantiles[h_i::horizon, li] = mean_2d[:, h_i] + q_offset
         else:
-            w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
-            w_double = np.vstack([w, w])  # replicate for both path directions
-            w_test = float(w.mean())
-            quantiles = np.empty((n_series * horizon, len(cuts)))
-            for h_i in range(horizon):
-                p_h = paths[:, :, h_i].ravel()
-                w_h = w_double[:, :, h_i].ravel()
-                for li, cut in enumerate(cuts):
-                    q = _weighted_quantile(p_h, w_h, 1.0 - cut, w_test)
-                    quantiles[h_i::horizon, li] = q
+            mean = mean_flat.reshape(1, n_series, -1)
+            paths = np.vstack([mean - scores, mean + scores])  # (2*n_windows, n_series, horizon)
+            if weights is None:
+                quantiles = np.quantile(paths, cuts, axis=0)
+                quantiles = quantiles.reshape(len(cuts), -1).T
+            else:
+                w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
+                w_double = np.vstack([w, w])  # replicate for both path directions
+                w_test = float(w.mean())
+                quantiles = np.empty((n_series * horizon, len(cuts)))
+                for h_i in range(horizon):
+                    p_h = paths[:, :, h_i].ravel()
+                    w_h = w_double[:, :, h_i].ravel()
+                    for li, cut in enumerate(cuts):
+                        q = _weighted_quantile(p_h, w_h, 1.0 - cut, w_test)
+                        quantiles[h_i::horizon, li] = q
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         fcst_df = ufp.assign_columns(fcst_df, lo_cols + hi_cols, quantiles)
