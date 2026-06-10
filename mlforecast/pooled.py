@@ -584,24 +584,31 @@ class PooledState:
             enc_scope_cols = [f"__enc_{c}" for c in parent_scope_cols]
             groups_nw = _encode_keys(nw.from_native(groups), parent_scope_cols)
             sorted_nw = _encode_keys(nw.from_native(sorted_df), parent_scope_cols)
-            for bid in np.unique(bid_arr):
-                row_nw = groups_nw.filter(nw.col("_bucket_id") == int(bid))
-                scope_key = row_nw.select(enc_scope_cols).row(0)
+            # Single pass over the unique (scope, time) pairs to build every
+            # scope's calendar at once instead of filtering the full frame per
+            # bucket. Scope keys are read via .rows() so they compare equal to
+            # the .row(0) tuples `_resolve_parent_for_bucket` builds later;
+            # times come from .to_numpy() so grids keep their native dtype.
+            scope_time = sorted_nw.select(enc_scope_cols + [time_col]).unique()
+            grid_scope_keys = scope_time.select(enc_scope_cols).rows()
+            grid_ts_vals = scope_time.get_column(time_col).to_numpy()
+            times_by_scope: Dict[tuple, list] = {}
+            for key, ts in zip(grid_scope_keys, grid_ts_vals):
+                times_by_scope.setdefault(key, []).append(ts)
 
+            # `groups` has one row per bucket in ascending _bucket_id order, so
+            # iterating it assigns parent ids in the same order as before.
+            bucket_scope_keys = groups_nw.select(enc_scope_cols).rows()
+            for bid, scope_key in zip(
+                groups_nw.get_column("_bucket_id").to_numpy(), bucket_scope_keys
+            ):
                 if scope_key not in parent_id_map:
                     pid = next_pid
                     next_pid += 1
                     parent_id_map[scope_key] = pid
-                    exprs = [nw.col(ec) == v for ec, v in zip(enc_scope_cols, scope_key)]
-                    combined = exprs[0]
-                    for e in exprs[1:]:
-                        combined = combined & e
-                    filtered = sorted_nw.filter(combined)
-                    parent_ts = np.sort(
-                        filtered.get_column(time_col).unique().to_numpy()
+                    parent_grids[pid] = np.sort(
+                        np.asarray(times_by_scope[scope_key])
                     )
-                    parent_grids[pid] = parent_ts
-
                 bucket_to_parent[int(bid)] = parent_id_map[scope_key]
         else:
             all_ts = sorted_df[time_col].to_numpy()
