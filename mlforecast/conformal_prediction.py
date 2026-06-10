@@ -675,12 +675,12 @@ def compute_conformity_scores(
         target_col: Name of the target column (dropped from output).
         feature_cols: Optional list of extra feature columns to keep alongside
             the error columns. Used by the weighted conformal DRE logic.
-        signed: If True, compute signed errors (pred - target). If False (default),
+        signed: If True, compute signed errors (y - pred). If False (default),
             compute absolute errors |pred - target|.
     """
     for model in model_names:
         if signed:
-            err = cv_results[model] - cv_results[target_col]
+            err = cv_results[target_col] - cv_results[model]
         else:
             err = abs(cv_results[model] - cv_results[target_col])
         cv_results = ufp.assign_columns(cv_results, model, err)

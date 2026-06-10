@@ -58,9 +58,9 @@ def test_compute_conformity_scores_signed():
     unsigned = compute_conformity_scores(cv.copy(), ["m"], "y")
     assert list(unsigned["m"]) == [2.0, 2.0]
 
-    # signed: pred - target (m - y)
+    # signed: y - pred (target - model)
     signed = compute_conformity_scores(cv.copy(), ["m"], "y", signed=True)
-    assert list(signed["m"]) == [-2.0, 2.0]
+    assert list(signed["m"]) == [2.0, -2.0]
 
 
 @pytest.fixture(scope="module")
