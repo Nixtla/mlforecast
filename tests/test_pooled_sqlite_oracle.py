@@ -664,6 +664,42 @@ def test_sqlite_oracle_partition_null_key(transform_factory, transform_name, lag
         )
 
 
+# Fractional-float partition keys: a dynamic partition value of 0.1/0.25/0.5 must
+# bucket the same way SQL `PARTITION BY <REAL>` groups it. Exercises the float->string
+# encoding path end to end against the oracle (string-keyed buckets vs SQL float
+# equality). One representative transform (RollingMean) is enough — the windowing
+# numerics are covered elsewhere; this only checks float key bucketing.
+_DISCOUNT_PATTERN = [0.1, 0.1, 0.25, 0.5, 0.1, 0.25, 0.1, 0.5]  # 8 per series
+
+
+@pytest.mark.parametrize(
+    "mode", ["global_partition", "groupby_partition", "local_partition"]
+)
+def test_sqlite_oracle_partition_fractional_float(mode):
+    pc = ["discount"]
+    if mode == "global_partition":
+        df = _global_partition_df()
+        df["discount"] = _DISCOUNT_PATTERN * 2
+        group_cols = None
+        transform = RollingMean(_WINDOW_SIZE, global_=True, partition_by=pc)
+    elif mode == "groupby_partition":
+        df = _groupby_partition_df()  # static `brand` group key
+        df["discount"] = _DISCOUNT_PATTERN * 4
+        group_cols = ["brand"]
+        transform = RollingMean(_WINDOW_SIZE, groupby=group_cols, partition_by=pc)
+    else:
+        df = _local_partition_df()
+        df["discount"] = _DISCOUNT_PATTERN * 2
+        group_cols = ["unique_id"]
+        transform = RollingMean(_WINDOW_SIZE, partition_by=pc)
+    assert_oracle_matches(
+        df, transform, "RollingMean", lag=1,
+        group_cols=group_cols,
+        partition_cols=pc,
+        window_size=_WINDOW_SIZE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # NULL groupby keys (SQL collapses all NULLs into one partition; our pooled
 # state must do the same). The oracle harness is pandas->SQLite, where to_sql

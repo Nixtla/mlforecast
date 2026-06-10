@@ -2105,6 +2105,32 @@ def test_groupby_partition_null_scope_resolves_at_predict(engine):
     assert state._bucket_to_parent_id[new_bid] == shared_parent
 
 
+def test_fractional_float_partition_feature_parity_across_engines():
+    """fit_transform with a fractional-float partition key yields identical feature
+    outputs on pandas and polars. The SQLite oracle is pandas-only, so this guards
+    the polars float->string encoding path against divergence."""
+    n_series, n_times = 4, 8
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = np.random.default_rng(5).standard_normal(n_series * n_times)
+    discount = [0.1, 0.1, 0.25, 0.5, 0.1, 0.25, 0.1, 0.5] * n_series
+    rows = {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "discount": discount,
+    }
+    outs = []
+    for engine in ["pandas", "polars"]:
+        tfm = RollingMean(window_size=2, min_samples=1, global_=True, partition_by=["discount"])
+        col = tfm._get_name(1)
+        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+        res = ts.fit_transform(
+            _make_df(engine, rows), id_col="unique_id", time_col="ds",
+            target_col="y", dropna=False, static_features=[],
+        )
+        outs.append(np.asarray(res[col]))
+    np.testing.assert_allclose(outs[0], outs[1], atol=1e-12, equal_nan=True)
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_prediction_fast_path_partition(engine):
     """Multi-step predict with fast path + partition_by produces finite values."""
@@ -2385,6 +2411,25 @@ def test_mixed_schema_reconcile_does_not_widen_int_side(engine):
     # float 1.0 reconciles to the integer-1 bucket via the to_int path.
     look = lookup_bucket_ids(q, groups, ["g"])
     assert look[0] == 2 and not np.isnan(look[0])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_fractional_float_keys_stay_distinct(engine):
+    # Close-but-distinct fractional floats must each get their own bucket through
+    # the str-cast encoding path (no collision), repeated values collapse, and a
+    # lookup of the same floats recovers the same bucket ids on both engines.
+    vals = [1.0000000001, 1.0000000002, 0.1, 0.2, 0.25, 0.1, 1.0000000001]
+    df = _make_df(engine, {"g": vals, "y": list(range(len(vals)))})
+    merged, groups = add_bucket_id(df, ["g"])
+    bids = _bids(merged)
+    assert np.all(bids >= 0)
+    assert len(groups) == 5  # 5 distinct floats; the two repeats collapse
+    assert bids[5] == bids[2]  # 0.1 repeat
+    assert bids[6] == bids[0]  # 1.0000000001 repeat
+    # the five distinct floats occupy five distinct buckets (no str-cast collision)
+    assert len({int(bids[0]), int(bids[1]), int(bids[2]), int(bids[3]), int(bids[4])}) == 5
+    look = lookup_bucket_ids(df, groups, ["g"])
+    np.testing.assert_array_equal(look.astype(np.int64), bids.astype(np.int64))
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
