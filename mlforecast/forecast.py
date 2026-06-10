@@ -62,6 +62,70 @@ _get_conformal_method = get_conformal_method  # backward compat
 _get_transfer_method_spec = get_transfer_method_spec
 
 
+def _frozen_backtest(
+    fcst,
+    new_df: DFType,
+    n_windows: int,
+    h: int,
+    step_size: int = 1,
+    max_lag: int = 0,
+    id_col: str = "unique_id",
+    time_col: str = "ds",
+    target_col: str = "y",
+) -> DFType:
+    """Run inference-only backtesting windows using already-fitted models.
+
+    Unlike cross_validation, never calls fit — uses source-trained models throughout.
+    step_size=1 is safe here (no refitting means no leakage from overlapping windows).
+    """
+    nw_df = nw.from_native(new_df)
+    times = sorted(nw_df[time_col].unique().to_list())
+    T = len(times)
+
+    required = h + (n_windows - 1) * step_size + max_lag + 1
+    counts_df = ufp.counts_by_id(new_df, id_col)
+    nw_counts = nw.from_native(counts_df)
+    min_count = int(nw_counts["counts"].min())
+    if min_count < required:
+        bad = nw_counts.filter(nw_counts["counts"] < required)
+        details = "; ".join(
+            f"'{uid}' has {cnt} time steps"
+            for uid, cnt in zip(bad[id_col].to_list(), bad["counts"].to_list())
+        )
+        raise ValueError(
+            f"_frozen_backtest requires >= {required} time steps per series "
+            f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
+            f"Series too short: {details}."
+        )
+
+    _original_ts = fcst.ts
+    try:
+        all_results = []
+        for k in range(n_windows):
+            cutoff = times[T - h - 1 - k * step_size]
+            valid_start = times[T - h - k * step_size]
+            valid_end = times[T - 1 - k * step_size]
+
+            train_slice = nw.to_native(nw_df.filter(nw_df[time_col] <= cutoff))
+            valid_df = nw.to_native(
+                nw_df.filter(
+                    (nw_df[time_col] >= valid_start) & (nw_df[time_col] <= valid_end)
+                ).select([id_col, time_col, target_col])
+            )
+
+            preds = fcst.predict(h=h, new_df=train_slice)
+
+            nw_preds = nw.from_native(preds)
+            nw_valid = nw.from_native(valid_df)
+            joined = nw_preds.join(nw_valid, on=[id_col, time_col], how="left")
+            joined = joined.with_columns(nw.lit(cutoff).alias("cutoff"))
+            all_results.append(nw.to_native(joined))
+    finally:
+        fcst.ts = _original_ts
+
+    return nw.to_native(nw.concat([nw.from_native(r) for r in all_results]))
+
+
 class MLForecast:
     def __init__(
         self,

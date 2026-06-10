@@ -350,3 +350,69 @@ def test_ess_no_warning_identical_distributions(transfer_cp_setup):
                     transfer_conformal=TransferConformal(method="weighted_conformal"))
     ess_warnings = [w for w in record if "ESS" in str(w.message)]
     assert len(ess_warnings) == 0, f"Unexpected ESS warnings: {ess_warnings}"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _frozen_backtest
+# ---------------------------------------------------------------------------
+def test_frozen_backtest_min_length_validation():
+    """Too-short target raises ValueError naming the shortfall."""
+    n, h = 3, 5
+    source = generate_daily_series(n, min_length=60, max_length=60, seed=40)
+    source["unique_id"] = "src_" + source["unique_id"].astype(str)
+    target = generate_daily_series(n, min_length=6, max_length=6, seed=41)
+    target["unique_id"] = "tgt_" + target["unique_id"].astype(str)
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=5, random_state=0, verbosity=-1),
+        lags=[1],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
+    with pytest.raises(ValueError, match="time steps"):
+        mlf.predict(
+            h=h, level=[90], new_df=target,
+            transfer_conformal=TransferConformal(method="recalibrate", n_windows=2),
+        )
+
+
+def test_frozen_backtest_uses_source_model():
+    """Recalibrate intervals are WIDE when source model is bad on target (100x scale).
+
+    If the bug were present (target re-trained), the target model would fit the 100x
+    data well and residuals would be small → intervals narrow.
+    With the frozen source model, residuals are huge → intervals wide.
+    """
+    n, h = 5, 3
+    src = generate_daily_series(n, min_length=50, max_length=50, seed=0)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+
+    tgt = generate_daily_series(n, min_length=30, max_length=30, seed=1)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    tgt["y"] = tgt["y"] * 100  # 100x scale — source model will predict ~src values
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+
+    src_preds = mlf.predict(h=h, level=[90])
+    src_width = float(
+        (src_preds["LGBMRegressor-hi-90"] - src_preds["LGBMRegressor-lo-90"]).mean()
+    )
+
+    tgt_preds = mlf.predict(h=h, level=[90], new_df=tgt, transfer_conformal="recalibrate")
+    tgt_width = float(
+        (tgt_preds["LGBMRegressor-hi-90"] - tgt_preds["LGBMRegressor-lo-90"]).mean()
+    )
+
+    # Frozen-model recalibrate: residuals ≈ 100x source values → much wider intervals.
+    assert tgt_width > src_width * 5, (
+        f"Recalibrate on 100x target (width={tgt_width:.3f}) should be far wider than "
+        f"source intervals (width={src_width:.3f}). Frozen-model invariant violated."
+    )
