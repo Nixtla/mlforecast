@@ -24,6 +24,45 @@ MODEL = "LGBMRegressor"
 _PREDICTION_CACHE: dict[tuple, pd.DataFrame] = {}
 
 
+# ---------------------------------------------------------------------------
+# Task 1: data-model additions
+# ---------------------------------------------------------------------------
+def test_transfer_conformal_step_size_validation():
+    with pytest.raises(ValueError, match="step_size"):
+        TransferConformal(step_size=0)
+    with pytest.raises(ValueError, match="step_size"):
+        TransferConformal(step_size=-1)
+    tc = TransferConformal(step_size=2)
+    assert tc.step_size == 2
+
+
+def test_transfer_result_signed_default():
+    from mlforecast.conformal_prediction import TransferResult
+    dummy = pd.DataFrame({"unique_id": ["a"], "ds": [1], "m": [0.0]})
+    tr = TransferResult(cs_df=dummy)
+    assert tr.signed is False
+    tr2 = TransferResult(cs_df=dummy, signed=True)
+    assert tr2.signed is True
+
+
+def test_compute_conformity_scores_signed():
+    from mlforecast.conformal_prediction import compute_conformity_scores
+    cv = pd.DataFrame({
+        "unique_id": ["a", "a"],
+        "ds":        [1, 2],
+        "cutoff":    [0, 0],
+        "y":         [3.0, 5.0],
+        "m":         [1.0, 7.0],
+    })
+    # unsigned: |y - pred|
+    unsigned = compute_conformity_scores(cv.copy(), ["m"], "y")
+    assert list(unsigned["m"]) == [2.0, 2.0]
+
+    # signed: pred - target (m - y)
+    signed = compute_conformity_scores(cv.copy(), ["m"], "y", signed=True)
+    assert list(signed["m"]) == [-2.0, 2.0]
+
+
 @pytest.fixture(scope="module")
 def transfer_cp_setup():
     source_train = generate_daily_series(

@@ -71,6 +71,7 @@ class TransferConformal:
     test_weight: str = "mean_target"
     weights: Optional[Union[np.ndarray, Callable]] = None
     n_windows: Optional[int] = None
+    step_size: Optional[int] = None
     cv: int = 5
     clip_quantile: Optional[float] = 0.99
 
@@ -101,6 +102,10 @@ class TransferConformal:
         if self.n_windows is not None and self.n_windows < 1:
             raise ValueError(
                 f"TransferConformal.n_windows must be >= 1, got {self.n_windows}"
+            )
+        if self.step_size is not None and self.step_size < 1:
+            raise ValueError(
+                f"TransferConformal.step_size must be >= 1, got {self.step_size}"
             )
 
     def validate(self, pi: PredictionIntervals) -> None:
@@ -568,19 +573,25 @@ def compute_conformity_scores(
     model_names: List[str],
     target_col: str,
     feature_cols: Optional[List[str]] = None,
+    signed: bool = False,
 ) -> DFType:
-    """Compute absolute-error conformity scores over CV folds.
+    """Compute conformity scores over CV folds.
 
     Args:
         cv_results: Cross-validation output with actual and predicted columns.
-        model_names: Names of model columns to convert to absolute errors.
+        model_names: Names of model columns to convert to errors.
         target_col: Name of the target column (dropped from output).
         feature_cols: Optional list of extra feature columns to keep alongside
             the error columns. Used by the weighted conformal DRE logic.
+        signed: If True, compute signed errors (pred - target). If False (default),
+            compute absolute errors |pred - target|.
     """
     for model in model_names:
-        abs_err = abs(cv_results[model] - cv_results[target_col])
-        cv_results = ufp.assign_columns(cv_results, model, abs_err)
+        if signed:
+            err = cv_results[model] - cv_results[target_col]
+        else:
+            err = abs(cv_results[model] - cv_results[target_col])
+        cv_results = ufp.assign_columns(cv_results, model, err)
     result = ufp.drop_columns(cv_results, target_col)
     if feature_cols is not None:
         keep = [c for c in result.columns if c not in feature_cols] + feature_cols
@@ -611,6 +622,7 @@ class TransferResult:
     weights: Optional[np.ndarray] = None
     target_scales: Optional[Dict[str, float]] = None  # uid -> sigma_tgt
     target_weights: Optional[np.ndarray] = None
+    signed: bool = False
 
 
 def _validate_transfer_df_length(
