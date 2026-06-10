@@ -787,9 +787,12 @@ class PooledState:
 
     def append_predictions(self, curr_dates, predictions, n_series):
         new_arr = np.asarray(predictions)
-        new_ts_val = curr_dates[0]
+        # normalize the scalar to self.time's dtype: a raw pd.Timestamp would
+        # produce object arrays in np.full/np.append, silently degrading
+        # self.time and the parent calendars from datetime64 to object
+        new_ts_val = np.asarray(curr_dates)[:1].astype(self.time.dtype, copy=False)[0]
         if self.groups is None:
-            new_ts = np.full(n_series, new_ts_val)
+            new_ts = np.full(n_series, new_ts_val, dtype=self.time.dtype)
             new_bid = np.zeros(n_series, dtype=np.int64)
             next_ord = self.next_time_index_by_bucket[0]
             new_ord = np.full(n_series, next_ord, dtype=np.int64)
@@ -833,7 +836,7 @@ class PooledState:
                 new_values=new_values,
                 new_groups=new_groups_mask,
             )
-            new_ts = np.full(n_series, new_ts_val)
+            new_ts = np.full(n_series, new_ts_val, dtype=self.time.dtype)
             self.time = np.concatenate([self.time, new_ts[sort_order]])
             self.y = np.concatenate(
                 [self.y, new_arr[sort_order].astype(float)]

@@ -2610,3 +2610,45 @@ def test_polars_shuffled_rows_slow_path_parity_with_pandas():
         )
         outs.append(np.asarray(res[col], dtype=float))
     np.testing.assert_allclose(outs[0], outs[1], atol=1e-12, equal_nan=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_append_predictions_preserves_time_dtype(engine):
+    """Recursive prediction must not degrade state.time or the parent
+    calendars from datetime64 to object dtype (np.full with a pd.Timestamp
+    scalar used to produce object arrays)."""
+    n_series, n_times = 4, 8
+    rng = np.random.default_rng(3)
+    dates = pd.date_range("2020-01-01", periods=n_times, freq="D")
+    rows = {
+        "unique_id": np.repeat([f"s{i}" for i in range(n_series)], n_times).tolist(),
+        "ds": list(dates) * n_series,
+        "y": rng.standard_normal(n_series * n_times).tolist(),
+        "brand": np.repeat(["x", "x", "z", "z"], n_times).tolist(),
+        "promo": np.tile([0, 0, 1, 1, 0, 1, 0, 1], n_series).tolist(),
+    }
+    tfms = [
+        RollingMean(2, min_samples=1, global_=True),
+        RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"]),
+    ]
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lag_transforms={1: tfms})
+    ts.fit_transform(
+        _make_df(engine, rows), id_col="unique_id", time_col="ds",
+        target_col="y", dropna=False, static_features=[],
+    )
+    dtypes_before = {
+        key: state.time.dtype for key, state in ts._pooled_states.items()
+    }
+    ts._predict_setup()
+    for step in range(2):
+        features = ts._update_features()
+        for tfm in tfms:
+            vals = np.asarray(features[tfm._get_name(1)], dtype=float)
+            assert not np.all(np.isnan(vals)), f"step {step}: all NaN"
+        ts._update_y(np.ones(n_series))
+    for key, state in ts._pooled_states.items():
+        assert state.time.dtype == dtypes_before[key], key
+        assert np.issubdtype(state.time.dtype, np.datetime64), key
+        for pid, grid in (state._parent_time_grids or {}).items():
+            assert grid.dtype == state.time.dtype, (key, pid)
