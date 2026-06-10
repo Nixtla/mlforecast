@@ -416,3 +416,66 @@ def test_frozen_backtest_uses_source_model():
         f"Recalibrate on 100x target (width={tgt_width:.3f}) should be far wider than "
         f"source intervals (width={src_width:.3f}). Frozen-model invariant violated."
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 3: _add_signed_transfer_intervals
+# ---------------------------------------------------------------------------
+def test_add_signed_transfer_intervals_shape_and_nesting():
+    import pandas as pd
+    from mlforecast.conformal_prediction import _add_signed_transfer_intervals
+
+    n_series, horizon = 3, 2
+    n_cal = 5  # windows * series (pooled)
+    rng = np.random.default_rng(0)
+    scores = rng.normal(0, 1, size=n_cal * horizon)  # signed residuals
+
+    cs_df = pd.DataFrame({"m": scores})
+    fcst_df = pd.DataFrame({
+        "unique_id": np.repeat(["a", "b", "c"], horizon),
+        "ds": list(range(horizon)) * n_series,
+        "m": rng.normal(5, 1, n_series * horizon),
+    })
+
+    result = _add_signed_transfer_intervals(
+        fcst_df, cs_df, model_names=["m"], level=[80, 90], horizon=horizon
+    )
+
+    # Columns present
+    for lv in [80, 90]:
+        assert f"m-lo-{lv}" in result.columns
+        assert f"m-hi-{lv}" in result.columns
+
+    # lo <= hi for all rows
+    for lv in [80, 90]:
+        assert (result[f"m-lo-{lv}"] <= result[f"m-hi-{lv}"]).all()
+
+    # Nesting: lo-90 <= lo-80 <= hi-80 <= hi-90
+    assert (result["m-lo-90"] <= result["m-lo-80"]).all()
+    assert (result["m-lo-80"] <= result["m-hi-80"]).all()
+    assert (result["m-hi-80"] <= result["m-hi-90"]).all()
+
+
+def test_add_signed_transfer_intervals_bias_warning():
+    import pandas as pd
+    import warnings as _warnings
+    from mlforecast.conformal_prediction import _add_signed_transfer_intervals
+
+    horizon = 2
+    # All-negative scores → interval entirely below point forecast
+    cs_df = pd.DataFrame({"m": [-5.0, -4.0, -6.0, -5.5, -4.5, -6.5, -5.0, -4.8]})
+    fcst_df = pd.DataFrame({
+        "unique_id": ["a", "a"],
+        "ds": [1, 2],
+        "m": [10.0, 10.0],
+    })
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        _add_signed_transfer_intervals(
+            fcst_df, cs_df, model_names=["m"], level=[90], horizon=horizon
+        )
+
+    assert any("over-predicts" in str(w.message) for w in caught), (
+        "Expected a bias warning when q_hi < 0 (interval below point forecast)"
+    )

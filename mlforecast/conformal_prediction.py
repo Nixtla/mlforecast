@@ -286,6 +286,82 @@ def _add_conformal_error_intervals(
     return fcst_df
 
 
+def _add_signed_transfer_intervals(
+    fcst_df: DFType,
+    cs_df: DFType,
+    model_names: List[str],
+    level: List[Union[int, float]],
+    horizon: int,
+) -> DFType:
+    """Add asymmetric prediction intervals from signed conformity scores (y − pred).
+
+    Unlike the symmetric conformal methods, uses separate lower and upper quantiles
+    so that a systematically biased transferred model shifts the interval rather than
+    merely widening it.
+
+    Emits UserWarning when the interval lies entirely above or below the point forecast
+    (both quantiles have the same sign), indicating severe source-model bias on the
+    target domain.
+    """
+    fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
+    n_cal_flat = len(cs_df[model_names[0]].to_numpy())
+    n_cal_series = n_cal_flat // horizon  # n_windows * n_target_series
+
+    for model in model_names:
+        mean = fcst_df[model].to_numpy().ravel()
+        scores = cs_df[model].to_numpy().astype(float)
+        scores_2d = scores.reshape(n_cal_series, horizon)
+
+        # level is pre-sorted ascending (e.g. [80, 90, 95])
+        # lo cols: reversed levels (widest first) → [lo-95, lo-90, lo-80]
+        # hi cols: ascending levels (narrowest first) → [hi-80, hi-90, hi-95]
+        lo_cuts = [((100 - lv) / 100) / 2 for lv in reversed(level)]
+        hi_cuts = [1 - ((100 - lv) / 100) / 2 for lv in level]
+        all_cuts = lo_cuts + hi_cuts
+
+        # q_per_horizon: (n_cuts, horizon) — per-step quantiles
+        q_per_horizon = np.quantile(scores_2d, all_cuts, axis=0)
+
+        # Bias warnings
+        n_lo = len(lo_cuts)
+        q_hi_vals = q_per_horizon[n_lo:]   # (n_hi_cuts, horizon)
+        q_lo_vals = q_per_horizon[:n_lo]   # (n_lo_cuts, horizon)
+        for i, lv in enumerate(level):
+            q_hi_lv = q_hi_vals[i]         # upper quantile for this level
+            q_lo_lv = q_lo_vals[-(i + 1)]  # matching lower quantile
+            if np.all(q_hi_lv < 0):
+                warnings.warn(
+                    f"Transfer recalibrate level={lv}: upper quantile is negative across "
+                    "all horizon steps — interval lies entirely below point forecasts. "
+                    "The transferred model systematically over-predicts on the target domain.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+            elif np.all(q_lo_lv > 0):
+                warnings.warn(
+                    f"Transfer recalibrate level={lv}: lower quantile is positive across "
+                    "all horizon steps — interval lies entirely above point forecasts. "
+                    "The transferred model systematically under-predicts on the target domain.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
+        # Apply: lo = pred + q_lo, hi = pred + q_hi, broadcast per horizon step
+        n_target = len(mean) // horizon
+        mean_2d = mean.reshape(n_target, horizon)
+        quantiles = (
+            q_per_horizon[:, np.newaxis, :] + mean_2d[np.newaxis, :, :]
+        ).reshape(len(all_cuts), -1).T  # (n_target * horizon, n_cuts)
+
+        out_cols = (
+            [f"{model}-lo-{lv}" for lv in reversed(level)]
+            + [f"{model}-hi-{lv}" for lv in level]
+        )
+        fcst_df = ufp.assign_columns(fcst_df, out_cols, quantiles)
+
+    return fcst_df
+
+
 def _weighted_quantile(
     values: np.ndarray,
     weights: np.ndarray,

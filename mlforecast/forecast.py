@@ -53,6 +53,7 @@ from .conformal_prediction import (
     PredictionIntervals,
     TransferConformal,
     TransferResult,
+    _add_signed_transfer_intervals,
     get_conformal_method,
     get_transfer_method_spec,
     compute_conformity_scores,
