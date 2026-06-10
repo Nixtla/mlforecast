@@ -2,7 +2,7 @@ __all__ = ["PredictionIntervals", "TransferConformal", "estimate_density_ratio"]
 
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import utilsforecast.processing as ufp
@@ -643,7 +643,7 @@ def estimate_density_ratio(
     return source_weights
 
 
-_INTERVAL_METHODS = {
+_INTERVAL_METHODS: Dict[str, Callable[..., Any]] = {
     "conformal_distribution": _add_conformal_distribution_intervals,
     "conformal_error": _add_conformal_error_intervals,
     "weighted_conformal_distribution": _add_weighted_conformal_distribution_intervals,
@@ -651,7 +651,7 @@ _INTERVAL_METHODS = {
 }
 
 
-def get_conformal_method(method: str) -> Callable:
+def get_conformal_method(method: str) -> Callable[..., Any]:
     if method not in _INTERVAL_METHODS:
         raise ValueError(
             f"prediction intervals method {method} not supported "

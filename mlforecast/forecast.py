@@ -1451,7 +1451,7 @@ class MLForecast:
                 self.prediction_intervals = _saved_pi
                 self._cs_source_scales_ = _saved_source_scales
 
-            if spec.runs_target_cv and _transfer_result.weights is None and _transfer_result.target_scales is None:
+            if spec.runs_target_cv and _transfer_result is not None and _transfer_result.weights is None and _transfer_result.target_scales is None:
                 # recalibrate / error_scaled: swap in the new cs_df for the quantile step.
                 _saved_cs_df = self._cs_df
                 self._cs_df = _transfer_result.cs_df
