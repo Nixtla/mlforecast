@@ -1,7 +1,7 @@
 __all__ = ["PredictionIntervals", "TransferConformal", "estimate_density_ratio"]
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
