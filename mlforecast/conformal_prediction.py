@@ -701,29 +701,6 @@ class TransferResult:
     signed: bool = False
 
 
-def _validate_transfer_df_length(
-    new_df: DFType,
-    prediction_intervals: PredictionIntervals,
-    id_col: str,
-    n_windows: Optional[int] = None,
-    method: str = "recalibrate",
-) -> None:
-    effective_n = n_windows if n_windows is not None else prediction_intervals.n_windows
-    min_windows = 2 if method == "recalibrate" else 1
-    if effective_n < min_windows:
-        raise ValueError(
-            f"transfer method '{method}' requires at least {min_windows} window(s), "
-            f"got n_windows={effective_n}."
-        )
-    min_samples = prediction_intervals.h * effective_n + 1
-    min_count = int(ufp.counts_by_id(new_df, id_col)["counts"].min())
-    if min_count < min_samples:
-        raise ValueError(
-            f"Transfer conformal prediction requires at least {min_samples} observations per "
-            f"series in new_df (h={prediction_intervals.h} × n_windows={effective_n} + 1). "
-            f"Shortest series has {min_count} observations."
-        )
-
 
 def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
     """IQR(|tgt_errors|) / IQR(|src_errors|) with std and constant fallbacks."""
@@ -756,9 +733,9 @@ def _recalibrate_transfer(
     new_df: DFType,  # noqa: ARG001
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,
+    model_names: List[str],
+    target_col: str,
     backtest_results: Optional[DFType] = None,
-    model_names: Optional[List[str]] = None,
-    target_col: Optional[str] = None,
     id_col: str = "unique_id",  # noqa: ARG001
     time_col: str = "ds",  # noqa: ARG001
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
@@ -786,9 +763,9 @@ def _weighted_conformal_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
     tc: TransferConformal,
+    model_names: List[str],
+    target_col: str,  # noqa: ARG001
     backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    model_names: Optional[List[str]] = None,
-    target_col: Optional[str] = None,  # noqa: ARG001
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,
@@ -858,9 +835,9 @@ def _scale_aligned_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,  # noqa: ARG001
+    model_names: List[str],  # noqa: ARG001
+    target_col: str,
     backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    model_names: Optional[List[str]] = None,  # noqa: ARG001
-    target_col: Optional[str] = None,
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
@@ -897,9 +874,9 @@ def _scale_aligned_weighted_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,
+    model_names: List[str],
+    target_col: str,
     backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    model_names: Optional[List[str]] = None,
-    target_col: Optional[str] = None,
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,
@@ -951,9 +928,9 @@ def _error_scaled_transfer(
     new_df: DFType,  # noqa: ARG001
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
     tc: TransferConformal,  # noqa: ARG001
+    model_names: List[str],
+    target_col: str,
     backtest_results: Optional[DFType] = None,
-    model_names: Optional[List[str]] = None,
-    target_col: Optional[str] = None,
     id_col: str = "unique_id",  # noqa: ARG001
     time_col: str = "ds",  # noqa: ARG001
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
