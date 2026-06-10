@@ -51,12 +51,15 @@ from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import _resolve_num_threads
 from .conformal_prediction import (
     PredictionIntervals,
+    TransferConformal,
+    TransferResult,
     get_conformal_method,
-    get_transfer_conformal_method,
+    get_transfer_method_spec,
     compute_conformity_scores,
 )
 
 _get_conformal_method = get_conformal_method  # backward compat
+_get_transfer_method_spec = get_transfer_method_spec
 
 
 class MLForecast:
@@ -928,6 +931,7 @@ class MLForecast:
                 if hasattr(tfm, "store_fitted"):
                     tfm.store_fitted = True
         self._cs_df: Optional[DataFrame] = None
+        self._cs_source_scales_: Optional[Dict] = None
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
             self._cs_df = self._conformity_scores(
@@ -948,7 +952,7 @@ class MLForecast:
             )
             if prediction_intervals.scale_estimator is not None:
                 from .conformal_prediction import _compute_series_scales
-                prediction_intervals._source_scales = _compute_series_scales(
+                self._cs_source_scales_ = _compute_series_scales(
                     df=df,
                     id_col=id_col,
                     time_col=time_col,
@@ -1210,9 +1214,7 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
-        transfer_conformal_method: str = "recalibrate",
-        covariate_shift_weights: Optional[Union[np.ndarray, Callable]] = None,
-        dre_estimator: str = "logistic",
+        transfer_conformal: Optional[Union[str, TransferConformal]] = None,
     ) -> DFType:
         """Compute the predictions for the next `h` steps.
 
@@ -1224,7 +1226,7 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
             ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Defaults to None.
-            transfer_conformal_method (str): Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. Supported values:
+            transfer_conformal (str or TransferConformal, optional): Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:
 
                 - ``'recalibrate'``: Re-runs cross-validation on ``new_df`` and replaces source calibration scores with target scores. No special fit requirements.
                 - ``'error_scaled'``: Scales source residuals by the ratio of target to source prediction-error standard deviation, estimated via CV on ``new_df``. No special fit requirements beyond ``prediction_intervals``.
@@ -1232,9 +1234,7 @@ class MLForecast:
                 - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``).
                 - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.
 
-                Defaults to ``'recalibrate'``.
-            covariate_shift_weights (np.ndarray or callable, optional): Pre-computed likelihood-ratio weights for each source calibration point (shape matching ``_cs_df`` rows), or a callable that receives the source feature matrix (extracted from ``_cs_df``) and returns a weights array. Requires a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``). Incompatible with ``transfer_conformal_method='recalibrate'`` and with the ``ids=`` argument. Defaults to None.
-            dre_estimator (str): Sklearn estimator used for built-in density-ratio estimation when ``transfer_conformal_method='weighted_conformal'``. Either ``'logistic'`` (default) or ``'gradient_boosting'``.
+                Defaults to ``None`` (equivalent to ``'recalibrate'`` when ``new_df`` and ``level`` are both provided).
 
         Returns:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
@@ -1292,77 +1292,78 @@ class MLForecast:
             ts = new_ts
         else:
             ts = self.ts
-        # Resolve covariate-shift weights for weighted conformal prediction.
-        _cs_weights = None
-        if level is not None and self._cs_df is not None and covariate_shift_weights is not None:
-            if callable(covariate_shift_weights):
+        # Normalize shorthand before any path.
+        if isinstance(transfer_conformal, str):
+            transfer_conformal = TransferConformal(method=transfer_conformal)
+
+        # Same-domain user-supplied weights (no new_df): replaces old covariate_shift_weights.
+        _transfer_result: Optional[TransferResult] = None
+        if (
+            transfer_conformal is not None
+            and transfer_conformal.weights is not None
+            and level is not None
+            and new_df is None
+            and self._cs_df is not None
+        ):
+            if callable(transfer_conformal.weights):
                 model_cols = set(self.models.keys())
                 non_feat = {self.ts.id_col, self.ts.time_col, "cutoff"} | model_cols
                 feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
-                if feat_cols:
-                    src = np.column_stack(
-                        [self._cs_df[c].to_numpy() for c in feat_cols]
-                    ).astype(float)
-                else:
-                    src = None
-                _cs_weights = covariate_shift_weights(src)
-            else:
-                _cs_weights = np.asarray(covariate_shift_weights, dtype=float)
-            if _cs_weights is not None and new_df is not None and transfer_conformal_method == "recalibrate":
-                raise ValueError(
-                    "covariate_shift_weights is incompatible with "
-                    "transfer_conformal_method='recalibrate': weights are computed against "
-                    "source calibration rows that are replaced during recalibration."
+                src = (
+                    np.column_stack([self._cs_df[c].to_numpy() for c in feat_cols]).astype(float)
+                    if feat_cols
+                    else None
                 )
+                w_arr = transfer_conformal.weights(src)
+            else:
+                w_arr = np.asarray(transfer_conformal.weights, dtype=float)
+            _transfer_result = TransferResult(cs_df=self._cs_df, weights=w_arr)
 
         _saved_cs_df = None
         if new_df is not None and level is not None:
-            if self._cs_df is None or self.prediction_intervals is None:
+            if self._cs_df is None or not hasattr(self, "prediction_intervals") or self.prediction_intervals is None:
                 raise ValueError(
                     "Transfer-learning prediction intervals require that the model was "
                     "fit with `prediction_intervals=PredictionIntervals(...)`."
                 )
-            transfer_fn = get_transfer_conformal_method(transfer_conformal_method)
+            if transfer_conformal is None:
+                transfer_conformal = TransferConformal()
+            transfer_conformal.validate(self.prediction_intervals)
+
+            spec = get_transfer_method_spec(transfer_conformal.method)
+
             # cross_validation calls self.fit() internally, clobbering models_, ts,
-            # _cs_df, and prediction_intervals. Save all four and restore after.
+            # _cs_df, prediction_intervals, and _cs_source_scales_. Save all and restore.
             _saved_models_ = self.models_
             _saved_ts_for_cv = self.ts
             _saved_cs_df_pre = self._cs_df
             _saved_pi = self.prediction_intervals
+            _saved_source_scales = self._cs_source_scales_
             try:
-                new_cs_df = transfer_fn(
+                _transfer_result = spec.fn(
                     new_df=new_df,
                     prediction_intervals=self.prediction_intervals,
+                    tc=transfer_conformal,
                     cv_fn=self.cross_validation,
                     model_names=list(self.models.keys()),
                     target_col=self.ts.target_col,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
-                    preprocess_fn=(
-                        self.preprocess
-                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned_weighted")
-                        else None
-                    ),
-                    dre_estimator=dre_estimator,
-                    source_cs_df=(
-                        self._cs_df
-                        if transfer_conformal_method in ("weighted_conformal", "scale_aligned", "scale_aligned_weighted", "error_scaled")
-                        else None
-                    ),
+                    preprocess_fn=(self.preprocess if spec.needs_preprocess else None),
+                    source_cs_df=(self._cs_df if spec.needs_source_cs else None),
+                    source_scales=(self._cs_source_scales_ if spec.needs_source_cs else None),
                 )
             finally:
                 self.models_ = _saved_models_
                 self.ts = _saved_ts_for_cv
                 self._cs_df = _saved_cs_df_pre
                 self.prediction_intervals = _saved_pi
-            if transfer_conformal_method in ("weighted_conformal", "scale_aligned_weighted"):
-                # DRE weights were stored on prediction_intervals; source _cs_df unchanged.
-                _cs_weights = getattr(self.prediction_intervals, "_cs_weights", None)
-            if transfer_conformal_method in ("recalibrate", "error_scaled"):
+                self._cs_source_scales_ = _saved_source_scales
+
+            if spec.runs_target_cv and _transfer_result.weights is None and _transfer_result.target_scales is None:
+                # recalibrate / error_scaled: swap in the new cs_df for the quantile step.
                 _saved_cs_df = self._cs_df
-                self._cs_df = new_cs_df
-            # scale_aligned / scale_aligned_weighted: source _cs_df kept as-is;
-            # _apply_scale_alignment is applied dynamically in the quantile step below.
+                self._cs_df = _transfer_result.cs_df
         try:
             forecasts = ts.predict(
                 models=self.models_,
@@ -1413,7 +1414,9 @@ class MLForecast:
                             "to prediction intervals."
                         )
                     is_transfer = (
-                        new_df is not None and transfer_conformal_method != "recalibrate"
+                        new_df is not None
+                        and transfer_conformal is not None
+                        and transfer_conformal.method != "recalibrate"
                     )
                     if self.prediction_intervals.h == 1 and h > 1:
                         if is_transfer:
@@ -1434,12 +1437,28 @@ class MLForecast:
                     conformal_method = _get_conformal_method(
                         self.prediction_intervals.method
                     )
+                    _cs_weights = _transfer_result.weights if _transfer_result is not None else None
+                    _target_weights = _transfer_result.target_weights if _transfer_result is not None else None
+                    # ESS warning: low effective sample size means weights are extreme.
+                    if _cs_weights is not None and level is not None:
+                        ess = float(_cs_weights.sum() ** 2 / (_cs_weights ** 2).sum())
+                        alpha_min = min((100.0 - lv) / 100.0 for lv in level)
+                        ess_needed = 1.0 / alpha_min - 1.0
+                        if ess < ess_needed:
+                            warnings.warn(
+                                f"Effective sample size (ESS={ess:.1f}) is below the recommended "
+                                f"threshold ({ess_needed:.1f}) for level {max(level)}. Weighted "
+                                "quantiles may return inf bounds. Consider: lower confidence levels, "
+                                "more calibration windows, or reduce clip_quantile in TransferConformal.",
+                                UserWarning,
+                                stacklevel=2,
+                            )
                     if _cs_weights is not None and self.prediction_intervals.method in (
                         "conformal_distribution",
                         "conformal_error",
                     ):
                         raise ValueError(
-                            "covariate_shift_weights requires a weighted conformal method. "
+                            "weighted_conformal transfer requires a weighted conformal fit method. "
                             "Refit the source model with "
                             "PredictionIntervals(method='weighted_conformal_error') or "
                             "'weighted_conformal_distribution'."
@@ -1447,9 +1466,9 @@ class MLForecast:
                     if ids is not None:
                         if _cs_weights is not None:
                             raise ValueError(
-                                "covariate_shift_weights cannot be used together with ids= filtering: "
-                                "the weights array aligns with the full calibration set and would "
-                                "misalign after id-based filtering."
+                                "TransferConformal with DRE weights cannot be used together with "
+                                "ids= filtering: the weights array aligns with the full calibration "
+                                "set and would misalign after id-based filtering."
                             )
                         ids_mask = ufp.is_in(self._cs_df[self.ts.id_col], ids)
                         cs_df = ufp.filter_with_mask(self._cs_df, ids_mask)
@@ -1463,21 +1482,20 @@ class MLForecast:
                         else:
                             n_series = self.ts.ga.n_groups
                     _target_scales = (
-                        getattr(self.prediction_intervals, "_target_scales", None)
-                        if self.prediction_intervals is not None
+                        _transfer_result.target_scales
+                        if _transfer_result is not None
                         else None
                     )
                     if (
                         _target_scales is not None
-                        and self.prediction_intervals._source_scales is not None
+                        and self._cs_source_scales_ is not None
                     ):
                         from .conformal_prediction import _apply_scale_alignment
                         cs_df = _apply_scale_alignment(
                             cs_df=cs_df,
                             model_names=list(model_names),
                             id_col=self.ts.id_col,
-                            source_scales=self.prediction_intervals._source_scales,
-                            target_scales=_target_scales,
+                            source_scales=self._cs_source_scales_,
                         )
                     forecasts = conformal_method(
                         forecasts,
@@ -1490,17 +1508,29 @@ class MLForecast:
                         horizon=h,
                         weights=_cs_weights,
                         is_transfer=is_transfer,
+                        **({} if self.prediction_intervals.method.startswith("conformal_") else {"target_weights": _target_weights}),
                     )
+                    # Per-series σ_tgt scaling: multiply interval half-widths by σ_tgt_j.
+                    # Scores are already normalized by σ_src_i, so quantiles are on the
+                    # normalized scale; rescaling by σ_tgt_j gives per-series correct widths.
+                    if _target_scales is not None:
+                        fcst_uid_arr = forecasts[self.ts.id_col].to_numpy()
+                        sigma_tgt = np.array(
+                            [_target_scales.get(uid, 1.0) for uid in fcst_uid_arr], dtype=float
+                        )
+                        for model_name in list(model_names):
+                            mean_arr = forecasts[model_name].to_numpy().astype(float)
+                            for lv in level_:
+                                for direction in ("lo", "hi"):
+                                    col = f"{model_name}-{direction}-{lv}"
+                                    offset = forecasts[col].to_numpy().astype(float) - mean_arr
+                                    forecasts = ufp.assign_columns(
+                                        forecasts, col, mean_arr + offset * sigma_tgt
+                                    )
             return forecasts
         finally:
             if _saved_cs_df is not None:
                 self._cs_df = _saved_cs_df
-            if (
-                hasattr(self, "prediction_intervals")
-                and self.prediction_intervals is not None
-            ):
-                self.prediction_intervals._target_scales = None
-                self.prediction_intervals._cs_weights = None
 
     def cross_validation(
         self,

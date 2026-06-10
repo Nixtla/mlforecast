@@ -1,4 +1,4 @@
-__all__ = ['generate_daily_series', 'generate_prices_for_series', 'PredictionIntervals']
+__all__ = ['generate_daily_series', 'generate_prices_for_series', 'PredictionIntervals', 'TransferConformal']
 
 
 from math import ceil, log10
@@ -12,7 +12,7 @@ from joblib import cpu_count
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
 
-from .conformal_prediction import PredictionIntervals  # noqa: F401
+from .conformal_prediction import PredictionIntervals, TransferConformal  # noqa: F401
 
 
 # Valid values for each date feature that can be dummy-encoded.

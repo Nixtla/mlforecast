@@ -2287,9 +2287,9 @@ def test_transfer_learning_intervals():
     # _cs_df restored after predict (same object — finally block ran)
     assert fcst._cs_df is saved_cs_df
 
-    # invalid transfer_conformal_method raises ValueError
-    with pytest.raises(ValueError, match="transfer conformal method"):
-        fcst.predict(h=5, level=[80], new_df=train_ef, transfer_conformal_method="bogus")
+    # invalid transfer_conformal raises ValueError
+    with pytest.raises(ValueError, match="TransferConformal.method must be one of"):
+        fcst.predict(h=5, level=[80], new_df=train_ef, transfer_conformal="bogus")
 
 
 def test_transfer_learning_intervals_no_prediction_intervals_raises():
