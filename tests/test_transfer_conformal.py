@@ -511,3 +511,33 @@ def test_add_signed_transfer_intervals_bias_warning():
     assert any("over-predicts" in str(w.message) for w in caught), (
         "Expected a bias warning when q_hi < 0 (interval below point forecast)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 6: dispatch integration
+# ---------------------------------------------------------------------------
+def test_recalibrate_step_size_param():
+    """TransferConformal(step_size=2) runs without error and produces valid intervals."""
+    n, h = 5, 3
+    src = generate_daily_series(n, min_length=60, max_length=60, seed=50)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+    tgt = generate_daily_series(n, min_length=40, max_length=40, seed=51)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(src, prediction_intervals=PredictionIntervals(n_windows=3, h=h))
+
+    preds = mlf.predict(
+        h=h,
+        level=[90],
+        new_df=tgt,
+        transfer_conformal=TransferConformal(method="recalibrate", step_size=2),
+    )
+    assert "LGBMRegressor-lo-90" in preds.columns
+    assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
+    assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()

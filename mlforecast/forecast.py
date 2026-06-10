@@ -1407,12 +1407,17 @@ class MLForecast:
                     if transfer_conformal.n_windows is not None
                     else self.prediction_intervals.n_windows
                 )
-                _max_lag = max(self.ts.lags) if self.ts.lags else 0
+                _max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
                 _backtest_results = _frozen_backtest(
                     fcst=self,
                     new_df=new_df,
                     n_windows=effective_n,
                     h=self.prediction_intervals.h,
+                    step_size=(
+                        transfer_conformal.step_size
+                        if transfer_conformal.step_size is not None
+                        else 1
+                    ),
                     max_lag=_max_lag,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
