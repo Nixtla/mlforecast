@@ -1229,6 +1229,14 @@ class TimeSeries:
         )
         return df
 
+    def _current_step_rows(self, X_df):
+        """One row per series from ``X_df`` for the current horizon step (``self._h``)."""
+        n_series = len(self.uids)
+        h = X_df.shape[0] // n_series
+        row_offset = min(self._h, h - 1)
+        rows = np.arange(row_offset, X_df.shape[0], h)
+        return ufp.drop_index_if_pandas(ufp.take_rows(X_df, rows))
+
     def _update_partition_assignments(self, X_df):
         """Update partition state bucket assignments from current X_df row.
 
@@ -1238,12 +1246,7 @@ class TimeSeries:
         """
         if not getattr(self, "_partition_cols", None):
             return None
-        n_series = len(self.uids)
-        h = X_df.shape[0] // n_series
-        row_offset = min(self._h, h - 1)
-        rows = np.arange(row_offset, X_df.shape[0], h)
-        X_row = ufp.take_rows(X_df, rows)
-        X_row = ufp.drop_index_if_pandas(X_row)
+        X_row = self._current_step_rows(X_df)
         for key, state in self._pooled_states.items():
             _mode, _group_cols, part_cols = key
             if not part_cols or state.key_cols is None:
@@ -1290,12 +1293,7 @@ class TimeSeries:
         new_x = self._update_features()
         if X_df is not None:
             if X_row is None:
-                n_series = len(self.uids)
-                h = X_df.shape[0] // n_series
-                row_offset = min(self._h, h - 1)
-                rows = np.arange(row_offset, X_df.shape[0], h)
-                X_row = ufp.take_rows(X_df, rows)
-                X_row = ufp.drop_index_if_pandas(X_row)
+                X_row = self._current_step_rows(X_df)
             new_x = ufp.horizontal_concat([new_x, X_row])
         if isinstance(new_x, pd.DataFrame):
             nulls = new_x.isnull().any()
