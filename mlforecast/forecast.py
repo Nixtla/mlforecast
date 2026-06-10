@@ -63,7 +63,7 @@ _get_transfer_method_spec = get_transfer_method_spec
 
 
 def _frozen_backtest(
-    fcst,
+    fcst: "MLForecast",
     new_df: DFType,
     n_windows: int,
     h: int,
