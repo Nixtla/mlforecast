@@ -669,6 +669,16 @@ class RollingMax(_RollingBase):
 
 
 class RollingQuantile(_RollingBase):
+    """Rolling quantile.
+
+    Note:
+        In pooled modes (``global_``/``groupby``/``partition_by``) this
+        transform has no aggregate-cache fast path: it falls back to a
+        row-level pass whose cost grows with ``unique timestamps x bucket
+        rows`` at fit, and aggregates are rebuilt at every recursive
+        prediction step. Can be slow on large panels.
+    """
+
     def __init__(
         self,
         p: float,
@@ -703,7 +713,15 @@ class RollingQuantile(_RollingBase):
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
-    """Rolling statistic over seasonal periods"""
+    """Rolling statistic over seasonal periods
+
+    Note:
+        In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+        rolling transforms have no aggregate-cache fast path: they fall back
+        to a row-level pass whose cost grows with ``unique timestamps x
+        bucket rows`` at fit, and aggregates are rebuilt at every recursive
+        prediction step. Can be slow on large panels.
+    """
 
     def __init__(
         self,
@@ -1196,6 +1214,16 @@ class ExpandingMax(_ExpandingBase):
 
 
 class ExpandingQuantile(_ExpandingBase):
+    """Expanding quantile.
+
+    Note:
+        In pooled modes (``global_``/``groupby``/``partition_by``) this
+        transform has no aggregate-cache fast path: it falls back to a
+        row-level pass whose cost grows with ``unique timestamps x bucket
+        rows`` at fit, and aggregates are rebuilt at every recursive
+        prediction step. Can be slow on large panels.
+    """
+
     def __init__(
         self,
         p: float,
