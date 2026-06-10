@@ -593,6 +593,77 @@ def test_random_partition_data(seed):
             )
 
 
+# NULL partition keys: SQL PARTITION BY collapses all NULLs into one partition,
+# and our pooled state must do the same. to_sql maps NaN/None -> SQL NULL, so the
+# oracle locks the SQL NULL-partition semantics for partition_by transforms.
+
+
+def _global_partition_null_df():
+    """global + partition_by where the partition key has NaN (-> one bucket)."""
+    df = _global_partition_df()
+    # float promo with NaN scattered across both series at the same timestamps.
+    df["promo"] = pd.Series(
+        [0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan] * 2
+    )
+    return df
+
+
+def _groupby_partition_null_df():
+    """groupby + partition_by where BOTH the group key and the partition key are
+    NULL on some rows.
+
+    Exercises (a) null-scope parent-calendar resolution: series b and c share a
+    NULL brand, so they must resolve to the *same* parent calendar, and (b) a NULL
+    partition (promo) value collapsing into one bucket within each scope — i.e.
+    SQL PARTITION BY (brand, promo) with NULLs treated as equal.
+    """
+    df = _groupby_partition_df()
+    df["brand"] = pd.Series(["X"] * 8 + [None] * 8 + [None] * 8 + ["Y"] * 8)
+    df["promo"] = pd.Series([0.0, np.nan, 1.0, 1.0, np.nan, 1.0, 0.0, np.nan] * 4)
+    return df
+
+
+def _local_partition_null_df():
+    """local + partition_by where the partition key has NaN (-> own bucket)."""
+    df = _local_partition_df()
+    df["promo"] = pd.Series([0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan] * 2)
+    return df
+
+
+@pytest.mark.parametrize(
+    "transform_factory,transform_name",
+    _PARTITION_TRANSFORMS,
+    ids=[t[1] for t in _PARTITION_TRANSFORMS],
+)
+@pytest.mark.parametrize("lag", [1, 2, 3])
+@pytest.mark.parametrize(
+    "mode", ["global_partition", "groupby_partition", "local_partition"]
+)
+def test_sqlite_oracle_partition_null_key(transform_factory, transform_name, lag, mode):
+    pc = ["promo"]
+    if mode == "global_partition":
+        df = _global_partition_null_df()
+        group_cols = None
+        transform = transform_factory("global_", None, pc)
+    elif mode == "groupby_partition":
+        df = _groupby_partition_null_df()
+        group_cols = ["brand"]
+        transform = transform_factory("groupby", group_cols, pc)
+    else:
+        df = _local_partition_null_df()
+        group_cols = ["unique_id"]
+        transform = transform_factory("local", None, pc)
+    window_size = _WINDOW_SIZE if transform_name.startswith("Rolling") else None
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")
+        assert_oracle_matches(
+            df, transform, transform_name, lag,
+            group_cols=group_cols,
+            partition_cols=pc,
+            window_size=window_size,
+        )
+
+
 # ---------------------------------------------------------------------------
 # NULL groupby keys (SQL collapses all NULLs into one partition; our pooled
 # state must do the same). The oracle harness is pandas->SQLite, where to_sql

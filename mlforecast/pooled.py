@@ -495,11 +495,11 @@ class PooledState:
         else:
             key_cols = _dedupe_preserve_order(partition_cols_list)
 
-        if mode == "local":
-            join_cols = key_cols + [time_col]
-            join_cols = _dedupe_preserve_order(join_cols)
-        else:
-            join_cols = [id_col, time_col]
+        # (id_col, time_col) uniquely identifies each row in bucket_df in every
+        # mode, so the slow-path join never needs to key on the (nullable)
+        # partition columns — a plain merge on a null partition value would
+        # mismatch (NaN != NaN) and drop the feature.
+        join_cols = [id_col, time_col]
 
         keep_cols = _dedupe_preserve_order(
             [id_col] + key_cols + [time_col, target_col]
@@ -559,17 +559,23 @@ class PooledState:
         next_pid = 0
 
         if parent_scope_cols is not None:
-            groups_nw = nw.from_native(groups)
-            sorted_nw = nw.from_native(sorted_df)
+            # Sentinel-encode the scope columns so a null/NaN scope value (e.g. a
+            # null groupby key under groupby+partition_by) matches itself and only
+            # itself: scope keys are used both as dict keys (NaN != NaN would split
+            # one scope across parents) and as a grid filter (an `== null` predicate
+            # matches nothing). Mirrors the null-equal bucket-key handling above.
+            enc_scope_cols = [f"__enc_{c}" for c in parent_scope_cols]
+            groups_nw = _encode_keys(nw.from_native(groups), parent_scope_cols)
+            sorted_nw = _encode_keys(nw.from_native(sorted_df), parent_scope_cols)
             for bid in np.unique(bid_arr):
                 row_nw = groups_nw.filter(nw.col("_bucket_id") == int(bid))
-                scope_key = row_nw.select(parent_scope_cols).row(0)
+                scope_key = row_nw.select(enc_scope_cols).row(0)
 
                 if scope_key not in parent_id_map:
                     pid = next_pid
                     next_pid += 1
                     parent_id_map[scope_key] = pid
-                    exprs = [nw.col(c) == v for c, v in zip(parent_scope_cols, scope_key)]
+                    exprs = [nw.col(ec) == v for ec, v in zip(enc_scope_cols, scope_key)]
                     combined = exprs[0]
                     for e in exprs[1:]:
                         combined = combined & e
@@ -663,6 +669,10 @@ class PooledState:
         new_bid = context_with_bid["_bucket_id"].to_numpy().astype(np.int64)
         self.series_bucket_id = new_bid
         groups_nw = nw.from_native(self.groups)
+        if self.parent_scope_cols:
+            # Encode once so the per-bucket `_resolve_parent_for_bucket` loop below
+            # reuses it instead of re-encoding each new bucket.
+            groups_nw = _encode_keys(groups_nw, self.parent_scope_cols)
         for bid in np.unique(new_bid):
             bid_int = int(bid)
             if bid_int not in self.next_time_index_by_bucket:
@@ -708,10 +718,16 @@ class PooledState:
         else:
             if groups_nw is None:
                 groups_nw = nw.from_native(self.groups)
+            # `_scope_key_to_parent_id` is keyed by sentinel-encoded scope tuples
+            # (see `from_partition`), so encode here too — null/NaN scope values
+            # must resolve to the same parent, not a fresh one per NaN.
+            enc_scope_cols = [f"__enc_{c}" for c in self.parent_scope_cols]
+            if enc_scope_cols[0] not in groups_nw.columns:
+                groups_nw = _encode_keys(groups_nw, self.parent_scope_cols)
             row_nw = groups_nw.filter(nw.col("_bucket_id") == bid)
             if len(row_nw) == 0:
                 return None
-            scope_key = row_nw.select(self.parent_scope_cols).row(0)
+            scope_key = row_nw.select(enc_scope_cols).row(0)
 
         if scope_key in self._scope_key_to_parent_id:
             pid = self._scope_key_to_parent_id[scope_key]

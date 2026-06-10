@@ -1953,6 +1953,159 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", _LAGS)
+def test_fast_vs_slow_local_partition_with_nan(engine, lag):
+    """Local partition_by with a missing partition value: the slow-path join
+    (forced by clearing the aggregate cache and the idsorted permutation) keys on
+    (id, time), so missing-partition rows are matched, not dropped — matching the
+    fast path. Guards the local ``join_cols`` fix on both engine join paths.
+
+    The missing value is ``None`` (-> polars *null*, pandas NaN): a raw polars join
+    on a null key does NOT match (raw pandas merge and polars NaN both do), so the
+    polars case is what actually exercises the fix."""
+    n_series, n_times = 4, 10
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = np.random.default_rng(11).standard_normal(n_series * n_times)
+    # contiguous missing run so the missing-partition bucket has dense observations
+    # and (with min_samples=1) produces non-NaN values — otherwise the fast vs slow
+    # comparison is vacuously all-NaN and would not catch a dropped-row join.
+    promo = [None, None, None, None, None, 0.0, 0.0, 1.0, 1.0, 0.0] * n_series
+    df = _make_df(engine, {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "promo": promo,
+    })
+
+    tfm = RollingMean(window_size=2, min_samples=1, partition_by=["promo"])
+    col = tfm._get_name(lag)
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    fast = np.asarray(ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )[col])
+
+    ts_slow = TimeSeries(
+        freq=1,
+        lag_transforms={
+            lag: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
+        },
+    )
+    ts_slow._fit(
+        df, id_col="unique_id", time_col="ds", target_col="y", static_features=[],
+    )
+    for st in ts_slow._pooled_states.values():
+        st._ts_aggs = {}
+        st._idsorted_to_bucket_pos = None
+    slow = np.asarray(ts_slow._transform(df=df, dropna=False)[col])
+
+    np.testing.assert_allclose(
+        fast, slow, atol=1e-10, equal_nan=True,
+        err_msg=f"local+partition NaN fast vs slow for {col}",
+    )
+    # the NaN-partition rows must receive values from the slow-path join, not be
+    # dropped (which would leave them NaN where the fast path has a value).
+    assert not np.all(np.isnan(slow))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_predict_x_df_partition_column_has_nan(engine):
+    """predict with an X_df whose partition column is NaN routes to the existing
+    missing bucket and yields finite predictions instead of crashing."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    n_series, n_times = 4, 8
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = np.random.default_rng(3).standard_normal(n_series * n_times)
+    promo = np.tile([0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan], n_series)
+    df = _make_df(engine, {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "promo": promo.tolist(),
+    })
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lags=[1],
+        lag_transforms={
+            1: [RollingMean(
+                window_size=2, min_samples=1, global_=True, partition_by=["promo"]
+            )]
+        },
+    )
+    fcst.fit(df, static_features=[])
+
+    # All future partition values are NaN: every step routes to the existing
+    # missing bucket (created at fit), which stays populated as predictions feed
+    # back in — exercising null-partition routing through update_series_bucket_id
+    # at predict time without an IndexError / garbage bucket.
+    h = 2
+    fut_ids = np.repeat([f"s{i}" for i in range(n_series)], h)
+    fut_ds = np.tile([n_times, n_times + 1], n_series)
+    fut_promo = np.full(n_series * h, np.nan)
+    X_df = _make_df(engine, {
+        "unique_id": fut_ids.tolist(), "ds": fut_ds.tolist(),
+        "promo": fut_promo.tolist(),
+    })
+    preds = fcst.predict(h, X_df=X_df)
+    pvals = np.asarray(preds["LinearRegression"])
+    assert np.all(np.isfinite(pvals))  # no IndexError / dropped NaN-partition rows
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_groupby_partition_null_scope_resolves_at_predict(engine):
+    """A new (null-group, unseen-promo) bucket created at predict time must resolve
+    to the SAME parent calendar as the existing null-group buckets. The group key is
+    a genuinely numeric field (``discount``) with NaN, so the lookup exercises the
+    sentinel encoding in ``_resolve_parent_for_bucket`` — raw NaN != NaN would
+    otherwise spawn a fresh parent per NaN."""
+    import narwhals as nw
+
+    # discount is numeric with NaN on series b and c (they share the null scope).
+    df = _make_df(engine, {
+        "unique_id": ["a"] * 6 + ["b"] * 6 + ["c"] * 6,
+        "ds": list(range(6)) * 3,
+        "y": [float(i) for i in range(18)],
+        "discount": [0.25] * 6 + [float("nan")] * 6 + [float("nan")] * 6,
+        "promo": [0, 1, 0, 1, 0, 1] * 3,
+    })
+    tfm = RollingMean(
+        window_size=2, min_samples=1, groupby=["discount"], partition_by=["promo"]
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=["discount"],
+    )
+    state = ts._pooled_states[("nonlocal", ("discount",), ("promo",))]
+
+    # all null-discount buckets must already share one parent calendar (fit-side fix)
+    groups_nw = nw.from_native(state.groups)
+    bids = groups_nw.get_column("_bucket_id").to_numpy()
+    discounts = groups_nw.get_column("discount").to_numpy()
+    null_scope_bids = [
+        int(b) for b, d in zip(bids, discounts)
+        if d is None or (isinstance(d, float) and np.isnan(d))
+    ]
+    null_parents = {state._bucket_to_parent_id[b] for b in null_scope_bids}
+    assert len(null_scope_bids) >= 2 and len(null_parents) == 1
+    shared_parent = null_parents.pop()
+
+    # predict-time context: null-discount series b takes an UNSEEN promo value (9),
+    # forcing a brand-new bucket whose parent must be resolved from its scope.
+    ctx = _make_df(engine, {
+        "unique_id": ["a", "b", "c"],
+        "discount": [0.25, float("nan"), float("nan")],
+        "promo": [0, 9, 1],
+    })
+    state.update_series_bucket_id(ctx, "unique_id")  # must not raise
+
+    new_bid = int(state.series_bucket_id[1])  # series b, the (NaN, 9) combo
+    assert new_bid not in null_scope_bids  # genuinely a new bucket
+    assert state._bucket_to_parent_id[new_bid] == shared_parent
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_prediction_fast_path_partition(engine):
     """Multi-step predict with fast path + partition_by produces finite values."""
     n_series, n_times = 4, 8
