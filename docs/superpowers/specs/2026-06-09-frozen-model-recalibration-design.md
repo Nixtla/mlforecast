@@ -61,6 +61,11 @@ predict()
 
 ## Component designs
 
+### `TransferConformal` (updated, in `conformal_prediction.py`)
+
+Add `step_size: Optional[int] = None`. When `None`, the frozen backtest defaults to
+`step_size=1`. Validation: if set, must be >= 1.
+
 ### `_frozen_backtest` (new, in `forecast.py`)
 
 ```python
@@ -105,7 +110,9 @@ If any series has fewer than `required` unique timestamps, raise `ValueError` na
 shortfall:
 > "series X has 8 time steps; need 12 for n_windows=2, h=3, step_size=1, max_lag=5"
 
-`max_lag` is read at the call site as `max(self.ts.lags)` (or `0` if no lags configured).
+`max_lag` is read at the call site as `self.ts.keep_last_n` when set (already the max across
+all lags and lag-transform windows, computed by `TimeSeries` at fit time), falling back to
+`max(self.ts.lags)` if `keep_last_n` is `None`, or `0` if no lags are configured.
 
 ### `compute_conformity_scores` (updated, in `conformal_prediction.py`)
 
@@ -141,7 +148,7 @@ if spec.runs_target_cv:
         n_windows=effective_n,
         h=prediction_intervals.h,
         step_size=tc.step_size if tc.step_size is not None else 1,
-        max_lag=max(self.ts.lags) if self.ts.lags else 0,
+        max_lag=self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0),
         id_col=self.ts.id_col,
         time_col=self.ts.time_col,
         target_col=self.ts.target_col,
