@@ -1,5 +1,6 @@
 __all__ = ["PredictionIntervals", "estimate_density_ratio"]
 
+import warnings
 from typing import Callable, Dict, List, Literal, Optional, Union
 
 import numpy as np
@@ -62,8 +63,6 @@ def _compute_series_scales(
     with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
     short series.
     """
-    import warnings
-
     raw: Dict = {}
     unique_ids = np.unique(df[id_col].to_numpy())
     for uid in unique_ids:
@@ -114,11 +113,10 @@ def _apply_scale_alignment(
     sigma_target_global = float(np.median(target_scales))
     cs_df = ufp.copy_if_pandas(cs_df, deep=False)
     uid_arr = cs_df[id_col].to_numpy()
+    scale_map = {uid: sigma_target_global / sigma_src for uid, sigma_src in source_scales.items()}
+    row_scales = np.vectorize(scale_map.__getitem__)(uid_arr)
     for model in model_names:
-        vals = cs_df[model].to_numpy().astype(float).copy()
-        for uid, sigma_src in source_scales.items():
-            mask = uid_arr == uid
-            vals[mask] *= sigma_target_global / sigma_src
+        vals = cs_df[model].to_numpy().astype(float) * row_scales
         cs_df = ufp.assign_columns(cs_df, model, vals)
     return cs_df
 
@@ -133,6 +131,7 @@ def _add_conformal_distribution_intervals(
     n_series: int,
     horizon: int,
     weights: Optional[np.ndarray] = None,  # noqa: ARG001
+    is_transfer: bool = False,
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -149,7 +148,7 @@ def _add_conformal_distribution_intervals(
         scores = scores[:, :, :horizon]
         mean_flat = fcst_df[model].to_numpy().ravel()
         n_target = len(mean_flat) // horizon
-        if n_target != n_series:
+        if is_transfer:
             # Transfer scenario: pool all source calibration points globally.
             # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
             scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
@@ -181,6 +180,7 @@ def _add_conformal_error_intervals(
     n_series: int,
     horizon: int,
     weights: Optional[np.ndarray] = None,  # noqa: ARG001
+    is_transfer: bool = False,
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -195,7 +195,7 @@ def _add_conformal_error_intervals(
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
         n_target = len(mean) // horizon
-        if n_target != n_series:
+        if is_transfer:
             # Transfer scenario: pool all source calibration points globally.
             # Compute a single quantile per horizon step, then tile to all target series.
             scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
@@ -242,6 +242,7 @@ def _add_weighted_conformal_error_intervals(
     n_series: int,
     horizon: int,
     weights: Optional[np.ndarray] = None,
+    is_transfer: bool = False,
 ) -> DFType:
     """Weighted conformal error intervals per Tibshirani et al. (2019).
 
@@ -257,7 +258,7 @@ def _add_weighted_conformal_error_intervals(
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         scores = scores[:, :, :horizon]
         n_target = len(mean) // horizon
-        if n_target != n_series:
+        if is_transfer:
             # Transfer scenario: pool all source calibration points globally.
             scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
             if weights is None:
@@ -303,6 +304,7 @@ def _add_weighted_conformal_distribution_intervals(
     n_series: int,
     horizon: int,
     weights: Optional[np.ndarray] = None,
+    is_transfer: bool = False,
 ) -> DFType:
     """Weighted conformal distribution intervals per Tibshirani et al. (2019).
 
@@ -318,7 +320,7 @@ def _add_weighted_conformal_distribution_intervals(
         scores = scores[:, :, :horizon]
         mean_flat = fcst_df[model].to_numpy().ravel()
         n_target = len(mean_flat) // horizon
-        if n_target != n_series:
+        if is_transfer:
             # Transfer scenario: pool all source calibration points globally.
             # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
             scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
@@ -457,6 +459,19 @@ def compute_conformity_scores(
     return result
 
 
+def _validate_transfer_df_length(
+    new_df: DFType, prediction_intervals: PredictionIntervals, id_col: str
+) -> None:
+    min_samples = prediction_intervals.h * prediction_intervals.n_windows + 1
+    min_count = int(ufp.counts_by_id(new_df, id_col)["counts"].min())
+    if min_count < min_samples:
+        raise ValueError(
+            f"Transfer conformal prediction requires at least {min_samples} observations per "
+            f"series in new_df (h={prediction_intervals.h} × n_windows={prediction_intervals.n_windows} + 1). "
+            f"Shortest series has {min_count} observations."
+        )
+
+
 def _recalibrate_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
@@ -470,6 +485,7 @@ def _recalibrate_transfer(
     source_cs_df: Optional[DFType] = None,  # noqa: ARG001
 ) -> DFType:
     """Recompute conformity scores via cross_validation on new_df."""
+    _validate_transfer_df_length(new_df, prediction_intervals, id_col)
     cv_results = cv_fn(
         df=new_df,
         n_windows=prediction_intervals.n_windows,
@@ -525,12 +541,21 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
-    src_np = np.column_stack(
-        [source_cs_df[c].to_numpy() for c in feature_cols]
-    ).astype(float)
-
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
+
+    dropped = set(feature_cols) - set(tgt_feature_cols)
+    if dropped:
+        warnings.warn(
+            f"Target data is missing {len(dropped)} feature column(s) used during source fit "
+            f"({sorted(dropped)}). Density ratio estimation will use the common subset only.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    src_np = np.column_stack(
+        [source_cs_df[c].to_numpy() for c in tgt_feature_cols]
+    ).astype(float)
     tgt_np = np.column_stack(
         [tgt_preprocessed[c].to_numpy() for c in tgt_feature_cols]
     ).astype(float)
@@ -660,6 +685,7 @@ def _error_scaled_transfer(
             "ensure the model was fit with prediction_intervals."
         )
 
+    _validate_transfer_df_length(new_df, prediction_intervals, id_col)
     cv_results = cv_fn(
         df=new_df,
         n_windows=prediction_intervals.n_windows,

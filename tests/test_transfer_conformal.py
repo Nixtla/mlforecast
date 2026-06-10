@@ -21,7 +21,7 @@ TRANSFER_METHODS = [
     "scale_aligned_weighted",
 ]
 MODEL = "LGBMRegressor"
-_PREDICTION_CACHE: dict[str, pd.DataFrame] = {}
+_PREDICTION_CACHE: dict[tuple, pd.DataFrame] = {}
 
 
 @pytest.fixture(scope="module")
@@ -97,15 +97,16 @@ def _predict_transfer(
     transfer_cp_setup: tuple[MLForecast, pd.DataFrame, pd.DataFrame],
     method: str,
 ) -> pd.DataFrame:
-    if method not in _PREDICTION_CACHE:
-        mlf, target_train, _ = transfer_cp_setup
-        _PREDICTION_CACHE[method] = mlf.predict(
+    mlf, target_train, _ = transfer_cp_setup
+    cache_key = (id(mlf), method)
+    if cache_key not in _PREDICTION_CACHE:
+        _PREDICTION_CACHE[cache_key] = mlf.predict(
             h=HORIZON,
             level=LEVELS,
             new_df=target_train,
             transfer_conformal_method=method,
         )
-    return _PREDICTION_CACHE[method].copy()
+    return _PREDICTION_CACHE[cache_key].copy()
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
@@ -157,3 +158,76 @@ def test_interval_nesting(transfer_cp_setup, method):
         & (preds[f"{MODEL}-hi-90"] <= preds[f"{MODEL}-hi-95"])
     )
     assert nested.all()
+
+
+def test_equal_counts_pooled_uniform_widths():
+    """n_source == n_target must produce uniform pooled interval widths (item 1 bug fix)."""
+    n = 5
+    source_train = generate_daily_series(n, min_length=200, max_length=200, seed=10)
+    target_train = generate_daily_series(n, min_length=200, max_length=200, seed=11)
+    source_train["unique_id"] = "src_" + source_train["unique_id"].astype(str)
+    target_train["unique_id"] = "tgt_" + target_train["unique_id"].astype(str)
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1, 7],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        source_train,
+        prediction_intervals=PredictionIntervals(n_windows=3, h=7),
+    )
+
+    preds = mlf.predict(
+        h=7, level=[90], new_df=target_train, transfer_conformal_method="error_scaled"
+    )
+    # For each forecast date (horizon step), all target series must share the same
+    # interval width (pooled quantile is the same scalar for every series at that step).
+    for ds, group in preds.groupby("ds", sort=False):
+        step_widths = group[f"{MODEL}-hi-90"] - group[f"{MODEL}-lo-90"]
+        assert np.allclose(step_widths, step_widths.iloc[0], rtol=1e-6), (
+            f"Pooled transfer with equal source/target counts must produce uniform widths "
+            f"across series at each horizon step; ds={ds} got "
+            f"[{step_widths.min():.4f}, {step_widths.max():.4f}]"
+        )
+
+
+def test_h1_transfer_raises():
+    """PredictionIntervals(h=1) + transfer + h > 1 must raise ValueError (item 2 bug fix)."""
+    n = 5
+    source_train = generate_daily_series(n, min_length=100, max_length=100, seed=20)
+    target_train = generate_daily_series(n, min_length=100, max_length=100, seed=21)
+    source_train["unique_id"] = "src_" + source_train["unique_id"].astype(str)
+    target_train["unique_id"] = "tgt_" + target_train["unique_id"].astype(str)
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        source_train,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=1),
+    )
+
+    with pytest.raises(ValueError, match="requires PredictionIntervals"):
+        mlf.predict(
+            h=7,
+            level=[90],
+            new_df=target_train,
+            transfer_conformal_method="error_scaled",
+        )
+
+
+def test_methods_produce_different_widths(transfer_cp_setup):
+    """Different transfer methods must produce meaningfully different interval widths."""
+    preds_r = _predict_transfer(transfer_cp_setup, "recalibrate")
+    preds_s = _predict_transfer(transfer_cp_setup, "scale_aligned")
+    widths_r = (preds_r[f"{MODEL}-hi-90"] - preds_r[f"{MODEL}-lo-90"]).mean()
+    widths_s = (preds_s[f"{MODEL}-hi-90"] - preds_s[f"{MODEL}-lo-90"]).mean()
+    assert not np.isclose(widths_r, widths_s, rtol=0.01), (
+        f"'recalibrate' and 'scale_aligned' produced nearly identical mean widths "
+        f"({widths_r:.4f} vs {widths_s:.4f}); expected them to differ."
+    )
