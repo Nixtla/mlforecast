@@ -292,6 +292,7 @@ def _add_signed_transfer_intervals(
     model_names: List[str],
     level: List[Union[int, float]],
     horizon: int,
+    cs_h: int = 1,
 ) -> DFType:
     """Add asymmetric prediction intervals from signed conformity scores (y − pred).
 
@@ -299,18 +300,26 @@ def _add_signed_transfer_intervals(
     so that a systematically biased transferred model shifts the interval rather than
     merely widening it.
 
+    When ``cs_h == 1`` but ``horizon > 1`` (calibration was done with 1-step ahead
+    cross-validation), the same constant-width interval is broadcast across all
+    horizon steps, matching the behaviour of the regular conformal methods in that
+    case.
+
     Emits UserWarning when the interval lies entirely above or below the point forecast
     (both quantiles have the same sign), indicating severe source-model bias on the
     target domain.
     """
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
+    # Determine the effective horizon stored in cs_df. If cs_h=1 but horizon>1,
+    # the calibration set only has 1-step scores; broadcast constant intervals.
+    effective_cs_h = cs_h if cs_h > 1 else 1
+    use_flat_pool = effective_cs_h == 1 and horizon > 1
     n_cal_flat = len(cs_df[model_names[0]].to_numpy())
-    n_cal_series = n_cal_flat // horizon  # n_windows * n_target_series
+    n_cal_series = n_cal_flat // effective_cs_h  # n_windows * n_target_series
 
     for model in model_names:
         mean = fcst_df[model].to_numpy().ravel()
         scores = cs_df[model].to_numpy().astype(float)
-        scores_2d = scores.reshape(n_cal_series, horizon)
 
         # level is pre-sorted ascending (e.g. [80, 90, 95])
         # lo cols: reversed levels (widest first) → [lo-95, lo-90, lo-80]
@@ -319,8 +328,15 @@ def _add_signed_transfer_intervals(
         hi_cuts = [1 - ((100 - lv) / 100) / 2 for lv in level]
         all_cuts = lo_cuts + hi_cuts
 
-        # q_per_horizon: (n_cuts, horizon) — per-step quantiles
-        q_per_horizon = np.quantile(scores_2d, all_cuts, axis=0)
+        if use_flat_pool:
+            # cs_h=1: compute a single quantile over all scores, broadcast to all steps.
+            # Shape: (n_cuts,) -> (n_cuts, horizon) via broadcasting.
+            q_flat = np.quantile(scores, all_cuts)  # (n_cuts,)
+            q_per_horizon = np.tile(q_flat[:, np.newaxis], (1, horizon))  # (n_cuts, horizon)
+        else:
+            scores_2d = scores.reshape(n_cal_series, effective_cs_h)
+            # q_per_horizon: (n_cuts, horizon) — per-step quantiles
+            q_per_horizon = np.quantile(scores_2d, all_cuts, axis=0)
 
         # Bias warnings
         n_lo = len(lo_cuts)

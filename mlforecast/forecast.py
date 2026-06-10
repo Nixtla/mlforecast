@@ -1595,6 +1595,7 @@ class MLForecast:
                             model_names=list(model_names),
                             level=level_,
                             horizon=h,
+                            cs_h=self.prediction_intervals.h,
                         )
                     else:
                         forecasts = conformal_method(
