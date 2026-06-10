@@ -1397,8 +1397,29 @@ class MLForecast:
 
             spec = get_transfer_method_spec(transfer_conformal.method)
 
-            # cross_validation calls self.fit() internally, clobbering models_, ts,
-            # _cs_df, prediction_intervals, and _cs_source_scales_. Save all and restore.
+            # Run frozen-model backtest on new_df for methods that need target-domain
+            # conformity scores (recalibrate, error_scaled). Uses source-trained models
+            # throughout — no refitting, so save/restore is not needed for the backtest.
+            _backtest_results = None
+            if spec.runs_target_cv:
+                effective_n = (
+                    transfer_conformal.n_windows
+                    if transfer_conformal.n_windows is not None
+                    else self.prediction_intervals.n_windows
+                )
+                _max_lag = max(self.ts.lags) if self.ts.lags else 0
+                _backtest_results = _frozen_backtest(
+                    fcst=self,
+                    new_df=new_df,
+                    n_windows=effective_n,
+                    h=self.prediction_intervals.h,
+                    max_lag=_max_lag,
+                    id_col=self.ts.id_col,
+                    time_col=self.ts.time_col,
+                    target_col=self.ts.target_col,
+                )
+
+            # Save state that needs to survive for the final forecasting step.
             _saved_models_ = self.models_
             _saved_ts_for_cv = self.ts
             _saved_cs_df_pre = self._cs_df
@@ -1409,7 +1430,7 @@ class MLForecast:
                     new_df=new_df,
                     prediction_intervals=self.prediction_intervals,
                     tc=transfer_conformal,
-                    cv_fn=self.cross_validation,
+                    backtest_results=_backtest_results,
                     model_names=list(self.models.keys()),
                     target_col=self.ts.target_col,
                     id_col=self.ts.id_col,
@@ -1562,19 +1583,28 @@ class MLForecast:
                             id_col=self.ts.id_col,
                             source_scales=self._cs_source_scales_,
                         )
-                    forecasts = conformal_method(
-                        forecasts,
-                        cs_df,
-                        model_names=list(model_names),
-                        level=level_,
-                        cs_h=self.prediction_intervals.h,
-                        cs_n_windows=self.prediction_intervals.n_windows,
-                        n_series=n_series,
-                        horizon=h,
-                        weights=_cs_weights,
-                        is_transfer=is_transfer,
-                        **({} if self.prediction_intervals.method.startswith("conformal_") else {"target_weights": _target_weights}),
-                    )
+                    if _transfer_result is not None and _transfer_result.signed:
+                        forecasts = _add_signed_transfer_intervals(
+                            forecasts,
+                            cs_df,
+                            model_names=list(model_names),
+                            level=level_,
+                            horizon=h,
+                        )
+                    else:
+                        forecasts = conformal_method(
+                            forecasts,
+                            cs_df,
+                            model_names=list(model_names),
+                            level=level_,
+                            cs_h=self.prediction_intervals.h,
+                            cs_n_windows=self.prediction_intervals.n_windows,
+                            n_series=n_series,
+                            horizon=h,
+                            weights=_cs_weights,
+                            is_transfer=is_transfer,
+                            **({} if self.prediction_intervals.method.startswith("conformal_") else {"target_weights": _target_weights}),
+                        )
                     # Per-series σ_tgt scaling: multiply interval half-widths by σ_tgt_j.
                     # Scores are already normalized by σ_src_i, so quantiles are on the
                     # normalized scale; rescaling by σ_tgt_j gives per-series correct widths.

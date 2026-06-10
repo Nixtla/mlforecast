@@ -456,6 +456,38 @@ def test_add_signed_transfer_intervals_shape_and_nesting():
     assert (result["m-hi-80"] <= result["m-hi-90"]).all()
 
 
+# ---------------------------------------------------------------------------
+# Task 4: _recalibrate_transfer signed residuals
+# ---------------------------------------------------------------------------
+def test_recalibrate_transfer_result_is_signed():
+    """_recalibrate_transfer must return TransferResult(signed=True) with signed scores."""
+    import pandas as pd
+    from mlforecast.conformal_prediction import (
+        _recalibrate_transfer, PredictionIntervals, TransferConformal,
+    )
+    backtest = pd.DataFrame({
+        "unique_id": ["a", "a", "a", "a"],
+        "ds":        [2, 3, 1, 2],
+        "cutoff":    [1, 1, 0, 0],
+        "y":         [3.0, 5.0, 2.0, 4.0],
+        "m":         [1.0, 7.0, 3.0, 3.0],
+    })
+    pi = PredictionIntervals(n_windows=2, h=1)
+    tc = TransferConformal(method="recalibrate")
+    result = _recalibrate_transfer(
+        new_df=backtest,
+        prediction_intervals=pi,
+        tc=tc,
+        backtest_results=backtest,
+        model_names=["m"],
+        target_col="y",
+    )
+    assert result.signed is True
+    # Signed residuals: y - pred = [3-1, 5-7, 2-3, 4-3] = [2, -2, -1, 1]
+    vals = list(result.cs_df["m"])
+    assert any(v < 0 for v in vals), "Signed residuals should include negative values"
+
+
 def test_add_signed_transfer_intervals_bias_warning():
     import pandas as pd
     import warnings as _warnings

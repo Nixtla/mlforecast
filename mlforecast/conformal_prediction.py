@@ -753,41 +753,42 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
 
 
 def _recalibrate_transfer(
-    new_df: DFType,
+    new_df: DFType,  # noqa: ARG001
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,
-    cv_fn: Callable,
-    model_names: List[str],
-    target_col: str,
-    id_col: str = "unique_id",
-    time_col: str = "ds",
+    backtest_results: Optional[DFType] = None,
+    model_names: Optional[List[str]] = None,
+    target_col: Optional[str] = None,
+    id_col: str = "unique_id",  # noqa: ARG001
+    time_col: str = "ds",  # noqa: ARG001
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
     source_cs_df: Optional[DFType] = None,  # noqa: ARG001
     source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
-    """Recompute conformity scores via cross_validation on new_df."""
+    """Recompute conformity scores from frozen-model backtest on new_df.
+
+    Uses signed residuals (y − pred) so systematic bias shifts the interval
+    instead of merely widening it.
+    """
     effective_n = tc.n_windows if tc.n_windows is not None else prediction_intervals.n_windows
-    _validate_transfer_df_length(new_df, prediction_intervals, id_col, n_windows=effective_n, method="recalibrate")
-    cv_results = cv_fn(
-        df=new_df,
-        n_windows=effective_n,
-        h=prediction_intervals.h,
-        refit=False,
-        prediction_intervals=None,
-        id_col=id_col,
-        time_col=time_col,
-        target_col=target_col,
+    if effective_n < 2:
+        raise ValueError(
+            f"transfer method 'recalibrate' requires at least 2 window(s), "
+            f"got n_windows={effective_n}."
+        )
+    return TransferResult(
+        cs_df=compute_conformity_scores(backtest_results, model_names, target_col, signed=True),
+        signed=True,
     )
-    return TransferResult(cs_df=compute_conformity_scores(cv_results, model_names, target_col))
 
 
 def _weighted_conformal_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
     tc: TransferConformal,
-    cv_fn: Callable,  # noqa: ARG001
-    model_names: List[str],
-    target_col: str,  # noqa: ARG001
+    backtest_results: Optional[DFType] = None,  # noqa: ARG001
+    model_names: Optional[List[str]] = None,
+    target_col: Optional[str] = None,  # noqa: ARG001
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,
@@ -857,9 +858,9 @@ def _scale_aligned_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,  # noqa: ARG001
-    cv_fn: Callable,  # noqa: ARG001
-    model_names: List[str],  # noqa: ARG001
-    target_col: str,
+    backtest_results: Optional[DFType] = None,  # noqa: ARG001
+    model_names: Optional[List[str]] = None,  # noqa: ARG001
+    target_col: Optional[str] = None,
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
@@ -896,9 +897,9 @@ def _scale_aligned_weighted_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,
     tc: TransferConformal,
-    cv_fn: Callable,
-    model_names: List[str],
-    target_col: str,
+    backtest_results: Optional[DFType] = None,  # noqa: ARG001
+    model_names: Optional[List[str]] = None,
+    target_col: Optional[str] = None,
     id_col: str = "unique_id",
     time_col: str = "ds",
     preprocess_fn: Optional[Callable] = None,
@@ -919,7 +920,6 @@ def _scale_aligned_weighted_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
-        cv_fn=cv_fn,
         model_names=model_names,
         target_col=target_col,
         id_col=id_col,
@@ -932,7 +932,6 @@ def _scale_aligned_weighted_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
-        cv_fn=cv_fn,
         model_names=model_names,
         target_col=target_col,
         id_col=id_col,
@@ -949,44 +948,25 @@ def _scale_aligned_weighted_transfer(
 
 
 def _error_scaled_transfer(
-    new_df: DFType,
-    prediction_intervals: PredictionIntervals,
+    new_df: DFType,  # noqa: ARG001
+    prediction_intervals: PredictionIntervals,  # noqa: ARG001
     tc: TransferConformal,  # noqa: ARG001
-    cv_fn: Callable,
-    model_names: List[str],
-    target_col: str,
-    id_col: str = "unique_id",
-    time_col: str = "ds",
+    backtest_results: Optional[DFType] = None,
+    model_names: Optional[List[str]] = None,
+    target_col: Optional[str] = None,
+    id_col: str = "unique_id",  # noqa: ARG001
+    time_col: str = "ds",  # noqa: ARG001
     preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
     source_cs_df: Optional[DFType] = None,
     source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
-    """Scale source conformity scores by the ratio of target to source prediction error stds.
-
-    Runs cross-validation on new_df to estimate target-domain error magnitude, then
-    scales source conformity scores by sigma_target / sigma_source per model.
-    Unlike scale_aligned (which uses y-history variance), this uses actual prediction
-    error variance and therefore requires inference on new_df.
-    """
+    """Scale source conformity scores by the ratio of target to source prediction error stds."""
     if source_cs_df is None:
         raise ValueError(
             "transfer_conformal_method='error_scaled' requires source_cs_df; "
             "ensure the model was fit with prediction_intervals."
         )
-
-    effective_n = tc.n_windows if tc.n_windows is not None else prediction_intervals.n_windows
-    _validate_transfer_df_length(new_df, prediction_intervals, id_col, n_windows=effective_n, method="error_scaled")
-    cv_results = cv_fn(
-        df=new_df,
-        n_windows=effective_n,
-        h=prediction_intervals.h,
-        refit=False,
-        prediction_intervals=None,
-        id_col=id_col,
-        time_col=time_col,
-        target_col=target_col,
-    )
-    target_cs_df = compute_conformity_scores(cv_results, model_names, target_col)
+    target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
     scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
     for model in model_names:
