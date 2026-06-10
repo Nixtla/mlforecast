@@ -2652,3 +2652,216 @@ def test_append_predictions_preserves_time_dtype(engine):
         assert np.issubdtype(state.time.dtype, np.datetime64), key
         for pid, grid in (state._parent_time_grids or {}).items():
             assert grid.dtype == state.time.dtype, (key, pid)
+
+
+def _diffed_range_mean_oracle(ids, times, diffs, promos, qid, qt, qpromo, scope,
+                              lag=1, window=2):
+    """Expected RANGE rolling mean over a differenced target.
+
+    Fixtures use a contiguous integer calendar shared by all series, so parent
+    ordinals equal the timestamps for both the global and the per-series
+    (local) parent calendars."""
+    lo, hi = qt - lag - window + 1, qt - lag
+    mask = (times >= lo) & (times <= hi)
+    if scope == "global":
+        pass  # one bucket: every series
+    else:  # local + partition_by: bucket is (series, promo value)
+        mask &= (ids == qid) & (promos == qpromo)
+    vals = diffs[mask]
+    vals = vals[~np.isnan(vals)]
+    return float(np.mean(vals)) if len(vals) else np.nan
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_target_transforms_with_pooled_preprocess(engine):
+    """Pooled states must be built on the *transformed* target when
+    target_transforms are configured (the df_for_pooled plumbing in
+    TimeSeries._fit)."""
+    from mlforecast import MLForecast
+    from mlforecast.target_transforms import Differences
+    from sklearn.linear_model import LinearRegression
+
+    n_series, n_times = 2, 12
+    rng = np.random.default_rng(8)
+    ids = np.repeat(["a", "b"], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times).cumsum()
+    promos = np.tile([0, 1], n_series * n_times // 2)
+    df = _make_df(engine, {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "promo": promos.tolist(),
+    })
+    g_tfm = RollingMean(2, min_samples=1, global_=True)
+    p_tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=1,
+        target_transforms=[Differences([1])],
+        lag_transforms={1: [g_tfm, p_tfm]},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        prep = fcst.preprocess(df, static_features=[], dropna=False)
+    if engine == "polars":
+        prep = prep.to_pandas()
+
+    diffs = pd.Series(y).groupby(ids).diff().to_numpy()
+    for scope, tfm in [("global", g_tfm), ("local", p_tfm)]:
+        col = tfm._get_name(1)
+        expected = np.array([
+            _diffed_range_mean_oracle(
+                ids, times, diffs, promos, row.unique_id, row.ds,
+                row.promo, scope,
+            )
+            for row in prep.itertuples()
+        ])
+        np.testing.assert_allclose(
+            prep[col].to_numpy(), expected, atol=1e-12, equal_nan=True,
+        )
+
+    # the pooled states' target must be the differenced values
+    for state in fcst.ts._pooled_states.values():
+        state_y = np.asarray(state.y, dtype=float)
+        assert np.isnan(state_y).sum() == np.isnan(diffs).sum()
+        np.testing.assert_allclose(
+            np.sort(state_y[~np.isnan(state_y)]),
+            np.sort(diffs[~np.isnan(diffs)]),
+            atol=1e-12,
+        )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_target_transforms_with_pooled_predict(engine):
+    """Recursive predict with Differences + pooled transforms: a linear target
+    has a constant differenced series, so predictions have a closed form
+    y(T+k) = y(T) + k*slope."""
+    from mlforecast import MLForecast
+    from mlforecast.target_transforms import Differences
+    from sklearn.linear_model import LinearRegression
+
+    n_times, slope = 12, 3.0
+    ids = np.repeat(["a", "b"], n_times)
+    times = np.tile(np.arange(n_times), 2)
+    y = np.concatenate([10.0 + slope * np.arange(n_times),
+                        100.0 + slope * np.arange(n_times)])
+    promos = np.tile([0, 1], n_times)
+    df = _make_df(engine, {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "promo": promos.tolist(),
+    })
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=1,
+        target_transforms=[Differences([1])],
+        lag_transforms={1: [
+            RollingMean(2, min_samples=1, global_=True),
+            RollingMean(2, min_samples=1, partition_by=["promo"]),
+        ]},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fcst.fit(df, static_features=[], dropna=True)
+        # promo parity matches the training pattern so each step's partition
+        # window is non-empty
+        X_df = _make_df(engine, {
+            "unique_id": ["a", "a", "b", "b"],
+            "ds": [12, 13, 12, 13],
+            "promo": [0, 1, 0, 1],
+        })
+        preds = fcst.predict(h=2, X_df=X_df)
+    if engine == "polars":
+        preds = preds.to_pandas()
+    preds = preds.sort_values(["unique_id", "ds"])
+    expected = np.array([
+        y[n_times - 1] + slope * np.array([1, 2]),
+        y[2 * n_times - 1] + slope * np.array([1, 2]),
+    ]).ravel()
+    np.testing.assert_allclose(
+        preds["LinearRegression"].to_numpy(), expected, rtol=1e-6,
+    )
+
+
+def _range_quantile_oracle(hist, qid, qt, qpromo, mode, p=0.5, lag=1, window=3,
+                           min_samples=1):
+    """Expected RANGE rolling quantile per bucket. ``hist`` is a list of
+    (id, t, y, promo) rows on a contiguous integer calendar (ordinals == t)."""
+    lo, hi = qt - lag - window + 1, qt - lag
+    if mode == "global":  # bucket key is (promo,)
+        vals = [r[2] for r in hist if lo <= r[1] <= hi and r[3] == qpromo]
+    else:  # local: bucket key is (id, promo)
+        vals = [
+            r[2] for r in hist
+            if lo <= r[1] <= hi and r[0] == qid and r[3] == qpromo
+        ]
+    vals = [v for v in vals if not np.isnan(v)]
+    if len(vals) < max(min_samples, 1):
+        return np.nan
+    return float(np.quantile(vals, p))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("mode", ["local", "global"])
+def test_slow_path_quantile_with_partition_by(engine, mode):
+    """RollingQuantile has no aggregate fast path, so partition_by routes it
+    through the row-level slow path at fit and through build_query_arrays at
+    predict. Pin both against a RANGE-window oracle."""
+    from mlforecast.lag_transforms import RollingQuantile
+
+    n_series, n_times = 3, 10
+    rng = np.random.default_rng(11)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    promos = np.tile([0, 1, 0, 0, 1, 1, 0, 1, 0, 1], n_series)
+    df = _make_df(engine, {
+        "unique_id": ids.tolist(), "ds": times.tolist(),
+        "y": y.tolist(), "promo": promos.tolist(),
+    })
+    tfm = RollingQuantile(
+        0.5, 3, min_samples=1, global_=(mode == "global"),
+        partition_by=["promo"],
+    )
+    col = tfm._get_name(1)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    res = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y",
+        dropna=False, static_features=[],
+    )
+    hist = list(zip(ids, times, y, promos))
+    expected_fit = np.array([
+        _range_quantile_oracle(hist, i, t, pr, mode)
+        for i, t, _, pr in hist
+    ])
+    np.testing.assert_allclose(
+        np.asarray(res[col], dtype=float), expected_fit,
+        atol=1e-12, equal_nan=True,
+    )
+
+    # two recursive steps through the build_query_arrays slow predict path;
+    # predict() hands _predict_recursive an X_df sorted by (id, time) with the
+    # id/time columns dropped, so mimic that shape here
+    uid_order = [f"s{i}" for i in range(n_series)]
+    step_promos = {10: [0, 0, 1], 11: [1, 0, 1]}
+    X_df = _make_df(engine, {
+        "promo": [v for i in range(n_series)
+                  for v in (step_promos[10][i], step_promos[11][i])],
+    })
+    ts._predict_setup()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for step, t_query in enumerate([10, 11]):
+            new_x = ts._get_features_for_next_step(X_df)
+            vals = np.asarray(new_x[col], dtype=float)
+            expected = np.array([
+                _range_quantile_oracle(
+                    hist, uid, t_query, step_promos[t_query][i], mode,
+                )
+                for i, uid in enumerate(uid_order)
+            ])
+            np.testing.assert_allclose(
+                vals, expected, atol=1e-12, equal_nan=True,
+            )
+            fake_preds = np.arange(n_series, dtype=float) + 10 * (step + 1)
+            ts._update_y(fake_preds)
+            hist.extend(
+                (uid, t_query, fake_preds[i], step_promos[t_query][i])
+                for i, uid in enumerate(uid_order)
+            )
