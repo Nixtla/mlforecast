@@ -104,6 +104,23 @@ def _encode_join_keys(left_nw, right_nw, cols):
     return left_nw.with_columns(left_exprs), right_nw.with_columns(right_exprs)
 
 
+_ROW_ORDER_COL = "_mlf_row_order"
+
+
+def _order_preserving_left_join(left_nw, right_nw, on):
+    """Left join that preserves the left frame's row order.
+
+    Results are consumed positionally against arrays aligned with the left
+    frame, but narwhals exposes no ``maintain_order`` for joins and polars does
+    not guarantee row order, so attach a row index to the left frame, sort on
+    it after the join, and drop it. All call sites join against key-unique
+    right frames, so the join never fans out.
+    """
+    left_idx = left_nw.with_row_index(name=_ROW_ORDER_COL)
+    joined = left_idx.join(right_nw, on=list(on), how="left")
+    return joined.sort(_ROW_ORDER_COL).drop(_ROW_ORDER_COL)
+
+
 def _null_equal_left_join(left_nw, right_nw, cols, payload_cols):
     """Left-join ``left_nw`` to ``right_nw`` on ``cols`` treating missing as equal.
 
@@ -114,7 +131,7 @@ def _null_equal_left_join(left_nw, right_nw, cols, payload_cols):
     enc_cols = [f"__enc_{c}" for c in cols]
     left_enc, right_enc = _encode_join_keys(left_nw, right_nw, cols)
     right_enc = right_enc.select(enc_cols + list(payload_cols))
-    joined = left_enc.join(right_enc, on=enc_cols, how="left")
+    joined = _order_preserving_left_join(left_enc, right_enc, on=enc_cols)
     return joined.drop(enc_cols)
 
 
@@ -130,8 +147,8 @@ def add_bucket_id(data, cols):
     groups_enc = groups_enc.with_row_index(name="_bucket_id").with_columns(
         nw.col("_bucket_id").cast(nw.Int64)
     )
-    merged_nw = data_enc.join(
-        groups_enc.select(enc_cols + ["_bucket_id"]), on=enc_cols, how="left"
+    merged_nw = _order_preserving_left_join(
+        data_enc, groups_enc.select(enc_cols + ["_bucket_id"]), on=enc_cols
     ).drop(enc_cols)
     groups_nw = groups_enc.drop(enc_cols)
     return (

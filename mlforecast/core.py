@@ -47,7 +47,11 @@ from mlforecast.target_transforms import (
 from .compat import CatBoostRegressor
 from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
-from .pooled import PooledState, compute_pooled_features
+from .pooled import (
+    PooledState,
+    _order_preserving_left_join,
+    compute_pooled_features,
+)
 from .utils import (
     _DUMMY_FEATURE_VALUES,
     _ShortSeriesException,
@@ -685,18 +689,19 @@ class TimeSeries:
             join_df = bucket_df[join_cols].copy()
             for name, vals in bucket_vals.items():
                 join_df[name] = vals
-            joined = df[join_cols].merge(join_df, on=join_cols, how="left")
-            for name in feature_cols:
-                features[name] = joined[name].to_numpy()
+            left = df[join_cols]
         else:
             join_df = bucket_df.select(join_cols)
             for name, vals in bucket_vals.items():
                 join_df = join_df.with_columns(pl.Series(name=name, values=vals))
-            joined = df.select(join_cols).join(
-                join_df, on=join_cols, how="left"
+            left = df.select(join_cols)
+        joined = nw.to_native(
+            _order_preserving_left_join(
+                nw.from_native(left), nw.from_native(join_df), on=join_cols
             )
-            for name in feature_cols:
-                features[name] = joined[name].to_numpy()
+        )
+        for name in feature_cols:
+            features[name] = joined[name].to_numpy()
 
     def _compute_date_feature(self, dates, feature) -> Dict[str, Any]:
         """Compute date feature(s) and return as a ``{col_name: values}`` dict."""

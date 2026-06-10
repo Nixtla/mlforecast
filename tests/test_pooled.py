@@ -2516,3 +2516,97 @@ def test_null_groupby_key_no_static_change_error(engine, kind):
         df, id_col="unique_id", time_col="ds", target_col="y",
         dropna=False, static_features=["brand"],
     )
+
+
+def test_polars_join_preserves_row_order():
+    """Pins the order-preservation contract of the pooled bucket-id joins.
+
+    Join results are consumed positionally against arrays aligned with the left
+    frame, and polars does not contractually guarantee left-join row order, so
+    the helpers route through ``_order_preserving_left_join``. The in-memory
+    polars engine may preserve order on its own; this test pins the contract
+    rather than proving any particular engine scrambles."""
+    from mlforecast.pooled import _attach_bucket_id, add_bucket_id, lookup_bucket_ids
+
+    rng = np.random.default_rng(0)
+    n_keys = 200
+    shuffled_keys = rng.permutation(n_keys)
+    base = pl.DataFrame({"k": shuffled_keys.tolist()})
+    merged, groups = add_bucket_id(base, ["k"])
+    assert merged.get_column("k").to_list() == shuffled_keys.tolist()
+    key_to_bid = dict(zip(groups.get_column("k"), groups.get_column("_bucket_id")))
+    expected = [key_to_bid[k] for k in shuffled_keys]
+    assert merged.get_column("_bucket_id").to_list() == expected
+
+    lookup_df = pl.DataFrame({"k": shuffled_keys[::-1].tolist()})
+    bids = lookup_bucket_ids(lookup_df, groups, ["k"])
+    np.testing.assert_array_equal(bids, expected[::-1])
+
+    attached = _attach_bucket_id(lookup_df, groups, ["k"])
+    assert attached.get_column("k").to_list() == shuffled_keys[::-1].tolist()
+    assert attached.get_column("_bucket_id").to_list() == expected[::-1]
+
+
+def test_polars_shuffled_rows_feature_parity_with_pandas():
+    """groupby+partition_by features on a shuffled-row polars frame match the
+    pandas-engine run, at fit and at the first prediction step."""
+    n_series, n_times = 40, 8
+    rng = np.random.default_rng(1)
+    ids = np.repeat([f"s{i:02d}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    brand = np.repeat([f"b{i % 5}" for i in range(n_series)], n_times)
+    promo = rng.integers(0, 2, n_series * n_times)
+    order = rng.permutation(n_series * n_times)
+    rows = {
+        "unique_id": ids[order].tolist(),
+        "ds": times[order].tolist(),
+        "y": y[order].tolist(),
+        "brand": brand[order].tolist(),
+        "promo": promo[order].tolist(),
+    }
+    fit_outs, step_outs = [], []
+    for engine in ["pandas", "polars"]:
+        tfm = RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"])
+        col = tfm._get_name(1)
+        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+        res = ts.fit_transform(
+            _make_df(engine, rows), id_col="unique_id", time_col="ds",
+            target_col="y", dropna=False, static_features=[],
+        )
+        fit_outs.append(np.asarray(res[col], dtype=float))
+        ts._predict_setup()
+        features = ts._update_features()
+        step_outs.append(np.asarray(features[col], dtype=float))
+    np.testing.assert_allclose(fit_outs[0], fit_outs[1], atol=1e-12, equal_nan=True)
+    np.testing.assert_allclose(step_outs[0], step_outs[1], atol=1e-12, equal_nan=True)
+
+
+def test_polars_shuffled_rows_slow_path_parity_with_pandas():
+    """The bucket-feature join path (slow-path transforms go through
+    TimeSeries._join_bucket_features) preserves row order on polars: a
+    shuffled-row polars frame matches pandas positionally."""
+    from mlforecast.lag_transforms import RollingQuantile
+
+    n_series, n_times = 6, 10
+    rng = np.random.default_rng(2)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    order = rng.permutation(n_series * n_times)
+    rows = {
+        "unique_id": ids[order].tolist(),
+        "ds": times[order].tolist(),
+        "y": y[order].tolist(),
+    }
+    outs = []
+    for engine in ["pandas", "polars"]:
+        tfm = RollingQuantile(0.5, 3, min_samples=1, global_=True)
+        col = tfm._get_name(1)
+        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+        res = ts.fit_transform(
+            _make_df(engine, rows), id_col="unique_id", time_col="ds",
+            target_col="y", dropna=False, static_features=[],
+        )
+        outs.append(np.asarray(res[col], dtype=float))
+    np.testing.assert_allclose(outs[0], outs[1], atol=1e-12, equal_nan=True)
