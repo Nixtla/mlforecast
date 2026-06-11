@@ -39,10 +39,17 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import FunctionTransformer
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import ExpandingMean, RollingMean
-from mlforecast.target_transforms import Differences
+from mlforecast.lag_transforms import (
+    ExpandingMean,
+    ExponentiallyWeightedMean,
+    RollingMean,
+    RollingStd,
+    SeasonalRollingMean,
+)
+from mlforecast.target_transforms import Differences, GlobalSklearnTransformer
 from mlforecast.utils import PredictionIntervals
 ```
 
@@ -182,7 +189,31 @@ plt.show()
 
 ## Fit MLForecast on Source Domain
 
-We fit the model on Macro series using `PredictionIntervals` with: -
+### Feature engineering for cross-domain transfer
+
+Because the model is trained on one domain and applied to another, the
+features must be **scale-invariant**. Tree models cannot extrapolate: if
+a Finance series has level changes larger than anything seen in the
+Macro training data, its predictions get clamped to the training range,
+producing large, skewed errors that no conformal correction can fully
+repair.
+
+We therefore model **log-returns** instead of raw differences:
+
+-   `GlobalSklearnTransformer(FunctionTransformer(np.log1p, np.expm1))`
+    followed by `Differences([1])` — the model sees relative changes,
+    which live on a comparable scale in both domains. Back-transformed
+    intervals scale multiplicatively with each series’ level.
+-   Volatility and trend features (`RollingStd`,
+    `ExponentiallyWeightedMean`, `SeasonalRollingMean`) — these sharpen
+    the point forecasts and, importantly, give the density-ratio
+    estimator meaningful covariates: on the raw scale, lag features
+    mostly encode the scale difference between domains rather than the
+    dynamics.
+
+### Prediction interval configuration
+
+We fit on Macro series using `PredictionIntervals` with: -
 `method='weighted_conformal_error'` — stores lag features in the
 conformity score dataframe, enabling density-ratio estimation (DRE) for
 the `weighted_conformal` and `scale_aligned_weighted` transfer
@@ -197,12 +228,20 @@ methods.
 mlf = MLForecast(
     models=lgb.LGBMRegressor(n_estimators=100, verbosity=-1, random_state=0),
     freq=1,
-    lags=[1, 2, 3, 6, 12],
+    lags=[1, 2, 3, 4, 6, 12],
     lag_transforms={
-        1: [ExpandingMean()],
-        12: [RollingMean(window_size=6)],
+        1: [
+            ExpandingMean(),
+            RollingMean(window_size=3),
+            RollingStd(window_size=12, min_samples=6),
+            ExponentiallyWeightedMean(alpha=0.3),
+        ],
+        12: [SeasonalRollingMean(season_length=12, window_size=2, min_samples=1)],
     },
-    target_transforms=[Differences([1])],
+    target_transforms=[
+        GlobalSklearnTransformer(FunctionTransformer(func=np.log1p, inverse_func=np.expm1)),
+        Differences([1]),
+    ],
     num_threads=1,
 )
 
@@ -215,15 +254,10 @@ mlf.fit(
         scale_estimator='mad',
     ),
 )
-print("Fitting complete.")
-print(f"Conformity score dataframe shape: {mlf._cs_df.shape}")
-print(f"Source scale estimates computed: {mlf.prediction_intervals._source_scales is not None}")
 ```
 
 ``` text
-Fitting complete.
-Conformity score dataframe shape: (28800, 11)
-Source scale estimates computed: True
+MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag1', 'lag2', 'lag3', 'lag4', 'lag6', 'lag12', 'expanding_mean_lag1', 'rolling_mean_lag1_window_size3', 'rolling_std_lag1_window_size12_min_samples6', 'exponentially_weighted_mean_lag1_alpha0.3', 'seasonal_rolling_mean_lag12_season_length12_window_size2_min_samples1'], date_features=[], num_threads=1)
 ```
 
 ## Evaluate Transfer Methods
@@ -231,7 +265,7 @@ Source scale estimates computed: True
 For each transfer method, we call `mlf.predict()` with: -
 `new_df=target_train` — the target domain training history (Finance
 series) - `level=[80, 90, 95]` — the requested coverage levels -
-`transfer_conformal_method=method` — which transfer strategy to use
+`transfer_conformal=method` — which transfer strategy to use
 
 We then merge predictions with `target_test` and compute the **empirical
 coverage** at each level.
@@ -243,9 +277,9 @@ MODEL = 'LGBMRegressor'
 transfer_methods = [
     'recalibrate',
     'scale_aligned',
-    #'error_scaled',
-    #'weighted_conformal',
-    #'scale_aligned_weighted',
+    'error_scaled',
+    'weighted_conformal',
+    'scale_aligned_weighted',
 ]
 
 coverage_results = {}
@@ -256,7 +290,7 @@ for method in transfer_methods:
         h=HORIZON,
         level=LEVELS,
         new_df=target_train,
-        transfer_conformal_method=method,
+        transfer_conformal=method,
     )
     merged = target_test.merge(preds, on=['unique_id', 'ds'])
     cov = {}
@@ -272,16 +306,13 @@ print("\nAll methods evaluated.")
 ```
 
 ``` text
-Running 'recalibrate'... done. Coverage: {80: '46.4%', 90: '47.8%', 95: '48.7%'}
-Running 'scale_aligned'... 
-```
+Running 'recalibrate'... done. Coverage: {80: '76.6%', 90: '85.9%', 95: '92.4%'}
+Running 'scale_aligned'... done. Coverage: {80: '75.6%', 90: '87.2%', 95: '92.9%'}
+Running 'error_scaled'... done. Coverage: {80: '76.3%', 90: '86.3%', 95: '91.7%'}
+Running 'weighted_conformal'... done. Coverage: {80: '80.7%', 90: '89.4%', 95: '94.5%'}
+Running 'scale_aligned_weighted'... done. Coverage: {80: '79.7%', 90: '90.5%', 95: '95.0%'}
 
-``` text
-ValueError: operands could not be broadcast together with shapes (3600,) (3,14400) 
-```
-
-```python
-merged
+All methods evaluated.
 ```
 
 ## Results: Nominal vs Empirical Coverage
@@ -315,6 +346,17 @@ print("=" * 70)
 print(display_df.to_string())
 ```
 
+``` text
+Empirical Coverage by Transfer Method (nominal levels: 80%, 90%, 95%)
+======================================================================
+Empirical Coverage @      80%    90%    95%
+Method                                     
+error_scaled            76.3%  86.3%  91.7%
+recalibrate             76.6%  85.9%  92.4%
+scale_aligned           75.6%  87.2%  92.9%
+scale_aligned_weighted  79.7%  90.5%  95.0%
+weighted_conformal      80.7%  89.4%  94.5%
+```
 
 ```python
 # Bar chart: empirical vs nominal coverage
@@ -358,6 +400,8 @@ plt.tight_layout()
 plt.show()
 ```
 
+![](./transfer_conformal_prediction_files/figure-markdown_strict/cell-10-output-1.png)
+
 ## Coverage Gap Analysis
 
 ```python
@@ -378,6 +422,27 @@ for method, gap in mean_abs_gap.items():
     print(f"  {method}: {gap*100:.2f} pp")
 ```
 
+``` text
+Coverage gap (Empirical − Nominal) in percentage points:
+  Positive = over-coverage (wider intervals than needed)
+  Negative = under-coverage (intervals too narrow)
+
+Nominal Level            80%   90%   95%
+Method                                  
+error_scaled           -3.72 -3.72 -3.33
+recalibrate            -3.36 -4.14 -2.61
+scale_aligned          -4.44 -2.83 -2.06
+scale_aligned_weighted -0.31  0.47  0.03
+weighted_conformal      0.69 -0.64 -0.53
+
+Methods ranked by mean |gap| across all levels:
+  scale_aligned_weighted: 0.27 pp
+  weighted_conformal: 0.62 pp
+  scale_aligned: 3.11 pp
+  recalibrate: 3.37 pp
+  error_scaled: 3.59 pp
+```
+
 ## Interval Width Analysis
 
 Beyond coverage, we also care about interval sharpness. Narrower
@@ -391,7 +456,7 @@ for method in transfer_methods:
         h=HORIZON,
         level=LEVELS,
         new_df=target_train,
-        transfer_conformal_method=method,
+        transfer_conformal=method,
     )
     widths = {}
     for lv in LEVELS:
@@ -407,6 +472,15 @@ print("Mean interval width by method and level:")
 print(width_df.round(2).to_string())
 ```
 
+``` text
+Mean interval width by method and level:
+                            80%      90%       95%
+recalibrate             1596.68  3038.93   5199.22
+scale_aligned           3410.02  5759.49   9812.96
+error_scaled            1469.70  2755.49   4186.24
+weighted_conformal      1883.55  3512.86   5472.55
+scale_aligned_weighted  4012.52  7362.65  13545.20
+```
 
 ```python
 # Scatter plot: width vs coverage gap (ideal: small gap, narrow width)
@@ -434,6 +508,8 @@ plt.tight_layout()
 plt.show()
 ```
 
+![](./transfer_conformal_prediction_files/figure-markdown_strict/cell-13-output-1.png)
+
 ## Visual Inspection: Interval Examples
 
 Let’s visually inspect the intervals produced by each method for a few
@@ -450,7 +526,7 @@ for method in transfer_methods:
         h=HORIZON,
         level=[PLOT_LEVEL],
         new_df=target_train[target_train['unique_id'].isin(EXAMPLE_IDS)],
-        transfer_conformal_method=method,
+        transfer_conformal=method,
     )
     all_preds[method] = preds
 ```
@@ -497,6 +573,8 @@ plt.tight_layout()
 plt.show()
 ```
 
+![](./transfer_conformal_prediction_files/figure-markdown_strict/cell-15-output-1.png)
+
 ## Summary
 
 The table and charts above show how each transfer method calibrates
@@ -505,6 +583,12 @@ target domain in M4 Monthly data.
 
 **Key takeaways:**
 
+-   **Feature engineering matters as much as the transfer method.**
+    Modeling log-returns (`log1p` + `Differences([1])`) instead of raw
+    differences makes the features scale-invariant across domains,
+    removes the systematic point-forecast bias, and is what allows the
+    weighted methods to reach near-nominal coverage. With raw
+    differences, every method under-covers by several percentage points.
 -   `recalibrate` runs cross-validation on the target data — it tends to
     be the most directly calibrated but requires running CV
     (computationally equivalent to retraining).
@@ -518,6 +602,11 @@ target domain in M4 Monthly data.
     target labels during calibration.
 -   `scale_aligned_weighted` combines scale alignment with DRE weighting
     — the most sophisticated zero-shot method.
+-   The residual under-coverage of the non-weighted methods comes from
+    pooling conformity scores across heterogeneous series: pooled
+    intervals are too wide for calm series and too narrow for volatile
+    ones. This is precisely the failure mode the weighted/scale-aligned
+    variants are designed to mitigate.
 
 The right method to use depends on your constraints: - If you can run CV
 on the target: `recalibrate` or `error_scaled` - If you need zero-shot
