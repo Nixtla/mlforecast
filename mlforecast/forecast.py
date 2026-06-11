@@ -1340,7 +1340,11 @@ class MLForecast:
                 lag_transforms=self.ts.lag_transforms,
                 date_features=self.ts.date_features,
                 num_threads=self.ts.num_threads,
-                target_transforms=self.ts.target_transforms,
+                # Deep copy: target transforms store fitted state (e.g. last values
+                # for Differences) inside the objects. Sharing them with self.ts
+                # lets nested predict calls (e.g. _frozen_backtest windows) clobber
+                # the state this prediction's inverse transform relies on.
+                target_transforms=copy.deepcopy(self.ts.target_transforms),
                 lag_transforms_namer=self.ts.lag_transforms_namer,
                 date_features_as_dummies=self.ts.date_features_as_dummies,
                 drop_auxiliary_columns=self.ts.drop_auxiliary_columns,

@@ -452,6 +452,54 @@ def test_frozen_backtest_unequal_length_series(method):
     assert (lo <= hi).all()
 
 
+def test_point_forecasts_invariant_across_transfer_methods():
+    """Transfer methods may only change interval widths, never the point forecasts.
+
+    Regression test: target transforms (Differences) store fitted state inside the
+    transform objects, which used to be shared between self.ts and the new_df
+    TimeSeries. The frozen backtest's nested predict calls then re-fitted that
+    state on truncated windows, shifting the outer point forecasts for the
+    runs_target_cv methods (recalibrate, error_scaled).
+    """
+    from mlforecast.target_transforms import Differences
+
+    h = 4
+    source = generate_daily_series(3, min_length=60, max_length=60, seed=20)
+    source["unique_id"] = "src_" + source["unique_id"].astype(str)
+    target = generate_daily_series(3, min_length=30, max_length=55, seed=21)
+    target["unique_id"] = "tgt_" + target["unique_id"].astype(str)
+    # Strong trend so a clobbered Differences restore produces a visible shift.
+    target["y"] = target["y"] + target.groupby("unique_id").cumcount() * 2.0
+
+    def fresh_fit():
+        mlf = MLForecast(
+            models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+            lags=[1, 2],
+            freq="D",
+            target_transforms=[Differences([1])],
+            num_threads=1,
+        )
+        mlf.fit(
+            source,
+            prediction_intervals=PredictionIntervals(
+                n_windows=2, h=h,
+                method="weighted_conformal_error",
+                scale_estimator="mad",
+            ),
+        )
+        return mlf
+
+    baseline = fresh_fit().predict(h=h, new_df=target)["LGBMRegressor"].to_numpy()
+    mlf = fresh_fit()
+    for method in TRANSFER_METHODS:
+        preds = mlf.predict(h=h, level=[90], new_df=target, transfer_conformal=method)
+        np.testing.assert_allclose(
+            preds["LGBMRegressor"].to_numpy(),
+            baseline,
+            err_msg=f"{method}: point forecasts differ from plain prediction",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Task 3: _add_signed_transfer_intervals
 # ---------------------------------------------------------------------------
