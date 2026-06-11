@@ -78,11 +78,9 @@ def _frozen_backtest(
 
     Unlike cross_validation, never calls fit — uses source-trained models throughout.
     step_size=1 is safe here (no refitting means no leakage from overlapping windows).
+    Windows are computed per series (``ufp.backtest_splits``) so that series with
+    unaligned ends each get cutoffs relative to their own last timestamp.
     """
-    nw_df = nw.from_native(new_df)
-    times = sorted(nw_df[time_col].unique().to_list())
-    T = len(times)
-
     required = h + (n_windows - 1) * step_size + max_lag + 1
     counts_df = ufp.counts_by_id(new_df, id_col)
     nw_counts = nw.from_native(counts_df)
@@ -102,25 +100,34 @@ def _frozen_backtest(
     _original_ts = fcst.ts
     try:
         all_results = []
-        for k in range(n_windows):
-            cutoff = times[T - h - 1 - k * step_size]
-            valid_start = times[T - h - k * step_size]
-            valid_end = times[T - 1 - k * step_size]
-
-            train_slice = nw.to_native(nw_df.filter(nw_df[time_col] <= cutoff))
-            valid_df = nw.to_native(
-                nw_df.filter(
-                    (nw_df[time_col] >= valid_start) & (nw_df[time_col] <= valid_end)
-                ).select([id_col, time_col, target_col])
+        splits = ufp.backtest_splits(
+            new_df,
+            n_windows=n_windows,
+            h=h,
+            id_col=id_col,
+            time_col=time_col,
+            freq=fcst.freq,
+            step_size=step_size,
+        )
+        for cutoffs, train, valid in splits:
+            preds = fcst.predict(h=h, new_df=train)
+            preds = ufp.join(preds, cutoffs, on=id_col, how="left")
+            joined = ufp.join(
+                valid[[id_col, time_col, target_col]],
+                preds,
+                on=[id_col, time_col],
             )
-
-            preds = fcst.predict(h=h, new_df=train_slice)
-
-            nw_preds = nw.from_native(preds)
-            nw_valid = nw.from_native(valid_df)
-            joined = nw_preds.join(nw_valid, on=[id_col, time_col], how="left")
-            joined = joined.with_columns(nw.lit(cutoff).alias("cutoff"))
-            all_results.append(nw.to_native(joined))
+            expected_rows = h * len(nw.from_native(cutoffs))
+            if len(nw.from_native(joined)) != expected_rows:
+                raise ValueError(
+                    "Frozen-model backtest predictions did not align with the "
+                    "validation windows. This usually means some series in `new_df` "
+                    "have gaps in their time index; please fill the gaps and retry."
+                )
+            sort_idxs = ufp.maybe_compute_sort_indices(joined, id_col, time_col)
+            if sort_idxs is not None:
+                joined = ufp.take_rows(joined, sort_idxs)
+            all_results.append(joined)
     finally:
         fcst.ts = _original_ts
 

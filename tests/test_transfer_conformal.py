@@ -418,6 +418,40 @@ def test_frozen_backtest_uses_source_model():
     )
 
 
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_frozen_backtest_unequal_length_series(method):
+    """Backtest windows must be computed per series, not from global times.
+
+    With unaligned series ends (e.g. M4-style data where every series starts at the
+    same origin but has its own length), global cutoffs place the validation window
+    past the end of all but the longest series, producing NaN conformity scores and
+    NaN intervals. Regression test for that bug: intervals must be finite and
+    properly ordered for every series.
+    """
+    h = 4
+    source = generate_daily_series(3, min_length=60, max_length=60, seed=10)
+    source["unique_id"] = "src_" + source["unique_id"].astype(str)
+    # Unequal lengths -> unaligned series ends (all start on the same date).
+    target = generate_daily_series(3, min_length=30, max_length=55, seed=11)
+    target["unique_id"] = "tgt_" + target["unique_id"].astype(str)
+    assert target.groupby("unique_id")["ds"].max().nunique() > 1
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1, 2],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+
+    preds = mlf.predict(h=h, level=[90], new_df=target, transfer_conformal=method)
+    lo = preds["LGBMRegressor-lo-90"].to_numpy()
+    hi = preds["LGBMRegressor-hi-90"].to_numpy()
+    assert np.isfinite(lo).all(), f"{method}: lower bounds contain non-finite values"
+    assert np.isfinite(hi).all(), f"{method}: upper bounds contain non-finite values"
+    assert (lo <= hi).all()
+
+
 # ---------------------------------------------------------------------------
 # Task 3: _add_signed_transfer_intervals
 # ---------------------------------------------------------------------------
