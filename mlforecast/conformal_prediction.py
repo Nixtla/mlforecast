@@ -68,7 +68,6 @@ class TransferConformal:
 
     method: str = "recalibrate"
     dre_estimator: str = "logistic"
-    test_weight: str = "mean_target"
     weights: Optional[Union[np.ndarray, Callable]] = None
     n_windows: Optional[int] = None
     step_size: Optional[int] = None
@@ -85,11 +84,6 @@ class TransferConformal:
             raise ValueError(
                 f"TransferConformal.dre_estimator must be 'logistic' or "
                 f"'gradient_boosting', got '{self.dre_estimator}'"
-            )
-        if self.test_weight not in ("mean_target", "per_point"):
-            raise ValueError(
-                f"TransferConformal.test_weight must be 'mean_target' or 'per_point', "
-                f"got '{self.test_weight}'"
             )
         if self.weights is not None and self.method not in (
             "weighted_conformal",
@@ -596,6 +590,11 @@ def estimate_density_ratio(
 
     n_src = len(source_features)
     n_tgt = len(target_features)
+    if cv >= 2 and (n_src < cv or n_tgt < cv):
+        raise ValueError(
+            f"cv={cv} requires at least {cv} samples in both source ({n_src}) "
+            f"and target ({n_tgt}). Reduce cv or provide more data."
+        )
     X = np.vstack([source_features, target_features])
     y = np.array([0] * n_src + [1] * n_tgt)
 
@@ -953,7 +952,13 @@ def _error_scaled_transfer(
     source_cs_df: Optional[DFType] = None,
     source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
-    """Scale source conformity scores by the ratio of target to source prediction error stds."""
+    """Scale source conformity scores by a single global IQR ratio (target / source).
+
+    The ratio is computed from the pooled residuals of all series combined — not
+    per-series. This corrects for domain-level scale differences between source and
+    target but does not account for series-level heterogeneity within the target domain.
+    For per-series scale correction use ``scale_aligned`` instead.
+    """
     if source_cs_df is None:
         raise ValueError(
             "transfer_conformal_method='error_scaled' requires source_cs_df; "
@@ -1006,7 +1011,3 @@ def get_transfer_method_spec(method: str) -> _TransferMethodSpec:
         )
     return _TRANSFER_METHODS[method]
 
-
-def get_transfer_conformal_method(method: str) -> Callable:
-    """Deprecated: use get_transfer_method_spec instead."""
-    return get_transfer_method_spec(method).fn
