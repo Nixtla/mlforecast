@@ -124,6 +124,10 @@ def test_apply_scale_alignment_equiv(backend):
         np.testing.assert_allclose(
             actual[m].to_numpy(), expected[m].to_numpy(), rtol=RTOL
         )
+    for col in ("unique_id", "ds", "cutoff"):
+        np.testing.assert_array_equal(
+            actual[col].to_numpy(), expected[col].to_numpy()
+        )
 
 
 # ---------------------------------------------------------------------------
