@@ -447,6 +447,9 @@ def _weighted_quantiles(
     sorted_vals = np.append(values[sort_idx], np.inf)
     sorted_w = np.append(weights[sort_idx] / total, w_test / total)
     cum_w = np.cumsum(sorted_w)
+    # NOTE: callers pass alphas (= 1 - cuts), not cuts; the 1.0 - alphas
+    # round-trip reproduces the reference's exact float rounding, which is
+    # load-bearing for tie-boundary index selection. Don't "simplify" it.
     idx = np.searchsorted(cum_w, 1.0 - np.asarray(alphas, dtype=float), side="left")
     return sorted_vals[idx]
 
