@@ -1629,11 +1629,11 @@ class MLForecast:
                         from .conformal_prediction import _rescale_interval_columns
 
                         fcst_uid_arr = forecasts[self.ts.id_col].to_numpy()
-                        uniques, inv = np.unique(fcst_uid_arr, return_inverse=True)
+                        codes, uniques = pd.factorize(fcst_uid_arr)
                         sigma_tgt = np.array(
                             [_target_scales.get(uid, 1.0) for uid in uniques],
                             dtype=float,
-                        )[inv]
+                        )[codes]
                         forecasts = _rescale_interval_columns(
                             forecasts, list(model_names), level_, sigma_tgt
                         )

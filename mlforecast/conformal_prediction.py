@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import narwhals as nw
 import numpy as np
+import pandas as pd
 import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
 
@@ -209,15 +210,16 @@ def _apply_scale_alignment(
     """
     cs_df = ufp.copy_if_pandas(cs_df, deep=False)
     uid_arr = cs_df[id_col].to_numpy()
-    uniques, inv = np.unique(uid_arr, return_inverse=True)
+    # hash-based factorization: avoids np.unique's O(n log n) sort on string ids
+    codes, uniques = pd.factorize(uid_arr)
     unique_norm = np.array(
         [1.0 / source_scales[uid] for uid in uniques], dtype=float
     )
-    norm_scales = unique_norm[inv]
-    vals = np.column_stack(
-        [cs_df[model].to_numpy().astype(float) * norm_scales for model in model_names]
-    )
-    return ufp.assign_columns(cs_df, list(model_names), vals)
+    norm_scales = unique_norm[codes]
+    for model in model_names:
+        vals = cs_df[model].to_numpy().astype(float) * norm_scales
+        cs_df = ufp.assign_columns(cs_df, model, vals)
+    return cs_df
 
 
 def _rescale_interval_columns(
@@ -226,7 +228,7 @@ def _rescale_interval_columns(
     level: List[Union[int, float]],
     sigma_tgt: np.ndarray,
 ) -> DFType:
-    """Multiply interval half-widths by per-row σ̂_tgt, one assignment per model.
+    """Multiply interval half-widths by per-row σ̂_tgt, one assignment per column.
 
     Replaces the per-(model, level, direction) loop previously inlined in
     ``MLForecast.predict()``.
@@ -234,17 +236,13 @@ def _rescale_interval_columns(
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
     for model_name in model_names:
         mean_arr = fcst_df[model_name].to_numpy().astype(float)
-        interval_cols = [
-            f"{model_name}-{direction}-{lv}"
-            for lv in level
-            for direction in ("lo", "hi")
-        ]
-        interval_matrix = np.column_stack(
-            [fcst_df[col].to_numpy().astype(float) for col in interval_cols]
-        )
-        offsets = interval_matrix - mean_arr[:, np.newaxis]
-        rescaled = mean_arr[:, np.newaxis] + offsets * sigma_tgt[:, np.newaxis]
-        fcst_df = ufp.assign_columns(fcst_df, interval_cols, rescaled)
+        for lv in level:
+            for direction in ("lo", "hi"):
+                col = f"{model_name}-{direction}-{lv}"
+                offset = fcst_df[col].to_numpy().astype(float) - mean_arr
+                fcst_df = ufp.assign_columns(
+                    fcst_df, col, mean_arr + offset * sigma_tgt
+                )
     return fcst_df
 
 
