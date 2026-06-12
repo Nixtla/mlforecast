@@ -240,7 +240,6 @@ def test_unweighted_interval_equiv(backend, fn_name, is_transfer, horizon):
 # 5. interval rescaling helper (replaces forecast.py triple loop)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="helper lands in vectorization tasks", strict=False)
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def test_rescale_interval_columns_equiv(backend):
     import utilsforecast.processing as ufp
