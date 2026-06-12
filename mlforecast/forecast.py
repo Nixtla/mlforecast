@@ -1626,19 +1626,17 @@ class MLForecast:
                     # Scores are already normalized by σ_src_i, so quantiles are on the
                     # normalized scale; rescaling by σ_tgt_j gives per-series correct widths.
                     if _target_scales is not None:
+                        from .conformal_prediction import _rescale_interval_columns
+
                         fcst_uid_arr = forecasts[self.ts.id_col].to_numpy()
+                        uniques, inv = np.unique(fcst_uid_arr, return_inverse=True)
                         sigma_tgt = np.array(
-                            [_target_scales.get(uid, 1.0) for uid in fcst_uid_arr], dtype=float
+                            [_target_scales.get(uid, 1.0) for uid in uniques],
+                            dtype=float,
+                        )[inv]
+                        forecasts = _rescale_interval_columns(
+                            forecasts, list(model_names), level_, sigma_tgt
                         )
-                        for model_name in list(model_names):
-                            mean_arr = forecasts[model_name].to_numpy().astype(float)
-                            for lv in level_:
-                                for direction in ("lo", "hi"):
-                                    col = f"{model_name}-{direction}-{lv}"
-                                    offset = forecasts[col].to_numpy().astype(float) - mean_arr
-                                    forecasts = ufp.assign_columns(
-                                        forecasts, col, mean_arr + offset * sigma_tgt
-                                    )
             return forecasts
         finally:
             if _saved_cs_df is not None:
