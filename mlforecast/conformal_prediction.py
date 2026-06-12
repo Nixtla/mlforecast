@@ -431,24 +431,36 @@ def _add_signed_transfer_intervals(
     return fcst_df
 
 
-def _weighted_quantile(
+def _weighted_quantiles(
     values: np.ndarray,
     weights: np.ndarray,
-    alpha: float,
+    alphas: np.ndarray,
     w_test: float = 1.0,
-) -> float:
-    """Tibshirani et al. (2019) Eq. (1): weighted (1-alpha) quantile.
+) -> np.ndarray:
+    """Tibshirani et al. (2019) Eq. (1) weighted (1-alpha) quantiles, vectorized
+    over alphas.
 
-    Appends a virtual ∞ residual with weight w_test, then returns the
-    leftmost residual value whose cumulative weight meets (1-alpha).
+    Sorts once, cumsums once, and answers every alpha with a single
+    ``searchsorted`` — preserving the scalar version's ``side='left'``
+    tie-breaking exactly. Returns an array aligned with ``alphas``.
     """
     total = weights.sum() + w_test
     sort_idx = np.argsort(values)
     sorted_vals = np.append(values[sort_idx], np.inf)
     sorted_w = np.append(weights[sort_idx] / total, w_test / total)
     cum_w = np.cumsum(sorted_w)
-    idx = np.searchsorted(cum_w, 1.0 - alpha, side="left")
-    return float(sorted_vals[idx])
+    idx = np.searchsorted(cum_w, 1.0 - np.asarray(alphas, dtype=float), side="left")
+    return sorted_vals[idx]
+
+
+def _weighted_quantile(
+    values: np.ndarray,
+    weights: np.ndarray,
+    alpha: float,
+    w_test: float = 1.0,
+) -> float:
+    """Scalar wrapper over :func:`_weighted_quantiles`."""
+    return float(_weighted_quantiles(values, weights, np.array([alpha]), w_test)[0])
 
 
 def _add_weighted_conformal_error_intervals(
@@ -491,26 +503,26 @@ def _add_weighted_conformal_error_intervals(
                     if target_weights is not None
                     else float(w_pooled.mean())
                 )
+                alphas = 1.0 - np.asarray(cuts)
                 quantiles = np.empty((len(cuts), n_target * horizon))
                 for h_i in range(horizon):
-                    s_h = scores_pooled[:, h_i]
-                    w_h = w_pooled[:, h_i]
-                    for li, alpha in enumerate([1 - c for c in cuts]):
-                        q = _weighted_quantile(s_h, w_h, alpha, w_test)
-                        quantiles[li, h_i::horizon] = q
+                    q = _weighted_quantiles(
+                        scores_pooled[:, h_i], w_pooled[:, h_i], alphas, w_test
+                    )
+                    quantiles[:, h_i::horizon] = q[:, np.newaxis]
         elif weights is None:
             quantiles = np.quantile(scores, cuts, axis=0)
             quantiles = quantiles.reshape(len(cuts), -1)
         else:
             w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
             w_test = float(w.mean())
+            alphas = 1.0 - np.asarray(cuts)
             quantiles = np.empty((len(cuts), n_series * horizon))
             for h_i in range(horizon):
-                s_h = scores[:, :, h_i].ravel()
-                w_h = w[:, :, h_i].ravel()
-                for li, alpha in enumerate([1 - c for c in cuts]):
-                    q = _weighted_quantile(s_h, w_h, alpha, w_test)
-                    quantiles[li, h_i::horizon] = q
+                q = _weighted_quantiles(
+                    scores[:, :, h_i].ravel(), w[:, :, h_i].ravel(), alphas, w_test
+                )
+                quantiles[:, h_i::horizon] = q[:, np.newaxis]
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         quantiles_out = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
@@ -566,13 +578,15 @@ def _add_weighted_conformal_distribution_intervals(
                 )
                 # Offsets: {-s_i, +s_i} for each horizon step
                 sym_scores = np.vstack([-scores_pooled, scores_pooled])
+                cut_alphas = 1.0 - np.asarray(cuts)
                 quantiles = np.empty((n_target * horizon, len(cuts)))
                 for h_i in range(horizon):
-                    p_h = sym_scores[:, h_i]
-                    w_h = w_double[:, h_i]
-                    for li, cut in enumerate(cuts):
-                        q_offset = _weighted_quantile(p_h, w_h, 1.0 - cut, w_test)
-                        quantiles[h_i::horizon, li] = mean_2d[:, h_i] + q_offset
+                    q_offsets = _weighted_quantiles(
+                        sym_scores[:, h_i], w_double[:, h_i], cut_alphas, w_test
+                    )
+                    quantiles[h_i::horizon, :] = (
+                        mean_2d[:, h_i][:, np.newaxis] + q_offsets[np.newaxis, :]
+                    )
         else:
             mean = mean_flat.reshape(1, n_series, -1)
             paths = np.vstack([mean - scores, mean + scores])  # (2*n_windows, n_series, horizon)
@@ -583,13 +597,16 @@ def _add_weighted_conformal_distribution_intervals(
                 w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
                 w_double = np.vstack([w, w])  # replicate for both path directions
                 w_test = float(w.mean())
+                cut_alphas = 1.0 - np.asarray(cuts)
                 quantiles = np.empty((n_series * horizon, len(cuts)))
                 for h_i in range(horizon):
-                    p_h = paths[:, :, h_i].ravel()
-                    w_h = w_double[:, :, h_i].ravel()
-                    for li, cut in enumerate(cuts):
-                        q = _weighted_quantile(p_h, w_h, 1.0 - cut, w_test)
-                        quantiles[h_i::horizon, li] = q
+                    q = _weighted_quantiles(
+                        paths[:, :, h_i].ravel(),
+                        w_double[:, :, h_i].ravel(),
+                        cut_alphas,
+                        w_test,
+                    )
+                    quantiles[h_i::horizon, :] = q[np.newaxis, :]
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         fcst_df = ufp.assign_columns(fcst_df, lo_cols + hi_cols, quantiles)

@@ -134,7 +134,6 @@ def test_apply_scale_alignment_equiv(backend):
 # 3. weighted quantiles (vectorized vs scalar reference)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="helper lands in vectorization tasks", strict=False)
 def test_weighted_quantiles_matches_scalar_reference():
     rng = np.random.default_rng(2)
     values = rng.normal(size=200)
