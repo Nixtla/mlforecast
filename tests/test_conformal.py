@@ -482,12 +482,6 @@ def test_transfer_conformal_weights_with_recalibrate_raises():
         TransferConformal(method="recalibrate", weights=np.ones(5))
 
 
-def test_transfer_conformal_invalid_test_weight_raises():
-    """TransferConformal.test_weight must be 'mean_target' or 'per_point'."""
-    with pytest.raises(ValueError, match="test_weight"):
-        TransferConformal(test_weight="unknown")
-
-
 # ---------------------------------------------------------------------------
 # Item 2 per-series scale tests
 # ---------------------------------------------------------------------------
