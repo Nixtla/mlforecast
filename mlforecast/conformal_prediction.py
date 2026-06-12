@@ -142,6 +142,12 @@ def _compute_series_scales(
         .over(id_col, order_by=time_col)
         .alias("_dy")
     )
+    # Precompute abs columns so every agg below is a plain column aggregation
+    # (avoids narwhals' "complex group-by expression" pandas warning/fallback).
+    ndf = ndf.with_columns(
+        nw.col(target_col).abs().alias("_abs_y"),
+        nw.col("_dy").abs().alias("_abs_dy_col"),
+    )
     if method == "mad":
         ndf = ndf.with_columns(
             (nw.col("_dy") - nw.col("_dy").median().over(id_col)).abs().alias("_ady")
@@ -152,23 +158,23 @@ def _compute_series_scales(
     stats = ndf.group_by(id_col).agg(
         scale_expr.alias("_scale"),
         nw.col("_dy").count().alias("_n_dy"),
-        nw.col(target_col).abs().mean().alias("_abs_mean"),
-        nw.col("_dy").abs().max().alias("_abs_dy"),
+        nw.col("_abs_y").mean().alias("_abs_mean"),
+        nw.col("_abs_dy_col").max().alias("_max_abs_dy"),
     )
     raw: Dict = {}
-    for uid, scale, n_dy, abs_mean, abs_dy in zip(
+    for uid, scale, n_dy, abs_mean, max_abs_dy in zip(
         stats[id_col].to_list(),
         stats["_scale"].to_list(),
         stats["_n_dy"].to_list(),
         stats["_abs_mean"].to_list(),
-        stats["_abs_dy"].to_list(),
+        stats["_max_abs_dy"].to_list(),
     ):
         if n_dy == 0:
             # single-observation series: no diffs available
             raw[uid] = float(abs_mean) if abs_mean is not None else 1.0
         elif method == "std" and n_dy == 1:
-            # std(ddof=1) of a single diff is NaN; use |dy[0]| as before
-            raw[uid] = float(abs_dy)
+            # std(ddof=1) of a single diff is NaN; use |dy[0]| = max(|dy|) as before
+            raw[uid] = float(max_abs_dy)
         else:
             raw[uid] = float(scale)
 
