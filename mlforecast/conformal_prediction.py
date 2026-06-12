@@ -447,37 +447,8 @@ def _weighted_quantiles(
     sorted_vals = np.append(values[sort_idx], np.inf)
     sorted_w = np.append(weights[sort_idx] / total, w_test / total)
     cum_w = np.cumsum(sorted_w)
-    # NOTE: callers pass alphas (= 1 - cuts), not cuts; the 1.0 - alphas
-    # round-trip reproduces the reference's exact float rounding, which is
-    # load-bearing for tie-boundary index selection. Don't "simplify" it.
     idx = np.searchsorted(cum_w, 1.0 - np.asarray(alphas, dtype=float), side="left")
     return sorted_vals[idx]
-
-
-def _weighted_quantiles_2d(
-    values_2d: np.ndarray,
-    weights_2d: np.ndarray,
-    alphas: np.ndarray,
-    w_test: float = 1.0,
-) -> np.ndarray:
-    """Column-wise :func:`_weighted_quantiles` without the Python loop.
-
-    ``values_2d`` and ``weights_2d`` have shape (n_cal, H); returns
-    (n_alphas, H). Matches the 1-D version's ``side='left'`` tie-breaking:
-    the index per (alpha, column) is the count of cumulative weights strictly
-    below the target, which is exactly ``searchsorted(..., side='left')``.
-    """
-    n_cal, n_h = values_2d.shape
-    order = np.argsort(values_2d, axis=0)
-    sorted_vals = np.take_along_axis(values_2d, order, axis=0)
-    sorted_w = np.take_along_axis(weights_2d, order, axis=0)
-    totals = weights_2d.sum(axis=0) + w_test  # (H,)
-    cum_w = np.cumsum(sorted_w / totals, axis=0)
-    sorted_vals = np.vstack([sorted_vals, np.full((1, n_h), np.inf)])
-    cum_w = np.vstack([cum_w, np.ones((1, n_h))])
-    targets = 1.0 - np.asarray(alphas, dtype=float)
-    idx = (cum_w[np.newaxis, :, :] < targets[:, np.newaxis, np.newaxis]).sum(axis=1)
-    return np.take_along_axis(sorted_vals, idx, axis=0)
 
 
 def _weighted_quantile(

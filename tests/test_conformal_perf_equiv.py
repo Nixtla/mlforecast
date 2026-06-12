@@ -271,23 +271,3 @@ def test_rescale_interval_columns_equiv(backend):
         np.testing.assert_allclose(
             actual[col].to_numpy(), expected[col].to_numpy(), rtol=RTOL, err_msg=col
         )
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: cross-horizon weighted quantiles
-# ---------------------------------------------------------------------------
-
-def test_weighted_quantiles_2d_matches_columnwise():
-    rng = np.random.default_rng(8)
-    n_cal, H = 150, 12
-    values = rng.normal(size=(n_cal, H))
-    values[::5, :] = values[0, :]  # ties
-    weights = rng.uniform(0.1, 2.0, size=(n_cal, H))
-    alphas = np.array([0.025, 0.05, 0.1, 0.5, 0.9, 0.95, 0.975])
-    got = cp._weighted_quantiles_2d(values, weights, alphas, w_test=0.8)
-    assert got.shape == (len(alphas), H)
-    for h in range(H):
-        expected = cp._weighted_quantiles(
-            values[:, h], weights[:, h], alphas, w_test=0.8
-        )
-        np.testing.assert_array_equal(got[:, h], expected, err_msg=f"h={h}")
