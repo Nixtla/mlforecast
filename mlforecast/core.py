@@ -1247,30 +1247,26 @@ class TimeSeries:
         if not getattr(self, "_partition_cols", None):
             return None
         X_row = self._current_step_rows(X_df)
+        # Both frames hold one row per series in uid order, so selecting key
+        # columns from each and concatenating keeps the context aligned.
+        X_row_nw = nw.from_native(X_row, eager_only=True)
+        statics_nw = nw.from_native(self.static_features_, eager_only=True)
+        x_cols = set(X_row_nw.columns)
+        sf_cols = set(statics_nw.columns)
         for key, state in self._pooled_states.items():
             _mode, _group_cols, part_cols = key
             if not part_cols or state.key_cols is None:
                 continue
-            if isinstance(X_row, pd.DataFrame):
-                context_data = {self.id_col: self.uids.to_numpy() if hasattr(self.uids, 'to_numpy') else np.array(self.uids)}
-            else:
-                context_data = {self.id_col: self.uids}
+            from_statics = [self.id_col]
+            from_x = []
             missing_keys = []
             for col in state.key_cols:
                 if col == self.id_col:
                     continue
-                x_cols = set(X_row.columns)
-                sf_cols = set(self.static_features_.columns)
                 if col in x_cols:
-                    if isinstance(X_row, pd.DataFrame):
-                        context_data[col] = X_row[col].values
-                    else:
-                        context_data[col] = X_row[col]
+                    from_x.append(col)
                 elif col in sf_cols:
-                    if isinstance(self.static_features_, pd.DataFrame):
-                        context_data[col] = self.static_features_[col].values
-                    else:
-                        context_data[col] = self.static_features_[col]
+                    from_statics.append(col)
                 else:
                     missing_keys.append(col)
             if missing_keys:
@@ -1279,11 +1275,12 @@ class TimeSeries:
                     f"in X_df or static_features. Provide these columns in "
                     f"X_df for prediction."
                 )
-            if isinstance(X_row, pd.DataFrame):
-                context_df = pd.DataFrame(context_data)
-            else:
-                context_df = pl_DataFrame(context_data)
-            state.update_series_bucket_id(context_df, self.id_col)
+            context_nw = statics_nw.select(from_statics)
+            if from_x:
+                context_nw = nw.concat(
+                    [context_nw, X_row_nw.select(from_x)], how="horizontal"
+                )
+            state.update_series_bucket_id(context_nw.to_native(), self.id_col)
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
