@@ -4,6 +4,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import narwhals as nw
 import numpy as np
 import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
@@ -133,23 +134,43 @@ def _compute_series_scales(
     with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
     short series.
     """
+    ndf = nw.from_native(df, eager_only=True)
+    ndf = ndf.select([id_col, time_col, target_col]).with_columns(
+        nw.col(target_col)
+        .cast(nw.Float64)
+        .diff()
+        .over(id_col, order_by=time_col)
+        .alias("_dy")
+    )
+    if method == "mad":
+        ndf = ndf.with_columns(
+            (nw.col("_dy") - nw.col("_dy").median().over(id_col)).abs().alias("_ady")
+        )
+        scale_expr = nw.col("_ady").median()
+    else:  # "std"
+        scale_expr = nw.col("_dy").std(ddof=1)
+    stats = ndf.group_by(id_col).agg(
+        scale_expr.alias("_scale"),
+        nw.col("_dy").count().alias("_n_dy"),
+        nw.col(target_col).abs().mean().alias("_abs_mean"),
+        nw.col("_dy").abs().max().alias("_abs_dy"),
+    )
     raw: Dict = {}
-    unique_ids = np.unique(df[id_col].to_numpy())
-    for uid in unique_ids:
-        mask = ufp.is_in(df[id_col], [uid])
-        sub = ufp.filter_with_mask(df, mask)
-        t_arr = sub[time_col].to_numpy()
-        y_arr = sub[target_col].to_numpy().astype(float)
-        sort_idx = np.argsort(t_arr, kind="stable")
-        y = y_arr[sort_idx]
-        if len(y) < 2:
-            raw[uid] = float(np.fabs(y).mean()) if len(y) > 0 else 1.0
-            continue
-        dy = np.diff(y)
-        if method == "mad":
-            raw[uid] = float(np.median(np.abs(dy - np.median(dy))))
-        else:  # "std"
-            raw[uid] = float(np.std(dy, ddof=1) if len(dy) > 1 else np.fabs(dy[0]))
+    for uid, scale, n_dy, abs_mean, abs_dy in zip(
+        stats[id_col].to_list(),
+        stats["_scale"].to_list(),
+        stats["_n_dy"].to_list(),
+        stats["_abs_mean"].to_list(),
+        stats["_abs_dy"].to_list(),
+    ):
+        if n_dy == 0:
+            # single-observation series: no diffs available
+            raw[uid] = float(abs_mean) if abs_mean is not None else 1.0
+        elif method == "std" and n_dy == 1:
+            # std(ddof=1) of a single diff is NaN; use |dy[0]| as before
+            raw[uid] = float(abs_dy)
+        else:
+            raw[uid] = float(scale)
 
     vals = np.array(list(raw.values()), dtype=float)
     global_median = float(np.median(vals)) if len(vals) > 0 else 1.0
