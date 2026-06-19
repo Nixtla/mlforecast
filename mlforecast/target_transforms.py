@@ -464,6 +464,6 @@ class GlobalSklearnTransformer(BaseTargetTransform):
 
     @staticmethod
     def stack(
-        transforms: Sequence["GlobalSklearnTransformer"],
-    ) -> "GlobalSklearnTransformer":  # type: ignore[override]
+        transforms: Sequence["GlobalSklearnTransformer"],  # type: ignore[override]
+    ) -> "GlobalSklearnTransformer":
         return transforms[0]
