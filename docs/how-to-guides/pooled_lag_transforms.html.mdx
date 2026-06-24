@@ -205,20 +205,232 @@ If you genuinely need to skip validation (e.g. on a very large
 pre-cleaned dataset), make sure your time grid is continuous and
 gap-free before doing so.
 
+## Pooling with `partition_by`
+
+`partition_by=[col, ...]` splits a pooled bucket further along a
+**dynamic** column — typically a feature whose value changes over time
+(e.g. `promo`, `regime`, `store_format` flips). Each unique combination
+of partition values gets its own bucket; rolling/expanding statistics
+are computed per bucket.
+
+Unlike `groupby`, `partition_by` columns **do not need to be static**.
+They can vary across timestamps for the same `unique_id`. At prediction
+time you must supply their future values via `X_df`.
+
+Three combinations are supported:
+
+| Combination                         | Bucket key                                                                                                |
+|------------------------------------|------------------------------------|
+| `partition_by=[...]` alone          | `(unique_id, *partition_values)` — *local partition*, one bucket per series-partition pair                |
+| `global_=True, partition_by=[...]`  | `(*partition_values)` — *nonlocal*, aggregates across all series sharing the same partition values        |
+| `groupby=[...], partition_by=[...]` | `(*group_values, *partition_values)` — *nonlocal*, aggregates within each group, separately per partition |
+
+Unlike `global_` and `groupby` (which are mutually exclusive),
+`partition_by` composes with either one — or stands alone.
+
+Let’s add a time-varying `promo` column to our panel and walk through
+the three combinations.
+
+```python
+rng = np.random.default_rng(0)
+series['promo'] = rng.choice([0, 1], size=len(series), p=[0.7, 0.3])
+series.head()
+
+```
+
+### Local partition: per-(id, partition_vals) buckets
+
+When `partition_by` is used alone (no `global_`, no `groupby`), each
+`(unique_id, partition_value)` combination becomes its own bucket. The
+rolling window is computed within that bucket only — so a series sees a
+different rolling history depending on which `promo` regime it is
+currently in.
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=7, partition_by=['promo'])]},
+)
+fcst.preprocess(series).head(8)
+
+```
+
+The feature name is prefixed `partby_promo_` to indicate the partition.
+Each row’s feature is the 7-day rolling mean of `y` lagged by 1,
+restricted to rows of the same series with the same `promo` value.
+
+### Global + `partition_by`: cross-series aggregates within each partition
+
+Combine with `global_=True` to aggregate across all series, but
+separately for each `promo` value:
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=7, global_=True, partition_by=['promo'])]},
+)
+fcst.preprocess(series).head(8)
+
+```
+
+Every series with `promo=0` at a given timestamp sees the same
+`global_partby_promo_...` value; every series with `promo=1` sees a
+different (also shared) value.
+
+### Groupby + `partition_by`: group aggregates within each partition
+
+Combine with `groupby=[...]` to aggregate per group (e.g. per `brand`),
+separately for each partition value:
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=7, groupby=['brand'], partition_by=['promo'])]},
+)
+fcst.preprocess(series, static_features=['brand']).head(8)
+
+```
+
+The bucket key here is `(brand, promo)`. There are at most
+`n_brands × n_promo_values` buckets.
+
+## Dynamic partition values at prediction time
+
+Because partition columns are *not* static, you must supply their future
+values when forecasting. Pass an `X_df` containing `unique_id`, `ds`,
+and every partition column for every horizon step:
+
+```python
+from sklearn.linear_model import LinearRegression
+
+fcst = MLForecast(
+    models=[LinearRegression()],
+    freq='D',
+    lag_transforms={1: [RollingMean(window_size=7, global_=True, partition_by=['promo'])]},
+)
+# `brand` plays no role in this global_ + partition_by example, so we drop it
+# rather than feed a raw string column to LinearRegression
+fcst.fit(series.drop(columns='brand'))
+
+last_date = series['ds'].max()
+unique_ids = sorted(series['unique_id'].unique())
+future_promo = pd.DataFrame([
+    {'unique_id': uid, 'ds': last_date + pd.Timedelta(days=h), 'promo': int(rng.integers(0, 2))}
+    for uid in unique_ids
+    for h in range(1, 4)
+])
+fcst.predict(h=3, X_df=future_promo).head()
+
+```
+
+A few notes on dynamic prediction:
+
+-   If `X_df` introduces a partition value never seen during fit,
+    mlforecast creates a fresh bucket on the fly. The first few
+    predictions for that bucket may be `NaN` if its history is shorter
+    than `window_size`/`min_samples`.
+-   Subset prediction (`predict(ids=[...])`) is rejected when nonlocal
+    `partition_by` is in play: the missing series would still contribute
+    to the bucket aggregates, so partial subsets are ambiguous.
+-   Partition columns are **automatically excluded from
+    `static_features`** even when `static_features=None`. They must come
+    from `X_df` at predict time.
+
+## Understanding ordinals and parent calendars
+
+A `partition_by` bucket only contains the rows where the partition value
+is active for a series. When the partition is sparse — e.g. `promo=1` is
+only on at timestamps `[1, 3, 5]` while the parent calendar (the global
+or group scope) is `[1, 2, 3, 4, 5]` — the bucket’s *ordinals* come from
+the parent calendar:
+
+-   Bucket has observations at parent positions `[0, 2, 4]`, not
+    `[0, 1, 2]`.
+-   `RollingMean(window_size=2)` at parent position 4 looks back to
+    positions `[3, 4]`. The bucket has no observation at position 3, so
+    only position 4 contributes to the window.
+
+This preserves SQL `RANGE BETWEEN ...` semantics across gaps: the window
+is defined in *time*, not in *number of rows*. Without parent-calendar
+ordinals, a partition with gaps would silently collapse to row-based
+semantics, mixing observations across non-adjacent timestamps.
+
+## Aligned-end requirement
+
+All pooled modes — `global_`, `groupby`, and `partition_by` (including
+local, alone) — require every series to **end at the same timestamp**.
+This is checked at `fit` and `predict` time and raises if violated:
+
+``` text
+ValueError: Pooled lag transforms require all series to end at the same timestamp (recursive prediction advances all series in lockstep).
+```
+
+Local `partition_by` shares this requirement because parent calendars
+(per-id, for local mode) must advance in lockstep during recursive
+prediction. If your series have ragged ends, pre-align them (pad to a
+common last timestamp, or drop series that end early) before fitting.
+
+## Exponentially Weighted Mean with partitions
+
+`ExponentiallyWeightedMean` with `partition_by` has subtly different
+semantics from a regular EWM:
+
+-   The decay is applied across the bucket’s **observed timestamp
+    aggregates** (one contribution per timestamp, regardless of how many
+    rows the aggregate covered).
+-   Timestamps where the partition bucket has **no observation** are
+    skipped — they do not contribute to the running EWM and do not
+    advance the decay step.
+
+This means EWM treats each observed timestamp uniformly and ignores
+gaps. mlforecast emits a `UserWarning` when you construct an
+`ExponentiallyWeightedMean` with `partition_by` to make this explicit.
+
+```python
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    tfm = ExponentiallyWeightedMean(alpha=0.3, partition_by=['promo'])
+[str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+
+```
+
 ## Constraints to keep in mind
 
 -   `global_=True` and `groupby=[...]` are **mutually exclusive** on the
     same transform. Use two separate transforms if you want both feature
-    families.
+    families. `partition_by` composes with either one, or stands alone.
 -   Columns in `groupby` must be declared in `static_features` when you
-    call `fit` / `preprocess`.
+    call `fit` / `preprocess`. Columns in `partition_by` must **not** be
+    — they are dynamic and supplied via `X_df` at prediction.
 -   `min_samples=0` in pooled mode produces NaN for timestamps with no
     observations in the window and triggers a warning at construction
     time — prefer `min_samples=1` if you want “as soon as there is any
     observation”.
+-   All pooled modes — `global_`, `groupby`, and `partition_by`
+    (including local, alone) — require **series to end at the same
+    timestamp**.
+-   Subset prediction (`predict(ids=[...])`) is rejected when nonlocal
+    pooled transforms are in play: omitted series would still contribute
+    to the bucket aggregates.
 -   All supported rolling, expanding, seasonal-rolling, and
-    exponentially weighted transforms accept `global_` and `groupby`.
-    `Offset` and `Combine` delegate to their wrapped transforms.
+    exponentially weighted transforms accept `global_`, `groupby`, and
+    `partition_by`. `Offset` and `Combine` delegate to their wrapped
+    transforms.
+-   **Performance**: `RollingQuantile`, `ExpandingQuantile` and the
+    `SeasonalRolling*` transforms have no aggregate-cache fast path in
+    pooled modes. They fall back to a row-level pass whose cost grows
+    with `unique timestamps × bucket rows` at fit, and aggregates are
+    rebuilt at every recursive prediction step. For large panels prefer
+    the mean/std/min/max/EWM transforms, which use cached per-timestamp
+    aggregates.
+-   **Memory**: pooled states keep the full training history regardless
+    of `keep_last_n` (which only trims the per-series arrays used by
+    local transforms), and each `predict` call backs up the pooled state
+    per model to isolate recursive mutations. Expect higher peak memory
+    with pooled transforms on large panels.
 
 ## End-to-end example
 
@@ -242,7 +454,9 @@ fcst = MLForecast(
         ],
     },
 )
-fcst.fit(series, static_features=['brand'])
+# `promo` was only needed for the partition_by examples above; this end-to-end
+# model groups by `brand` and doesn't use it, so drop it to keep predict X_df-free
+fcst.fit(series.drop(columns='promo'), static_features=['brand'])
 fcst.predict(h=7).head(6)
 ```
 
