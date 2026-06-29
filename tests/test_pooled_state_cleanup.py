@@ -98,6 +98,115 @@ def _build_fcst():
     )
 
 
+def _agg_arrays(agg):
+    return [agg.unique_times, agg.sums, agg.counts, agg.sum_sq, agg.mins, agg.maxs]
+
+
+def _assert_state_equal(got, ref):
+    """Field-by-field equality of two PooledStates (mutable fields)."""
+    for f in ("series_bucket_id", "bucket_id", "time", "time_index", "y"):
+        np.testing.assert_array_equal(getattr(got, f), getattr(ref, f))
+    if ref._idsorted_to_bucket_pos is None:
+        assert got._idsorted_to_bucket_pos is None
+    else:
+        np.testing.assert_array_equal(
+            got._idsorted_to_bucket_pos, ref._idsorted_to_bucket_pos
+        )
+    assert got.next_time_index_by_bucket == ref.next_time_index_by_bucket
+    assert got._bucket_to_parent_id == ref._bucket_to_parent_id
+    assert got._parent_to_buckets == ref._parent_to_buckets
+    assert got._scope_key_to_parent_id == ref._scope_key_to_parent_id
+    # bucket_df / groups grow on append / new buckets; a missed restore would
+    # change their length.
+    assert len(got.bucket_df) == len(ref.bucket_df)
+    assert list(got.bucket_df.columns) == list(ref.bucket_df.columns)
+    if ref.groups is None:
+        assert got.groups is None
+    else:
+        assert len(got.groups) == len(ref.groups)
+    if ref._parent_time_grids is None:
+        assert got._parent_time_grids is None
+    else:
+        assert got._parent_time_grids.keys() == ref._parent_time_grids.keys()
+        for pid in ref._parent_time_grids:
+            np.testing.assert_array_equal(
+                got._parent_time_grids[pid], ref._parent_time_grids[pid]
+            )
+    assert got._ts_aggs.keys() == ref._ts_aggs.keys()
+    for bid in ref._ts_aggs:
+        for a_got, a_ref in zip(
+            _agg_arrays(got._ts_aggs[bid]), _agg_arrays(ref._ts_aggs[bid])
+        ):
+            np.testing.assert_array_equal(a_got, a_ref)
+
+
+def test_backup_snapshot_restores_pooled_state_like_deepcopy():
+    """_backup's cheap snapshot/restore must leave every pooled state identical
+    to a deepcopy taken before predict (predict mutates the states in place and
+    _backup rolls them back per model)."""
+    import copy
+
+    df = _make_panel()
+    fcst = _build_fcst()
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["brand"],
+    )
+    ref = {k: copy.deepcopy(s) for k, s in fcst.ts._pooled_states.items()}
+    assert ref  # there are pooled states to check
+    future = []
+    for sid in ["a", "b", "c", "d"]:
+        for t in range(17, 20):
+            future.append({"unique_id": sid, "ds": t, "promo": t % 2})
+    fcst.predict(h=3, X_df=pd.DataFrame(future))
+    for key, ref_state in ref.items():
+        _assert_state_equal(fcst.ts._pooled_states[key], ref_state)
+
+
+def test_snapshot_restore_after_dynamic_new_bucket():
+    """update_series_bucket_id creates new buckets (mutating groups, parent maps,
+    _ts_aggs, ...). snapshot taken before must restore all of it."""
+    import copy
+
+    df = _make_panel()
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lags=[1],
+        lag_transforms={
+            1: [
+                RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"])
+            ]
+        },
+    )
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["brand"],
+    )
+    key = ("nonlocal", ("brand",), ("promo",))
+    state = fcst.ts._pooled_states[key]
+    ref = copy.deepcopy(state)
+    snap = state.snapshot()
+    # introduce a brand-new (brand, promo) combo -> new bucket created in place
+    ctx = pd.DataFrame(
+        {
+            "unique_id": ["a", "b", "c", "d"],
+            "brand": ["x", "x", "y", "y"],
+            "promo": [9, 9, 9, 9],
+        }
+    )
+    state.update_series_bucket_id(ctx, "unique_id")
+    assert len(state._ts_aggs) > len(ref._ts_aggs)  # a new bucket really appeared
+    state.restore(snap)
+    _assert_state_equal(state, ref)
+
+
 def test_g1_pooled_predictions_byte_identical():
     df = _make_panel()
     fcst = _build_fcst()

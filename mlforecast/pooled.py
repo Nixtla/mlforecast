@@ -1,5 +1,6 @@
 __all__ = ["PooledState", "compute_pooled_features"]
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -338,6 +339,58 @@ class PooledState:
                 nw.new_series("_bucket_id", [0], dtype=nw.Int64, backend=ns)
             )
         return nw.to_native(nw.from_native(self.groups).get_column("_bucket_id").sort())
+
+    # Mutable fields touched during recursive prediction. ``snapshot``/``restore``
+    # let ``TimeSeries._backup`` save and roll back state cheaply (see below);
+    # keep this list in sync with the fields mutated by ``append_predictions`` /
+    # ``append_observations`` / ``update_series_bucket_id``.
+    _MUTABLE_REF_FIELDS = (
+        "bucket_df",
+        "groups",
+        "series_bucket_id",
+        "bucket_id",
+        "time",
+        "time_index",
+        "y",
+        "_idsorted_to_bucket_pos",
+    )
+    _MUTABLE_DICT_FIELDS = (
+        "next_time_index_by_bucket",
+        "_parent_time_grids",
+        "_bucket_to_parent_id",
+        "_scope_key_to_parent_id",
+    )
+
+    def snapshot(self):
+        """Cheap structural backup for recursive prediction.
+
+        Prediction only ever **replaces** the array fields wholesale
+        (``np.append`` / ``np.concatenate`` produce new arrays) and rebinds
+        attributes on the ``_TimestampAggregates`` instances — it never mutates
+        a shared array in place. So a faithful backup needs only reference
+        copies of the arrays plus shallow copies of the mutable containers and
+        of each aggregate instance; no array data is duplicated (unlike a full
+        ``deepcopy`` of every pooled state per model per ``predict``).
+        """
+        snap = {f: getattr(self, f) for f in self._MUTABLE_REF_FIELDS}
+        for f in self._MUTABLE_DICT_FIELDS:
+            v = getattr(self, f)
+            snap[f] = None if v is None else dict(v)
+        # lists are reassigned wholesale today, but copy them defensively so a
+        # future in-place ``append`` can't corrupt the backup.
+        snap["_parent_to_buckets"] = (
+            None
+            if self._parent_to_buckets is None
+            else {k: list(v) for k, v in self._parent_to_buckets.items()}
+        )
+        # each agg instance is mutated in place (``agg.sums = np.append(...)``),
+        # so copy the instances; their arrays are replaced wholesale, share them.
+        snap["_ts_aggs"] = {bid: copy.copy(agg) for bid, agg in self._ts_aggs.items()}
+        return snap
+
+    def restore(self, snap):
+        for field_name, value in snap.items():
+            setattr(self, field_name, value)
 
     @classmethod
     def from_global(

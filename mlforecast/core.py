@@ -1360,13 +1360,18 @@ class TimeSeries:
     def _backup(self) -> Iterator[None]:
         ga = copy.copy(self.ga)
         lag_tfms = copy.deepcopy(self.transforms)
-        pooled_states = copy.deepcopy(getattr(self, "_pooled_states", {}))
+        # Pooled states are only appended to during prediction, so a cheap
+        # structural snapshot (references + shallow container copies) restores
+        # them faithfully without deep-copying every aggregate array per model.
+        pooled_states = getattr(self, "_pooled_states", {})
+        pooled_snaps = {key: state.snapshot() for key, state in pooled_states.items()}
         try:
             yield
         finally:
             self.ga = ga
             self.transforms = lag_tfms
-            self._pooled_states = pooled_states
+            for key, snap in pooled_snaps.items():
+                self._pooled_states[key].restore(snap)
 
     def _predict_setup(self) -> None:
         # TODO: move to utils
