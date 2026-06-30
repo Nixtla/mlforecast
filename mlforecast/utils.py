@@ -1,4 +1,9 @@
-__all__ = ['generate_daily_series', 'generate_prices_for_series', 'PredictionIntervals']
+__all__ = [
+    "generate_daily_series",
+    "generate_prices_for_series",
+    "PredictionIntervals",
+    "TransferConformal",
+]
 
 
 from math import ceil, log10
@@ -12,43 +17,45 @@ from joblib import cpu_count
 from utilsforecast.compat import DataFrame, pl
 from utilsforecast.data import generate_series
 
+from .conformal_prediction import PredictionIntervals, TransferConformal  # noqa: F401
+
 
 # Valid values for each date feature that can be dummy-encoded.
 # Features not listed here (e.g. year) are not supported because they have an
 # unbounded range that depends on the training data.
 _DUMMY_FEATURE_VALUES: Dict[str, List[int]] = {
-    "dayofweek":   list(range(7)),         # 0=Mon … 6=Sun (pandas convention)
+    "dayofweek": list(range(7)),  # 0=Mon … 6=Sun (pandas convention)
     "day_of_week": list(range(7)),
-    "weekday":     list(range(7)),
-    "month":       list(range(1, 13)),
-    "quarter":     list(range(1, 5)),
-    "day":         list(range(1, 32)),
-    "hour":        list(range(24)),
-    "minute":      list(range(60)),
-    "second":      list(range(60)),
-    "dayofyear":   list(range(1, 367)),    # 366 columns (leap-year safe)
+    "weekday": list(range(7)),
+    "month": list(range(1, 13)),
+    "quarter": list(range(1, 5)),
+    "day": list(range(1, 32)),
+    "hour": list(range(24)),
+    "minute": list(range(60)),
+    "second": list(range(60)),
+    "dayofyear": list(range(1, 367)),  # 366 columns (leap-year safe)
     "day_of_year": list(range(1, 367)),
     # no narwhals equivalent — computed via backend-specific fallback below
-    "week":        list(range(1, 54)),     # ISO weeks 1-53
-    "weekofyear":  list(range(1, 54)),
+    "week": list(range(1, 54)),  # ISO weeks 1-53
+    "weekofyear": list(range(1, 54)),
 }
 
 # narwhals dt method name when it differs from the mlforecast feature name
 _NW_DT_ATTR: Dict[str, str] = {
-    "dayofweek":   "weekday",
+    "dayofweek": "weekday",
     "day_of_week": "weekday",
-    "weekday":     "weekday",
-    "quarter":     "month",      # special: quarter is derived from month
-    "dayofyear":   "ordinal_day",
+    "weekday": "weekday",
+    "quarter": "month",  # special: quarter is derived from month
+    "dayofyear": "ordinal_day",
     "day_of_year": "ordinal_day",
     # "week" / "weekofyear" intentionally absent — handled via backend fallback
 }
 
 # additive offset applied after the narwhals call so values match the pandas convention
 _NW_OFFSET: Dict[str, int] = {
-    "dayofweek":   -1,   # narwhals weekday is 1-7; pandas dayofweek is 0-6
+    "dayofweek": -1,  # narwhals weekday is 1-7; pandas dayofweek is 0-6
     "day_of_week": -1,
-    "weekday":     -1,
+    "weekday": -1,
 }
 
 # Features that narwhals does not expose and require a backend-specific path
@@ -137,7 +144,7 @@ def _resolve_num_threads(num_threads: int) -> int:
                 warnings.warn(
                     "Could not determine CPU count, using num_threads=1.",
                     UserWarning,
-                    stacklevel=3
+                    stacklevel=3,
                 )
                 return 1
             return resolved
@@ -145,11 +152,13 @@ def _resolve_num_threads(num_threads: int) -> int:
             warnings.warn(
                 f"Error determining CPU count ({e}), using num_threads=1.",
                 UserWarning,
-                stacklevel=3
+                stacklevel=3,
             )
             return 1
     if num_threads < 1:
-        raise ValueError(f"num_threads must be -1 or a positive integer, got {num_threads}.")
+        raise ValueError(
+            f"num_threads must be -1 or a positive integer, got {num_threads}."
+        )
     return num_threads
 
 
@@ -235,30 +244,6 @@ def generate_prices_for_series(
         dfs.append(product_df)
     prices_catalog = pd.concat(dfs).reset_index()
     return prices_catalog
-
-
-class PredictionIntervals:
-    """Class for storing prediction intervals metadata information."""
-
-    def __init__(
-        self,
-        n_windows: int = 2,
-        h: int = 1,
-        method: str = "conformal_distribution",
-    ):
-        if n_windows < 2:
-            raise ValueError(
-                "You need at least two windows to compute conformal intervals"
-            )
-        allowed_methods = ["conformal_error", "conformal_distribution"]
-        if method not in allowed_methods:
-            raise ValueError(f"method must be one of {allowed_methods}")
-        self.n_windows = n_windows
-        self.h = h
-        self.method = method
-
-    def __repr__(self):
-        return f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, method='{self.method}')"
 
 
 class _ShortSeriesException(Exception):
