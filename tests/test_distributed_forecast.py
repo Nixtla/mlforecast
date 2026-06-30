@@ -7,15 +7,15 @@ import pandas as pd
 import pytest
 from sklearn.base import BaseEstimator
 
-from mlforecast.distributed import DistributedMLForecast
-from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
-from mlforecast.lag_transforms import ExpandingMean, RollingMean
-from mlforecast.utils import generate_daily_series
-
 if sys.platform != "linux":
     pytest.skip(
         "Distributed interface is only supported on Linux", allow_module_level=True
     )
+
+from mlforecast.distributed import DistributedMLForecast
+from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
+from mlforecast.utils import generate_daily_series
 
 warnings.simplefilter("ignore", FutureWarning)
 
