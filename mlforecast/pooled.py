@@ -987,6 +987,65 @@ class PooledState:
             tmp_ord = np.concatenate([self.time_index, new_ords])
             return tmp_bid, tmp_ord, tmp_y
 
+    def trim_to_last(self, n_ordinals: int) -> None:
+        """Drop history so each calendar keeps only its last ``n_ordinals`` ordinals.
+
+        Equivalent, by construction, to fitting on only the observations whose
+        parent-calendar ordinal falls in the last ``n_ordinals`` positions: the
+        flat arrays, ``bucket_df`` and parent grids are trimmed and renumbered
+        in lockstep, then every derived structure (``_ts_aggs``,
+        ``_idsorted_to_bucket_pos``) is regenerated through the same primitives
+        the constructors/append paths use, so all representations stay mutually
+        consistent. The caller must pass an ``n_ordinals`` covering every
+        transform's window (see the retention rule in ``TimeSeries._transform``),
+        so the dropped prefix can never enter a window and the trim is
+        prediction-neutral.
+
+        Only valid at fit time, before any prediction/observation append, while
+        ``bucket_df`` is still positionally aligned with the flat arrays.
+
+        In every mode ``next_time_index_by_bucket[bid]`` is the length of that
+        bucket's calendar (global: distinct global timestamps; groupby: the
+        bucket's own distinct timestamps; partition: the shared parent grid), so
+        the per-bucket cutoff ``len - n_ordinals`` is uniform across the buckets
+        that share a calendar. Renumbering by subtracting the cutoff matches a
+        fresh ``searchsorted`` into the retained-suffix calendar, which is also
+        what the next ``append_observations`` recomputes.
+        """
+        if n_ordinals <= 0:
+            return
+        bid_arr = self.bucket_id
+        keep = np.zeros(len(bid_arr), dtype=bool)
+        new_time_index = self.time_index.copy()
+        for bid in np.unique(bid_arr):
+            bid_int = int(bid)
+            cutoff = max(self.next_time_index_by_bucket[bid_int] - n_ordinals, 0)
+            mask = bid_arr == bid
+            ords = self.time_index[mask]
+            keep[mask] = ords >= cutoff
+            new_time_index[mask] = ords - cutoff
+        if keep.all():
+            # every calendar already fits in n_ordinals -> nothing to drop.
+            return
+        self.bucket_id = bid_arr[keep]
+        self.time = self.time[keep]
+        self.y = self.y[keep]
+        self.time_index = new_time_index[keep]
+        # bucket_df is row-aligned with the flat arrays at fit time, so the same
+        # boolean mask trims it consistently.
+        self.bucket_df = ufp.filter_with_mask(self.bucket_df, keep)
+        if self._parent_time_grids is not None:
+            for pid, grid in self._parent_time_grids.items():
+                self._parent_time_grids[pid] = grid[max(len(grid) - n_ordinals, 0) :]
+        for bid_int, cal_len in self.next_time_index_by_bucket.items():
+            self.next_time_index_by_bucket[bid_int] = min(cal_len, n_ordinals)
+        self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
+        if self._idsorted_to_bucket_pos is not None:
+            id_col, time_col = self.join_cols
+            self._idsorted_to_bucket_pos = _compute_idsorted_to_bucket_pos(
+                self.bucket_df, id_col, time_col
+            )
+
 
 def _attach_bucket_id(bucket_df, groups, group_cols_list):
     joined = _null_equal_left_join(
