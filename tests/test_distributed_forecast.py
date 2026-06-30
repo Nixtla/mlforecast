@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +10,8 @@ if sys.platform != "linux":
     pytest.skip(
         "Distributed interface is only supported on Linux", allow_module_level=True
     )
+
+import dask.dataframe as dd
 
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
