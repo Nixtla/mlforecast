@@ -199,6 +199,23 @@ class Lag(_BaseLagTransform):
         return self.lag
 
 
+def _resolve_min_samples(tfm) -> int:
+    """Resolve ``min_samples=None`` for pooled window computations.
+
+    In local partition mode (``partition_by`` without ``global_``/``groupby``)
+    the window spans ``window_size`` parent-calendar steps while only
+    same-partition observations count toward ``min_samples``, so requiring a
+    full window is rarely attainable; the default is 1, matching SQL
+    RANGE-window semantics (NULL only for empty windows). Every other mode
+    defaults to ``window_size``.
+    """
+    if tfm.min_samples is not None:
+        return tfm.min_samples
+    if tfm.partition_by and not tfm.global_ and not tfm.groupby:
+        return 1
+    return tfm.window_size
+
+
 class _RollingBase(_BaseLagTransform):
     "Rolling statistic"
 
@@ -215,14 +232,24 @@ class _RollingBase(_BaseLagTransform):
         Args:
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
-                If `None`, will be set to `window_size`. Defaults to None.
+                If `None`, will be set to `window_size`, except in local partition mode
+                (``partition_by`` without ``global_``/``groupby``), where it will be set
+                to 1. Defaults to None.
                 In local (per-series) mode, ``min_samples`` is capped at ``window_size``
-                by coreforecast.  In pooled mode (``global_=True`` or ``groupby``),
-                ``min_samples`` counts total non-NaN observations across **all series**
-                in the bucket within the rolling window, with no capping.  For example,
-                ``RollingMean(window_size=1, min_samples=2, groupby=["brand"])`` produces
-                a non-null result at timestamps where at least 2 series in the brand
-                group contribute observations.
+                by coreforecast.  In pooled mode (``global_=True``, ``groupby`` or
+                ``partition_by``), ``min_samples`` counts total non-NaN observations
+                across **all series** in the bucket within the rolling window, with no
+                capping.  For example, ``RollingMean(window_size=1, min_samples=2,
+                groupby=["brand"])`` produces a non-null result at timestamps where at
+                least 2 series in the brand group contribute observations.
+                With ``partition_by``, the window spans ``window_size`` parent-calendar
+                steps while only same-partition observations count toward
+                ``min_samples``, so requiring a full window is rarely attainable in
+                local partition mode; its default of 1 matches SQL RANGE-window
+                semantics (NULL only for empty windows). When ``partition_by`` is
+                combined with ``global_`` or ``groupby``, the default remains
+                ``window_size``, counted across all series in the (group, partition)
+                bucket.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
@@ -274,7 +301,7 @@ class _RollingBase(_BaseLagTransform):
     ) -> np.ndarray:
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.empty(n)
         result[:] = np.nan
@@ -331,7 +358,7 @@ class RollingMean(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
             if len(agg.unique_times) == 0:
@@ -354,7 +381,7 @@ class RollingMean(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         return {
             bid: _rolling_mean_from_agg(agg, lag, w, min_samples)
             for bid, agg in ts_aggs.items()
@@ -374,7 +401,7 @@ class RollingMean(_RollingBase):
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.empty(n)
         result[:] = np.nan
@@ -388,7 +415,7 @@ class RollingMean(_RollingBase):
     def _compute_row_level(self, bid_arr, y_arr, ord_arr):
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.empty(n)
         result[:] = np.nan
@@ -464,7 +491,7 @@ class RollingStd(_RollingBase):
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.empty(n)
         result[:] = np.nan
@@ -484,7 +511,7 @@ class RollingStd(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
             if len(agg.unique_times) == 0:
@@ -516,7 +543,7 @@ class RollingStd(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         return {
             bid: _rolling_std_from_agg(agg, lag, w, min_samples)
             for bid, agg in ts_aggs.items()
@@ -569,7 +596,7 @@ class RollingMin(_RollingBase):
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.full(n, np.nan)
         for bid, agg in ts_aggs.items():
@@ -588,7 +615,7 @@ class RollingMin(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
             if len(agg.unique_times) == 0:
@@ -616,7 +643,7 @@ class RollingMin(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         return {
             bid: _rolling_min_from_agg(agg, lag, w, min_samples)
             for bid, agg in ts_aggs.items()
@@ -641,7 +668,7 @@ class RollingMax(_RollingBase):
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.full(n, np.nan)
         for bid, agg in ts_aggs.items():
@@ -660,7 +687,7 @@ class RollingMax(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
             if len(agg.unique_times) == 0:
@@ -688,7 +715,7 @@ class RollingMax(_RollingBase):
             return None
         lag = self._core_tfm.lag
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         return {
             bid: _rolling_max_from_agg(agg, lag, w, min_samples)
             for bid, agg in ts_aggs.items()
@@ -765,15 +792,25 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             season_length (int): Periodicity of the seasonal period.
             window_size (int): Number of samples in the window.
             min_samples (int, optional): Minimum samples required to output the statistic.
-                If `None`, will be set to `window_size`. Defaults to None.
+                If `None`, will be set to `window_size`, except in local partition mode
+                (``partition_by`` without ``global_``/``groupby``), where it will be set
+                to 1. Defaults to None.
                 In local (per-series) mode, ``min_samples`` is capped at ``window_size``
-                by coreforecast.  In pooled mode (``global_=True`` or ``groupby``),
-                ``min_samples`` counts total non-NaN observations across **all series**
-                in the bucket within the rolling window, with no capping.  For example,
-                ``SeasonalRollingMean(season_length=7, window_size=1, min_samples=2,
-                groupby=["brand"])`` produces a non-null result at the target seasonal
-                timestamp when at least 2 series in the brand group contribute
-                observations.
+                by coreforecast.  In pooled mode (``global_=True``, ``groupby`` or
+                ``partition_by``), ``min_samples`` counts total non-NaN observations
+                across **all series** in the bucket within the rolling window, with no
+                capping.  For example, ``SeasonalRollingMean(season_length=7,
+                window_size=1, min_samples=2, groupby=["brand"])`` produces a non-null
+                result at the target seasonal timestamp when at least 2 series in the
+                brand group contribute observations.
+                With ``partition_by``, the window targets ``window_size`` seasonal
+                steps of the parent calendar while only same-partition observations
+                count toward ``min_samples``, so requiring a full window is rarely
+                attainable in local partition mode; its default of 1 matches SQL
+                RANGE-window semantics (NULL only for empty windows). When
+                ``partition_by`` is combined with ``global_`` or ``groupby``, the
+                default remains ``window_size``, counted across all series in the
+                (group, partition) bucket.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
@@ -827,7 +864,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         lag = self._core_tfm.lag
         sl = self.season_length
         w = self.window_size
-        min_samples = self.min_samples if self.min_samples is not None else w
+        min_samples = _resolve_min_samples(self)
         n = len(bid_arr)
         result = np.empty(n)
         result[:] = np.nan

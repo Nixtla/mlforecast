@@ -3609,3 +3609,122 @@ def test_slow_path_quantile_with_partition_by(engine, mode):
                 (uid, t_query, fake_preds[i], step_promos[t_query][i])
                 for i, uid in enumerate(uid_order)
             )
+
+
+# === min_samples default resolution ===
+# In local partition mode min_samples=None defaults to 1 (SQL RANGE semantics);
+# every other mode keeps the window_size default.
+
+from mlforecast.lag_transforms import (  # noqa: E402
+    SeasonalRollingMean,
+    _resolve_min_samples,
+)
+
+
+def test_min_samples_default_resolution():
+    assert _resolve_min_samples(RollingMean(7)) == 7
+    assert _resolve_min_samples(RollingMean(7, global_=True)) == 7
+    assert _resolve_min_samples(RollingMean(7, groupby=["brand"])) == 7
+    assert _resolve_min_samples(RollingMean(7, partition_by=["promo"])) == 1
+    assert (
+        _resolve_min_samples(RollingMean(7, global_=True, partition_by=["promo"])) == 7
+    )
+    assert (
+        _resolve_min_samples(RollingMean(7, groupby=["brand"], partition_by=["promo"]))
+        == 7
+    )
+    # explicit values are never overridden
+    assert (
+        _resolve_min_samples(RollingMean(7, min_samples=3, partition_by=["promo"])) == 3
+    )
+    assert (
+        _resolve_min_samples(
+            SeasonalRollingMean(season_length=7, window_size=4, partition_by=["promo"])
+        )
+        == 1
+    )
+    assert (
+        _resolve_min_samples(
+            SeasonalRollingMean(season_length=7, window_size=4, global_=True)
+        )
+        == 4
+    )
+
+
+def _fit_transform_values(engine, df, tfm):
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    if engine == "polars":
+        out = out.to_pandas()
+    return out[tfm._get_name(1)].to_numpy(dtype=float)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_by_local_default_min_samples_is_one(engine):
+    """On a dense panel with interleaved promo days, a 7-step window almost
+    never holds 7 same-promo observations (the window spans calendar steps
+    while only same-promo rows count), so the window_size default would make
+    the feature ~100% NaN. Local partition mode defaults to 1 instead."""
+    n = 30
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n,
+            "ds": list(range(1, n + 1)),
+            "y": [float(i) for i in range(1, n + 1)],
+            "promo": [0, 1] * (n // 2),
+        },
+    )
+    default_vals = _fit_transform_values(
+        engine, df, RollingMean(7, partition_by=["promo"])
+    )
+    explicit_one = _fit_transform_values(
+        engine, df, RollingMean(7, min_samples=1, partition_by=["promo"])
+    )
+    np.testing.assert_array_equal(default_vals, explicit_one)
+    # usable feature: only the empty-lookback rows at the start are NaN
+    assert np.isnan(default_vals).mean() < 0.2
+    # the local-mode default (window_size) would have produced all NaN here
+    old_default = _fit_transform_values(
+        engine, df, RollingMean(7, min_samples=7, partition_by=["promo"])
+    )
+    assert np.isnan(old_default).all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_by_nonlocal_default_min_samples_unchanged(engine):
+    """global_ + partition_by keeps the window_size default (counts sum
+    across series in the (partition) bucket)."""
+    n = 12
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n + ["b"] * n,
+            "ds": list(range(1, n + 1)) * 2,
+            "y": [float(i) for i in range(1, 2 * n + 1)],
+            "promo": [0, 1] * (n // 2) * 2,
+        },
+    )
+    default_vals = _fit_transform_values(
+        engine, df, RollingMean(4, global_=True, partition_by=["promo"])
+    )
+    explicit_ws = _fit_transform_values(
+        engine,
+        df,
+        RollingMean(4, min_samples=4, global_=True, partition_by=["promo"]),
+    )
+    explicit_one = _fit_transform_values(
+        engine,
+        df,
+        RollingMean(4, min_samples=1, global_=True, partition_by=["promo"]),
+    )
+    np.testing.assert_array_equal(default_vals, explicit_ws)
+    # the guard still bites on partially-filled windows, unlike min_samples=1
+    assert np.isnan(default_vals).sum() > np.isnan(explicit_one).sum()

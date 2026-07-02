@@ -256,6 +256,18 @@ def assert_oracle_matches(
     min_samples: Optional[int] = None,
     atol: float = 1e-10,
 ):
+    # mlforecast defaults min_samples to 1 (instead of window_size) in local
+    # partition mode, where the RANGE window spans calendar steps but only
+    # same-partition observations count. Derived here independently so the
+    # oracle pins that default.
+    if min_samples is None and window_size is not None:
+        is_local_partition = bool(
+            getattr(transform, "partition_by", None)
+            and not getattr(transform, "global_", False)
+            and not getattr(transform, "groupby", None)
+        )
+        if is_local_partition:
+            min_samples = 1
     sql_result = sqlite_oracle(
         df,
         transform_name,
