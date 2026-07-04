@@ -1104,7 +1104,8 @@ def test_lookup_lag_partition_by_uses_previous_matching_occurrence(engine):
         df = pl.from_pandas(df).with_columns(pl.col("unique_id").cast(pl.Categorical))
 
     tfm = LookupLag(partition_by=["holiday_name"])
-    ts = TimeSeries(freq="D", lag_transforms={1: [tfm]})
+    freq = "1d" if engine == "polars" else "D"
+    ts = TimeSeries(freq=freq, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
         df,
         id_col="unique_id",
