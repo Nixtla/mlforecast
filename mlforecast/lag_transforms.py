@@ -15,6 +15,7 @@ __all__ = [
     "ExpandingMax",
     "ExpandingQuantile",
     "ExponentiallyWeightedMean",
+    "LookupLag",
     "Offset",
     "Combine",
 ]
@@ -197,6 +198,75 @@ class Lag(_BaseLagTransform):
     @property
     def update_samples(self) -> int:
         return self.lag
+
+
+class LookupLag(_BaseLagTransform):
+    """Look up the target from a previous matching occurrence.
+
+    The lag value is provided by the ``lag_transforms`` dictionary key. For
+    example, ``lag_transforms={1: [LookupLag(partition_by=["holiday_name"])]}``
+    returns the previous target value observed within each
+    ``(unique_id, holiday_name)`` bucket.
+
+    Args:
+        partition_by (Sequence[str], optional): Dynamic column names used to
+            define matching buckets within each series. Defaults to None.
+    """
+
+    def __init__(
+        self,
+        partition_by: Optional[Sequence[str]] = None,
+        **kwargs,
+    ):
+        if "partition_by" in kwargs:
+            partition_by = kwargs.pop("partition_by")
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        self.partition_by = _normalize_columns(partition_by)
+        self._core_tfm = None
+
+    def _set_core_tfm(self, lag: int) -> "LookupLag":
+        self._core_tfm = core_tfms.Lag(lag=lag)
+        return self
+
+    def _get_name(self, lag: int) -> str:
+        prefix = ""
+        if self.partition_by:
+            part_str = "__".join(self.partition_by)
+            prefix = f"partby_{part_str}_"
+        return f"{prefix}lookup_lag{lag}"
+
+    def _compute_bucket_feature(
+        self,
+        bid_arr: np.ndarray,
+        ord_arr: np.ndarray,
+        y_arr: np.ndarray,
+        _ts_aggs=None,
+    ) -> np.ndarray:
+        lag = self._core_tfm.lag
+        n = len(y_arr)
+        result = np.full(n, np.nan)
+        if n == 0:
+            return result
+        order = np.lexsort((np.arange(n), ord_arr, bid_arr))
+        ordered_bid = bid_arr[order]
+        bounds = np.r_[
+            0,
+            np.flatnonzero(ordered_bid[1:] != ordered_bid[:-1]) + 1,
+            n,
+        ]
+        for start, end in zip(bounds[:-1], bounds[1:]):
+            if end - start <= lag:
+                continue
+            idxs = order[start:end]
+            result[idxs[lag:]] = y_arr[idxs[:-lag]]
+        return result
+
+    @property
+    def update_samples(self) -> int:
+        if self._core_tfm is None:
+            return -1
+        return self._core_tfm.lag
 
 
 class _RollingBase(_BaseLagTransform):
