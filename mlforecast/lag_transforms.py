@@ -308,8 +308,8 @@ class _RollingBase(_BaseLagTransform):
                 ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``
                 (raises ``ValueError`` otherwise, since local/partition-only modes have a
                 single row per (bucket, timestamp) and the aggregation would be an
-                identity). Defaults to None (each row is an individual sample, the current
-                row-pooled behavior).
+                identity). Defaults to None, which treats each row as an individual
+                pooled sample.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
