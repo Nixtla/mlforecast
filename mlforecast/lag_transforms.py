@@ -48,6 +48,28 @@ def _normalize_columns(columns):
     return list(dict.fromkeys(columns))
 
 
+# Allowed per-timestamp aggregations for the pooled ``time_agg`` option. Defined
+# here (not in pooled.py) so ``_validate_time_agg`` can run at construction time
+# without importing pooled.py, which imports this module (avoids a cycle).
+_TIME_AGGS = ("sum", "count", "mean", "min", "max")
+
+
+def _validate_time_agg(time_agg, global_, groupby):
+    if time_agg is None:
+        return
+    if time_agg not in _TIME_AGGS:
+        raise ValueError(
+            f"time_agg must be one of {_TIME_AGGS} or None; got {time_agg!r}."
+        )
+    if not (global_ or groupby):
+        raise ValueError(
+            "time_agg requires a pooled aggregation scope: set global_=True or "
+            "groupby=[...] (optionally combined with partition_by). In local or "
+            "partition_by-only mode each (bucket, timestamp) has a single row, so "
+            "time_agg would be a no-op."
+        )
+
+
 def _build_sparse_table(arr, op):
     n = len(arr)
     if n == 0:
@@ -95,6 +117,7 @@ class _BaseLagTransform(BaseEstimator):
         init_args.pop("global", None)
         init_args.pop("groupby", None)
         init_args.pop("partition_by", None)
+        init_args.pop("time_agg", None)
         self._core_tfm = getattr(core_tfms, self.__class__.__name__)(
             lag=lag, **init_args
         )
@@ -148,6 +171,46 @@ class _BaseLagTransform(BaseEstimator):
 
     def _compute_ts_level_from_aggs(self, _ts_aggs):
         return None
+
+    def _maybe_reagg(self, ts_aggs):
+        """Return per-timestamp aggregates collapsed by ``self.time_agg``.
+
+        Applied at the entry of every aggregate-path hook so the transform
+        operates over the per-timestamp aggregated series when ``time_agg`` is
+        set, and is a no-op otherwise. The ``pooled`` import is deferred because
+        ``pooled`` imports this module.
+        """
+        time_agg = getattr(self, "time_agg", None)
+        if not time_agg or not ts_aggs:
+            return ts_aggs
+        from .pooled import _reaggregate_ts_aggs
+
+        return _reaggregate_ts_aggs(ts_aggs, time_agg)
+
+    def _compute_bucket_feature_collapsed(self, bid_arr, ord_arr, y_arr):
+        """Row-level ``time_agg`` for transforms without an aggregate fast path.
+
+        Collapse the raw rows to one per ``(bucket, timestamp)`` holding the
+        ``time_agg`` aggregate, run the ordinary row-level computation on that
+        collapsed series (with ``time_agg`` disabled to avoid recursion), then
+        broadcast each per-timestamp result back to every original row sharing
+        that timestamp.
+        """
+        from .pooled import _collapse_rows_by_time
+
+        cb, co, cy = _collapse_rows_by_time(bid_arr, ord_arr, y_arr, self.time_agg)
+        inner = copy.copy(self)
+        inner.time_agg = None
+        cvals = inner._compute_bucket_feature(cb, co, cy)
+        result = np.full(len(bid_arr), np.nan)
+        for bid in np.unique(bid_arr):
+            idxs = np.where(bid_arr == bid)[0]
+            c_idxs = np.where(cb == bid)[0]
+            if len(c_idxs) == 0:
+                continue
+            pos = np.searchsorted(co[c_idxs], ord_arr[idxs])
+            result[idxs] = cvals[c_idxs][pos]
+        return result
 
     def _get_configured_lag(self) -> int:
         return self._core_tfm.lag
@@ -209,6 +272,7 @@ class _RollingBase(_BaseLagTransform):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -223,6 +287,9 @@ class _RollingBase(_BaseLagTransform):
                 ``RollingMean(window_size=1, min_samples=2, groupby=["brand"])`` produces
                 a non-null result at timestamps where at least 2 series in the brand
                 group contribute observations.
+                When ``time_agg`` is set, ``min_samples`` instead counts observed
+                **timestamps** in the window (each contributes at most one aggregated
+                value), not rows.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
@@ -234,6 +301,15 @@ class _RollingBase(_BaseLagTransform):
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
+            time_agg (str, optional): Pre-aggregate all rows sharing a timestamp within
+                each bucket into a single value before applying the transform, e.g.
+                ``RollingMean(window_size=7, groupby=["category"], time_agg="sum")`` is a
+                rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``,
+                ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``
+                (raises ``ValueError`` otherwise, since local/partition-only modes have a
+                single row per (bucket, timestamp) and the aggregation would be an
+                identity). Defaults to None (each row is an individual sample, the current
+                row-pooled behavior).
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -248,8 +324,10 @@ class _RollingBase(_BaseLagTransform):
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
+        self.time_agg = time_agg
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        _validate_time_agg(time_agg, self.global_, self.groupby)
         if (
             min_samples is not None
             and min_samples == 0
@@ -272,6 +350,8 @@ class _RollingBase(_BaseLagTransform):
         y_arr: np.ndarray,
         _ts_aggs=None,
     ) -> np.ndarray:
+        if getattr(self, "time_agg", None):
+            return self._compute_bucket_feature_collapsed(bid_arr, ord_arr, y_arr)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -329,6 +409,7 @@ class RollingMean(_RollingBase):
     ) -> Optional[Dict[int, float]]:
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -352,6 +433,7 @@ class RollingMean(_RollingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -369,9 +451,12 @@ class RollingMean(_RollingBase):
     ) -> np.ndarray:
         if _ts_aggs:
             return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        if getattr(self, "time_agg", None):
+            return self._compute_bucket_feature_collapsed(bid_arr, ord_arr, y_arr)
         return self._compute_row_level(bid_arr, y_arr, ord_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -462,6 +547,7 @@ class RollingStd(_RollingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -482,6 +568,7 @@ class RollingStd(_RollingBase):
     ) -> Optional[Dict[int, float]]:
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -514,6 +601,7 @@ class RollingStd(_RollingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -567,6 +655,7 @@ class RollingMin(_RollingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -586,6 +675,7 @@ class RollingMin(_RollingBase):
     ) -> Optional[Dict[int, float]]:
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -614,6 +704,7 @@ class RollingMin(_RollingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -639,6 +730,7 @@ class RollingMax(_RollingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -658,6 +750,7 @@ class RollingMax(_RollingBase):
     ) -> Optional[Dict[int, float]]:
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -686,6 +779,7 @@ class RollingMax(_RollingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         w = self.window_size
         min_samples = self.min_samples if self.min_samples is not None else w
@@ -714,6 +808,7 @@ class RollingQuantile(_RollingBase):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(
@@ -722,6 +817,7 @@ class RollingQuantile(_RollingBase):
             global_=global_,
             groupby=groupby,
             partition_by=partition_by,
+            time_agg=time_agg,
             **kwargs,
         )
         self.p = p
@@ -758,6 +854,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -774,6 +871,8 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 groupby=["brand"])`` produces a non-null result at the target seasonal
                 timestamp when at least 2 series in the brand group contribute
                 observations.
+                When ``time_agg`` is set, ``min_samples`` instead counts observed
+                **timestamps** in the window, not rows.
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
@@ -785,6 +884,10 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
+            time_agg (str, optional): Pre-aggregate all rows sharing a timestamp within
+                each bucket into a single value before applying the transform. One of
+                ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires
+                ``global_`` or ``groupby``. Defaults to None.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -800,8 +903,10 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
+        self.time_agg = time_agg
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        _validate_time_agg(time_agg, self.global_, self.groupby)
         if (
             min_samples is not None
             and min_samples == 0
@@ -824,6 +929,8 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         y_arr: np.ndarray,
         _ts_aggs=None,
     ) -> np.ndarray:
+        if getattr(self, "time_agg", None):
+            return self._compute_bucket_feature_collapsed(bid_arr, ord_arr, y_arr)
         lag = self._core_tfm.lag
         sl = self.season_length
         w = self.window_size
@@ -887,6 +994,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(
@@ -896,6 +1004,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
             global_=global_,
             groupby=groupby,
             partition_by=partition_by,
+            time_agg=time_agg,
             **kwargs,
         )
         self.p = p
@@ -919,6 +1028,10 @@ class _ExpandingBase(_BaseLagTransform):
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
+        time_agg (str, optional): Pre-aggregate all rows sharing a timestamp within each
+            bucket into a single value before applying the transform. One of ``"sum"``,
+            ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or
+            ``groupby``. Defaults to None.
     """
 
     def __init__(
@@ -926,6 +1039,7 @@ class _ExpandingBase(_BaseLagTransform):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         if "global" in kwargs:
@@ -939,8 +1053,10 @@ class _ExpandingBase(_BaseLagTransform):
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
+        self.time_agg = time_agg
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        _validate_time_agg(time_agg, self.global_, self.groupby)
 
     @property
     def update_samples(self) -> int:
@@ -953,6 +1069,8 @@ class _ExpandingBase(_BaseLagTransform):
         y_arr: np.ndarray,
         _ts_aggs=None,
     ) -> np.ndarray:
+        if getattr(self, "time_agg", None):
+            return self._compute_bucket_feature_collapsed(bid_arr, ord_arr, y_arr)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.empty(n)
@@ -1009,6 +1127,7 @@ class ExpandingMean(_ExpandingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.full(n, np.nan)
@@ -1022,6 +1141,7 @@ class ExpandingMean(_ExpandingBase):
     def _compute_latest_from_aggs(self, ts_aggs, target_ords):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
@@ -1041,6 +1161,7 @@ class ExpandingMean(_ExpandingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         return {bid: _expanding_mean_from_agg(agg, lag) for bid, agg in ts_aggs.items()}
 
@@ -1077,6 +1198,7 @@ class ExpandingStd(_ExpandingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.full(n, np.nan)
@@ -1090,6 +1212,7 @@ class ExpandingStd(_ExpandingBase):
     def _compute_latest_from_aggs(self, ts_aggs, target_ords):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
@@ -1116,6 +1239,7 @@ class ExpandingStd(_ExpandingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         return {bid: _expanding_std_from_agg(agg, lag) for bid, agg in ts_aggs.items()}
 
@@ -1150,6 +1274,7 @@ class ExpandingMin(_ExpandingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.full(n, np.nan)
@@ -1163,6 +1288,7 @@ class ExpandingMin(_ExpandingBase):
     def _compute_latest_from_aggs(self, ts_aggs, target_ords):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
@@ -1179,6 +1305,7 @@ class ExpandingMin(_ExpandingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         return {bid: _expanding_min_from_agg(agg, lag) for bid, agg in ts_aggs.items()}
 
@@ -1199,6 +1326,7 @@ class ExpandingMax(_ExpandingBase):
         return super()._compute_bucket_feature(bid_arr, ord_arr, y_arr)
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         n = len(bid_arr)
         result = np.full(n, np.nan)
@@ -1212,6 +1340,7 @@ class ExpandingMax(_ExpandingBase):
     def _compute_latest_from_aggs(self, ts_aggs, target_ords):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
@@ -1228,6 +1357,7 @@ class ExpandingMax(_ExpandingBase):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         return {bid: _expanding_max_from_agg(agg, lag) for bid, agg in ts_aggs.items()}
 
@@ -1249,10 +1379,15 @@ class ExpandingQuantile(_ExpandingBase):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(
-            global_=global_, groupby=groupby, partition_by=partition_by, **kwargs
+            global_=global_,
+            groupby=groupby,
+            partition_by=partition_by,
+            time_agg=time_agg,
+            **kwargs,
         )
         self.p = p
 
@@ -1303,6 +1438,12 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
+        time_agg (str, optional): Pre-aggregate all rows sharing a timestamp within each
+            bucket into a single value before applying the transform. One of ``"sum"``,
+            ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or
+            ``groupby``. ``time_agg="mean"`` is a documented no-op: pooled EWM already
+            consumes each timestamp's bucket-aggregate mean exactly once, regardless of
+            how many rows aggregated there. Defaults to None.
     """
 
     def __init__(
@@ -1311,6 +1452,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
+        time_agg: Optional[str] = None,
         **kwargs,
     ):
         if "global" in kwargs:
@@ -1325,8 +1467,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         self.global_ = global_
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
+        self.time_agg = time_agg
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
+        _validate_time_agg(time_agg, self.global_, self.groupby)
         if self.partition_by:
             warnings.warn(
                 "Partitioned EWM skips timestamps where the partition bucket "
@@ -1350,6 +1494,8 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     ) -> np.ndarray:
         if _ts_aggs:
             return self._compute_from_aggregates(bid_arr, ord_arr, _ts_aggs)
+        if getattr(self, "time_agg", None):
+            return self._compute_bucket_feature_collapsed(bid_arr, ord_arr, y_arr)
         lag = self._core_tfm.lag
         alpha = self.alpha
         n = len(bid_arr)
@@ -1388,6 +1534,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         return result
 
     def _compute_from_aggregates(self, bid_arr, ord_arr, ts_aggs):
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         alpha = self.alpha
         n = len(bid_arr)
@@ -1402,6 +1549,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     def _compute_latest_from_aggs(self, ts_aggs, target_ords):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         alpha = self.alpha
         result: Dict[int, float] = {}
@@ -1429,6 +1577,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
             return None
+        ts_aggs = self._maybe_reagg(ts_aggs)
         lag = self._core_tfm.lag
         alpha = self.alpha
         return {bid: _ewm_from_agg(agg, lag, alpha) for bid, agg in ts_aggs.items()}
@@ -1448,6 +1597,7 @@ class Offset(_BaseLagTransform):
         self.global_ = getattr(tfm, "global_", False)
         self.groupby = getattr(tfm, "groupby", None)
         self.partition_by = getattr(tfm, "partition_by", None)
+        self.time_agg = getattr(tfm, "time_agg", None)
 
     def _get_name(self, lag: int) -> str:
         return self.tfm._get_name(lag + self.n)
@@ -1521,6 +1671,9 @@ class Combine(_BaseLagTransform):
                 "Can't combine transforms with different partition_by settings."
             )
         self.partition_by = partition_by_1
+        # time_agg needs no reconciliation: it doesn't affect the pooled mode key,
+        # and each inner transform applies its own re-aggregation at hook entry, so
+        # mixing (e.g. rolling mean of sums / rolling mean of means) is intentional.
 
     def _set_core_tfm(self, lag: int) -> "Combine":
         self.tfm1 = copy.deepcopy(self.tfm1)._set_core_tfm(lag)
