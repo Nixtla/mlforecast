@@ -3876,23 +3876,37 @@ def test_time_agg_multistep_predict(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_ewm_time_agg_mean_is_noop(engine):
-    """Pooled EWM already consumes each timestamp's bucket mean once, so
-    time_agg='mean' must match no time_agg exactly."""
+    """Pooled EWM uses bucket means by default, so explicit time_agg='mean'
+    must match the default contract exactly."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
-    tfms = [
-        ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"], time_agg="mean"),
-        ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"]),
-    ]
-    out = _fit_and_collect(engine, 1, tfms, y_a, y_b, 6, grp="X")
-    with_ta = "groupby_grp_exponentially_weighted_mean_lag1_alpha0.5_time_aggmean"
-    without = "groupby_grp_exponentially_weighted_mean_lag1_alpha0.5"
+    out_explicit = _fit_and_collect(
+        engine,
+        1,
+        [ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"], time_agg="mean")],
+        y_a,
+        y_b,
+        6,
+        grp="X",
+    )
+    out_default = _fit_and_collect(
+        engine,
+        1,
+        [ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"])],
+        y_a,
+        y_b,
+        6,
+        grp="X",
+    )
+    col = "groupby_grp_exponentially_weighted_mean_lag1_alpha0.5"
     np.testing.assert_allclose(
-        out[with_ta]["preprocess"],
-        out[without]["preprocess"],
+        out_explicit[col]["preprocess"],
+        out_default[col]["preprocess"],
         equal_nan=True,
     )
-    np.testing.assert_allclose(out[with_ta]["predict"], out[without]["predict"])
+    np.testing.assert_allclose(
+        out_explicit[col]["predict"], out_default[col]["predict"]
+    )
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -3981,6 +3995,11 @@ def test_time_agg_validation_errors(factory):
         factory(groupby=["g"], partition_by=["promo"], time_agg="sum")
 
 
+def test_ewm_time_agg_none_rejected():
+    with pytest.raises(ValueError, match="does not accept time_agg=None"):
+        ExponentiallyWeightedMean(alpha=0.5, time_agg=None)
+
+
 def test_time_agg_min_samples_zero_warning_still_fires():
     with pytest.warns(UserWarning, match="min_samples=0"):
         RollingMean(window_size=3, min_samples=0, global_=True, time_agg="sum")
@@ -3992,6 +4011,15 @@ def test_time_agg_feature_name():
     )._get_name(7)
     # default None keeps names unchanged
     assert "time_agg" not in RollingMean(window_size=3, groupby=["cat"])._get_name(7)
+    assert "time_agg" not in ExponentiallyWeightedMean(
+        alpha=0.5, groupby=["cat"]
+    )._get_name(7)
+    assert "time_agg" not in ExponentiallyWeightedMean(
+        alpha=0.5, groupby=["cat"], time_agg="mean"
+    )._get_name(7)
+    assert "time_aggsum" in ExponentiallyWeightedMean(
+        alpha=0.5, groupby=["cat"], time_agg="sum"
+    )._get_name(7)
 
 
 def test_time_agg_offset_carries_attr():

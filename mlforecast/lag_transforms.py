@@ -70,6 +70,22 @@ def _validate_time_agg(time_agg, global_, groupby):
         )
 
 
+def _validate_ewm_time_agg(time_agg, global_, groupby):
+    if time_agg is None:
+        raise ValueError(
+            "ExponentiallyWeightedMean does not accept time_agg=None; use "
+            'time_agg="mean" for EWM\'s bucket-mean update rule.'
+        )
+    if time_agg not in _TIME_AGGS:
+        raise ValueError(f"time_agg must be one of {_TIME_AGGS}; got {time_agg!r}.")
+    if time_agg != "mean" and not (global_ or groupby):
+        raise ValueError(
+            "time_agg requires a pooled aggregation scope for values other than "
+            '"mean": set global_=True or groupby=[...] (optionally combined with '
+            "partition_by)."
+        )
+
+
 def _build_sparse_table(arr, op):
     n = len(arr)
     if n == 0:
@@ -1438,12 +1454,13 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
-        time_agg (str, optional): Pre-aggregate all rows sharing a timestamp within each
+        time_agg (str): Pre-aggregate all rows sharing a timestamp within each
             bucket into a single value before applying the transform. One of ``"sum"``,
-            ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or
-            ``groupby``. ``time_agg="mean"`` is a documented no-op: pooled EWM already
-            consumes each timestamp's bucket-aggregate mean exactly once, regardless of
-            how many rows aggregated there. Defaults to None.
+            ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Values other than
+            ``"mean"`` require ``global_`` or ``groupby``. Defaults to ``"mean"``,
+            which matches EWM's bucket-mean update rule: each timestamp contributes
+            its bucket aggregate mean exactly once, regardless of how many rows
+            aggregated there. ``None`` is not accepted.
     """
 
     def __init__(
@@ -1452,7 +1469,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         global_: bool = False,
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
-        time_agg: Optional[str] = None,
+        time_agg: str = "mean",
         **kwargs,
     ):
         if "global" in kwargs:
@@ -1470,7 +1487,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         self.time_agg = time_agg
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
-        _validate_time_agg(time_agg, self.global_, self.groupby)
+        _validate_ewm_time_agg(time_agg, self.global_, self.groupby)
         if self.partition_by:
             warnings.warn(
                 "Partitioned EWM skips timestamps where the partition bucket "
