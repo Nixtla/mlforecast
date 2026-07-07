@@ -163,48 +163,49 @@ def _build_sql(
     result_expr = template["result_expr"]
     if min_samples is not None:
         result_expr = result_expr.format(min_samples=min_samples)
+    # single CTE list with an optional collapsed stage, so the ordinal and
+    # window definitions are shared verbatim between the two variants
+    ctes = [
+        f"base AS ("
+        f"  SELECT *,"
+        f"    DENSE_RANK() OVER ({dense_rank_partition}ORDER BY ds) - 1 AS ord"
+        f"  FROM obs"
+        f")"
+    ]
+    source = "base"
+    scope_cols = scope_cols or []
+    if time_agg is not None:
+        # collapse all rows sharing a (bucket, ordinal) to one per-timestamp
+        # aggregate and run the window over that collapsed series
+        agg_fn = _TIME_AGG_SQL_FN[time_agg]
+        scope_select = "".join(f"{c}, " for c in scope_cols)
+        group_by_cols = ", ".join(scope_cols + ["ord"])
+        ctes.append(
+            f" collapsed AS ("
+            f"  SELECT {scope_select}ord, {agg_fn}(y) AS y"
+            f"  FROM base"
+            f"  GROUP BY {group_by_cols}"
+            f")"
+        )
+        source = "collapsed"
+    ctes.append(
+        f" aggs AS (  SELECT *, {template['agg_cols']}  FROM {source}  {window_clause})"
+    )
+    with_block = "WITH " + ",".join(ctes)
     if time_agg is None:
         return (
-            f"WITH base AS ("
-            f"  SELECT *,"
-            f"    DENSE_RANK() OVER ({dense_rank_partition}ORDER BY ds) - 1 AS ord"
-            f"  FROM obs"
-            f"),"
-            f" aggs AS ("
-            f"  SELECT *, {template['agg_cols']}"
-            f"  FROM base"
-            f"  {window_clause}"
-            f")"
+            f"{with_block}"
             f" SELECT unique_id, ds, {result_expr} AS result"
             f" FROM aggs"
             f" ORDER BY unique_id, ds"
         )
-    # time_agg variant: collapse all rows sharing a (bucket, ordinal) to one
-    # per-timestamp aggregate, run the window over that collapsed series, then
-    # LEFT JOIN the windowed result back onto every original (unique_id, ds) row
-    # via the scope columns + ord so the per-timestamp value broadcasts to each
-    # row (otherwise the oracle would return one row per timestamp, not per obs).
-    agg_fn = _TIME_AGG_SQL_FN[time_agg]
-    scope_cols = scope_cols or []
-    scope_select = "".join(f"{c}, " for c in scope_cols)
-    group_by_cols = ", ".join(scope_cols + ["ord"])
+    # LEFT JOIN the windowed per-timestamp result back onto every original
+    # (unique_id, ds) row via the scope columns + ord so the value broadcasts
+    # to each row (otherwise the oracle would return one row per timestamp,
+    # not per obs).
     join_cond = " AND ".join(f"b.{c} IS a.{c}" for c in scope_cols + ["ord"])
     return (
-        f"WITH base AS ("
-        f"  SELECT *,"
-        f"    DENSE_RANK() OVER ({dense_rank_partition}ORDER BY ds) - 1 AS ord"
-        f"  FROM obs"
-        f"),"
-        f" collapsed AS ("
-        f"  SELECT {scope_select}ord, {agg_fn}(y) AS y"
-        f"  FROM base"
-        f"  GROUP BY {group_by_cols}"
-        f"),"
-        f" aggs AS ("
-        f"  SELECT *, {template['agg_cols']}"
-        f"  FROM collapsed"
-        f"  {window_clause}"
-        f")"
+        f"{with_block}"
         f" SELECT b.unique_id, b.ds, {result_expr} AS result"
         f" FROM base b"
         f" LEFT JOIN aggs a ON {join_cond}"

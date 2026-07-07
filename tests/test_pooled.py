@@ -3709,8 +3709,9 @@ def test_collapse_matches_reaggregate(time_agg):
     y = rng.standard_normal(20)
     y[3] = np.nan  # partial-NaN and all-NaN timestamps
     y[7] = np.nan
-    direct = _reaggregate_ts_aggs(_build_ts_aggs(bid, ordv, y), time_agg)
-    cb, co, cy = _collapse_rows_by_time(bid, ordv, y, time_agg)
+    raw_aggs = _build_ts_aggs(bid, ordv, y)
+    direct = _reaggregate_ts_aggs(raw_aggs, time_agg)
+    cb, co, cy, inv = _collapse_rows_by_time(bid, ordv, y, time_agg)
     via_collapse = _build_ts_aggs(cb, co, cy)
     assert set(direct) == set(via_collapse)
     for b in direct:
@@ -3721,6 +3722,15 @@ def test_collapse_matches_reaggregate(time_agg):
                 equal_nan=True,
                 err_msg=f"{time_agg} bucket {b} field {f}",
             )
+    # inv maps every raw row to its (bucket, ord) collapsed row
+    np.testing.assert_array_equal(cb[inv], bid)
+    np.testing.assert_array_equal(co[inv], ordv)
+    # supplying the pre-built aggregate cache must give the identical collapse
+    cb2, co2, cy2, inv2 = _collapse_rows_by_time(bid, ordv, y, time_agg, raw_aggs)
+    np.testing.assert_array_equal(cb2, cb)
+    np.testing.assert_array_equal(co2, co)
+    np.testing.assert_allclose(cy2, cy, equal_nan=True)
+    np.testing.assert_array_equal(inv2, inv)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -4022,11 +4032,38 @@ def test_time_agg_feature_name():
     )._get_name(7)
 
 
-def test_time_agg_offset_carries_attr():
+def test_time_agg_offset_delegates_to_inner():
     inner = RollingMean(window_size=3, global_=True, time_agg="sum")
     off = Offset(inner, 1)
-    assert off.time_agg == "sum"
+    # the wrapper doesn't mirror time_agg (its hooks delegate to the inner
+    # transform, which applies its own re-aggregation), but the feature name
+    # still carries it
+    assert off.time_agg is None
+    assert off.tfm.time_agg == "sum"
     assert "time_aggsum" in off._get_name(1)
+
+
+def test_offset_effective_lag_must_be_positive():
+    with pytest.raises(ValueError, match="effective lag"):
+        Offset(RollingMean(window_size=2), -1)._set_core_tfm(1)
+    with pytest.raises(ValueError, match="effective lag"):
+        Offset(
+            RollingMean(window_size=2, global_=True, time_agg="count"), -2
+        )._set_core_tfm(2)
+    # a negative shift is fine while the effective lag stays >= 1
+    off = Offset(RollingMean(window_size=2), -1)._set_core_tfm(3)
+    assert off._core_tfm.lag == 2
+
+
+def test_ewm_time_agg_mean_skips_reaggregation():
+    """time_agg='mean' is EWM's native update rule, so _maybe_reagg must be an
+    identity (same object) instead of a full-copy re-aggregation."""
+    ewm = ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"])
+    _, _, _, aggs = _one_bucket_aggs()
+    assert ewm._maybe_reagg(aggs) is aggs
+    # other aggregates still re-aggregate
+    ewm_sum = ExponentiallyWeightedMean(alpha=0.5, groupby=["grp"], time_agg="sum")
+    assert ewm_sum._maybe_reagg(aggs) is not aggs
 
 
 def test_time_agg_combine_mixed():
