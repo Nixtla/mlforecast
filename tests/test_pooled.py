@@ -312,17 +312,12 @@ def test_compute_pooled_features_raises_for_unsupported():
     """Transforms returning None from _compute_bucket_feature raise NotImplementedError."""
     from mlforecast.pooled import PooledState, compute_pooled_features
     from mlforecast.lag_transforms import _BaseLagTransform
-    from mlforecast.grouped_array import GroupedArray
 
     class DummyTransform(_BaseLagTransform):
         pass
 
-    ga = GroupedArray(np.array([1.0, 2.0]), np.array([0, 2], dtype=np.int32))
     state = PooledState(
-        ga=ga,
-        bucket_df=pd.DataFrame(
-            {"uid": ["a", "a"], "ds": [1, 2], "_bucket_pos": [0, 1]}
-        ),
+        bucket_df=pd.DataFrame({"uid": ["a", "a"], "ds": [1, 2]}),
         groups=None,
         group_cols=None,
         series_bucket_id=np.array([0]),
@@ -3692,7 +3687,7 @@ def test_reaggregate_ts_aggs_does_not_mutate_input():
     _, _, _, aggs = _one_bucket_aggs()
     before = {
         f: getattr(aggs[0], f).copy()
-        for f in ("sums", "counts", "sum_sq", "mins", "maxs", "n_rows", "unique_times")
+        for f in ("sums", "counts", "sum_sq", "mins", "maxs", "unique_times")
     }
     for agg in ("sum", "count", "mean", "min", "max"):
         _reaggregate_ts_aggs(aggs, agg)
@@ -3715,7 +3710,7 @@ def test_collapse_matches_reaggregate(time_agg):
     via_collapse = _build_ts_aggs(cb, co, cy)
     assert set(direct) == set(via_collapse)
     for b in direct:
-        for f in ("sums", "counts", "sum_sq", "mins", "maxs", "n_rows", "unique_times"):
+        for f in ("sums", "counts", "sum_sq", "mins", "maxs", "unique_times"):
             np.testing.assert_allclose(
                 getattr(direct[b], f),
                 getattr(via_collapse[b], f),
