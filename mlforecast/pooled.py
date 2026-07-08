@@ -1015,18 +1015,22 @@ class PooledState:
         if n_ordinals <= 0:
             return
         bid_arr = self.bucket_id
-        keep = np.zeros(len(bid_arr), dtype=bool)
-        new_time_index = self.time_index.copy()
-        for bid in np.unique(bid_arr):
-            bid_int = int(bid)
-            cutoff = max(self.next_time_index_by_bucket[bid_int] - n_ordinals, 0)
-            mask = bid_arr == bid
-            ords = self.time_index[mask]
-            keep[mask] = ords >= cutoff
-            new_time_index[mask] = ords - cutoff
+        # Per-row cutoff in a single grouping pass instead of one boolean scan
+        # per bucket (the old ``for bid: bid_arr == bid`` loop was O(buckets x
+        # rows)). ``inv`` maps each row to its bucket's slot in the sorted
+        # ``uniq``; the cutoff is uniform within a bucket, so a gather assigns
+        # it per row.
+        uniq, inv = np.unique(bid_arr, return_inverse=True)
+        next_vals = np.array(
+            [self.next_time_index_by_bucket[int(b)] for b in uniq], dtype=np.int64
+        )
+        cutoff_by_uniq = np.maximum(next_vals - n_ordinals, 0)
+        cutoff = cutoff_by_uniq[inv]
+        keep = self.time_index >= cutoff
         if keep.all():
             # every calendar already fits in n_ordinals -> nothing to drop.
             return
+        new_time_index = self.time_index - cutoff
         self.bucket_id = bid_arr[keep]
         self.time = self.time[keep]
         self.y = self.y[keep]
@@ -1037,9 +1041,42 @@ class PooledState:
         if self._parent_time_grids is not None:
             for pid, grid in self._parent_time_grids.items():
                 self._parent_time_grids[pid] = grid[max(len(grid) - n_ordinals, 0) :]
+        # A trim drops a whole prefix of ordinals per bucket (``keep`` is
+        # ``ord >= cutoff``, uniform within a bucket), so every surviving
+        # timestamp group is untouched: its sums/counts/sum_sq/min/max are
+        # byte-identical to before and only the ordinal shifts down by
+        # ``cutoff``. So slice each aggregate to its surviving suffix rather
+        # than re-aggregating from raw ``y`` -- the dominant cost of a trim on
+        # large panels. Buckets whose suffix is empty lost all their rows and
+        # are dropped, matching ``_build_ts_aggs`` on the filtered rows.
+        # The cache is complete whenever it is non-empty (every constructor
+        # fills it for all buckets); a cleared cache (slow-path ``_transform``)
+        # has no suffixes to slice, so rebuild it from the trimmed arrays.
+        if self._ts_aggs:
+            new_aggs: Dict[int, _TimestampAggregates] = {}
+            for pos, b in enumerate(uniq):
+                cut = int(cutoff_by_uniq[pos])
+                bid_int = int(b)
+                agg = self._ts_aggs[bid_int]
+                if cut == 0:
+                    new_aggs[bid_int] = agg
+                    continue
+                m = agg.unique_times >= cut
+                if not m.any():
+                    continue
+                new_aggs[bid_int] = _TimestampAggregates(
+                    unique_times=agg.unique_times[m] - cut,
+                    sums=agg.sums[m],
+                    counts=agg.counts[m],
+                    sum_sq=agg.sum_sq[m],
+                    mins=agg.mins[m],
+                    maxs=agg.maxs[m],
+                )
+            self._ts_aggs = new_aggs
+        else:
+            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
         for bid_int, cal_len in self.next_time_index_by_bucket.items():
             self.next_time_index_by_bucket[bid_int] = min(cal_len, n_ordinals)
-        self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
         if self._idsorted_to_bucket_pos is not None:
             id_col, time_col = self.join_cols
             self._idsorted_to_bucket_pos = _compute_idsorted_to_bucket_pos(
