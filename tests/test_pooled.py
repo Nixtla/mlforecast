@@ -56,6 +56,7 @@ def test_new_series_new_group_update_then_predict(engine, lag):
         target_col="y",
         dropna=False,
         static_features=["brand"],
+        keep_last_n=10_000,
     )
     assert ts._pooled_states[("groupby", ("brand",), ())] is not None
     state = ts._pooled_states[("groupby", ("brand",), ())]
@@ -244,6 +245,7 @@ def test_staggered_series_start(engine, lag):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
     )
     state = ts._pooled_states[("global", (), ())]
@@ -312,12 +314,10 @@ def test_compute_pooled_features_raises_for_unsupported():
     """Transforms returning None from _compute_bucket_feature raise NotImplementedError."""
     from mlforecast.pooled import PooledState, compute_pooled_features
     from mlforecast.lag_transforms import _BaseLagTransform
-    from mlforecast.grouped_array import GroupedArray
 
     class DummyTransform(_BaseLagTransform):
         pass
 
-    ga = GroupedArray(np.array([1.0, 2.0]), np.array([0, 2], dtype=np.int32))
     state = PooledState(
         ga=ga,
         bucket_df=pd.DataFrame(
@@ -704,6 +704,7 @@ def test_partition_ordinals_have_parent_gaps(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1031,6 +1032,7 @@ def test_local_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,
         dropna=False,
         static_features=[],
     )
@@ -1091,6 +1093,7 @@ def test_new_partition_bucket_uses_existing_parent_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1139,6 +1142,7 @@ def test_global_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1184,6 +1188,7 @@ def test_groupby_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=["brand"],
     )
@@ -1424,6 +1429,7 @@ def test_global_partition_new_bucket_inherits_parent_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1478,6 +1484,7 @@ def test_partition_datetime_update_new_bucket(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1692,6 +1699,7 @@ def test_partition_update_batch_multiple_ids_new_buckets(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1766,6 +1774,7 @@ def test_partition_update_sparse_then_dense(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1789,6 +1798,7 @@ def test_partition_update_sparse_then_dense(engine):
         target_col="y",
         dropna=False,
         static_features=[],
+        keep_last_n=10_000,  # full-history check: disable pooled trim
     )
 
     key = ("nonlocal", (), ("promo",))
@@ -3389,7 +3399,7 @@ def test_target_transforms_with_pooled_preprocess(engine):
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        prep = fcst.preprocess(df, static_features=[], dropna=False)
+        prep = fcst.preprocess(df, static_features=[], dropna=False, keep_last_n=10_000)
     if engine == "polars":
         prep = prep.to_pandas()
 

@@ -400,7 +400,7 @@ class MLForecast:
             target_col (str): Column that contains the target. Defaults to 'y'.
             static_features (list of str, optional): Names of the features that are static and will be repeated when forecasting. Defaults to None.
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.
@@ -1004,7 +1004,7 @@ class MLForecast:
             target_col (str): Column that contains the target. Defaults to 'y'.
             static_features (list of str, optional): Names of the features that are static and will be repeated when forecasting. If `None`, will consider all columns (except id_col and time_col) as static. Defaults to None.
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.
@@ -1387,6 +1387,8 @@ class MLForecast:
                 date_features_as_dummies=self.ts.date_features_as_dummies,
                 drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
+            # Builds `_pooled_states` (global/groupby/partition_by), whose
+            # `_ts_aggs` are computed from the full `new_df` history here.
             new_ts._fit(
                 new_df,
                 id_col=self.ts.id_col,
@@ -1396,8 +1398,8 @@ class MLForecast:
                 keep_last_n=self.ts.keep_last_n,
                 weight_col=self.ts.weight_col,
             )
-            # Populate any stateful lag transforms before the first update-based
-            # prediction step. This includes pooled global/group transforms.
+            # Warms up local (coreforecast) lag-transform buffers before the
+            # first update-based prediction step.
             new_ts._initialize_lag_transform_states()
             new_ts.max_horizon = self.ts.max_horizon
             new_ts._horizons = self.ts._horizons
@@ -1752,7 +1754,7 @@ class MLForecast:
             step_size (int, optional): Step size between each cross validation window. If None it will be equal to `h`. Defaults to None.
             static_features (list of str, optional): Names of the features that are static and will be repeated when forecasting. Defaults to None.
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.
