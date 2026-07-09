@@ -3920,3 +3920,43 @@ def test_lookup_lag_predict_survives_keep_last_n_trim(engine):
     assert len(preds) == 1
     # future promo step reaches the far-back promo occurrence (ds=3, y=30), not NaN
     np.testing.assert_allclose(captured[0][0], 30.0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", [1, 2, 7, 52])
+def test_lookup_lag_predict_various_lags(engine, lag):
+    """Predict looks up the correct occurrence across a range of lag values
+    (exercises the _compute_latest_from_aggs fast path and its [-lag] indexing)."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    n = 120
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n,
+            "ds": list(range(n)),
+            "y": [float(i) for i in range(n)],  # y == ds index
+            "promo": [1] * n,  # one partition value → bucket is the whole series
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(lag)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=5)],
+        freq=1,
+        lags=[1],
+        lag_transforms={lag: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [n], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future step looks up the occurrence `lag` back; since y == ds index, that is y[n - lag]
+    np.testing.assert_allclose(captured[0][0], float(n - lag))

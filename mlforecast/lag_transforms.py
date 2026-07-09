@@ -318,6 +318,30 @@ class LookupLag(_BaseLagTransform):
             result[idxs[lag:]] = y_arr[idxs[:-lag]]
         return result
 
+    def _compute_latest_from_aggs(
+        self,
+        ts_aggs,
+        _target_ords,
+    ) -> Optional[Dict[int, float]]:
+        # Fast predict path: the looked-up value is the target `lag` occurrences
+        # back. In local partition mode each bucket is a single series (one
+        # observation per timestamp), so ``agg.sums[-lag] / agg.counts[-lag]`` is
+        # exactly that occurrence's value -- NaN when it has no valid observation
+        # (``counts == 0``), matching the row-level ``_compute_bucket_feature``
+        # result for the appended query row. This avoids re-sorting the full
+        # history and building unused aggregates at every recursive step.
+        if not ts_aggs:
+            return None
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            if len(agg.unique_times) < lag:
+                result[bid] = float("nan")
+            else:
+                count = agg.counts[-lag]
+                result[bid] = agg.sums[-lag] / count if count > 0 else float("nan")
+        return result
+
     @property
     def update_samples(self) -> int:
         if self._core_tfm is None:
