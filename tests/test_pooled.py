@@ -319,7 +319,6 @@ def test_compute_pooled_features_raises_for_unsupported():
         pass
 
     state = PooledState(
-        ga=ga,
         bucket_df=pd.DataFrame(
             {"uid": ["a", "a"], "ds": [1, 2], "_bucket_pos": [0, 1]}
         ),
