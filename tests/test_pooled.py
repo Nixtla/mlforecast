@@ -12,6 +12,7 @@ from mlforecast.lag_transforms import (
     ExpandingMin,
     ExpandingStd,
     ExponentiallyWeightedMean,
+    LookupLag,
     RollingMax,
     RollingMean,
     RollingMin,
@@ -3737,3 +3738,12 @@ def test_partition_by_nonlocal_default_min_samples_unchanged(engine):
     np.testing.assert_array_equal(default_vals, explicit_ws)
     # the guard still bites on partially-filled windows, unlike min_samples=1
     assert np.isnan(default_vals).sum() > np.isnan(explicit_one).sum()
+
+
+def test_lookup_lag_requires_partition_by():
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag()
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag(partition_by=None)
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag(partition_by=[])

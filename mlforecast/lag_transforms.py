@@ -259,21 +259,26 @@ class LookupLag(_BaseLagTransform):
     returns the previous target value observed within each
     ``(unique_id, holiday_name)`` bucket.
 
+    ``partition_by`` is required: it defines the matching buckets and is what
+    makes this a lookup rather than a plain :class:`Lag`. Like other pooled
+    transforms, the partition columns may vary over time and must be supplied
+    via ``X_df`` at prediction.
+
     Args:
-        partition_by (Sequence[str], optional): Dynamic column names used to
-            define matching buckets within each series. Defaults to None.
+        partition_by (Sequence[str]): Dynamic column names used to define the
+            matching buckets within each series. Required.
     """
 
     def __init__(
         self,
         partition_by: Optional[Sequence[str]] = None,
-        **kwargs,
     ):
-        if "partition_by" in kwargs:
-            partition_by = kwargs.pop("partition_by")
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.partition_by = _normalize_columns(partition_by)
+        if self.partition_by is None:
+            raise ValueError(
+                "LookupLag requires `partition_by`; it defines the buckets "
+                "used for the occurrence lookup."
+            )
         self._core_tfm = None
 
     def _set_core_tfm(self, lag: int) -> "LookupLag":
@@ -317,7 +322,19 @@ class LookupLag(_BaseLagTransform):
     def update_samples(self) -> int:
         if self._core_tfm is None:
             return -1
+        # LookupLag's pooled state is never trimmed under ``keep_last_n`` (it is
+        # not finite-window; see ``_is_finite_window``), so it keeps full bucket
+        # history at predict. This value only feeds the ``self.ga`` keep_last_n
+        # inference and the regular-``ga`` core-``Lag`` output it governs -- which
+        # the pooled result overwrites; pooled trimming ignores it. ``lag`` is the
+        # minimal safe value.
         return self._core_tfm.lag
+
+    @property
+    def _is_finite_window(self) -> bool:
+        # A matching occurrence can be arbitrarily far back, so LookupLag needs
+        # unbounded history; its pooled state must never be trimmed.
+        return False
 
 
 class _RollingBase(_BaseLagTransform):
