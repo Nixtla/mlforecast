@@ -3960,3 +3960,28 @@ def test_lookup_lag_predict_various_lags(engine, lag):
     assert len(preds) == 1
     # future step looks up the occurrence `lag` back; since y == ds index, that is y[n - lag]
     np.testing.assert_allclose(captured[0][0], float(n - lag))
+
+
+def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
+    """Fast predict path (_compute_latest_from_aggs): NaN when a bucket has
+    fewer than `lag` occurrences or the looked-up occurrence has no valid
+    observation; None when there are no aggregates."""
+    from mlforecast.pooled import _build_ts_aggs
+
+    # bucket 0: 3 valid obs (10,20,30); bucket 1: single obs (< lag); bucket 2:
+    # the lag-back occurrence (index -2) is NaN-valued.
+    bid = np.array([0, 0, 0, 1, 2, 2, 2])
+    ordv = np.array([0, 1, 2, 0, 0, 1, 2])
+    y = np.array([10.0, 20.0, 30.0, 99.0, 5.0, np.nan, 7.0])
+    aggs = _build_ts_aggs(bid, ordv, y)
+
+    tfm = LookupLag(partition_by=["x"])
+    tfm._set_core_tfm(2)  # lag = 2
+    result = tfm._compute_latest_from_aggs(aggs, {0: 3, 1: 1, 2: 3})
+
+    np.testing.assert_allclose(result[0], 20.0)  # occurrence 2 back = index -2 = 20.0
+    assert np.isnan(result[1])  # only 1 occurrence, < lag=2 -> NaN
+    assert np.isnan(result[2])  # lag-back occurrence has NaN y (count==0) -> NaN
+
+    # No aggregates -> None (falls through to the slow path in core.py).
+    assert tfm._compute_latest_from_aggs({}, {}) is None
