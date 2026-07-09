@@ -204,6 +204,69 @@ prep[
 ].head(6)
 ```
 
+## Aggregating rows per timestamp with `time_agg`
+
+By default a pooled transform treats every observation as an individual
+sample: `RollingMean(window_size=7, groupby=['brand'])` pools *all rows*
+of the brand that fall in the window and averages them, weighting a
+timestamp by how many series reported on it. Sometimes you instead want
+to first collapse all rows sharing a timestamp into a single value — for
+example the brand’s **daily total** — and then apply the transform over
+that per-timestamp series.
+
+`time_agg` does exactly that. Set it to one of `'sum'`, `'count'`,
+`'mean'`, `'min'`, or `'max'` and each `(bucket, timestamp)` is reduced
+to one value before the rolling/expanding/seasonal/EWM statistic runs:
+
+-   `time_agg='sum'` — rolling mean of the brand’s daily *sums* (total
+    demand)
+-   `time_agg='count'` — e.g. expanding max of the number of active
+    series per day
+-   `time_agg='max'` — rolling max of the daily *peak* across the brand
+
+`time_agg` requires `global_=True` or `groupby=[...]` (optionally
+combined with `partition_by`). It is rejected in local or
+`partition_by`-only mode, where each `(bucket, timestamp)` already has a
+single row and the aggregation would be a no-op. With `time_agg=None`,
+each observation remains an individual pooled sample.
+`ExponentiallyWeightedMean` is the exception: its `time_agg` defaults to
+`'mean'`, and `None` is not accepted.
+
+```python
+fcst = MLForecast(
+    models=[],
+    freq="D",
+    lag_transforms={
+        1: [RollingMean(window_size=3, groupby=["brand"], time_agg="sum")],
+    },
+)
+prep = fcst.preprocess(series, static_features=["brand"], dropna=False)
+prep[
+    [
+        "unique_id",
+        "ds",
+        "brand",
+        "groupby_brand_rolling_mean_lag1_window_size3_time_aggsum",
+    ]
+].head(6)
+```
+
+Two semantics worth calling out:
+
+-   With `time_agg`, `min_samples` counts **observed timestamps** in the
+    window (each timestamp contributes at most one aggregated value),
+    not rows.
+    `RollingMean(window_size=3, min_samples=3, groupby=['brand'], time_agg='sum')`
+    needs three distinct timestamps of history, regardless of how many
+    series reported on each.
+-   `RollingMean(..., time_agg='mean')` differs from `RollingMean(...)`
+    without `time_agg`: the former is an unweighted mean of the
+    per-timestamp means, the latter a row-weighted pooled mean (they
+    coincide only when every timestamp has the same number of
+    observations). On `ExponentiallyWeightedMean`, `time_agg='mean'` is
+    the default because pooled EWM consumes each timestamp’s
+    bucket-aggregate mean exactly once.
+
 ## Disabling validation: the `validate_data=False` warning
 
 Pooled transforms are correctness-sensitive to timestamp gaps because
@@ -527,6 +590,12 @@ prep.head()
     Each `predict` call also backs up the pooled state per model to
     isolate recursive mutations. Expect higher peak memory with
     unbounded pooled transforms on large panels.
+-   `time_agg` (`'sum'`/`'count'`/`'mean'`/`'min'`/`'max'`)
+    pre-aggregates rows sharing a timestamp within each bucket before
+    the transform runs; it requires `global_` or `groupby` and counts
+    observed timestamps for `min_samples`. All pooled-capable transforms
+    support it, including the quantile and seasonal ones (via the
+    row-level path).
 
 ## End-to-end example
 

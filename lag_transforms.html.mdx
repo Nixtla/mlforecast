@@ -105,7 +105,7 @@ how-to guide for end-to-end examples.
 ### `RollingQuantile`
 
 ```python
-RollingQuantile(p, window_size, min_samples=None, global_=False, groupby=None, partition_by=None, **kwargs)
+RollingQuantile(p, window_size, min_samples=None, global_=False, groupby=None, partition_by=None, time_agg=None, **kwargs)
 ```
 
 Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
@@ -155,7 +155,7 @@ Rolling statistic
 ### `SeasonalRollingQuantile`
 
 ```python
-SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_=False, groupby=None, partition_by=None, **kwargs)
+SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_=False, groupby=None, partition_by=None, time_agg=None, **kwargs)
 ```
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
@@ -249,7 +249,7 @@ prediction step. Can be slow on large panels.
 ### `ExpandingQuantile`
 
 ```python
-ExpandingQuantile(p, global_=False, groupby=None, partition_by=None, **kwargs)
+ExpandingQuantile(p, global_=False, groupby=None, partition_by=None, time_agg=None, **kwargs)
 ```
 
 Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
@@ -281,6 +281,7 @@ Name | Type | Description | Default
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 `partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
 ### `ExpandingMin`
@@ -296,6 +297,7 @@ Name | Type | Description | Default
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 `partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
 ### `ExpandingStd`
@@ -311,6 +313,7 @@ Name | Type | Description | Default
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 `partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
 ### `ExpandingMean`
@@ -326,12 +329,13 @@ Name | Type | Description | Default
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
 `groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
 `partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
 ### `ExponentiallyWeightedMean`
 
 ```python
-ExponentiallyWeightedMean(alpha, global_=False, groupby=None, partition_by=None, **kwargs)
+ExponentiallyWeightedMean(alpha, global_=False, groupby=None, partition_by=None, time_agg='mean', **kwargs)
 ```
 
 Bases: <code>[_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
@@ -346,6 +350,7 @@ Name | Type | Description | Default
 `global_` | <code>[bool](#bool)</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | <code>False</code>
 `groupby` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
 `partition_by` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | <code>None</code>
+`time_agg` | <code>[str](#str)</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Values other than ``"mean"`` require ``global_`` or ``groupby``. Defaults to ``"mean"``, which matches EWM's bucket-mean update rule: each timestamp contributes its bucket aggregate mean exactly once, regardless of how many rows aggregated there. ``None`` is not accepted. | <code>'mean'</code>
 
 
 ### `Offset`
