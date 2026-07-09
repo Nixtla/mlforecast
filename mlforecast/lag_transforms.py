@@ -1303,6 +1303,10 @@ class ExpandingQuantile(_ExpandingBase):
 
 
 def _ewm_from_agg(agg, lag, alpha):
+    # ``agg`` may be a lazy ``_ReaggregatedAggregates`` view whose ``counts`` /
+    # ``sums`` are recomputed on every attribute access. Hoist ``counts`` once
+    # and size off ``unique_times`` (a plain cached array, always the same
+    # length) so we don't materialize the derived arrays more than needed.
     counts = agg.counts
     mean_per_ord = np.full(len(agg.unique_times), np.nan)
     np.divide(agg.sums, counts, out=mean_per_ord, where=counts > 0)

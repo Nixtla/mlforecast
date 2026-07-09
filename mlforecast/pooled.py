@@ -368,7 +368,11 @@ def _collapse_rows_by_time(
     row_groups = {
         int(b): order[s:e] for b, s, e in zip(group_bids, group_starts, group_ends)
     }
-    inv = np.empty(len(bid_arr), dtype=np.int64)
+    # -1 sentinel: every input row must map to a collapsed row below. Callers
+    # always build ``ts_aggs`` from exactly these rows, so no row can reference a
+    # bucket absent from ``ts_aggs``; the assert turns a silent out-of-bounds
+    # gather (garbage ``vals[inv]``) into a loud failure if that ever breaks.
+    inv = np.full(len(bid_arr), -1, dtype=np.int64)
     bids, ords, ys = [], [], []
     offset = 0
     for bid, agg in ts_aggs.items():
@@ -382,6 +386,7 @@ def _collapse_rows_by_time(
         if rows is not None:
             inv[rows] = offset + np.searchsorted(agg.unique_times, ord_arr[rows])
         offset += m
+    assert (inv >= 0).all(), "every input row must map to a collapsed (bucket, timestamp)"
     if not bids:
         return (
             np.empty(0, dtype=bid_arr.dtype),
