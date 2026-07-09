@@ -54,8 +54,8 @@ series = generate_daily_series(
     static_as_categorical=False,
     seed=0,
 )
-brand_map = {f'id_{i}': 'A' if i < 3 else 'B' for i in range(6)}
-series['brand'] = series['unique_id'].map(brand_map)
+brand_map = {f"id_{i}": "A" if i < 3 else "B" for i in range(6)}
+series["brand"] = series["unique_id"].map(brand_map)
 series.head()
 ```
 
@@ -68,13 +68,13 @@ receives the same value at a given timestamp.
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
+    freq="D",
     lag_transforms={
         1: [RollingMean(window_size=7, global_=True)],
     },
 )
-prep = fcst.preprocess(series, static_features=['brand'])
-prep[prep['ds'] == prep['ds'].min()].head(6)
+prep = fcst.preprocess(series, static_features=["brand"])
+prep[prep["ds"] == prep["ds"].min()].head(6)
 ```
 
 Notice that `global_rolling_mean_lag1_window_size7` is identical for
@@ -95,13 +95,13 @@ fitting.
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
+    freq="D",
     lag_transforms={
-        1: [RollingMean(window_size=7, groupby=['brand'])],
+        1: [RollingMean(window_size=7, groupby=["brand"])],
     },
 )
-prep = fcst.preprocess(series, static_features=['brand'])
-prep[prep['ds'] == prep['ds'].min()].sort_values(['brand', 'unique_id']).head(6)
+prep = fcst.preprocess(series, static_features=["brand"])
+prep[prep["ds"] == prep["ds"].min()].sort_values(["brand", "unique_id"]).head(6)
 ```
 
 Series within brand `A` share one rolling-mean value; series within
@@ -132,14 +132,18 @@ at `ds=1`. At each timestamp the window looks back over the last two
 days of *real* values across all series, applied at lag 1.
 
 ```python
-staggered = pd.DataFrame({
-    'unique_id': ['a', 'a', 'a', 'b', 'b'],
-    'ds': pd.to_datetime(['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-02', '2024-01-03']),
-    'y': [1.0, 2.0, 3.0, 20.0, 30.0],
-})
+staggered = pd.DataFrame(
+    {
+        "unique_id": ["a", "a", "a", "b", "b"],
+        "ds": pd.to_datetime(
+            ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-02", "2024-01-03"]
+        ),
+        "y": [1.0, 2.0, 3.0, 20.0, 30.0],
+    }
+)
 fcst = MLForecast(
     models=[],
-    freq='D',
+    freq="D",
     lag_transforms={1: [RollingMean(window_size=2, global_=True, min_samples=1)]},
 )
 fcst.preprocess(staggered, dropna=False)
@@ -167,16 +171,37 @@ produces a value when at least two series in the brand contributed an
 observation in the window — useful to suppress noise from sparsely
 populated groups.
 
+The default when `min_samples=None` also differs by mode. Everywhere
+else it defaults to `window_size`, but in **local partition mode**
+(`partition_by` without `global_`/`groupby`, covered below) it defaults
+to **1**: the window spans `window_size` calendar steps while only
+same-partition observations count toward `min_samples`, so requiring a
+full window is rarely attainable —
+`RollingMean(7, partition_by=['promo'])` on a panel with interleaved
+promo days would otherwise be almost entirely NaN. The default of 1
+matches SQL `RANGE` window semantics, where the result is NULL only for
+empty windows. When `partition_by` is combined with `global_` or
+`groupby`, the default remains `window_size`, counted across all series
+in the (group, partition) bucket — pass `min_samples` explicitly if you
+want a different threshold.
+
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
+    freq="D",
     lag_transforms={
-        1: [RollingMean(window_size=1, min_samples=2, groupby=['brand'])],
+        1: [RollingMean(window_size=1, min_samples=2, groupby=["brand"])],
     },
 )
-prep = fcst.preprocess(series, static_features=['brand'], dropna=False)
-prep[['unique_id', 'ds', 'brand', 'groupby_brand_rolling_mean_lag1_window_size1_min_samples2']].head(6)
+prep = fcst.preprocess(series, static_features=["brand"], dropna=False)
+prep[
+    [
+        "unique_id",
+        "ds",
+        "brand",
+        "groupby_brand_rolling_mean_lag1_window_size1_min_samples2",
+    ]
+].head(6)
 ```
 
 ## Disabling validation: the `validate_data=False` warning
@@ -192,12 +217,12 @@ you combine `validate_data=False` with any pooled transform:
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
+    freq="D",
     lag_transforms={1: [RollingMean(window_size=7, global_=True)]},
 )
 with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter('always')
-    fcst.preprocess(series, static_features=['brand'], validate_data=False)
+    warnings.simplefilter("always")
+    fcst.preprocess(series, static_features=["brand"], validate_data=False)
 [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
 ```
 
@@ -233,9 +258,8 @@ the three combinations.
 
 ```python
 rng = np.random.default_rng(0)
-series['promo'] = rng.choice([0, 1], size=len(series), p=[0.7, 0.3])
+series["promo"] = rng.choice([0, 1], size=len(series), p=[0.7, 0.3])
 series.head()
-
 ```
 
 ### Local partition: per-(id, partition_vals) buckets
@@ -249,11 +273,10 @@ currently in.
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
-    lag_transforms={1: [RollingMean(window_size=7, partition_by=['promo'])]},
+    freq="D",
+    lag_transforms={1: [RollingMean(window_size=7, partition_by=["promo"])]},
 )
 fcst.preprocess(series).head(8)
-
 ```
 
 The feature name is prefixed `partby_promo_` to indicate the partition.
@@ -268,11 +291,12 @@ separately for each `promo` value:
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
-    lag_transforms={1: [RollingMean(window_size=7, global_=True, partition_by=['promo'])]},
+    freq="D",
+    lag_transforms={
+        1: [RollingMean(window_size=7, global_=True, partition_by=["promo"])]
+    },
 )
 fcst.preprocess(series).head(8)
-
 ```
 
 Every series with `promo=0` at a given timestamp sees the same
@@ -287,11 +311,12 @@ separately for each partition value:
 ```python
 fcst = MLForecast(
     models=[],
-    freq='D',
-    lag_transforms={1: [RollingMean(window_size=7, groupby=['brand'], partition_by=['promo'])]},
+    freq="D",
+    lag_transforms={
+        1: [RollingMean(window_size=7, groupby=["brand"], partition_by=["promo"])]
+    },
 )
-fcst.preprocess(series, static_features=['brand']).head(8)
-
+fcst.preprocess(series, static_features=["brand"]).head(8)
 ```
 
 The bucket key here is `(brand, promo)`. There are at most
@@ -308,22 +333,29 @@ from sklearn.linear_model import LinearRegression
 
 fcst = MLForecast(
     models=[LinearRegression()],
-    freq='D',
-    lag_transforms={1: [RollingMean(window_size=7, global_=True, partition_by=['promo'])]},
+    freq="D",
+    lag_transforms={
+        1: [RollingMean(window_size=7, global_=True, partition_by=["promo"])]
+    },
 )
 # `brand` plays no role in this global_ + partition_by example, so we drop it
 # rather than feed a raw string column to LinearRegression
-fcst.fit(series.drop(columns='brand'))
+fcst.fit(series.drop(columns="brand"))
 
-last_date = series['ds'].max()
-unique_ids = sorted(series['unique_id'].unique())
-future_promo = pd.DataFrame([
-    {'unique_id': uid, 'ds': last_date + pd.Timedelta(days=h), 'promo': int(rng.integers(0, 2))}
-    for uid in unique_ids
-    for h in range(1, 4)
-])
+last_date = series["ds"].max()
+unique_ids = sorted(series["unique_id"].unique())
+future_promo = pd.DataFrame(
+    [
+        {
+            "unique_id": uid,
+            "ds": last_date + pd.Timedelta(days=h),
+            "promo": int(rng.integers(0, 2)),
+        }
+        for uid in unique_ids
+        for h in range(1, 4)
+    ]
+)
 fcst.predict(h=3, X_df=future_promo).head()
-
 ```
 
 A few notes on dynamic prediction:
@@ -391,10 +423,9 @@ gaps. mlforecast emits a `UserWarning` when you construct an
 
 ```python
 with warnings.catch_warnings(record=True) as caught:
-    warnings.simplefilter('always')
-    tfm = ExponentiallyWeightedMean(alpha=0.3, partition_by=['promo'])
+    warnings.simplefilter("always")
+    tfm = ExponentiallyWeightedMean(alpha=0.3, partition_by=["promo"])
 [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
-
 ```
 
 ## `keep_last_n` and pooled history
@@ -482,20 +513,20 @@ from sklearn.linear_model import LinearRegression
 
 fcst = MLForecast(
     models=[LinearRegression()],
-    freq='D',
+    freq="D",
     lags=[1, 7],
     lag_transforms={
         1: [
             RollingMean(window_size=7, global_=True),
-            RollingMean(window_size=7, groupby=['brand']),
-            ExpandingMean(groupby=['brand']),
+            RollingMean(window_size=7, groupby=["brand"]),
+            ExpandingMean(groupby=["brand"]),
             ExponentiallyWeightedMean(alpha=0.3, global_=True),
         ],
     },
 )
 # `promo` was only needed for the partition_by examples above; this end-to-end
 # model groups by `brand` and doesn't use it, so drop it to keep predict X_df-free
-fcst.fit(series.drop(columns='promo'), static_features=['brand'])
+fcst.fit(series.drop(columns="promo"), static_features=["brand"])
 fcst.predict(h=7).head(6)
 ```
 
