@@ -12,6 +12,7 @@ from mlforecast.lag_transforms import (
     ExpandingMin,
     ExpandingStd,
     ExponentiallyWeightedMean,
+    LookupLag,
     RollingMax,
     RollingMean,
     RollingMin,
@@ -56,6 +57,7 @@ def test_new_series_new_group_update_then_predict(engine, lag):
         target_col="y",
         dropna=False,
         static_features=["brand"],
+        keep_last_n=10_000,
     )
     assert ts._pooled_states[("groupby", ("brand",), ())] is not None
     state = ts._pooled_states[("groupby", ("brand",), ())]
@@ -244,6 +246,7 @@ def test_staggered_series_start(engine, lag):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
     )
     state = ts._pooled_states[("global", (), ())]
@@ -317,7 +320,9 @@ def test_compute_pooled_features_raises_for_unsupported():
         pass
 
     state = PooledState(
-        bucket_df=pd.DataFrame({"uid": ["a", "a"], "ds": [1, 2]}),
+        bucket_df=pd.DataFrame(
+            {"uid": ["a", "a"], "ds": [1, 2], "_bucket_pos": [0, 1]}
+        ),
         groups=None,
         group_cols=None,
         series_bucket_id=np.array([0]),
@@ -699,6 +704,7 @@ def test_partition_ordinals_have_parent_gaps(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1026,6 +1032,7 @@ def test_local_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,
         dropna=False,
         static_features=[],
     )
@@ -1086,6 +1093,7 @@ def test_new_partition_bucket_uses_existing_parent_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1134,6 +1142,7 @@ def test_global_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1179,6 +1188,7 @@ def test_groupby_partition_update_advances_sibling_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=["brand"],
     )
@@ -1419,6 +1429,7 @@ def test_global_partition_new_bucket_inherits_parent_calendar(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1473,6 +1484,7 @@ def test_partition_datetime_update_new_bucket(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1687,6 +1699,7 @@ def test_partition_update_batch_multiple_ids_new_buckets(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1761,6 +1774,7 @@ def test_partition_update_sparse_then_dense(engine):
         id_col="unique_id",
         time_col="ds",
         target_col="y",
+        keep_last_n=10_000,  # full-history check: disable pooled trim
         dropna=False,
         static_features=[],
     )
@@ -1784,6 +1798,7 @@ def test_partition_update_sparse_then_dense(engine):
         target_col="y",
         dropna=False,
         static_features=[],
+        keep_last_n=10_000,  # full-history check: disable pooled trim
     )
 
     key = ("nonlocal", (), ("promo",))
@@ -3384,7 +3399,7 @@ def test_target_transforms_with_pooled_preprocess(engine):
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        prep = fcst.preprocess(df, static_features=[], dropna=False)
+        prep = fcst.preprocess(df, static_features=[], dropna=False, keep_last_n=10_000)
     if engine == "polars":
         prep = prep.to_pandas()
 
@@ -4083,3 +4098,368 @@ def test_time_agg_sklearn_clone_roundtrip():
     cloned = _sk_clone(tfm)
     assert cloned.time_agg == "sum"
     assert cloned._get_name(1) == tfm._get_name(1)
+
+
+# === min_samples default resolution ===
+# In local partition mode min_samples=None defaults to 1 (SQL RANGE semantics);
+# every other mode keeps the window_size default.
+
+from mlforecast.lag_transforms import (  # noqa: E402
+    _resolve_min_samples,
+)
+
+
+def test_min_samples_default_resolution():
+    assert _resolve_min_samples(RollingMean(7)) == 7
+    assert _resolve_min_samples(RollingMean(7, global_=True)) == 7
+    assert _resolve_min_samples(RollingMean(7, groupby=["brand"])) == 7
+    assert _resolve_min_samples(RollingMean(7, partition_by=["promo"])) == 1
+    assert (
+        _resolve_min_samples(RollingMean(7, global_=True, partition_by=["promo"])) == 7
+    )
+    assert (
+        _resolve_min_samples(RollingMean(7, groupby=["brand"], partition_by=["promo"]))
+        == 7
+    )
+    # explicit values are never overridden
+    assert (
+        _resolve_min_samples(RollingMean(7, min_samples=3, partition_by=["promo"])) == 3
+    )
+    assert (
+        _resolve_min_samples(
+            SeasonalRollingMean(season_length=7, window_size=4, partition_by=["promo"])
+        )
+        == 1
+    )
+    assert (
+        _resolve_min_samples(
+            SeasonalRollingMean(season_length=7, window_size=4, global_=True)
+        )
+        == 4
+    )
+
+
+def _fit_transform_values(engine, df, tfm):
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    if engine == "polars":
+        out = out.to_pandas()
+    return out[tfm._get_name(1)].to_numpy(dtype=float)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_by_local_default_min_samples_is_one(engine):
+    """On a dense panel with interleaved promo days, a 7-step window almost
+    never holds 7 same-promo observations (the window spans calendar steps
+    while only same-promo rows count), so the window_size default would make
+    the feature ~100% NaN. Local partition mode defaults to 1 instead."""
+    n = 30
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n,
+            "ds": list(range(1, n + 1)),
+            "y": [float(i) for i in range(1, n + 1)],
+            "promo": [0, 1] * (n // 2),
+        },
+    )
+    default_vals = _fit_transform_values(
+        engine, df, RollingMean(7, partition_by=["promo"])
+    )
+    explicit_one = _fit_transform_values(
+        engine, df, RollingMean(7, min_samples=1, partition_by=["promo"])
+    )
+    np.testing.assert_array_equal(default_vals, explicit_one)
+    # usable feature: only the empty-lookback rows at the start are NaN
+    assert np.isnan(default_vals).mean() < 0.2
+    # the local-mode default (window_size) would have produced all NaN here
+    old_default = _fit_transform_values(
+        engine, df, RollingMean(7, min_samples=7, partition_by=["promo"])
+    )
+    assert np.isnan(old_default).all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_partition_by_nonlocal_default_min_samples_unchanged(engine):
+    """global_ + partition_by keeps the window_size default (counts sum
+    across series in the (partition) bucket)."""
+    n = 12
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n + ["b"] * n,
+            "ds": list(range(1, n + 1)) * 2,
+            "y": [float(i) for i in range(1, 2 * n + 1)],
+            "promo": [0, 1] * (n // 2) * 2,
+        },
+    )
+    default_vals = _fit_transform_values(
+        engine, df, RollingMean(4, global_=True, partition_by=["promo"])
+    )
+    explicit_ws = _fit_transform_values(
+        engine,
+        df,
+        RollingMean(4, min_samples=4, global_=True, partition_by=["promo"]),
+    )
+    explicit_one = _fit_transform_values(
+        engine,
+        df,
+        RollingMean(4, min_samples=1, global_=True, partition_by=["promo"]),
+    )
+    np.testing.assert_array_equal(default_vals, explicit_ws)
+    # the guard still bites on partially-filled windows, unlike min_samples=1
+    assert np.isnan(default_vals).sum() > np.isnan(explicit_one).sum()
+
+
+def test_lookup_lag_requires_partition_by():
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag()
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag(partition_by=None)
+    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+        LookupLag(partition_by=[])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_uses_previous_occurrence(engine):
+    """Predict looks up the previous matching-occurrence target via X_df."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 10,
+            "ds": list(range(1, 11)),
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+            "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],  # promo=1 at ds 3,6,9 (y 30,60,90)
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [11], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future step is promo=1; the previous promo occurrence is ds=9 (y=90)
+    np.testing.assert_allclose(captured[0][0], 90.0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_multistep_transformed(engine):
+    """Multi-step predict with dynamic keys stays on the transformed scale."""
+    from mlforecast.forecast import MLForecast
+    from mlforecast.target_transforms import LocalStandardScaler
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    rows = {
+        "unique_id": ["a"] * 10,
+        "ds": list(range(1, 11)),
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+        "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+    }
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+
+    # Expected transformed-target values via a separate preprocess pass.
+    fexp = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [LookupLag(partition_by=["promo"])]},
+        target_transforms=[LocalStandardScaler()],
+    )
+    prep = fexp.preprocess(_make_df(engine, rows), static_features=[], dropna=False)
+    prep_pd = prep.to_pandas() if engine == "polars" else prep
+    exp_promo1 = prep_pd[prep_pd["promo"] == 1]["y"].to_numpy()[-1]  # ds=9 transformed
+    exp_promo0 = prep_pd[prep_pd["promo"] == 0]["y"].to_numpy()[-1]  # ds=10 transformed
+
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+        target_transforms=[LocalStandardScaler()],
+    )
+    fcst.fit(
+        _make_df(engine, rows),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    future_df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a"],
+            "ds": [11, 12],
+            "promo": [1, 0],
+        },
+    )
+    preds = fcst.predict(h=2, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 2
+    # step 0 (ds=11, promo=1): previous promo=1 occurrence, transformed scale
+    np.testing.assert_allclose(captured[0][0], exp_promo1)
+    # step 1 (ds=12, promo=0): bucket (a,0) unchanged by ds=11 (which was promo=1)
+    np.testing.assert_allclose(captured[1][0], exp_promo0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_survives_keep_last_n_trim(engine):
+    """LookupLag reaches a far-back occurrence even under an aggressive
+    keep_last_n (its pooled state is not finite-window, so it is not trimmed)."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 12,
+            "ds": list(range(1, 13)),
+            "y": [
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                50.0,
+                60.0,
+                70.0,
+                80.0,
+                90.0,
+                100.0,
+                110.0,
+                120.0,
+            ],
+            "promo": [
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],  # single promo far back (ds=3, y=30)
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+        keep_last_n=2,
+    )
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [13], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future promo step reaches the far-back promo occurrence (ds=3, y=30), not NaN
+    np.testing.assert_allclose(captured[0][0], 30.0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", [1, 2, 7, 52])
+def test_lookup_lag_predict_various_lags(engine, lag):
+    """Predict looks up the correct occurrence across a range of lag values
+    (exercises the _compute_latest_from_aggs fast path and its [-lag] indexing)."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    n = 120
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n,
+            "ds": list(range(n)),
+            "y": [float(i) for i in range(n)],  # y == ds index
+            "promo": [1] * n,  # one partition value → bucket is the whole series
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(lag)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=5)],
+        freq=1,
+        lags=[1],
+        lag_transforms={lag: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [n], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future step looks up the occurrence `lag` back; since y == ds index, that is y[n - lag]
+    np.testing.assert_allclose(captured[0][0], float(n - lag))
+
+
+def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
+    """Fast predict path (_compute_latest_from_aggs): NaN when a bucket has
+    fewer than `lag` occurrences or the looked-up occurrence has no valid
+    observation; None when there are no aggregates."""
+    from mlforecast.pooled import _build_ts_aggs
+
+    # bucket 0: 3 valid obs (10,20,30); bucket 1: single obs (< lag); bucket 2:
+    # the lag-back occurrence (index -2) is NaN-valued.
+    bid = np.array([0, 0, 0, 1, 2, 2, 2])
+    ordv = np.array([0, 1, 2, 0, 0, 1, 2])
+    y = np.array([10.0, 20.0, 30.0, 99.0, 5.0, np.nan, 7.0])
+    aggs = _build_ts_aggs(bid, ordv, y)
+
+    tfm = LookupLag(partition_by=["x"])
+    tfm._set_core_tfm(2)  # lag = 2
+    result = tfm._compute_latest_from_aggs(aggs, {0: 3, 1: 1, 2: 3})
+
+    np.testing.assert_allclose(result[0], 20.0)  # occurrence 2 back = index -2 = 20.0
+    assert np.isnan(result[1])  # only 1 occurrence, < lag=2 -> NaN
+    assert np.isnan(result[2])  # lag-back occurrence has NaN y (count==0) -> NaN
+
+    # No aggregates -> None (falls through to the slow path in core.py).
+    assert tfm._compute_latest_from_aggs({}, {}) is None
