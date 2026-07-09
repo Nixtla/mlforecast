@@ -3747,3 +3747,176 @@ def test_lookup_lag_requires_partition_by():
         LookupLag(partition_by=None)
     with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
         LookupLag(partition_by=[])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_uses_previous_occurrence(engine):
+    """Predict looks up the previous matching-occurrence target via X_df."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 10,
+            "ds": list(range(1, 11)),
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+            "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],  # promo=1 at ds 3,6,9 (y 30,60,90)
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [11], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future step is promo=1; the previous promo occurrence is ds=9 (y=90)
+    np.testing.assert_allclose(captured[0][0], 90.0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_multistep_transformed(engine):
+    """Multi-step predict with dynamic keys stays on the transformed scale."""
+    from mlforecast.forecast import MLForecast
+    from mlforecast.target_transforms import LocalStandardScaler
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    rows = {
+        "unique_id": ["a"] * 10,
+        "ds": list(range(1, 11)),
+        "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+        "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+    }
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+
+    # Expected transformed-target values via a separate preprocess pass.
+    fexp = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [LookupLag(partition_by=["promo"])]},
+        target_transforms=[LocalStandardScaler()],
+    )
+    prep = fexp.preprocess(_make_df(engine, rows), static_features=[], dropna=False)
+    prep_pd = prep.to_pandas() if engine == "polars" else prep
+    exp_promo1 = prep_pd[prep_pd["promo"] == 1]["y"].to_numpy()[-1]  # ds=9 transformed
+    exp_promo0 = prep_pd[prep_pd["promo"] == 0]["y"].to_numpy()[-1]  # ds=10 transformed
+
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+        target_transforms=[LocalStandardScaler()],
+    )
+    fcst.fit(
+        _make_df(engine, rows),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    future_df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a"],
+            "ds": [11, 12],
+            "promo": [1, 0],
+        },
+    )
+    preds = fcst.predict(h=2, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 2
+    # step 0 (ds=11, promo=1): previous promo=1 occurrence, transformed scale
+    np.testing.assert_allclose(captured[0][0], exp_promo1)
+    # step 1 (ds=12, promo=0): bucket (a,0) unchanged by ds=11 (which was promo=1)
+    np.testing.assert_allclose(captured[1][0], exp_promo0)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_lookup_lag_predict_survives_keep_last_n_trim(engine):
+    """LookupLag reaches a far-back occurrence even under an aggressive
+    keep_last_n (its pooled state is not finite-window, so it is not trimmed)."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 12,
+            "ds": list(range(1, 13)),
+            "y": [
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                50.0,
+                60.0,
+                70.0,
+                80.0,
+                90.0,
+                100.0,
+                110.0,
+                120.0,
+            ],
+            "promo": [
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],  # single promo far back (ds=3, y=30)
+        },
+    )
+    tfm = LookupLag(partition_by=["promo"])
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(x[col].to_numpy().copy())
+        return x
+
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lags=[1],
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+        keep_last_n=2,
+    )
+    future_df = _make_df(engine, {"unique_id": ["a"], "ds": [13], "promo": [1]})
+    preds = fcst.predict(h=1, X_df=future_df, before_predict_callback=save_features)
+    assert len(preds) == 1
+    # future promo step reaches the far-back promo occurrence (ds=3, y=30), not NaN
+    np.testing.assert_allclose(captured[0][0], 30.0)
