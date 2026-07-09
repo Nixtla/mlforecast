@@ -462,6 +462,32 @@ is raised to that window for the affected state, keeping predictions
 correct. When `keep_last_n` is left to be inferred it already equals the
 largest window, so the floor never changes anything.
 
+## Occurrence lookups with `LookupLag`
+
+`LookupLag` returns the target from the **previous matching occurrence**
+within each `(unique_id, partition_by...)` bucket, regardless of the
+calendar gap between occurrences. This is useful for moving events —
+e.g. “last year’s Easter value” — where the relevant previous target is
+not a fixed calendar lag.
+
+`partition_by` is required and defines the buckets. Because it is a
+pooled transform, the partition columns may change over time and must be
+supplied via `X_df` at prediction. Since the lookup is computed inside
+`mlforecast`, it stays aligned with any target transforms
+(e.g. `LocalStandardScaler`).
+
+```python
+from mlforecast.lag_transforms import LookupLag
+
+fcst = MLForecast(
+    models=[],
+    freq='D',
+    lag_transforms={1: [LookupLag(partition_by=['promo'])]},
+)
+prep = fcst.preprocess(series, static_features=['brand'])
+prep.head()
+```
+
 ## Constraints to keep in mind
 
 -   `global_=True` and `groupby=[...]` are **mutually exclusive** on the
