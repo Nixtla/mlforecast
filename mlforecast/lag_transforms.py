@@ -24,7 +24,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, Optional, Protocol, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
@@ -199,7 +199,22 @@ class Lag(_BaseLagTransform):
         return self.lag
 
 
-def _resolve_min_samples(tfm) -> int:
+class _WindowTransform(Protocol):
+    """Structural type accepted by :func:`_resolve_min_samples`.
+
+    Any rolling / seasonal-rolling transform (a ``_RollingBase`` or
+    ``_Seasonal_RollingBase`` subclass) satisfies this by exposing the pooling
+    mode flags and window sizing needed to resolve the ``min_samples`` default.
+    """
+
+    min_samples: Optional[int]
+    window_size: int
+    global_: bool
+    groupby: Optional[Sequence[str]]
+    partition_by: Optional[Sequence[str]]
+
+
+def _resolve_min_samples(tfm: _WindowTransform) -> int:
     """Resolve ``min_samples=None`` for pooled window computations.
 
     In local partition mode (``partition_by`` without ``global_``/``groupby``)
