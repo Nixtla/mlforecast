@@ -10,8 +10,7 @@ import reprlib
 from typing import Tuple, Union
 
 import narwhals as nw
-import pandas as pd
-from utilsforecast.compat import DFType, pl
+from utilsforecast.compat import DFType
 from utilsforecast.processing import offset_times
 
 
@@ -114,10 +113,9 @@ def validate_continuity(
         ]
     )
 
-    # offset_times accepts Union[int, np.ndarray] for n; convert pandas Series to numpy
+    # offset_times accepts a native numpy array (pandas) or a native Series (polars);
+    # `.to_native()` yields the right type per backend without an explicit branch
     n_steps = (stats["_n_unique"] - 1).to_native()
-    if isinstance(n_steps, pd.Series):
-        n_steps = n_steps.to_numpy()
 
     expected_max_native = offset_times(stats["_min"].to_native(), freq, n_steps)
     expected_max_nw = nw.from_native(expected_max_native, series_only=True).alias(
@@ -163,10 +161,11 @@ def validate_update_df(
     Raises:
         ValueError: If any series has an invalid start date or internal gaps/duplicates.
     """
-    if isinstance(df, pd.DataFrame):
-        last_dates_df = pd.DataFrame({id_col: uids, "_last": last_dates})
-    else:
-        last_dates_df = pl.DataFrame({id_col: uids, "_last": last_dates})
+    # build the frame in df's backend so the downstream join stays backend-consistent
+    backend = nw.get_native_namespace(nw.from_native(df, eager_only=True))
+    last_dates_df = nw.from_dict(
+        {id_col: list(uids), "_last": list(last_dates)}, backend=backend
+    ).to_native()
 
     has_issues, bad = validate_update_start_dates(
         df, id_col, time_col, last_dates_df, freq
