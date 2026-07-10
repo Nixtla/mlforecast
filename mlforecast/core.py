@@ -753,16 +753,15 @@ class TimeSeries:
         feature_cols = list(bucket_vals.keys())
         if not feature_cols:
             return
-        if isinstance(df, pd.DataFrame):
-            join_df = bucket_df[join_cols].copy()
-            for name, vals in bucket_vals.items():
-                join_df[name] = vals
-            left = df[join_cols]
-        else:
-            join_df = bucket_df.select(join_cols)
-            for name, vals in bucket_vals.items():
-                join_df = join_df.with_columns(pl.Series(name=name, values=vals))
-            left = df.select(join_cols)
+        nw_bucket = nw.from_native(bucket_df, eager_only=True)
+        backend = nw.get_native_namespace(nw_bucket)
+        join_df = nw_bucket.select(join_cols)
+        for name, vals in bucket_vals.items():
+            join_df = join_df.with_columns(
+                nw.new_series(name, vals, backend=backend).alias(name)
+            )
+        join_df = join_df.to_native()
+        left = nw.from_native(df, eager_only=True).select(join_cols).to_native()
         joined = nw.to_native(
             _order_preserving_left_join(
                 nw.from_native(left), nw.from_native(join_df), on=join_cols
@@ -1297,12 +1296,10 @@ class TimeSeries:
 
     def _get_future_ids(self, h: int):
         if isinstance(self.uids, pl_Series):
-            uids = pl.concat([self.uids for _ in range(h)]).sort()
-        else:
-            uids = pd.Series(
-                np.repeat(self.uids, h), name=self.id_col, dtype=self.uids.dtype
-            )
-        return uids
+            idxs = np.repeat(np.arange(len(self.uids)), h)
+            return self.uids.gather(idxs).sort()
+        repeated = np.repeat(np.asarray(self.uids), h)
+        return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
 
     def _get_predictions(self) -> DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
