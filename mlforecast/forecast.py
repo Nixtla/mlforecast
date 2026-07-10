@@ -63,6 +63,13 @@ _get_conformal_method = get_conformal_method  # backward compat
 _get_transfer_method_spec = get_transfer_method_spec
 
 
+def _ensure_h_int64(res):
+    """Cast the ``h`` column to Int64, preserving the input backend."""
+    return nw.from_native(res, eager_only=True).with_columns(
+        nw.col("h").cast(nw.Int64)
+    ).to_native()
+
+
 def _frozen_backtest(
     fcst: "MLForecast",
     new_df: DFType,
@@ -1214,12 +1221,7 @@ class MLForecast:
             res = self.fcst_fitted_values_
             if "h" not in res.columns:
                 res = ufp.assign_columns(res, "h", np.int64(h))
-            if isinstance(res, pd.DataFrame):
-                res = res.copy()
-                res["h"] = res["h"].astype(np.int64)
-            else:
-                res = res.with_columns(pl.col("h").cast(pl.Int64))
-            return res
+            return _ensure_h_int64(res)
 
         first_model = next(iter(self.models_.values()))
         is_direct = isinstance(first_model, dict)
@@ -1230,12 +1232,14 @@ class MLForecast:
                     "Direct fitted values are missing horizon information. "
                     "Please refit the model with the current version."
                 )
-            if isinstance(res, pd.DataFrame):
-                res = res[res["h"].eq(h)].reset_index(drop=True)
-                available = sorted(self.fcst_fitted_values_["h"].unique().tolist())
-            else:
-                res = res.filter(pl.col("h") == h)
-                available = sorted(self.fcst_fitted_values_["h"].unique().to_list())
+            res = nw.to_native(
+                nw.from_native(res, eager_only=True).filter(nw.col("h") == h)
+            )
+            available = sorted(
+                nw.from_native(self.fcst_fitted_values_, eager_only=True)["h"]
+                .unique()
+                .to_list()
+            )
             if len(res) == 0:
                 raise ValueError(
                     f"No fitted values found for h={h}. Available horizons: {available}."
@@ -1266,11 +1270,7 @@ class MLForecast:
                     res = pl.from_pandas(res_pd)
         if "h" not in res.columns:
             res = ufp.assign_columns(res, "h", np.int64(h))
-        if isinstance(res, pd.DataFrame):
-            res = res.copy()
-            res["h"] = res["h"].astype(np.int64)
-        else:
-            res = res.with_columns(pl.col("h").cast(pl.Int64))
+        res = _ensure_h_int64(res)
         if level is not None:
             res = ufp.add_insample_levels(
                 res,
