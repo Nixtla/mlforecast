@@ -1392,7 +1392,9 @@ class TimeSeries:
             if X_row is None:
                 X_row = self._current_step_rows(X_df)
             new_x = ufp.horizontal_concat([new_x, X_row])
-        null_any = nw.from_native(new_x, eager_only=True).select(nw.all().is_null().any())
+        null_any = nw.from_native(new_x, eager_only=True).select(
+            nw.all().is_null().any()
+        )
         cols_with_nulls = [c for c in null_any.columns if null_any[c][0]]
         if cols_with_nulls:
             warnings.warn(f"Found null values in {', '.join(cols_with_nulls)}.")
@@ -1821,7 +1823,9 @@ class TimeSeries:
         if self._pooled_states:
             # Category C: pd.Index guard before from_native
             uids_nw = pd.Series(uids) if isinstance(uids, pd.Index) else uids
-            new_ids_nw = pd.Series(new_ids) if isinstance(new_ids, pd.Index) else new_ids
+            new_ids_nw = (
+                pd.Series(new_ids) if isinstance(new_ids, pd.Index) else new_ids
+            )
             expected_count = len(
                 set(nw.from_native(uids_nw, series_only=True).to_list())
                 | set(nw.from_native(new_ids_nw, series_only=True).to_list())

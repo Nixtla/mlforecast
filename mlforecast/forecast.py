@@ -65,9 +65,11 @@ _get_transfer_method_spec = get_transfer_method_spec
 
 def _ensure_h_int64(res):
     """Cast the ``h`` column to Int64, preserving the input backend."""
-    return nw.from_native(res, eager_only=True).with_columns(
-        nw.col("h").cast(nw.Int64)
-    ).to_native()
+    return (
+        nw.from_native(res, eager_only=True)
+        .with_columns(nw.col("h").cast(nw.Int64))
+        .to_native()
+    )
 
 
 def _frozen_backtest(
@@ -1237,7 +1239,9 @@ class MLForecast:
                     "Please refit the model with the current version."
                 )
             res = ufp.drop_index_if_pandas(
-                nw.to_native(nw.from_native(res, eager_only=True).filter(nw.col("h") == h))
+                nw.to_native(
+                    nw.from_native(res, eager_only=True).filter(nw.col("h") == h)
+                )
             )
             available = sorted(
                 nw.from_native(self.fcst_fitted_values_, eager_only=True)["h"]
@@ -1547,9 +1551,7 @@ class MLForecast:
                     warnings.warn(warn_msg, UserWarning)
                 else:
                     cs_ids = set(
-                        nw.from_native(self._cs_df, eager_only=True)[
-                            self.ts.id_col
-                        ]
+                        nw.from_native(self._cs_df, eager_only=True)[self.ts.id_col]
                         .unique()
                         .to_list()
                     )
