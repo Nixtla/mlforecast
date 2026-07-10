@@ -47,12 +47,12 @@ Name | Type | Description | Default
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
 `static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. If `None`, will consider all columns (except id_col and time_col) as static. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
 `horizon_feature_templates` | <code>list of str</code> | Template patterns for horizon-specific dynamic exogenous features. Each template must include exactly one '{h}' placeholder (1-indexed), for example: ['feature_h{h}']. Acts as shorthand for `horizon_features` and is only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
-`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
+`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.conformal_prediction.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Save in-sample predictions. Defaults to False. | <code>False</code>
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
@@ -153,7 +153,7 @@ Type | Description
 #### `MLForecast.predict`
 
 ```python
-predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None)
+predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None, transfer_conformal=None)
 ```
 
 Compute the predictions for the next `h` steps.
@@ -169,6 +169,7 @@ Name | Type | Description | Default
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `X_df` | <code>pandas or polars DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
 `ids` | <code>list of str</code> | List with subset of ids seen during training for which the forecasts should be computed. Defaults to None. | <code>None</code>
+`transfer_conformal` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Re-runs cross-validation on ``new_df`` and replaces source calibration scores with target scores. No special fit requirements. - ``'error_scaled'``: Scales source residuals by the ratio of target to source prediction-error standard deviation, estimated via CV on ``new_df``. No special fit requirements beyond ``prediction_intervals``. - ``'scale_aligned'``: Zero-shot — scales source residuals by the ratio of target to source y-history variance without running CV. Requires the source model to have been fit with ``PredictionIntervals(scale_estimator='mad'|'std')``. - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``). - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.<br/>Defaults to ``None`` (equivalent to ``'recalibrate'`` when ``new_df`` and ``level`` are both provided). | <code>None</code>
 
 **Returns:**
 
@@ -194,7 +195,7 @@ Name | Type | Description | Default
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
 `static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
@@ -256,7 +257,7 @@ Name | Type | Description | Default
 `step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
 `static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
@@ -264,7 +265,7 @@ Name | Type | Description | Default
 `refit` | <code>[bool](#bool) or [int](#int)</code> | Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True. | <code>True</code>
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.utils.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
+`prediction_intervals` | <code>[PredictionIntervals](#mlforecast.conformal_prediction.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
