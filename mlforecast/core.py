@@ -1297,8 +1297,46 @@ class TimeSeries:
             df_constructor = pl_DataFrame
         else:
             df_constructor = pd.DataFrame
+        self._feature_null_cols = self._null_cols_in_feature_values(
+            features, nan_is_null=df_constructor is pd.DataFrame
+        )
         features_df = df_constructor(features)[self.features]
         return ufp.horizontal_concat([self.static_features_, features_df])
+
+    def _null_cols_in_feature_values(
+        self, features: Dict[str, Any], nan_is_null: bool
+    ) -> List[str]:
+        """Names of computed features containing nulls, in ``self.features`` order.
+
+        Runs once per horizon step, so it checks the raw feature values
+        (numpy arrays or native series) before the frame is assembled instead
+        of scanning the assembled frame, keeping the per-step null diagnostic
+        vectorized. NaN counts as null only when ``nan_is_null`` (the pandas
+        backend), matching each backend's null semantics.
+        """
+        null_names = set()
+        for name, vals in features.items():
+            if isinstance(vals, np.ndarray):
+                kind = vals.dtype.kind
+                if kind == "f":
+                    has_null = nan_is_null and bool(np.isnan(vals).any())
+                elif kind in "Mm":
+                    has_null = bool(np.isnat(vals).any())
+                elif kind == "O":
+                    has_null = bool(pd.isnull(vals).any())
+                else:
+                    # int/uint/bool arrays can't hold nulls
+                    has_null = False
+            else:
+                try:
+                    has_null = bool(
+                        nw.from_native(vals, series_only=True).is_null().any()
+                    )
+                except TypeError:
+                    has_null = bool(pd.isnull(np.asarray(vals)).any())
+            if has_null:
+                null_names.add(name)
+        return [c for c in self.features if c in null_names]
 
     def _get_raw_predictions(self) -> np.ndarray:
         return np.array(self.y_pred).ravel("F")
@@ -1388,14 +1426,33 @@ class TimeSeries:
         if X_df is not None:
             X_row = self._update_partition_assignments(X_df)
         new_x = self._update_features()
+        # statics were scanned in _predict_setup and computed features while
+        # building them in _update_features; assembled here in new_x column
+        # order (statics, features, X_row) so the warning matches a full scan
+        cols_with_nulls = self._static_null_cols + self._feature_null_cols
         if X_df is not None:
             if X_row is None:
                 X_row = self._current_step_rows(X_df)
+            if self._xdf_null_cols is None:
+                # X_df is fixed for the whole predict; scan it once so the
+                # common no-nulls case skips the per-step check entirely
+                xdf_nw = nw.from_native(X_df, eager_only=True)
+                if xdf_nw.columns:
+                    xdf_null_counts = xdf_nw.null_count().row(0)
+                    self._xdf_null_cols = [
+                        c for c, n in zip(xdf_nw.columns, xdf_null_counts) if n
+                    ]
+                else:
+                    self._xdf_null_cols = []
+            if self._xdf_null_cols:
+                row_nw = nw.from_native(X_row, eager_only=True).select(
+                    self._xdf_null_cols
+                )
+                row_null_counts = row_nw.null_count().row(0)
+                cols_with_nulls += [
+                    c for c, n in zip(self._xdf_null_cols, row_null_counts) if n
+                ]
             new_x = ufp.horizontal_concat([new_x, X_row])
-        null_any = nw.from_native(new_x, eager_only=True).select(
-            nw.all().is_null().any()
-        )
-        cols_with_nulls = [c for c in null_any.columns if null_any[c][0]]
         if cols_with_nulls:
             warnings.warn(f"Found null values in {', '.join(cols_with_nulls)}.")
         self._h += 1
@@ -1431,6 +1488,18 @@ class TimeSeries:
         self.test_dates: List[Union[pd.Index, pl_Series]] = []
         self.y_pred = []
         self._h = 0
+        # Null-diagnostic state for _get_features_for_next_step. Statics are
+        # fixed for the whole predict, so scan them once here (boundary)
+        # instead of once per horizon step (hot loop).
+        self._feature_null_cols: List[str] = []
+        self._xdf_null_cols: Optional[List[str]] = None
+        self._static_null_cols: List[str] = []
+        statics_nw = nw.from_native(self.static_features_, eager_only=True)
+        if statics_nw.columns:
+            static_null_counts = statics_nw.null_count().row(0)
+            self._static_null_cols = [
+                c for c, n in zip(statics_nw.columns, static_null_counts) if n
+            ]
 
     def _predict_recursive(
         self,
