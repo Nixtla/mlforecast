@@ -992,6 +992,7 @@ class TimeSeries:
                         unique_dates, feature
                     ).items():
                         df[feat_name] = feat_vals[restore_idxs]
+            # Category C: backend-specific date-feature fast path (pandas positional-map + polars expr build); kept for performance
             elif isinstance(df, pl_DataFrame):
                 exprs = []
                 nw_feats: Dict[str, Any] = {}
@@ -1291,6 +1292,7 @@ class TimeSeries:
             ).items():
                 features[feat_name] = feat_vals
 
+        # Category C: native-container boundary — uids/df constructor selected per backend
         if isinstance(self.last_dates, pl_Series):
             df_constructor = pl_DataFrame
         else:
@@ -1302,6 +1304,7 @@ class TimeSeries:
         return np.array(self.y_pred).ravel("F")
 
     def _get_future_ids(self, h: int):
+        # Category C: native-container boundary — uids/df constructor selected per backend
         if isinstance(self.uids, pl_Series):
             idxs = np.repeat(np.arange(len(self.uids)), h)
             return self.uids.gather(idxs).sort()
@@ -1311,6 +1314,7 @@ class TimeSeries:
     def _get_predictions(self) -> DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
         h = len(self.y_pred)
+        # Category C: native-container boundary — uids/df constructor selected per backend
         if isinstance(self.uids, pl_Series):
             df_constructor = pl_DataFrame
         else:
@@ -1417,6 +1421,7 @@ class TimeSeries:
 
     def _predict_setup(self) -> None:
         # TODO: move to utils
+        # Category C: native-container boundary — clone/copy method selected per backend
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
         else:

@@ -1546,10 +1546,13 @@ class MLForecast:
                     )
                     warnings.warn(warn_msg, UserWarning)
                 else:
-                    if isinstance(self._cs_df, pl_DataFrame):
-                        cs_ids = set(self._cs_df[self.ts.id_col].unique().to_list())
-                    else:
-                        cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
+                    cs_ids = set(
+                        nw.from_native(self._cs_df, eager_only=True)[
+                            self.ts.id_col
+                        ]
+                        .unique()
+                        .to_list()
+                    )
                     if ids is None:
                         active_ids = set(self.ts.uids)
                         if cs_ids != active_ids and new_df is None:
