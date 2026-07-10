@@ -390,10 +390,12 @@ class TimeSeries:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
         if not self._get_pooled_tfms():
             return
-        if isinstance(self.last_dates, pd.Index):
-            aligned = self.last_dates.nunique() == 1
-        else:
-            aligned = self.last_dates.n_unique() == 1
+        last_dates = (
+            pd.Series(self.last_dates)
+            if isinstance(self.last_dates, pd.Index)
+            else self.last_dates
+        )
+        aligned = nw.from_native(last_dates, series_only=True).n_unique() == 1
         if not aligned:
             raise ValueError(
                 "Pooled lag transforms require all series to end at the same timestamp "
@@ -923,9 +925,9 @@ class TimeSeries:
                     "These series won't show up if you use `MLForecast.forecast_fitted_values()`.\n"
                     "You can set `dropna=False` or use transformations that require less samples to mitigate this"
                 )
-        elif isinstance(df, pd.DataFrame):
-            # we'll be assigning columns below, so we need to copy
-            df = df.copy(deep=False)
+        else:
+            # we'll be assigning columns below; copy_if_pandas is a no-op on polars (immutable)
+            df = ufp.copy_if_pandas(df, deep=False)
 
         # once we've computed the features and target we can slice the series
         update_samples = [
@@ -1373,12 +1375,8 @@ class TimeSeries:
             if X_row is None:
                 X_row = self._current_step_rows(X_df)
             new_x = ufp.horizontal_concat([new_x, X_row])
-        if isinstance(new_x, pd.DataFrame):
-            nulls = new_x.isnull().any()
-            cols_with_nulls = nulls[nulls].index.tolist()
-        else:
-            nulls = new_x.select(pl.all().is_null().any())
-            cols_with_nulls = [k for k, v in nulls.to_dicts()[0].items() if v]
+        null_any = nw.from_native(new_x, eager_only=True).select(nw.all().is_null().any())
+        cols_with_nulls = [c for c in null_any.columns if null_any[c][0]]
         if cols_with_nulls:
             warnings.warn(f"Found null values in {', '.join(cols_with_nulls)}.")
         self._h += 1
@@ -1799,26 +1797,21 @@ class TimeSeries:
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
         if self._pooled_states:
-            if isinstance(df, pd.DataFrame):
-                expected_ids = pd.Index(uids).union(pd.Index(new_ids))
-                expected_count = len(expected_ids)
-                counts = df.groupby(self.time_col, observed=True)[self.id_col].nunique()
-                bad_times = counts[counts != expected_count]
-                if not bad_times.empty:
-                    raise ValueError(
-                        "Pooled lag transforms require updates to include all series for each timestamp."
-                    )
-            else:
-                expected_ids = pl.concat([pl.Series(uids), pl.Series(new_ids)]).unique()
-                expected_count = expected_ids.len()
-                counts = df.group_by(self.time_col).agg(
-                    pl.col(self.id_col).n_unique().alias("_n_ids")
+            uids_nw = pd.Series(uids) if isinstance(uids, pd.Index) else uids
+            new_ids_nw = pd.Series(new_ids) if isinstance(new_ids, pd.Index) else new_ids
+            expected_count = len(
+                set(nw.from_native(uids_nw, series_only=True).to_list())
+                | set(nw.from_native(new_ids_nw, series_only=True).to_list())
+            )
+            counts = (
+                nw.from_native(df, eager_only=True)
+                .group_by(self.time_col)
+                .agg(nw.col(self.id_col).n_unique().alias("_n_ids"))
+            )
+            if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
+                raise ValueError(
+                    "Pooled lag transforms require updates to include all series for each timestamp."
                 )
-                bad_times = counts.filter(pl.col("_n_ids") != expected_count)
-                if bad_times.height:
-                    raise ValueError(
-                        "Pooled lag transforms require updates to include all series for each timestamp."
-                    )
         if validate_new_data:
             self._validate_new_df(df=df)
         id_counts = ufp.counts_by_id(df, self.id_col)
