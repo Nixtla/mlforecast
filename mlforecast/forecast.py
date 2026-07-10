@@ -1232,8 +1232,8 @@ class MLForecast:
                     "Direct fitted values are missing horizon information. "
                     "Please refit the model with the current version."
                 )
-            res = nw.to_native(
-                nw.from_native(res, eager_only=True).filter(nw.col("h") == h)
+            res = ufp.drop_index_if_pandas(
+                nw.to_native(nw.from_native(res, eager_only=True).filter(nw.col("h") == h))
             )
             available = sorted(
                 nw.from_native(self.fcst_fitted_values_, eager_only=True)["h"]
