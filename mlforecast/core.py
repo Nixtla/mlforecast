@@ -235,6 +235,19 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
+def _to_native_uids(values, *, df):
+    """Wrap ids/dates into the backend-native container mlforecast exposes as
+    ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
+
+    pandas -> ``pd.Index``, polars -> ``pl.Series``. Centralized here because these
+    attributes are observable API (tests rely on ``.tolist()`` and fancy indexing),
+    so their native type must be produced in exactly one place.
+    """
+    if isinstance(df, pd.DataFrame):
+        return pd.Index(values)
+    return pl_Series(values)
+
+
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
@@ -520,12 +533,8 @@ class TimeSeries:
         if data.ndim == 2:
             data = data[:, 0]
         ga = GroupedArray(data, indptr)
-        if isinstance(df, pd.DataFrame):
-            self.uids = pd.Index(uids)
-            self.last_dates = pd.Index(times)
-        else:
-            self.uids = uids
-            self.last_dates = pl_Series(times)
+        self.uids = _to_native_uids(uids, df=df)
+        self.last_dates = _to_native_uids(times, df=df)
         self._check_aligned_ends()
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
@@ -1787,6 +1796,7 @@ class TimeSeries:
         """
         validate_format(df, self.id_col, self.time_col, self.target_col)
         uids = self.uids
+        # pd.Index is not a narwhals-native input; normalize to Series for ufp.match_if_categorical
         if isinstance(uids, pd.Index):
             uids = pd.Series(uids)
         uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
@@ -1831,9 +1841,8 @@ class TimeSeries:
         last_dates = ufp.sort(last_dates, by=self.id_col)
         self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
         self.uids = ufp.sort(sizes[self.id_col])
-        if isinstance(df, pd.DataFrame):
-            self.uids = pd.Index(self.uids)
-            self.last_dates = pd.Index(self.last_dates)
+        self.uids = _to_native_uids(self.uids, df=df)
+        self.last_dates = _to_native_uids(self.last_dates, df=df)
         if new_groups.any():
             if self.target_transforms is not None:
                 raise ValueError("Can not update target_transforms with new series.")
