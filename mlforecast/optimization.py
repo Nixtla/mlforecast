@@ -39,7 +39,7 @@ def _get_categorical_static_features(
     return [
         feature
         for feature in static_features
-        if schema[feature] in (nw.Categorical, nw.Enum, nw.String)
+        if schema[feature] in (nw.Categorical, nw.Enum, nw.String, nw.Object)
     ]
 
 
