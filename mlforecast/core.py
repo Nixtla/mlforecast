@@ -252,6 +252,12 @@ def _to_native_uids(values, *, df):
 class TimeSeries:
     """Utility class for storing and transforming time series data."""
 
+    # Per-predict state (set in ``_predict_setup``, used in the horizon loop).
+    # Declared here so mypy has a type regardless of method processing order.
+    _uniform_dates: bool
+    _feature_null_cols: List[str]
+    _xdf_null_cols: Optional[List[str]]
+
     def __init__(
         self,
         freq: Freq,
@@ -1228,6 +1234,11 @@ class TimeSeries:
 
     def _update_features(self) -> DataFrame:
         """Compute the current values of all the features using the latest values of the time series."""
+        features_df = self._compute_features_df()
+        return ufp.horizontal_concat([self.static_features_, features_df])
+
+    def _compute_features_df(self) -> DataFrame:
+        """Advance ``curr_dates`` one step and compute the features frame (without statics)."""
         self.curr_dates: Union[pd.Index, pl_Series] = ufp.offset_times(
             self.curr_dates, self.freq, 1
         )
@@ -1286,11 +1297,23 @@ class TimeSeries:
                             lookup[bid] = val
                         features[name] = lookup[state.series_bucket_id]
 
+        if self._uniform_dates and self.date_features:
+            # all series are on the same timestamp, so date features are
+            # constant across series: compute them on a single date and
+            # broadcast instead of recomputing on n_series identical dates.
+            # restricted to non-callables, which are guaranteed elementwise
+            broadcast_idx = np.zeros(len(self.uids), dtype=np.int64)
         for feature in self.date_features:
-            for feat_name, feat_vals in self._compute_date_feature(
-                self.curr_dates, feature
-            ).items():
-                features[feat_name] = feat_vals
+            if self._uniform_dates and not callable(feature):
+                for feat_name, feat_vals in self._compute_date_feature(
+                    self.curr_dates[:1], feature
+                ).items():
+                    features[feat_name] = feat_vals[broadcast_idx]
+            else:
+                for feat_name, feat_vals in self._compute_date_feature(
+                    self.curr_dates, feature
+                ).items():
+                    features[feat_name] = feat_vals
 
         # Category C: native-container boundary — uids/df constructor selected per backend
         if isinstance(self.last_dates, pl_Series):
@@ -1300,8 +1323,10 @@ class TimeSeries:
         self._feature_null_cols = self._null_cols_in_feature_values(
             features, nan_is_null=df_constructor is pd.DataFrame
         )
-        features_df = df_constructor(features)[self.features]
-        return ufp.horizontal_concat([self.static_features_, features_df])
+        features_df = df_constructor(features)
+        if list(features_df.columns) != self.features:
+            features_df = features_df[self.features]
+        return features_df
 
     def _null_cols_in_feature_values(
         self, features: Dict[str, Any], nan_is_null: bool
@@ -1425,7 +1450,11 @@ class TimeSeries:
         X_row = None
         if X_df is not None:
             X_row = self._update_partition_assignments(X_df)
-        new_x = self._update_features()
+        # same frame _update_features builds, but with the statics trimmed to
+        # model features (_statics_keep) so columns dropped by the
+        # features_order_ selection below aren't carried through every step
+        features_df = self._compute_features_df()
+        new_x = ufp.horizontal_concat([self._statics_keep, features_df])
         # statics were scanned in _predict_setup and computed features while
         # building them in _update_features; assembled here in new_x column
         # order (statics, features, X_row) so the warning matches a full scan
@@ -1456,7 +1485,8 @@ class TimeSeries:
         if cols_with_nulls:
             warnings.warn(f"Found null values in {', '.join(cols_with_nulls)}.")
         self._h += 1
-        new_x = new_x[self.features_order_]
+        if list(new_x.columns) != self.features_order_:
+            new_x = new_x[self.features_order_]
         if self.as_numpy:
             new_x = ufp.to_numpy(new_x)
         return new_x
@@ -1491,8 +1521,24 @@ class TimeSeries:
         # Null-diagnostic state for _get_features_for_next_step. Statics are
         # fixed for the whole predict, so scan them once here (boundary)
         # instead of once per horizon step (hot loop).
-        self._feature_null_cols: List[str] = []
-        self._xdf_null_cols: Optional[List[str]] = None
+        self._feature_null_cols = []
+        self._xdf_null_cols = None
+        # when all series end at the same timestamp, per-step date features
+        # are constant across series and can be computed on a single date
+        last_dates = (
+            pd.Series(self.last_dates)
+            if isinstance(self.last_dates, pd.Index)
+            else self.last_dates
+        )
+        self._uniform_dates = bool(
+            nw.from_native(last_dates, series_only=True).n_unique() == 1
+        )
+        # _predict_setup runs once per model; the statics-derived state below
+        # is fixed for the whole predict, so reuse it across models
+        # (TimeSeries.predict clears _static_null_src per call)
+        if getattr(self, "_static_null_src", None) is self.static_features_:
+            return
+        self._static_null_src = self.static_features_
         self._static_null_cols: List[str] = []
         statics_nw = nw.from_native(self.static_features_, eager_only=True)
         if statics_nw.columns:
@@ -1500,6 +1546,18 @@ class TimeSeries:
             self._static_null_cols = [
                 c for c, n in zip(statics_nw.columns, static_null_counts) if n
             ]
+        # cache the statics restricted to actual model features (usually all
+        # but the id column, which can itself be a feature when the user lists
+        # it in static_features) so the per-step feature assembly doesn't
+        # carry columns that the features_order_ selection drops at the end.
+        # when no static column is a feature keep the full frame: it provides
+        # the row count of new_x (e.g. no computed features at all)
+        feature_set = set(self.features_order_)
+        static_cols = [c for c in statics_nw.columns if c in feature_set]
+        if static_cols and static_cols != statics_nw.columns:
+            self._statics_keep = self.static_features_[static_cols]
+        else:
+            self._statics_keep = self.static_features_
 
     def _predict_recursive(
         self,
@@ -1752,6 +1810,8 @@ class TimeSeries:
                     f"{sorted(required_future_cols)}."
                 )
         with self._maybe_subset(idxs):
+            # invalidate the per-predict statics cache in _predict_setup
+            self._static_null_src = None
             if X_df is not None:
                 if self.id_col not in X_df or self.time_col not in X_df:
                     raise ValueError(
