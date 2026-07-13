@@ -45,6 +45,7 @@ from mlforecast.target_transforms import (
 )
 
 from .compat import CatBoostRegressor
+from .data_validation import _index_to_series
 from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
@@ -235,8 +236,7 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
-# native-container boundary for observable uids/last_dates (pd.Index/pl.Series); tests rely on these types
-def _to_native_uids(values, *, df):
+def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
 
@@ -410,12 +410,7 @@ class TimeSeries:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
         if not self._get_pooled_tfms():
             return
-        # pd.Index is not a narwhals input type; wrap to Series before from_native
-        last_dates = (
-            pd.Series(self.last_dates)
-            if isinstance(self.last_dates, pd.Index)
-            else self.last_dates
-        )
+        last_dates = _index_to_series(self.last_dates)
         aligned = nw.from_native(last_dates, series_only=True).n_unique() == 1
         if not aligned:
             raise ValueError(
@@ -541,8 +536,8 @@ class TimeSeries:
         if data.ndim == 2:
             data = data[:, 0]
         ga = GroupedArray(data, indptr)
-        self.uids = _to_native_uids(uids, df=df)
-        self.last_dates = _to_native_uids(times, df=df)
+        self.uids = _to_native_index(uids, df=df)
+        self.last_dates = _to_native_index(times, df=df)
         self._check_aligned_ends()
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
@@ -765,9 +760,7 @@ class TimeSeries:
         backend = nw.get_native_namespace(nw_bucket)
         join_df = nw_bucket.select(join_cols)
         for name, vals in bucket_vals.items():
-            join_df = join_df.with_columns(
-                nw.new_series(name, vals, backend=backend).alias(name)
-            )
+            join_df = join_df.with_columns(nw.new_series(name, vals, backend=backend))
         join_df = join_df.to_native()
         left = nw.from_native(df, eager_only=True).select(join_cols).to_native()
         joined = nw.to_native(
@@ -793,7 +786,6 @@ class TimeSeries:
             # callable-returned native types have no narwhals equivalent
             if isinstance(feat_vals, pd.DataFrame):
                 return {col: np.asarray(feat_vals[col]) for col in feat_vals.columns}
-            # callable-returned native types have no narwhals equivalent
             if isinstance(feat_vals, (pd.Index, pd.Series)):
                 feat_vals = np.asarray(feat_vals)
             return {feat_name: feat_vals}
@@ -805,7 +797,6 @@ class TimeSeries:
             if feature in ("week", "weekofyear"):
                 dates = dates.isocalendar()
             feat_vals = getattr(dates, feature)
-            # DatetimeIndex date-attribute access has no narwhals equivalent
             if isinstance(feat_vals, (pd.Index, pd.Series)):
                 feat_vals = np.asarray(feat_vals)
                 feat_dtype = date_features_dtypes.get(feature)
@@ -1525,11 +1516,7 @@ class TimeSeries:
         self._xdf_null_cols = None
         # when all series end at the same timestamp, per-step date features
         # are constant across series and can be computed on a single date
-        last_dates = (
-            pd.Series(self.last_dates)
-            if isinstance(self.last_dates, pd.Index)
-            else self.last_dates
-        )
+        last_dates = _index_to_series(self.last_dates)
         self._uniform_dates = bool(
             nw.from_native(last_dates, series_only=True).n_unique() == 1
         )
@@ -1938,10 +1925,7 @@ class TimeSeries:
             validate_new_data: If True, validate continuity, start dates, and frequency.
         """
         validate_format(df, self.id_col, self.time_col, self.target_col)
-        uids = self.uids
-        # pd.Index is not a narwhals-native input; normalize to Series for ufp.match_if_categorical
-        if isinstance(uids, pd.Index):
-            uids = pd.Series(uids)
+        uids = _index_to_series(self.uids)
         uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
         df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)
@@ -1950,15 +1934,15 @@ class TimeSeries:
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
         if self._pooled_states:
-            # pd.Index guard before from_native
-            uids_nw = pd.Series(uids) if isinstance(uids, pd.Index) else uids
-            new_ids_nw = (
-                pd.Series(new_ids) if isinstance(new_ids, pd.Index) else new_ids
+            uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
+                "_uid"
             )
-            expected_count = len(
-                set(nw.from_native(uids_nw, series_only=True).to_list())
-                | set(nw.from_native(new_ids_nw, series_only=True).to_list())
-            )
+            new_ids_nw = nw.from_native(
+                _index_to_series(new_ids), series_only=True
+            ).alias("_uid")
+            expected_count = nw.concat(
+                [uids_nw.to_frame(), new_ids_nw.to_frame()], how="vertical"
+            )["_uid"].n_unique()
             counts = (
                 nw.from_native(df, eager_only=True)
                 .group_by(self.time_col)
@@ -1987,8 +1971,8 @@ class TimeSeries:
         last_dates = ufp.sort(last_dates, by=self.id_col)
         self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
         self.uids = ufp.sort(sizes[self.id_col])
-        self.uids = _to_native_uids(self.uids, df=df)
-        self.last_dates = _to_native_uids(self.last_dates, df=df)
+        self.uids = _to_native_index(self.uids, df=df)
+        self.last_dates = _to_native_index(self.last_dates, df=df)
         if new_groups.any():
             if self.target_transforms is not None:
                 raise ValueError("Can not update target_transforms with new series.")

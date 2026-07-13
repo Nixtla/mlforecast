@@ -10,8 +10,18 @@ import reprlib
 from typing import Tuple, Union
 
 import narwhals as nw
+import pandas as pd
 from utilsforecast.compat import DFType
 from utilsforecast.processing import offset_times
+
+
+def _index_to_series(x):
+    """Wrap a ``pd.Index`` into a ``pd.Series`` (pass anything else through).
+
+    ``pd.Index`` is not a valid narwhals input, so this normalizes
+    ``uids``/``last_dates`` before ``nw.from_native``.
+    """
+    return pd.Series(x) if isinstance(x, pd.Index) else x
 
 
 def validate_update_start_dates(
@@ -161,11 +171,13 @@ def validate_update_df(
     Raises:
         ValueError: If any series has an invalid start date or internal gaps/duplicates.
     """
-    # build the frame in df's backend so the downstream join stays backend-consistent
-    backend = nw.get_native_namespace(nw.from_native(df, eager_only=True))
-    last_dates_df = nw.from_dict(
-        {id_col: list(uids), "_last": list(last_dates)}, backend=backend
-    ).to_native()
+    # build the frame from the native series so dtypes survive (categorical ids,
+    # nanosecond-precision timestamps); a python-list round-trip would lose both
+    uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(id_col)
+    last_nw = nw.from_native(_index_to_series(last_dates), series_only=True).alias(
+        "_last"
+    )
+    last_dates_df = uids_nw.to_frame().with_columns(last_nw).to_native()
 
     has_issues, bad = validate_update_start_dates(
         df, id_col, time_col, last_dates_df, freq

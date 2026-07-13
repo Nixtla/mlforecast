@@ -64,12 +64,18 @@ _get_transfer_method_spec = get_transfer_method_spec
 
 
 def _ensure_h_int64(res):
-    """Cast the ``h`` column to Int64, preserving the input backend."""
-    return (
+    """Cast the ``h`` column to Int64, preserving the input backend.
+
+    Deep-copies the pandas result so callers can mutate it without writing
+    through to the cached ``fcst_fitted_values_`` (narwhals' ``with_columns``
+    shares column buffers on pandas without copy-on-write).
+    """
+    res = (
         nw.from_native(res, eager_only=True)
         .with_columns(nw.col("h").cast(nw.Int64))
         .to_native()
     )
+    return ufp.copy_if_pandas(res, deep=True)
 
 
 def _frozen_backtest(
