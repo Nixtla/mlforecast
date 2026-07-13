@@ -235,7 +235,7 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
-# Category C: native-container boundary for observable uids/last_dates (pd.Index/pl.Series); tests rely on these types
+# native-container boundary for observable uids/last_dates (pd.Index/pl.Series); tests rely on these types
 def _to_native_uids(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -410,7 +410,7 @@ class TimeSeries:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
         if not self._get_pooled_tfms():
             return
-        # Category C: pd.Index is not a narwhals input type; wrap to Series before from_native
+        # pd.Index is not a narwhals input type; wrap to Series before from_native
         last_dates = (
             pd.Series(self.last_dates)
             if isinstance(self.last_dates, pd.Index)
@@ -790,22 +790,22 @@ class TimeSeries:
         if callable(feature):
             feat_name = feature.__name__
             feat_vals = feature(dates)
-            # Category C: callable-returned native types have no narwhals equivalent
+            # callable-returned native types have no narwhals equivalent
             if isinstance(feat_vals, pd.DataFrame):
                 return {col: np.asarray(feat_vals[col]) for col in feat_vals.columns}
-            # Category C: callable-returned native types have no narwhals equivalent
+            # callable-returned native types have no narwhals equivalent
             if isinstance(feat_vals, (pd.Index, pd.Series)):
                 feat_vals = np.asarray(feat_vals)
             return {feat_name: feat_vals}
 
         # regular string feature
         feat_name = feature
-        # Category C: DatetimeIndex date-attribute access has no narwhals equivalent
+        # DatetimeIndex date-attribute access has no narwhals equivalent
         if isinstance(dates, pd.DatetimeIndex):
             if feature in ("week", "weekofyear"):
                 dates = dates.isocalendar()
             feat_vals = getattr(dates, feature)
-            # Category C: DatetimeIndex date-attribute access has no narwhals equivalent
+            # DatetimeIndex date-attribute access has no narwhals equivalent
             if isinstance(feat_vals, (pd.Index, pd.Series)):
                 feat_vals = np.asarray(feat_vals)
                 feat_dtype = date_features_dtypes.get(feature)
@@ -987,7 +987,7 @@ class TimeSeries:
         ]
         if date_features:
             unique_dates = df[self.time_col].unique()
-            # Category C: pandas positional-map fast path; narwhals rewrite would regress this hot path
+            # pandas positional-map fast path; narwhals rewrite would regress this hot path
             if isinstance(df, pd.DataFrame):
                 # all kinds of trickery to make this fast
                 unique_dates = pd.Index(unique_dates)
@@ -998,7 +998,7 @@ class TimeSeries:
                         unique_dates, feature
                     ).items():
                         df[feat_name] = feat_vals[restore_idxs]
-            # Category C: backend-specific date-feature fast path (pandas positional-map + polars expr build); kept for performance
+            # backend-specific date-feature fast path (pandas positional-map + polars expr build); kept for performance
             elif isinstance(df, pl_DataFrame):
                 exprs = []
                 nw_feats: Dict[str, Any] = {}
@@ -1315,7 +1315,7 @@ class TimeSeries:
                 ).items():
                     features[feat_name] = feat_vals
 
-        # Category C: native-container boundary — uids/df constructor selected per backend
+        # native-container boundary — uids/df constructor selected per backend
         if isinstance(self.last_dates, pl_Series):
             df_constructor = pl_DataFrame
         else:
@@ -1367,7 +1367,7 @@ class TimeSeries:
         return np.array(self.y_pred).ravel("F")
 
     def _get_future_ids(self, h: int):
-        # Category C: native-container boundary — uids/df constructor selected per backend
+        # native-container boundary — uids/df constructor selected per backend
         if isinstance(self.uids, pl_Series):
             idxs = np.repeat(np.arange(len(self.uids)), h)
             return self.uids.gather(idxs).sort()
@@ -1377,7 +1377,7 @@ class TimeSeries:
     def _get_predictions(self) -> DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
         h = len(self.y_pred)
-        # Category C: native-container boundary — uids/df constructor selected per backend
+        # native-container boundary — uids/df constructor selected per backend
         if isinstance(self.uids, pl_Series):
             df_constructor = pl_DataFrame
         else:
@@ -1510,7 +1510,7 @@ class TimeSeries:
 
     def _predict_setup(self) -> None:
         # TODO: move to utils
-        # Category C: native-container boundary — clone/copy method selected per backend
+        # native-container boundary — clone/copy method selected per backend
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
         else:
@@ -1576,7 +1576,7 @@ class TimeSeries:
                     if before_predict_callback is not None:
                         new_x = before_predict_callback(new_x)
                     model_x = new_x
-                    # Category C: sklearn models consume pandas/numpy; native conversion at the model boundary
+                    # sklearn models consume pandas/numpy; native conversion at the model boundary
                     if isinstance(model, CatBoostRegressor) and isinstance(
                         new_x, pl_DataFrame
                     ):
@@ -1645,7 +1645,7 @@ class TimeSeries:
                     ufp.offset_times(self.curr_dates, self.freq, h + 1)
                     for h in horizons_to_predict
                 ]
-                # Category C: backend-specific date-matrix build at prediction assembly
+                # backend-specific date-matrix build at prediction assembly
                 # Stack: each row is a series, each col is a horizon
                 dates_matrix = pl.DataFrame(dates_per_horizon).transpose()
                 # Flatten row by row: [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
@@ -1715,7 +1715,7 @@ class TimeSeries:
                             )
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
-                    # Category C: sklearn models consume pandas/numpy; native conversion at the model boundary
+                    # sklearn models consume pandas/numpy; native conversion at the model boundary
                     if isinstance(horizon_model, CatBoostRegressor) and isinstance(
                         model_x, pl_DataFrame
                     ):
@@ -1950,7 +1950,7 @@ class TimeSeries:
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
         if self._pooled_states:
-            # Category C: pd.Index guard before from_native
+            # pd.Index guard before from_native
             uids_nw = pd.Series(uids) if isinstance(uids, pd.Index) else uids
             new_ids_nw = (
                 pd.Series(new_ids) if isinstance(new_ids, pd.Index) else new_ids

@@ -512,7 +512,7 @@ class MLForecast:
                     fit_kwargs["sample_weight"] = X[weight_col]
                     X = ufp.drop_columns(X, weight_col)
             if isinstance(model, CatBoostRegressor):
-                # Category C: model input boundary
+                # CatBoost consumes pandas, not polars; convert at the model input boundary
                 if isinstance(X, pl_DataFrame):
                     X = X.to_pandas()
                 sample_weight = fit_kwargs.get("sample_weight")
@@ -862,14 +862,14 @@ class MLForecast:
                 )
             train_df = self._fitted_train_df_
 
-        # Category C: pandas-only algorithm; converts to pandas at its boundary
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(train_df, pd.DataFrame):
             train_pd = train_df.copy()
         else:
             train_pd = train_df.to_pandas()
 
         one_step = self.fcst_fitted_values_
-        # Category C: pandas-only algorithm; converts to pandas at its boundary
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(one_step, pd.DataFrame):
             one_step_pd = one_step[[self.ts.id_col, self.ts.time_col]].copy()
         else:
@@ -892,7 +892,7 @@ class MLForecast:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
         model_names = list(self.models_.keys())
-        # Category C: pandas-only algorithm; converts to pandas at its boundary
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(self.ts.static_features_, pd.DataFrame):
             static_features_pd = self.ts.static_features_.copy(deep=True)
         else:
@@ -1272,7 +1272,7 @@ class MLForecast:
                 res_pd = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
                 )
-                # Category C: convert the pandas-only recursive result back to the origin backend
+                # convert the pandas-only recursive result back to the origin backend
                 if isinstance(self.fcst_fitted_values_, pd.DataFrame):
                     res = res_pd
                 else:
