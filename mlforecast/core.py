@@ -254,7 +254,10 @@ class TimeSeries:
 
     # Per-predict state (set in ``_predict_setup``, used in the horizon loop).
     # Declared here so mypy has a type regardless of method processing order.
-    _uniform_dates: bool
+    # _uniform_dates defaults to False so the date-feature broadcast fast
+    # path stays off if the feature computation runs without a prior
+    # ``_predict_setup`` (the non-broadcast path is always correct).
+    _uniform_dates: bool = False
     _feature_null_cols: List[str]
     _xdf_null_cols: Optional[List[str]]
 
@@ -1224,7 +1227,12 @@ class TimeSeries:
             state.append_predictions(self.curr_dates, new_arr, len(new_arr))
 
     def _update_features(self) -> DataFrame:
-        """Compute the current values of all the features using the latest values of the time series."""
+        """Compute the current values of all the features using the latest values of the time series.
+
+        Expects the per-predict state from ``_predict_setup`` (``curr_dates``,
+        ``static_features_``, pooled states); ``_uniform_dates`` safely
+        defaults to False if setup hasn't run.
+        """
         features_df = self._compute_features_df()
         return ufp.horizontal_concat([self.static_features_, features_df])
 
