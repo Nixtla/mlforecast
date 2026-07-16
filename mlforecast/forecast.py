@@ -238,6 +238,33 @@ class MLForecast:
     ) -> None:
         validate_df(df, id_col, time_col, self.freq)
 
+    def _validate_data_or_warn(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+        validate_data: bool,
+    ) -> None:
+        if validate_data:
+            self._validate_data(df, id_col, time_col)
+        else:
+            has_pooled = any(
+                getattr(v, "global_", False)
+                or getattr(v, "groupby", None)
+                or getattr(v, "partition_by", None)
+                for v in self.ts.transforms.values()
+            )
+            if has_pooled:
+                warnings.warn(
+                    "Pooled (global/groupby/partition_by) lag transforms assume "
+                    "a continuous, gap-free time grid. Data validation has been "
+                    "disabled (validate_data=False), so timestamp gaps may "
+                    "silently produce incorrect feature values. Consider "
+                    "enabling validation or pre-validating your data.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
     def _get_dynamic_exog_cols(
         self,
         df_columns: List[str],
@@ -432,25 +459,7 @@ class MLForecast:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
         # Run data validations if requested
-        if validate_data:
-            self._validate_data(df, id_col, time_col)
-        else:
-            has_pooled = any(
-                getattr(v, "global_", False)
-                or getattr(v, "groupby", None)
-                or getattr(v, "partition_by", None)
-                for v in self.ts.transforms.values()
-            )
-            if has_pooled:
-                warnings.warn(
-                    "Pooled (global/groupby/partition_by) lag transforms assume "
-                    "a continuous, gap-free time grid. Data validation has been "
-                    "disabled (validate_data=False), so timestamp gaps may "
-                    "silently produce incorrect feature values. Consider "
-                    "enabling validation or pre-validating your data.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+        self._validate_data_or_warn(df, id_col, time_col, validate_data)
         self.ts.horizon_features_ = self._resolve_horizon_features(
             df=df,
             id_col=id_col,
@@ -478,6 +487,80 @@ class MLForecast:
             as_numpy=as_numpy,
             weight_col=weight_col,
         )
+
+    def history_warmup(
+        self,
+        df: DFType,
+        id_col: str = "unique_id",
+        time_col: str = "ds",
+        target_col: str = "y",
+        static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
+        weight_col: Optional[str] = None,
+        max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
+        horizon_features: Optional[Dict[int, List[str]]] = None,
+        horizon_feature_templates: Optional[List[str]] = None,
+        validate_data: bool = True,
+    ) -> "MLForecast":
+        """Build the internal state from `df` without computing the features.
+
+        Runs the same state-building steps as `preprocess` (series storage,
+        target transforms, lag-transform buffers, pooled aggregates, feature
+        order) but skips materializing the features dataframe, which makes it
+        much cheaper when the features themselves aren't needed. Use it to warm
+        an instance whose models are already trained -- e.g. after unpickling,
+        `MLForecast.load`, or assigning externally trained models to `models_`
+        -- so that `update` and `predict` can be used without calling `fit` or
+        `preprocess` first.
+
+        History is trimmed like in `fit`: `keep_last_n` (explicit or inferred
+        from the transforms) is applied after the transform states are warmed,
+        so only the observations required for updates are kept.
+
+        Args:
+            df (pandas or polars DataFrame): Series data in long format.
+            id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
+            time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
+            target_col (str): Column that contains the target. Defaults to 'y'.
+            static_features (list of str, optional): Names of the features that are static and will be repeated when forecasting. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Inferred from the transforms when None. Defaults to None.
+            weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            max_horizon (int, optional): Horizon the models were trained for when using one model per horizon. Leave None for recursive models; when None, any value from a previous fit is preserved. Defaults to None.
+            horizons (list of int, optional): Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. Defaults to None.
+            horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns the models were trained with. When None, any mapping from a previous fit is preserved. Defaults to None.
+            horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None.
+            validate_data (bool): Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True.
+
+        Returns:
+            MLForecast: Forecast object with the internal state built from `df`.
+        """
+        self._validate_data_or_warn(df, id_col, time_col, validate_data)
+        if horizon_features is not None or horizon_feature_templates is not None:
+            self.ts.horizon_features_ = self._resolve_horizon_features(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                max_horizon=max_horizon,
+                horizons=horizons,
+                horizon_features=horizon_features,
+                horizon_feature_templates=horizon_feature_templates,
+                weight_col=weight_col,
+            )
+        self.ts.history_warmup(
+            df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+            max_horizon=max_horizon,
+            horizons=horizons,
+        )
+        return self
 
     def fit_models(
         self,
@@ -1403,8 +1486,11 @@ class MLForecast:
                 drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             # Builds `_pooled_states` (global/groupby/partition_by), whose
-            # `_ts_aggs` are computed from the full `new_df` history here.
-            new_ts._fit(
+            # `_ts_aggs` are computed from the full `new_df` history, and warms
+            # up local (coreforecast) lag-transform buffers before the first
+            # update-based prediction step. trim=False keeps the full provided
+            # history rather than applying the `keep_last_n` trim.
+            new_ts.history_warmup(
                 new_df,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
@@ -1412,10 +1498,8 @@ class MLForecast:
                 static_features=self.ts.static_features,
                 keep_last_n=self.ts.keep_last_n,
                 weight_col=self.ts.weight_col,
+                trim=False,
             )
-            # Warms up local (coreforecast) lag-transform buffers before the
-            # first update-based prediction step.
-            new_ts._initialize_lag_transform_states()
             new_ts.max_horizon = self.ts.max_horizon
             new_ts._horizons = self.ts._horizons
             new_ts.as_numpy = self.ts.as_numpy
