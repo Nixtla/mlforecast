@@ -40,8 +40,10 @@ from mlforecast.lag_transforms import (
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
     SeasonalRollingMean,
+    SeasonalRollingQuantile,
 )
 
 ID, TIME, TARGET = "unique_id", "ds", "y"
@@ -78,6 +80,10 @@ def _finite_lag_transforms():
             RollingMin(4, global_=True),
             RollingMax(4, global_=True),
             SeasonalRollingMean(season_length=2, window_size=2, global_=True),
+            RollingQuantile(p=0.5, window_size=4, min_samples=1, global_=True),
+            SeasonalRollingQuantile(
+                p=0.5, season_length=2, window_size=2, min_samples=1, global_=True
+            ),
         ]
     }
 
@@ -224,6 +230,14 @@ _MODES = {
             SeasonalRollingMean(
                 season_length=2, window_size=2, min_samples=1, partition_by=["promo"]
             )
+        ]
+    },
+    "global-quantile": {
+        1: [RollingQuantile(p=0.5, window_size=3, min_samples=1, global_=True)]
+    },
+    "local+partition-quantile": {
+        1: [
+            RollingQuantile(p=0.5, window_size=3, min_samples=1, partition_by=["promo"])
         ]
     },
 }

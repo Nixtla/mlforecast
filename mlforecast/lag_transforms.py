@@ -960,15 +960,48 @@ class RollingMax(_RollingBase):
         }
 
 
+def _rolling_quantile_from_agg(agg, query_ords, lag, window_size, min_samples, p):
+    """Rolling quantile at each query ordinal, from the CSR value store.
+
+    ``query_ords`` are ordinal *values* (fit passes ``agg.unique_times``; predict
+    a single target ordinal). The window for target ``t`` spans the ordinals in
+    ``(t - lag - window_size, t - lag]`` -- the same searchsorted bounds as
+    :func:`_rolling_mean_from_agg` -- gathered as one contiguous ``values``
+    slice. Returns one quantile per query ordinal, or ``None`` when the bucket
+    carries no value store (caller falls back to the row slow path).
+    """
+    if agg.values is None or agg.row_offsets is None:
+        return None
+    ut = agg.unique_times
+    out = np.full(len(query_ords), np.nan)
+    if len(ut) == 0:
+        return out
+    off = agg.row_offsets
+    vals = agg.values
+    ui = np.searchsorted(ut, query_ords - lag, side="right") - 1
+    li = np.searchsorted(ut, query_ords - lag - window_size, side="right") - 1
+    for j in range(len(query_ords)):
+        u = int(ui[j])
+        if u < 0:
+            continue
+        start = int(off[int(li[j]) + 1])
+        end = int(off[u + 1])
+        if end - start >= min_samples and end > start:
+            out[j] = np.quantile(vals[start:end], p)
+    return out
+
+
 class RollingQuantile(_RollingBase):
     """Rolling quantile.
 
     Note:
-        In pooled modes (``global_``/``groupby``/``partition_by``) this
-        transform has no aggregate-cache fast path: it falls back to a
-        row-level pass whose cost grows with ``unique timestamps x bucket
-        rows`` at fit, and aggregates are rebuilt at every recursive
-        prediction step. Can be slow on large panels.
+        In pooled modes (``global_``/``groupby``/``partition_by``) the fit and
+        predict fast paths read each bucket's per-ordinal value store (see
+        ``_TimestampAggregates``): a quantile is not derivable from the scalar
+        aggregates, so with ``time_agg=None`` the state retains every
+        observation (its memory grows O(rows)). With ``time_agg`` set the
+        quantile runs over the single collapsed scalar per timestamp and needs
+        no raw store.
     """
 
     def __init__(
@@ -1002,8 +1035,61 @@ class RollingQuantile(_RollingBase):
         )
         return self
 
+    @property
+    def _needs_value_store(self) -> bool:
+        # Raw-row quantile: store observations. A time_agg quantile derives its
+        # one-scalar-per-timestamp view from the scalar aggregates instead.
+        return self.time_agg is None
+
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            feat_u = _rolling_quantile_from_agg(
+                agg, agg.unique_times, lag, w, min_samples, self.p
+            )
+            if feat_u is None:
+                return None
+            idxs = np.where(bid_arr == bid)[0]
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            feat = _rolling_quantile_from_agg(agg, t, lag, w, min_samples, self.p)
+            if feat is None:
+                return None
+            result[bid] = float(feat[0])
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        out: Dict[int, np.ndarray] = {}
+        for bid, agg in ts_aggs.items():
+            feat_u = _rolling_quantile_from_agg(
+                agg, agg.unique_times, lag, w, min_samples, self.p
+            )
+            if feat_u is None:
+                return None
+            out[bid] = feat_u
+        return out
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
@@ -1429,6 +1515,38 @@ class SeasonalRollingMax(_Seasonal_RollingBase):
         }
 
 
+def _seasonal_quantile_from_agg(
+    agg, query_ords, lag, season_length, window_size, min_samples, p
+):
+    """Seasonal rolling quantile at each query ordinal, from the CSR store.
+
+    Uses :func:`_seasonal_step_positions` (clip-safe, matched by value) to locate
+    each seasonal step's ordinal, then concatenates those ordinals' value slices
+    and takes the quantile -- mirroring the row slow path's ``np.isin`` gather
+    over ``t - lag - i*season_length``. Returns ``None`` with no value store.
+    """
+    if agg.values is None or agg.row_offsets is None:
+        return None
+    ut = agg.unique_times
+    out = np.full(len(query_ords), np.nan)
+    if len(ut) == 0:
+        return out
+    off = agg.row_offsets
+    vals = agg.values
+    steps = _seasonal_step_positions(ut, query_ords, lag, season_length, window_size)
+    for j in range(len(query_ords)):
+        parts = []
+        for pos, valid in steps:
+            if valid[j]:
+                s = int(pos[j])
+                parts.append(vals[off[s] : off[s + 1]])
+        if parts:
+            gathered = np.concatenate(parts)
+            if len(gathered) >= min_samples and len(gathered) > 0:
+                out[j] = np.quantile(gathered, p)
+    return out
+
+
 class SeasonalRollingQuantile(_Seasonal_RollingBase):
     def __init__(
         self,
@@ -1454,8 +1572,62 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         )
         self.p = p
 
+    @property
+    def _needs_value_store(self) -> bool:
+        return self.time_agg is None
+
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            feat_u = _seasonal_quantile_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples, self.p
+            )
+            if feat_u is None:
+                return None
+            idxs = np.where(bid_arr == bid)[0]
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Optional[Dict[int, float]]:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            feat = _seasonal_quantile_from_agg(agg, t, lag, sl, w, min_samples, self.p)
+            if feat is None:
+                return None
+            result[bid] = float(feat[0])
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        out: Dict[int, np.ndarray] = {}
+        for bid, agg in ts_aggs.items():
+            feat_u = _seasonal_quantile_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples, self.p
+            )
+            if feat_u is None:
+                return None
+            out[bid] = feat_u
+        return out
 
 
 class _ExpandingBase(_BaseLagTransform):
@@ -1739,15 +1911,45 @@ class ExpandingMax(_ExpandingBase):
         return {bid: _expanding_max_from_agg(agg, lag) for bid, agg in ts_aggs.items()}
 
 
+def _expanding_quantile_from_agg(agg, query_ords, lag, p):
+    """Expanding quantile at each query ordinal, from the CSR value store.
+
+    The window for target ``t`` is every ordinal ``<= t - lag`` (the same
+    ``upper`` bound as :func:`_expanding_mean_from_agg`), i.e. the value-store
+    prefix ``values[:row_offsets[ui + 1]]``. No ``min_samples`` (the expanding
+    row path emits a value whenever the prefix has any observation). Returns
+    ``None`` with no value store.
+    """
+    if agg.values is None or agg.row_offsets is None:
+        return None
+    ut = agg.unique_times
+    out = np.full(len(query_ords), np.nan)
+    if len(ut) == 0:
+        return out
+    off = agg.row_offsets
+    vals = agg.values
+    ui = np.searchsorted(ut, query_ords - lag, side="right") - 1
+    for j in range(len(query_ords)):
+        u = int(ui[j])
+        if u < 0:
+            continue
+        end = int(off[u + 1])
+        if end > 0:
+            out[j] = np.quantile(vals[:end], p)
+    return out
+
+
 class ExpandingQuantile(_ExpandingBase):
     """Expanding quantile.
 
     Note:
-        In pooled modes (``global_``/``groupby``/``partition_by``) this
-        transform has no aggregate-cache fast path: it falls back to a
-        row-level pass whose cost grows with ``unique timestamps x bucket
-        rows`` at fit, and aggregates are rebuilt at every recursive
-        prediction step. Can be slow on large panels.
+        In pooled modes (``global_``/``groupby``/``partition_by``) the fit and
+        predict fast paths read each bucket's per-ordinal value store (see
+        ``_TimestampAggregates``): a quantile is not derivable from the scalar
+        aggregates, so with ``time_agg=None`` the state retains every
+        observation (its memory grows O(rows)). With ``time_agg`` set the
+        quantile runs over the single collapsed scalar per timestamp and needs
+        no raw store.
     """
 
     def __init__(
@@ -1772,8 +1974,45 @@ class ExpandingQuantile(_ExpandingBase):
     def update_samples(self) -> int:
         return -1
 
+    @property
+    def _needs_value_store(self) -> bool:
+        return self.time_agg is None
+
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            feat_u = _expanding_quantile_from_agg(agg, agg.unique_times, lag, self.p)
+            if feat_u is None:
+                return None
+            idxs = np.where(bid_arr == bid)[0]
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+        lag = self._core_tfm.lag
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            feat = _expanding_quantile_from_agg(agg, t, lag, self.p)
+            if feat is None:
+                return None
+            result[bid] = float(feat[0])
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        out: Dict[int, np.ndarray] = {}
+        for bid, agg in ts_aggs.items():
+            feat_u = _expanding_quantile_from_agg(agg, agg.unique_times, lag, self.p)
+            if feat_u is None:
+                return None
+            out[bid] = feat_u
+        return out
 
 
 def _ewm_from_agg(agg, lag, alpha):

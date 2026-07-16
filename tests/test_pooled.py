@@ -10,16 +10,19 @@ from mlforecast.lag_transforms import (
     ExpandingMax,
     ExpandingMean,
     ExpandingMin,
+    ExpandingQuantile,
     ExpandingStd,
     ExponentiallyWeightedMean,
     LookupLag,
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
     SeasonalRollingMax,
     SeasonalRollingMean,
     SeasonalRollingMin,
+    SeasonalRollingQuantile,
     SeasonalRollingStd,
 )
 
@@ -2219,6 +2222,9 @@ def test_pooled_transforms_lag2_groupby(engine):
         lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
         lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
         lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        lambda m: RollingQuantile(p=0.5, window_size=4, **m),
+        lambda m: ExpandingQuantile(p=0.5, **m),
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2234,6 +2240,9 @@ def test_pooled_transforms_lag2_groupby(engine):
         "SeasonalRollingStd",
         "SeasonalRollingMin",
         "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2387,6 +2396,9 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
         lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
         lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        lambda m: RollingQuantile(p=0.5, window_size=4, **m),
+        lambda m: ExpandingQuantile(p=0.5, **m),
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2402,6 +2414,9 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         "SeasonalRollingStd",
         "SeasonalRollingMin",
         "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2532,8 +2547,9 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
         lambda m: SeasonalRollingMean(
             season_length=2, window_size=2, min_samples=1, **m
         ),
+        lambda m: RollingQuantile(p=0.5, window_size=2, min_samples=1, **m),
     ],
-    ids=["RollingMean", "SeasonalRollingMean"],
+    ids=["RollingMean", "SeasonalRollingMean", "RollingQuantile"],
 )
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2656,12 +2672,29 @@ _PREDICT_EQUIV_MODES = [
             ),
             SeasonalRollingMax,
         ),
+        (
+            lambda m: RollingQuantile(p=0.5, window_size=6, min_samples=1, **m),
+            RollingQuantile,
+        ),
+        (
+            lambda m: ExpandingQuantile(p=0.5, **m),
+            ExpandingQuantile,
+        ),
+        (
+            lambda m: SeasonalRollingQuantile(
+                p=0.5, season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingQuantile,
+        ),
     ],
     ids=[
         "SeasonalRollingMean",
         "SeasonalRollingStd",
         "SeasonalRollingMin",
         "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
     ],
 )
 @pytest.mark.parametrize(
@@ -3673,9 +3706,11 @@ def _range_quantile_oracle(
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("mode", ["local", "global"])
 def test_slow_path_quantile_with_partition_by(engine, mode):
-    """RollingQuantile has no aggregate fast path, so partition_by routes it
-    through the row-level slow path at fit and through build_query_arrays at
-    predict. Pin both against a RANGE-window oracle."""
+    """RollingQuantile with partition_by, pinned against a RANGE-window oracle at
+    fit and across recursive predict steps. It now runs the aggregate fast path
+    (per-ordinal value store); ``test_slow_path_quantile_with_partition_by_forced``
+    below monkeypatches the hooks off to keep the row/build_query_arrays slow path
+    covered too."""
     from mlforecast.lag_transforms import RollingQuantile
 
     n_series, n_times = 3, 10
@@ -3768,6 +3803,179 @@ def test_slow_path_quantile_with_partition_by(engine, mode):
             )
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("mode", ["local", "global"])
+def test_slow_path_quantile_with_partition_by_forced(engine, mode, monkeypatch):
+    """Forced-slow twin of the test above: with RollingQuantile's aggregate
+    hooks disabled the row-level fit path must still match the RANGE-window
+    oracle, keeping the slow path covered now that the fast path is default."""
+    from mlforecast.lag_transforms import RollingQuantile
+
+    _force_slow_path(monkeypatch, RollingQuantile)
+    n_series, n_times = 3, 10
+    rng = np.random.default_rng(11)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    promos = np.tile([0, 1, 0, 0, 1, 1, 0, 1, 0, 1], n_series)
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ids.tolist(),
+            "ds": times.tolist(),
+            "y": y.tolist(),
+            "promo": promos.tolist(),
+        },
+    )
+    tfm = RollingQuantile(
+        0.5, 3, min_samples=1, global_=(mode == "global"), partition_by=["promo"]
+    )
+    col = tfm._get_name(1)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    res = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    hist = list(zip(ids, times, y, promos))
+    expected_fit = np.array(
+        [_range_quantile_oracle(hist, i, t, pr, mode) for i, t, _, pr in hist]
+    )
+    np.testing.assert_allclose(
+        np.asarray(res[col], dtype=float), expected_fit, atol=1e-12, equal_nan=True
+    )
+
+
+def _assert_csr_ok(agg):
+    """CSR value-store invariants for one bucket's aggregates."""
+    assert agg.values is not None and agg.row_offsets is not None
+    assert agg.row_offsets.dtype == np.intp
+    assert len(agg.row_offsets) == len(agg.unique_times) + 1
+    assert agg.row_offsets[0] == 0
+    assert np.all(np.diff(agg.row_offsets) >= 0)  # monotone
+    assert len(agg.values) == int(agg.row_offsets[-1])
+    # per-ordinal slice length == non-NaN count for that ordinal
+    np.testing.assert_array_equal(
+        np.diff(agg.row_offsets).astype(np.intp), agg.counts.astype(np.intp)
+    )
+
+
+def test_csr_value_store_invariants_across_mutations():
+    """The CSR store stays consistent (offsets integer & monotone, values length
+    == last offset, window slice == masked selection) through build,
+    append_predictions, append_observations and trim_to_last."""
+    from mlforecast.pooled import PooledState
+
+    def slice_matches_rows(agg, time_index, y):
+        for k, o in enumerate(agg.unique_times):
+            got = np.sort(agg.values[agg.row_offsets[k] : agg.row_offsets[k + 1]])
+            want = np.sort(y[(time_index == o) & ~np.isnan(y)])
+            np.testing.assert_array_equal(got, want)
+
+    n_series = 4
+    ids = np.repeat([f"s{i}" for i in range(n_series)], 5)
+    times = np.tile(np.arange(5), n_series)
+    y = np.arange(n_series * 5, dtype=float)
+    df = pd.DataFrame({"unique_id": ids, "ds": times, "y": y})
+
+    def fresh_state():
+        return PooledState.from_global(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            ga_data_dtype=np.dtype("float64"),
+            n_series=n_series,
+            store_values=True,
+        )
+
+    # build
+    state = fresh_state()
+    assert state._store_values is True
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+    # append_predictions: one new ordinal whose slice is the step's non-NaN preds
+    state = fresh_state()
+    preds = np.array([100.0, np.nan, 102.0, 103.0])
+    state.append_predictions(np.array([5]), preds, n_series)
+    agg = state._ts_aggs[0]
+    _assert_csr_ok(agg)
+    last = agg.values[agg.row_offsets[-2] : agg.row_offsets[-1]]
+    np.testing.assert_array_equal(np.sort(last), np.sort(preds[~np.isnan(preds)]))
+    slice_matches_rows(agg, state.time_index, state.y)
+
+    # append_observations: rebuild keeps the store
+    state = fresh_state()
+    new = pd.DataFrame(
+        {
+            "unique_id": [f"s{i}" for i in range(n_series)],
+            "ds": [5] * n_series,
+            "y": [7.0, 8.0, 9.0, 10.0],
+        }
+    )
+    state.append_observations(
+        new,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        ga_data_dtype=np.dtype("float64"),
+    )
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+    # trim_to_last: suffix-slice keeps the store consistent (fit-time only, so a
+    # fresh state before any append -- bucket_df is still row-aligned)
+    state = fresh_state()
+    state.trim_to_last(3)
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", _LAGS)
+def test_pooled_expanding_quantile_matches_numpy_oracle(engine, lag):
+    """Pooled ExpandingQuantile (global_) fit output equals a numpy
+    expanding-quantile oracle over the per-timestamp pooled series."""
+    n_series, n_times = 4, 9
+    rng = np.random.default_rng(5)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    df = _make_df(
+        engine,
+        {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()},
+    )
+    p = 0.4
+    tfm = ExpandingQuantile(p=p, global_=True)
+    col = tfm._get_name(lag)
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    res = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    # ordinals == ds (dense integer calendar); oracle read from res's own columns
+    rt = np.asarray(res["ds"], dtype=float)
+    ry = np.asarray(res["y"], dtype=float)
+    got = np.asarray(res[col], dtype=float)
+    exp = np.full(len(rt), np.nan)
+    for r in range(len(rt)):
+        upper = rt[r] - lag
+        if upper < 0:
+            continue
+        vals = ry[(rt <= upper) & ~np.isnan(ry)]
+        if len(vals) > 0:
+            exp[r] = float(np.quantile(vals, p))
+    np.testing.assert_allclose(got, exp, atol=1e-12, equal_nan=True)
+
+
 # ---------------------------------------------------------------------------
 # time_agg: pre-aggregate rows sharing a timestamp within each bucket, then
 # apply the transform over that per-timestamp series.
@@ -3778,9 +3986,7 @@ from sklearn.base import clone as _sk_clone  # noqa: E402
 
 from mlforecast.lag_transforms import (  # noqa: E402
     Combine,
-    ExpandingQuantile,
     Offset,
-    RollingQuantile,
 )
 from mlforecast.pooled import (  # noqa: E402
     _build_ts_aggs,
@@ -3960,6 +4166,12 @@ _TIME_AGG_FACTORIES = [
         lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
         "SeasonalRollingMax",
     ),
+    (lambda m: RollingQuantile(p=0.5, window_size=4, **m), "RollingQuantile"),
+    (lambda m: ExpandingQuantile(p=0.5, **m), "ExpandingQuantile"),
+    (
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
+        "SeasonalRollingQuantile",
+    ),
 ]
 
 
@@ -4092,8 +4304,10 @@ def test_ewm_time_agg_mean_is_noop(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_time_agg_quantile_slow_path_literal(engine):
-    """RollingQuantile has no fast path: time_agg goes through row-collapse."""
+def test_time_agg_quantile_literal(engine):
+    """A time_agg RollingQuantile runs its aggregate fast path over the single
+    collapsed scalar per timestamp (the reaggregated value store, not a raw
+    O(rows) store); the hand-computed literals pin that it matches row-collapse."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums [11,22,33,44,55,66]; median over window=3 == middle value
