@@ -41,6 +41,7 @@ from mlforecast.lag_transforms import (
     RollingMean,
     RollingMin,
     RollingStd,
+    SeasonalRollingMean,
 )
 
 ID, TIME, TARGET = "unique_id", "ds", "y"
@@ -76,6 +77,7 @@ def _finite_lag_transforms():
             RollingStd(4, min_samples=2, global_=True),
             RollingMin(4, global_=True),
             RollingMax(4, global_=True),
+            SeasonalRollingMean(season_length=2, window_size=2, global_=True),
         ]
     }
 
@@ -214,6 +216,16 @@ _MODES = {
         1: [RollingMean(3, min_samples=1, groupby=["brand"], partition_by=["promo"])]
     },
     "local+partition": {1: [RollingMean(3, min_samples=1, partition_by=["promo"])]},
+    "global-seasonal": {
+        1: [SeasonalRollingMean(season_length=2, window_size=2, global_=True)]
+    },
+    "local+partition-seasonal": {
+        1: [
+            SeasonalRollingMean(
+                season_length=2, window_size=2, min_samples=1, partition_by=["promo"]
+            )
+        ]
+    },
 }
 
 

@@ -17,6 +17,10 @@ from mlforecast.lag_transforms import (
     RollingMean,
     RollingMin,
     RollingStd,
+    SeasonalRollingMax,
+    SeasonalRollingMean,
+    SeasonalRollingMin,
+    SeasonalRollingStd,
 )
 
 _LAGS = [1, 3]
@@ -2211,6 +2215,10 @@ def test_pooled_transforms_lag2_groupby(engine):
         lambda m: ExpandingMin(**m),
         lambda m: ExpandingMax(**m),
         lambda m: ExponentiallyWeightedMean(alpha=0.3, **m),
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2222,6 +2230,10 @@ def test_pooled_transforms_lag2_groupby(engine):
         "ExpandingMin",
         "ExpandingMax",
         "EWM",
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2371,6 +2383,10 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         lambda m: ExpandingMin(**m),
         lambda m: ExpandingMax(**m),
         lambda m: ExponentiallyWeightedMean(alpha=0.3, **m),
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2382,6 +2398,10 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         "ExpandingMin",
         "ExpandingMax",
         "EWM",
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2505,9 +2525,19 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
     )
 
 
+@pytest.mark.parametrize(
+    "tfm_factory",
+    [
+        lambda m: RollingMean(window_size=2, min_samples=1, **m),
+        lambda m: SeasonalRollingMean(
+            season_length=2, window_size=2, min_samples=1, **m
+        ),
+    ],
+    ids=["RollingMean", "SeasonalRollingMean"],
+)
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
-def test_fast_vs_slow_local_partition_with_nan(engine, lag):
+def test_fast_vs_slow_local_partition_with_nan(engine, lag, tfm_factory):
     """Local partition_by with a missing partition value: the slow-path join
     (forced by clearing the aggregate cache and the idsorted permutation) keys on
     (id, time), so missing-partition rows are matched, not dropped — matching the
@@ -2534,7 +2564,7 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
         },
     )
 
-    tfm = RollingMean(window_size=2, min_samples=1, partition_by=["promo"])
+    tfm = tfm_factory({"partition_by": ["promo"]})
     col = tfm._get_name(lag)
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     fast = np.asarray(
@@ -2550,9 +2580,7 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
 
     ts_slow = TimeSeries(
         freq=1,
-        lag_transforms={
-            lag: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
-        },
+        lag_transforms={lag: [tfm_factory({"partition_by": ["promo"]})]},
     )
     ts_slow._fit(
         df,
@@ -2576,6 +2604,125 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
     # the NaN-partition rows must receive values from the slow-path join, not be
     # dropped (which would leave them NaN where the fast path has a value).
     assert not np.all(np.isnan(slow))
+
+
+def _force_slow_path(monkeypatch, *tfm_classes):
+    """Route the given transform classes through the row-level slow path by
+    restoring the base-class (None-returning) aggregate hooks."""
+    from mlforecast.lag_transforms import _BaseLagTransform
+
+    for cls in tfm_classes:
+        for impl in (
+            "_ts_level_from_aggs_impl",
+            "_latest_from_aggs_impl",
+            "_bucket_feature_from_aggs_impl",
+        ):
+            if impl in cls.__dict__:
+                monkeypatch.setattr(cls, impl, getattr(_BaseLagTransform, impl))
+
+
+_PREDICT_EQUIV_MODES = [
+    ("global", {"global_": True}),
+    ("groupby", {"groupby": ["grp"]}),
+    ("global+partition", {"global_": True, "partition_by": ["promo"]}),
+    ("local+partition", {"partition_by": ["promo"]}),
+]
+
+
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls",
+    [
+        (
+            lambda m: SeasonalRollingMean(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMean,
+        ),
+        (
+            lambda m: SeasonalRollingStd(
+                season_length=3, window_size=3, min_samples=2, **m
+            ),
+            SeasonalRollingStd,
+        ),
+        (
+            lambda m: SeasonalRollingMin(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMin,
+        ),
+        (
+            lambda m: SeasonalRollingMax(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMax,
+        ),
+    ],
+    ids=[
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
+    ],
+)
+@pytest.mark.parametrize(
+    "mode_kwargs", [m[1] for m in _PREDICT_EQUIV_MODES], ids=[m[0] for m in _PREDICT_EQUIV_MODES]
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_fast_predict_matches_forced_slow(engine, mode_kwargs, tfm_factory, tfm_cls, monkeypatch):
+    """Multi-step recursive predict through the aggregate fast path matches the
+    same model predicted with the class's fast-path hooks disabled (row-level
+    slow path), including the per-step append_predictions aggregate extension.
+
+    ``season_length`` matches the promo period (both 3, with the transform on
+    lag 3) so every seasonal target falls in the queried partition bucket's own
+    residue class: partition buckets keep calendar holes (value-space matching
+    is exercised) while windows stay populated, keeping features finite for the
+    sklearn model at every recursive step."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    rng = np.random.default_rng(8)
+    n_series, n_times, h = 4, 24, 6
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times) + 5.0
+    data = {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()}
+    static_features = []
+    if "groupby" in mode_kwargs:
+        data["grp"] = np.repeat(["A"] * 2 + ["B"] * 2, n_times).tolist()
+        static_features = ["grp"]
+    needs_xdf = "partition_by" in mode_kwargs
+    if needs_xdf:
+        data["promo"] = np.tile((np.arange(n_times) % 3 == 0).astype(float), n_series).tolist()
+    df = _make_df(engine, data)
+    X_df = None
+    if needs_xdf:
+        fut_ds = np.tile(np.arange(n_times, n_times + h), n_series)
+        X_df = _make_df(
+            engine,
+            {
+                "unique_id": np.repeat([f"s{i}" for i in range(n_series)], h).tolist(),
+                "ds": fut_ds.tolist(),
+                "promo": (fut_ds % 3 == 0).astype(float).tolist(),
+            },
+        )
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={3: [tfm_factory(dict(mode_kwargs))]},
+        )
+        fcst.fit(df, static_features=static_features)
+        preds = fcst.predict(h, X_df=X_df)
+        return np.asarray(preds["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -3634,7 +3781,6 @@ from mlforecast.lag_transforms import (  # noqa: E402
     ExpandingQuantile,
     Offset,
     RollingQuantile,
-    SeasonalRollingMean,
 )
 from mlforecast.pooled import (  # noqa: E402
     _build_ts_aggs,
@@ -3798,6 +3944,22 @@ _TIME_AGG_FACTORIES = [
     (lambda m: ExpandingMin(**m), "ExpandingMin"),
     (lambda m: ExpandingMax(**m), "ExpandingMax"),
     (lambda m: ExponentiallyWeightedMean(alpha=0.3, **m), "EWM"),
+    (
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        "SeasonalRollingMean",
+    ),
+    (
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        "SeasonalRollingStd",
+    ),
+    (
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        "SeasonalRollingMin",
+    ),
+    (
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        "SeasonalRollingMax",
+    ),
 ]
 
 
@@ -3947,7 +4109,9 @@ def test_time_agg_quantile_slow_path_literal(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_time_agg_seasonal_slow_path_literal(engine):
+def test_time_agg_seasonal_literal(engine):
+    """Hand-computed seasonal rolling mean of daily sums; the values are pinned
+    so the aggregate fast path must reproduce the row-collapse results exactly."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums [11,22,33,44,55,66]; season_length=2, window=2, lag=1

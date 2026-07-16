@@ -993,15 +993,7 @@ class RollingQuantile(_RollingBase):
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
-    """Rolling statistic over seasonal periods
-
-    Note:
-        In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
-        rolling transforms have no aggregate-cache fast path: they fall back
-        to a row-level pass whose cost grows with ``unique timestamps x
-        bucket rows`` at fit, and aggregates are rebuilt at every recursive
-        prediction step. Can be slow on large panels.
-    """
+    """Rolling statistic over seasonal periods"""
 
     def __init__(
         self,
@@ -1132,24 +1124,295 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         )
 
 
+def _seasonal_step_positions(
+    unique_times, target_ords, lag, season_length, window_size
+):
+    """Locate every seasonal step's target ordinal in ``unique_times``.
+
+    Seasonal windows stride in ordinal *value* space (``t - lag -
+    i*season_length`` for ``i in range(window_size)``); the calendar may have
+    holes (partition mode), so targets are matched by value via searchsorted,
+    never by position. Returns one ``(positions, valid)`` pair per seasonal
+    step: ``positions`` are clip-safe indices into ``unique_times`` and
+    ``valid`` flags which targets exist (matching the slow path's ``t >= 0``
+    filter). ``unique_times`` must be non-empty.
+    """
+    last = len(unique_times) - 1
+    steps = []
+    for i in range(window_size):
+        tgt = target_ords - lag - i * season_length
+        pos = np.minimum(np.searchsorted(unique_times, tgt), last)
+        valid = (tgt >= 0) & (unique_times[pos] == tgt)
+        steps.append((pos, valid))
+    return steps
+
+
+def _seasonal_mean_from_agg(
+    agg, target_ords, lag, season_length, window_size, min_samples
+):
+    if len(agg.unique_times) == 0:
+        return np.full(len(target_ords), np.nan)
+    sums = agg.sums
+    counts = agg.counts
+    win_sum = np.zeros(len(target_ords))
+    win_cnt = np.zeros(len(target_ords))
+    for pos, valid in _seasonal_step_positions(
+        agg.unique_times, target_ords, lag, season_length, window_size
+    ):
+        win_sum += np.where(valid, sums[pos], 0.0)
+        win_cnt += np.where(valid, counts[pos], 0.0)
+    safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
+    return np.where(
+        (win_cnt >= min_samples) & (win_cnt > 0), win_sum / safe_cnt, np.nan
+    )
+
+
+def _seasonal_std_from_agg(
+    agg, target_ords, lag, season_length, window_size, min_samples
+):
+    if len(agg.unique_times) == 0:
+        return np.full(len(target_ords), np.nan)
+    sums = agg.sums
+    counts = agg.counts
+    sum_sq = agg.sum_sq
+    win_sum = np.zeros(len(target_ords))
+    win_cnt = np.zeros(len(target_ords))
+    win_sq = np.zeros(len(target_ords))
+    for pos, valid in _seasonal_step_positions(
+        agg.unique_times, target_ords, lag, season_length, window_size
+    ):
+        win_sum += np.where(valid, sums[pos], 0.0)
+        win_cnt += np.where(valid, counts[pos], 0.0)
+        win_sq += np.where(valid, sum_sq[pos], 0.0)
+    safe_n = np.where(win_cnt > 0, win_cnt, 1.0)
+    den = np.where(win_cnt > 1, win_cnt - 1, 1.0)
+    var = (win_sq - win_sum**2 / safe_n) / den
+    var = np.maximum(var, 0.0)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 1), np.sqrt(var), np.nan)
+
+
+def _seasonal_min_from_agg(
+    agg, target_ords, lag, season_length, window_size, min_samples
+):
+    if len(agg.unique_times) == 0:
+        return np.full(len(target_ords), np.nan)
+    mins = agg.mins
+    counts = agg.counts
+    acc = np.full(len(target_ords), np.nan)
+    win_cnt = np.zeros(len(target_ords))
+    for pos, valid in _seasonal_step_positions(
+        agg.unique_times, target_ords, lag, season_length, window_size
+    ):
+        # per-timestamp mins are NaN where the timestamp has no valid rows, so
+        # invalid/unobserved steps contribute NaN and fmin skips them
+        acc = np.fmin(acc, np.where(valid, mins[pos], np.nan))
+        win_cnt += np.where(valid, counts[pos], 0.0)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 0), acc, np.nan)
+
+
+def _seasonal_max_from_agg(
+    agg, target_ords, lag, season_length, window_size, min_samples
+):
+    if len(agg.unique_times) == 0:
+        return np.full(len(target_ords), np.nan)
+    maxs = agg.maxs
+    counts = agg.counts
+    acc = np.full(len(target_ords), np.nan)
+    win_cnt = np.zeros(len(target_ords))
+    for pos, valid in _seasonal_step_positions(
+        agg.unique_times, target_ords, lag, season_length, window_size
+    ):
+        acc = np.fmax(acc, np.where(valid, maxs[pos], np.nan))
+        win_cnt += np.where(valid, counts[pos], 0.0)
+    return np.where((win_cnt >= min_samples) & (win_cnt > 0), acc, np.nan)
+
+
 class SeasonalRollingMean(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.mean(vals))
+
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _seasonal_mean_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples
+            )
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Dict[int, float]:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            result[bid] = float(
+                _seasonal_mean_from_agg(agg, t, lag, sl, w, min_samples)[0]
+            )
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        return {
+            bid: _seasonal_mean_from_agg(agg, agg.unique_times, lag, sl, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class SeasonalRollingStd(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _seasonal_std_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples
+            )
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Dict[int, float]:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            result[bid] = float(
+                _seasonal_std_from_agg(agg, t, lag, sl, w, min_samples)[0]
+            )
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        return {
+            bid: _seasonal_std_from_agg(agg, agg.unique_times, lag, sl, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
+
 
 class SeasonalRollingMin(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _seasonal_min_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples
+            )
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Dict[int, float]:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            result[bid] = float(
+                _seasonal_min_from_agg(agg, t, lag, sl, w, min_samples)[0]
+            )
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        return {
+            bid: _seasonal_min_from_agg(agg, agg.unique_times, lag, sl, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
+
 
 class SeasonalRollingMax(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
+
+    def _bucket_feature_from_aggs_impl(self, bid_arr, ord_arr, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result = np.full(len(bid_arr), np.nan)
+        for bid, agg in ts_aggs.items():
+            idxs = np.where(bid_arr == bid)[0]
+            feat_u = _seasonal_max_from_agg(
+                agg, agg.unique_times, lag, sl, w, min_samples
+            )
+            inv = np.searchsorted(agg.unique_times, ord_arr[idxs])
+            result[idxs] = feat_u[inv]
+        return result
+
+    def _latest_from_aggs_impl(
+        self,
+        ts_aggs,
+        target_ords: Dict[int, int],
+    ) -> Dict[int, float]:
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        result: Dict[int, float] = {}
+        for bid, agg in ts_aggs.items():
+            t = np.array([target_ords[bid]], dtype=np.int64)
+            result[bid] = float(
+                _seasonal_max_from_agg(agg, t, lag, sl, w, min_samples)[0]
+            )
+        return result
+
+    def _ts_level_from_aggs_impl(self, ts_aggs):
+        lag = self._core_tfm.lag
+        sl = self.season_length
+        w = self.window_size
+        min_samples = _resolve_min_samples(self)
+        return {
+            bid: _seasonal_max_from_agg(agg, agg.unique_times, lag, sl, w, min_samples)
+            for bid, agg in ts_aggs.items()
+        }
 
 
 class SeasonalRollingQuantile(_Seasonal_RollingBase):
