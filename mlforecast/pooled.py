@@ -178,12 +178,22 @@ class _TimestampAggregates:
     sum_sq: np.ndarray
     mins: np.ndarray
     maxs: np.ndarray
+    # Opt-in CSR raw-value store, built only when a state's transforms include a
+    # raw-row quantile (see ``PooledState._store_values``). ``values`` holds
+    # every non-NaN observation grouped by ordinal — slot ``k``'s observations
+    # are ``values[row_offsets[k]:row_offsets[k + 1]]`` — and ``row_offsets`` is
+    # always integer (``np.intp``) so it can index arrays. ``None`` on both means
+    # "no store": quantile fast paths return ``None`` and fall back to the row
+    # slow path (also the state for old pickles, which lack these fields).
+    values: Optional[np.ndarray] = None
+    row_offsets: Optional[np.ndarray] = None
 
 
 def _build_ts_aggs(
     bid_arr: np.ndarray,
     ord_arr: np.ndarray,
     y_arr: np.ndarray,
+    store_values: bool = False,
 ) -> Dict[int, _TimestampAggregates]:
     aggs: Dict[int, _TimestampAggregates] = {}
     for bid in np.unique(bid_arr):
@@ -207,6 +217,22 @@ def _build_ts_aggs(
         no_valid = mins == np.inf
         mins[no_valid] = np.nan
         maxs[no_valid] = np.nan
+        values = row_offsets = None
+        if store_values:
+            # Group every non-NaN observation by its ordinal slot. The input
+            # rows are NOT assumed ordinal-sorted (flat arrays may be in any row
+            # order, and updates recompute ordinals without reordering them), so
+            # stable-sort the valid rows by their slot ``inv[valid]`` to lay the
+            # values out contiguously per ordinal. Offsets come from an *integer*
+            # per-slot count, never ``cumsum(counts)``: ``counts`` is float (it is
+            # a weighted ``np.bincount`` above) and float offsets cannot index
+            # arrays. Empty / all-NaN ordinals get a zero count -> repeated offset.
+            order = np.argsort(valid_inv, kind="stable")
+            values = valid_y[order].astype(float, copy=False)
+            counts_int = np.bincount(valid_inv, minlength=m).astype(np.intp)
+            row_offsets = np.empty(m + 1, dtype=np.intp)
+            row_offsets[0] = 0
+            np.cumsum(counts_int, out=row_offsets[1:])
         aggs[int(bid)] = _TimestampAggregates(
             unique_times=unique_ord,
             sums=sums,
@@ -214,6 +240,8 @@ def _build_ts_aggs(
             sum_sq=sum_sq,
             mins=mins,
             maxs=maxs,
+            values=values,
+            row_offsets=row_offsets,
         )
     return aggs
 
@@ -305,6 +333,24 @@ class _ReaggregatedAggregates:
     @property
     def maxs(self) -> np.ndarray:
         return self._values
+
+    @property
+    def values(self) -> np.ndarray:
+        # CSR value store for the quantile fast paths, derived rather than
+        # stored: under ``time_agg`` each ordinal collapses to a single scalar
+        # (``_values``), so a quantile over the collapsed series needs only the
+        # one observed value per timestamp — never the O(rows) raw store a
+        # raw-row quantile builds. Observed timestamps only (NaN => unobserved).
+        return self._values[self._obs]
+
+    @property
+    def row_offsets(self) -> np.ndarray:
+        # Each observed timestamp contributes exactly one value; unobserved
+        # timestamps contribute none (a repeated offset). Integer so it indexes.
+        offsets = np.empty(len(self._values) + 1, dtype=np.intp)
+        offsets[0] = 0
+        np.cumsum(self._obs.astype(np.intp), out=offsets[1:])
+        return offsets
 
 
 def _reaggregate_ts_aggs(
@@ -516,6 +562,13 @@ class PooledState:
     _scope_key_to_parent_id: Optional[Dict[tuple, int]] = None
     _ts_aggs: Dict[int, _TimestampAggregates] = field(default_factory=dict)
     _idsorted_to_bucket_pos: Optional[np.ndarray] = None
+    # Immutable build policy: whether ``_ts_aggs`` carries the CSR raw-value
+    # store the quantile fast paths need (set once by the constructors from the
+    # state's transforms). Every build/rebuild/create path reads this so a
+    # rebuilt aggregate keeps the store the original build chose. Not
+    # snapshotted (never mutated during prediction); ``getattr(state,
+    # "_store_values", False)`` keeps old pickles on the slow path.
+    _store_values: bool = False
 
     @property
     def group_uids(self):
@@ -587,6 +640,7 @@ class PooledState:
         target_col: str,
         ga_data_dtype,
         n_series: int,
+        store_values: bool = False,
     ):
         keep_cols = _dedupe_preserve_order([id_col, time_col, target_col])
         global_df = sorted_df[keep_cols]
@@ -611,7 +665,10 @@ class PooledState:
             y=y_float,
             next_time_index_by_bucket={0: len(unique_ts)},
             join_cols=[id_col, time_col],
-            _ts_aggs=_build_ts_aggs(bid_arr, ord_raw, y_float),
+            _ts_aggs=_build_ts_aggs(
+                bid_arr, ord_raw, y_float, store_values=store_values
+            ),
+            _store_values=store_values,
         )
 
     @classmethod
@@ -624,6 +681,7 @@ class PooledState:
         target_col: str,
         ga_data_dtype,
         static_features,
+        store_values: bool = False,
     ):
         keep_cols = _dedupe_preserve_order(
             [id_col] + group_cols_list + [time_col, target_col]
@@ -655,7 +713,10 @@ class PooledState:
             y=y_float,
             next_time_index_by_bucket=next_by_bucket,
             join_cols=[id_col, time_col],
-            _ts_aggs=_build_ts_aggs(bid_arr, ord_arr, y_float),
+            _ts_aggs=_build_ts_aggs(
+                bid_arr, ord_arr, y_float, store_values=store_values
+            ),
+            _store_values=store_values,
         )
 
     @classmethod
@@ -671,6 +732,7 @@ class PooledState:
         ga_data_dtype,
         static_features,
         n_series: int,
+        store_values: bool = False,
     ):
         """Build a PooledState for partition_by transforms.
 
@@ -811,7 +873,10 @@ class PooledState:
             _bucket_to_parent_id=bucket_to_parent,
             _parent_to_buckets=parent_to_buckets,
             _scope_key_to_parent_id=scope_key_to_parent,
-            _ts_aggs=_build_ts_aggs(bid_arr, ord_arr, y_float),
+            _ts_aggs=_build_ts_aggs(
+                bid_arr, ord_arr, y_float, store_values=store_values
+            ),
+            _store_values=store_values,
         )
 
     def update_series_bucket_id(self, context_df, _id_col: str):
@@ -855,6 +920,12 @@ class PooledState:
                 else:
                     self.next_time_index_by_bucket[bid_int] = 0
             if bid_int not in self._ts_aggs:
+                if self._store_values:
+                    empty_values: Optional[np.ndarray] = np.empty(0)
+                    empty_offsets: Optional[np.ndarray] = np.array([0], dtype=np.intp)
+                else:
+                    empty_values = None
+                    empty_offsets = None
                 self._ts_aggs[bid_int] = _TimestampAggregates(
                     unique_times=np.array([], dtype=np.intp),
                     sums=np.array([], dtype=np.float64),
@@ -862,6 +933,8 @@ class PooledState:
                     sum_sq=np.array([], dtype=np.float64),
                     mins=np.array([], dtype=np.float64),
                     maxs=np.array([], dtype=np.float64),
+                    values=empty_values,
+                    row_offsets=empty_offsets,
                 )
 
     def _resolve_parent_for_bucket(self, bid: int, groups_nw=None) -> Optional[int]:
@@ -970,6 +1043,13 @@ class PooledState:
                 agg.maxs = np.append(
                     agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan
                 )
+                # CSR store (present iff the state builds it): the step adds one
+                # new ordinal whose non-NaN values are all of ``valid_vals``.
+                if agg.row_offsets is not None:
+                    agg.values = np.append(agg.values, valid_vals)
+                    agg.row_offsets = np.append(
+                        agg.row_offsets, agg.row_offsets[-1] + valid_vals.size
+                    ).astype(np.intp, copy=False)
         else:
             sort_order = np.argsort(self.series_bucket_id, kind="stable")
             sorted_bids = self.series_bucket_id[sort_order]
@@ -1003,6 +1083,13 @@ class PooledState:
                     agg.maxs = np.append(
                         agg.maxs, np.max(valid_vals) if len(valid_vals) > 0 else np.nan
                     )
+                    # CSR store (present iff the state builds it): one new
+                    # ordinal for this bucket holding its non-NaN step values.
+                    if agg.row_offsets is not None:
+                        agg.values = np.append(agg.values, valid_vals)
+                        agg.row_offsets = np.append(
+                            agg.row_offsets, agg.row_offsets[-1] + valid_vals.size
+                        ).astype(np.intp, copy=False)
             if self._parent_time_grids is not None:
                 self._advance_parent_calendars(new_ts_val)
             else:
@@ -1035,7 +1122,9 @@ class PooledState:
             self.bucket_id = np.concatenate([self.bucket_id, new_bid])
             self.time_index = np.concatenate([old_idx, new_idx])
             self.next_time_index_by_bucket[0] = len(unique_all)
-            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
+            self._ts_aggs = _build_ts_aggs(
+                self.bucket_id, self.time_index, self.y, store_values=self._store_values
+            )
             old_len = len(self.bucket_df)
             new_df_nw = nw.from_native(new_df)
             new_rows_nw = new_df_nw.with_row_index(name="_bucket_pos").with_columns(
@@ -1111,7 +1200,9 @@ class PooledState:
                 new_ord_arr, new_next = _compute_time_index(all_bid, all_ts)
             self.time_index = new_ord_arr
             self.next_time_index_by_bucket = new_next
-            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
+            self._ts_aggs = _build_ts_aggs(
+                self.bucket_id, self.time_index, self.y, store_values=self._store_values
+            )
             old_len = len(self.bucket_df)
             bucket_df_nw = nw.from_native(bucket_df)
             new_rows_nw = bucket_df_nw.with_row_index(name="_bucket_pos").with_columns(
@@ -1250,6 +1341,19 @@ class PooledState:
                 m = agg.unique_times >= cut
                 if not m.any():
                     continue
+                # The CSR store trims to the same surviving suffix: ``m`` is a
+                # contiguous tail of ordinals (unique_times is sorted), so the
+                # surviving observations are one contiguous value slice.
+                if agg.values is not None and agg.row_offsets is not None:
+                    first = int(np.argmax(m))
+                    first_off = int(agg.row_offsets[first])
+                    new_values: Optional[np.ndarray] = agg.values[first_off:]
+                    new_row_offsets: Optional[np.ndarray] = (
+                        agg.row_offsets[first:] - first_off
+                    )
+                else:
+                    new_values = None
+                    new_row_offsets = None
                 new_aggs[bid_int] = _TimestampAggregates(
                     unique_times=agg.unique_times[m] - cut,
                     sums=agg.sums[m],
@@ -1257,10 +1361,14 @@ class PooledState:
                     sum_sq=agg.sum_sq[m],
                     mins=agg.mins[m],
                     maxs=agg.maxs[m],
+                    values=new_values,
+                    row_offsets=new_row_offsets,
                 )
             self._ts_aggs = new_aggs
         else:
-            self._ts_aggs = _build_ts_aggs(self.bucket_id, self.time_index, self.y)
+            self._ts_aggs = _build_ts_aggs(
+                self.bucket_id, self.time_index, self.y, store_values=self._store_values
+            )
         for bid_int, cal_len in self.next_time_index_by_bucket.items():
             self.next_time_index_by_bucket[bid_int] = min(cal_len, n_ordinals)
         if self._idsorted_to_bucket_pos is not None:
@@ -1323,7 +1431,9 @@ def compute_pooled_features(
 ) -> Dict[str, np.ndarray]:
     if query_arrays is not None:
         bid_arr, idx_arr, y_arr = query_arrays
-        ts_aggs = _build_ts_aggs(bid_arr, idx_arr, y_arr)
+        ts_aggs = _build_ts_aggs(
+            bid_arr, idx_arr, y_arr, store_values=state._store_values
+        )
     else:
         bid_arr = state.bucket_id
         idx_arr = state.time_index

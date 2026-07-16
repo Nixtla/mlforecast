@@ -316,6 +316,20 @@ class _BaseLagTransform(BaseEstimator):
         """
         return False
 
+    @property
+    def _needs_value_store(self) -> bool:
+        """Whether the pooled aggregate cache must retain the raw per-ordinal
+        observations (the CSR value store on ``_TimestampAggregates``).
+
+        Only raw-row quantiles need it: a quantile is not derivable from the
+        scalar aggregates, so its fit/predict fast paths read the stored values
+        directly. A ``time_agg`` quantile instead works off the single collapsed
+        scalar per timestamp (derived from the scalar aggregates by
+        ``_ReaggregatedAggregates``), so it needs no O(rows) store. Every other
+        transform defaults to ``False``.
+        """
+        return False
+
 
 class Lag(_BaseLagTransform):
     def __init__(self, lag: int):
@@ -2005,6 +2019,10 @@ class Offset(_BaseLagTransform):
     def _is_finite_window(self) -> bool:
         return self.tfm._is_finite_window
 
+    @property
+    def _needs_value_store(self) -> bool:
+        return self.tfm._needs_value_store
+
     def _compute_ts_level_from_aggs(self, ts_aggs):
         return self.tfm._compute_ts_level_from_aggs(ts_aggs)
 
@@ -2089,6 +2107,10 @@ class Combine(_BaseLagTransform):
     @property
     def _is_finite_window(self) -> bool:
         return self.tfm1._is_finite_window and self.tfm2._is_finite_window
+
+    @property
+    def _needs_value_store(self) -> bool:
+        return self.tfm1._needs_value_store or self.tfm2._needs_value_store
 
     def _compute_ts_level_from_aggs(self, ts_aggs):
         r1 = self.tfm1._compute_ts_level_from_aggs(ts_aggs)
