@@ -1,4 +1,6 @@
 import datetime
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -7,6 +9,7 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.conformal_prediction import PredictionIntervals
 from mlforecast.lag_transforms import (
     ExpandingMean,
     ExponentiallyWeightedMean,
@@ -206,6 +209,89 @@ def test_history_warmup_requires_models_for_predict():
     fcst.history_warmup(_gen("pandas"))
     with pytest.raises(ValueError, match="No fitted models"):
         fcst.predict(H)
+
+
+def test_history_warmup_preserves_horizon_features_shape():
+    """Re-warming an already-fitted instance with `horizon_features` but no
+    explicit `max_horizon`/`horizons` must resolve against the preserved
+    shape instead of raising ("only supported when using max_horizon or
+    horizons")."""
+    df = _gen("pandas")[["unique_id", "ds", "y"]]
+    df["exog_h1"] = df["y"] * 0.9
+    df["exog_h2"] = df["y"] * 0.7
+    horizon_features = {1: ["exog_h1"], 2: ["exog_h2"]}
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1])
+    fcst.fit(
+        df.copy(),
+        static_features=[],
+        max_horizon=H,
+        horizon_features=horizon_features,
+    )
+    expected = fcst.horizon_features_
+
+    fcst.history_warmup(
+        df.copy(), static_features=[], horizon_features=horizon_features
+    )
+    assert fcst.horizon_features_ == expected
+    assert fcst.ts.max_horizon == H
+
+
+def test_history_warmup_calibration_state_defaults():
+    """A fresh instance with externally supplied models has no calibration
+    state until warmed. `predict(level=...)` should warn like an
+    un-configured `fit` does (not raise `AttributeError`), and `save()`
+    should omit the interval artifact instead of crashing. Re-warming an
+    already-calibrated instance must leave its state untouched."""
+    df = _gen("pandas")[["unique_id", "ds", "y"]]
+
+    source = _new_fcst("local")
+    source.fit(df.copy())
+
+    warmed = _new_fcst("local")
+    warmed.models_ = source.models_
+    warmed.history_warmup(df.copy())
+
+    with pytest.warns(UserWarning, match="prediction intervals"):
+        warmed.predict(H, level=[90])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        savedir = Path(tmpdir) / "fcst"
+        savedir.mkdir()
+        warmed.save(savedir)  # must not raise despite no calibration state
+
+    calibrated = _new_fcst("local")
+    calibrated.fit(df.copy(), prediction_intervals=PredictionIntervals(n_windows=2))
+    cs_df_before = calibrated._cs_df
+    calibrated.history_warmup(df.copy())
+    assert calibrated._cs_df is cs_df_before
+
+
+def test_history_warmup_as_numpy():
+    """A fresh instance can opt into numpy model input via `as_numpy`; when
+    omitted, re-warming an already-configured instance keeps its existing
+    setting."""
+
+    class RecordingModel(LinearRegression):
+        last_X_type = None
+
+        def predict(self, X):
+            RecordingModel.last_X_type = type(X)
+            return super().predict(np.asarray(X))
+
+    df = _gen("pandas")[["unique_id", "ds", "y"]]
+
+    source = MLForecast(models=[RecordingModel()], freq="D", lags=[1])
+    source.fit(df.copy(), as_numpy=True)
+
+    fresh = MLForecast(models=[RecordingModel()], freq="D", lags=[1])
+    fresh.models_ = source.models_
+    fresh.history_warmup(df.copy(), as_numpy=True)
+    fresh.predict(H)
+    assert RecordingModel.last_X_type is np.ndarray
+
+    source.history_warmup(df.copy())
+    assert source.ts.as_numpy is True
 
 
 def test_history_warmup_validation():

@@ -150,6 +150,11 @@ def _frozen_backtest(
 
 
 class MLForecast:
+    # Calibration state (set in ``fit``/``history_warmup``/``load``). Declared
+    # here so mypy has a type regardless of method processing order.
+    _cs_df: Optional[DataFrame]
+    _cs_source_scales_: Optional[Dict]
+
     def __init__(
         self,
         models: Models,
@@ -501,6 +506,7 @@ class MLForecast:
         horizons: Optional[List[int]] = None,
         horizon_features: Optional[Dict[int, List[str]]] = None,
         horizon_feature_templates: Optional[List[str]] = None,
+        as_numpy: Optional[bool] = None,
         validate_data: bool = True,
     ) -> "MLForecast":
         """Build the internal state from `df` without computing the features.
@@ -530,6 +536,7 @@ class MLForecast:
             horizons (list of int, optional): Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns the models were trained with. When None, any mapping from a previous fit is preserved. Defaults to None.
             horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None.
+            as_numpy (bool, optional): Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None.
             validate_data (bool): Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True.
 
         Returns:
@@ -537,18 +544,27 @@ class MLForecast:
         """
         self._validate_data_or_warn(df, id_col, time_col, validate_data)
         if horizon_features is not None or horizon_feature_templates is not None:
+            effective_max_horizon = max_horizon
+            if effective_max_horizon is None and horizons is None:
+                # preserve model-shape metadata from a previous fit (e.g. an
+                # unpickled instance being re-warmed), same as TimeSeries.history_warmup
+                effective_max_horizon = getattr(self.ts, "max_horizon", None)
             self.ts.horizon_features_ = self._resolve_horizon_features(
                 df=df,
                 id_col=id_col,
                 time_col=time_col,
                 target_col=target_col,
                 static_features=static_features,
-                max_horizon=max_horizon,
+                max_horizon=effective_max_horizon,
                 horizons=horizons,
                 horizon_features=horizon_features,
                 horizon_feature_templates=horizon_feature_templates,
                 weight_col=weight_col,
             )
+        if not hasattr(self, "_cs_df"):
+            self._cs_df = None
+        if not hasattr(self, "_cs_source_scales_"):
+            self._cs_source_scales_ = None
         self.ts.history_warmup(
             df,
             id_col=id_col,
@@ -559,6 +575,7 @@ class MLForecast:
             weight_col=weight_col,
             max_horizon=max_horizon,
             horizons=horizons,
+            as_numpy=as_numpy,
         )
         return self
 
@@ -1132,8 +1149,8 @@ class MLForecast:
             for tfm in self.ts.target_transforms:
                 if hasattr(tfm, "store_fitted"):
                     tfm.store_fitted = True
-        self._cs_df: Optional[DataFrame] = None
-        self._cs_source_scales_: Optional[Dict] = None
+        self._cs_df = None
+        self._cs_source_scales_ = None
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
             self._cs_df = self._conformity_scores(

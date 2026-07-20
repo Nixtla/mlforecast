@@ -1242,6 +1242,7 @@ class TimeSeries:
         weight_col: Optional[str] = None,
         max_horizon: Optional[int] = None,
         horizons: Optional[List[int]] = None,
+        as_numpy: Optional[bool] = None,
         trim: bool = True,
     ) -> "TimeSeries":
         """Build all internal state from `df` without materializing features.
@@ -1266,6 +1267,9 @@ class TimeSeries:
                 from a previous fit on this instance is preserved.
             horizons: Specific 1-indexed horizons the models were trained for.
                 Mutually exclusive with max_horizon.
+            as_numpy: Whether prediction passes a numpy array to the model
+                instead of a dataframe. When None, any value from a previous
+                fit is preserved (False for a fresh instance).
             trim: Apply the `keep_last_n` trim after warming the transform
                 state. `predict(new_df=...)` disables this to keep the full
                 provided history.
@@ -1294,7 +1298,10 @@ class TimeSeries:
             # unpickled instance being re-warmed); default to recursive mode
             self._horizons = getattr(self, "_horizons", None)
             self.max_horizon = getattr(self, "max_horizon", None)
-        self.as_numpy = getattr(self, "as_numpy", False)
+        if as_numpy is not None:
+            self.as_numpy = as_numpy
+        else:
+            self.as_numpy = getattr(self, "as_numpy", False)
         return self
 
     def _update_y(self, new: np.ndarray) -> None:
