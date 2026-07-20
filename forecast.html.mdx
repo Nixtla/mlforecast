@@ -211,6 +211,51 @@ Type | Description
 ---- | -----------
 <code>[Union](#typing.Union)[[DFType](#utilsforecast.compat.DFType), [Tuple](#typing.Tuple)[[DFType](#utilsforecast.compat.DFType), [ndarray](#numpy.ndarray)]]</code> | DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
 
+#### `MLForecast.history_warmup`
+
+```python
+history_warmup(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, as_numpy=None, validate_data=True)
+```
+
+Build the internal state from `df` without computing the features.
+
+Runs the same state-building steps as `preprocess` (series storage,
+target transforms, lag-transform buffers, pooled aggregates, feature
+order) but skips materializing the features dataframe, which makes it
+much cheaper when the features themselves aren't needed. Use it to warm
+an instance whose models are already trained -- e.g. after unpickling,
+`MLForecast.load`, or assigning externally trained models to `models_`
+-- so that `update` and `predict` can be used without calling `fit` or
+`preprocess` first.
+
+History is trimmed like in `fit`: `keep_last_n` (explicit or inferred
+from the transforms) is applied after the transform states are warmed,
+so only the observations required for updates are kept.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>pandas or polars DataFrame</code> | Series data in long format. | *required*
+`id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
+`time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
+`target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
+`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Inferred from the transforms when None. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
+`max_horizon` | <code>[int](#int)</code> | Horizon the models were trained for when using one model per horizon. Leave None for recursive models; when None, any value from a previous fit is preserved. Defaults to None. | <code>None</code>
+`horizons` | <code>list of int</code> | Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
+`horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns the models were trained with. When None, any mapping from a previous fit is preserved. Defaults to None. | <code>None</code>
+`horizon_feature_templates` | <code>list of str</code> | Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None. | <code>None</code>
+`as_numpy` | <code>[bool](#bool)</code> | Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None. | <code>None</code>
+`validate_data` | <code>[bool](#bool)</code> | Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
+
+**Returns:**
+
+Name | Type | Description
+---- | ---- | -----------
+`MLForecast` | <code>[MLForecast](#mlforecast.forecast.MLForecast)</code> | Forecast object with the internal state built from `df`.
+
 #### `MLForecast.fit_models`
 
 ```python

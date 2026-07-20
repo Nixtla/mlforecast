@@ -99,6 +99,36 @@ Name | Type | Description | Default
 `max_horizon` | <code>[Optional](#typing.Optional)[[int](#int)]</code> | Train models for all horizons 1 to max_horizon. | <code>None</code>
 `horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Train models only for specific horizons (1-indexed).       Mutually exclusive with max_horizon. | <code>None</code>
 
+#### `TimeSeries.history_warmup`
+
+```python
+history_warmup(df, id_col, time_col, target_col, static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, as_numpy=None, trim=True)
+```
+
+Build all internal state from `df` without materializing features.
+
+Runs the same state-building steps as `fit_transform` (series storage,
+target transforms, lag-transform buffers, pooled states, feature order)
+but skips computing and assembling the features dataframe. After this
+the instance supports `update` and `predict`, e.g. to warm a loaded
+instance from raw history before updating it with new observations.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>[DataFrame](#utilsforecast.compat.DataFrame)</code> | Series data in long format. | *required*
+`id_col` | <code>[str](#str)</code> | Column that identifies each serie. | *required*
+`time_col` | <code>[str](#str)</code> | Column that identifies each timestep. | *required*
+`target_col` | <code>[str](#str)</code> | Column that contains the target. | *required*
+`static_features` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[str](#str)]]</code> | Names of the features that are static. | <code>None</code>
+`keep_last_n` | <code>[Optional](#typing.Optional)[[int](#int)]</code> | Keep only these many records from each serie. When None it's inferred from the transforms, like in `fit_transform`. | <code>None</code>
+`weight_col` | <code>[Optional](#typing.Optional)[[str](#str)]</code> | Column that contains the sample weights. | <code>None</code>
+`max_horizon` | <code>[Optional](#typing.Optional)[[int](#int)]</code> | Horizon the models were trained for (one model per horizon). Leave None for recursive models; when None, any value from a previous fit on this instance is preserved. | <code>None</code>
+`horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. | <code>None</code>
+`as_numpy` | <code>[Optional](#typing.Optional)[[bool](#bool)]</code> | Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). | <code>None</code>
+`trim` | <code>[bool](#bool)</code> | Apply the `keep_last_n` trim after warming the transform state. `predict(new_df=...)` disables this to keep the full provided history. | <code>True</code>
+
 #### `TimeSeries.predict`
 
 ```python

@@ -142,3 +142,47 @@ fcst.predict(1)
 | 3   | id_3      | 2000-08-30 | 4.061801 | 0.245443 |
 | 4   | id_4      | 2001-01-08 | 2.904872 | 2.225106 |
 
+## Skipping preprocess: warming up from history
+
+The flow above ran `MLForecast.preprocess` because we needed the
+training features. If your models are already trained – for example you
+just unpickled them in a serving process, or trained them yourself like
+above – computing the features again just to restore the internal state
+would be wasted work. `MLForecast.history_warmup` is a cheaper
+alternative for that case: it runs the same state-building steps as
+`preprocess` (target transforms, lag transform buffers, pooled
+aggregates, feature order) but skips materializing the features
+dataframe. Like `fit`, it also keeps only the history required for the
+updates (`keep_last_n`, explicit or inferred from the transforms).
+
+```python
+fcst2 = MLForecast(
+    models=[],
+    freq='D',
+    lags=[1],
+    date_features=['dayofweek'],
+)
+fcst2.models_ = fcst.models_  # previously trained models
+fcst2.history_warmup(series)
+```
+
+``` text
+MLForecast(models=[], freq=D, lag_features=['lag1'], date_features=['dayofweek'], num_threads=1)
+```
+
+After warming up, `MLForecast.update` and `MLForecast.predict` can be
+used directly – without ever calling `fit` or `preprocess` – and produce
+the same forecasts as before.
+
+```python
+fcst2.predict(1)
+```
+
+|     | unique_id | ds         | lr       | lgbm     |
+|-----|-----------|------------|----------|----------|
+| 0   | id_0      | 2000-08-10 | 3.549124 | 5.166797 |
+| 1   | id_1      | 2000-04-07 | 3.154285 | 4.252490 |
+| 2   | id_2      | 2000-06-16 | 2.880933 | 3.224506 |
+| 3   | id_3      | 2000-08-30 | 4.061801 | 0.245443 |
+| 4   | id_4      | 2001-01-08 | 2.904872 | 2.225106 |
+
