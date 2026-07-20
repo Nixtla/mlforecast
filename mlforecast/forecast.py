@@ -561,6 +561,32 @@ class MLForecast:
                 horizon_feature_templates=horizon_feature_templates,
                 weight_col=weight_col,
             )
+        elif self.ts.horizon_features_:
+            # Preserving the mapping from a previous fit (the explicit branch
+            # above re-validates it). `_fit` rebuilds `features_order_` from
+            # `df.columns`, so a preserved mapping referencing exog columns
+            # absent from `df` would otherwise surface as a raw ``KeyError``
+            # deep inside ``predict``. Validate it eagerly here instead.
+            exog_cols = set(
+                self._get_dynamic_exog_cols(
+                    list(df.columns),
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    static_features=static_features,
+                    weight_col=weight_col,
+                )
+            )
+            missing = {
+                col for cols in self.ts.horizon_features_.values() for col in cols
+            } - exog_cols
+            if missing:
+                raise ValueError(
+                    "Preserved `horizon_features` reference columns missing from "
+                    f"the warmup data's dynamic exogenous features: {sorted(missing)}. "
+                    "Pass `horizon_features` explicitly to reconfigure the model "
+                    "shape, or include the columns in `df`."
+                )
         if not hasattr(self, "_cs_df"):
             self._cs_df = None
         if not hasattr(self, "_cs_source_scales_"):

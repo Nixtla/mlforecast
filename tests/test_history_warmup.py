@@ -237,6 +237,35 @@ def test_history_warmup_preserves_horizon_features_shape():
     assert fcst.ts.max_horizon == H
 
 
+def test_history_warmup_preserved_horizon_features_missing_cols():
+    """Re-warming a `horizon_features` instance without re-passing them
+    preserves the mapping (`_fit` rebuilds `features_order_` from the new
+    frame). If that frame drops the referenced exog columns the preserved
+    mapping is stale, and warming must raise a clear error instead of letting
+    a raw `KeyError` surface later inside `predict`."""
+    df = _gen("pandas")[["unique_id", "ds", "y"]]
+    df["exog_h1"] = df["y"] * 0.9
+    df["exog_h2"] = df["y"] * 0.7
+    horizon_features = {1: ["exog_h1"], 2: ["exog_h2"]}
+
+    fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1])
+    fcst.fit(
+        df.copy(),
+        static_features=[],
+        max_horizon=H,
+        horizon_features=horizon_features,
+    )
+
+    # re-warm with the exog columns dropped and without re-passing the mapping
+    without_exog = df[["unique_id", "ds", "y"]].copy()
+    with pytest.raises(ValueError, match="exog_h1.*exog_h2"):
+        fcst.history_warmup(without_exog, static_features=[])
+
+    # still fine when the columns are present (mapping stays valid)
+    fcst.history_warmup(df.copy(), static_features=[])
+    assert fcst.horizon_features_ == horizon_features
+
+
 def test_history_warmup_calibration_state_defaults():
     """A fresh instance with externally supplied models has no calibration
     state until warmed. `predict(level=...)` should warn like an
