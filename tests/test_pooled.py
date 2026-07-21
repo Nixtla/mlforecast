@@ -2994,6 +2994,40 @@ def test_multi_model_latest_cache_isolation(engine):
         )
 
 
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls", _EXPANDING_EWM_FACTORIES, ids=_EXPANDING_EWM_IDS
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_expanding_ewm_multi_horizon_matches_forced_slow(
+    engine, tfm_factory, tfm_cls, monkeypatch
+):
+    """Direct (``max_horizon``) forecasting drives the prefix caches through the
+    ``_predict_multi`` path, which advances the target ordinal each step without
+    feeding predictions back. The cached fast path must still match the same
+    model predicted through the row-level slow path."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 6
+    df, _, static_features = _pooled_predict_fixture(engine, {"global_": True}, h)
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: [tfm_factory({"global_": True})]},
+        )
+        fcst.fit(df, static_features=static_features, max_horizon=h)
+        return np.asarray(fcst.predict(h)["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_predict_x_df_partition_column_has_nan(engine):
     """predict with an X_df whose partition column is NaN routes to the existing
