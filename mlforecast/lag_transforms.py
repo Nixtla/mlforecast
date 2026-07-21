@@ -657,19 +657,25 @@ class RollingMean(_RollingBase):
         min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            cum_sum = np.cumsum(agg.sums)
-            cum_cnt = np.cumsum(agg.counts)
             t = target_ords[bid]
             upper = t - lag
             lower = t - lag - w
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            li = int(np.searchsorted(agg.unique_times, lower, side="right")) - 1
-            s = (cum_sum[ui] if ui >= 0 else 0.0) - (cum_sum[li] if li >= 0 else 0.0)
-            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li] if li >= 0 else 0.0)
-            result[bid] = s / c if c >= min_samples and c > 0 else float("nan")
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            li = int(np.searchsorted(ut, lower, side="right")) - 1
+            # The window is the half-open agg range ``(li, ui]``. Sum that
+            # ``O(window)`` slice directly rather than differencing full-vector
+            # cumsums, which would cost ``O(len(ut))`` at every recursive
+            # predict step (``ut`` grows by one each step).
+            lo, hi = li + 1, ui + 1
+            c = agg.counts[lo:hi].sum()
+            if c >= min_samples and c > 0:
+                result[bid] = float(agg.sums[lo:hi].sum() / c)
+            else:
+                result[bid] = float("nan")
         return result
 
     def _ts_level_from_aggs_impl(self, ts_aggs):
@@ -784,23 +790,22 @@ class RollingStd(_RollingBase):
         min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            cum_sum = np.cumsum(agg.sums)
-            cum_cnt = np.cumsum(agg.counts)
-            cum_sum_sq = np.cumsum(agg.sum_sq)
             t = target_ords[bid]
             upper = t - lag
             lower = t - lag - w
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            li = int(np.searchsorted(agg.unique_times, lower, side="right")) - 1
-            s = (cum_sum[ui] if ui >= 0 else 0.0) - (cum_sum[li] if li >= 0 else 0.0)
-            sq = (cum_sum_sq[ui] if ui >= 0 else 0.0) - (
-                cum_sum_sq[li] if li >= 0 else 0.0
-            )
-            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li] if li >= 0 else 0.0)
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            li = int(np.searchsorted(ut, lower, side="right")) - 1
+            # Half-open agg window ``(li, ui]``; sum the ``O(window)`` slice
+            # instead of differencing full-vector cumsums (see RollingMean).
+            lo, hi = li + 1, ui + 1
+            c = agg.counts[lo:hi].sum()
             if c >= min_samples and c > 1:
+                s = agg.sums[lo:hi].sum()
+                sq = agg.sum_sq[lo:hi].sum()
                 var = (sq - s**2 / c) / (c - 1)
                 var = max(var, 0.0)
                 result[bid] = float(np.sqrt(var))
@@ -873,22 +878,23 @@ class RollingMin(_RollingBase):
         min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            sparse = _build_sparse_table(agg.mins, np.fmin)
-            cum_cnt = np.cumsum(agg.counts)
             t = target_ords[bid]
             upper = t - lag
             lower = t - lag - w + 1
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            li = int(np.searchsorted(agg.unique_times, lower, side="left"))
-            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li - 1] if li > 0 else 0.0)
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            li = int(np.searchsorted(ut, lower, side="left"))
+            # Inclusive agg window ``[li, ui]``. Reduce over that ``O(window)``
+            # slice with NaN-skipping ``fmin`` (matching the sparse table)
+            # instead of rebuilding an ``O(n log n)`` sparse table at every
+            # recursive predict step. ``c > 0`` guarantees a non-empty slice
+            # with at least one non-NaN entry.
+            c = agg.counts[li : ui + 1].sum()
             if c >= min_samples and c > 0:
-                val = _query_sparse_table(
-                    sparse, np.array([li]), np.array([ui]), np.fmin
-                )
-                result[bid] = float(val[0])
+                result[bid] = float(np.fmin.reduce(agg.mins[li : ui + 1]))
             else:
                 result[bid] = float("nan")
         return result
@@ -930,22 +936,21 @@ class RollingMax(_RollingBase):
         min_samples = _resolve_min_samples(self)
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            sparse = _build_sparse_table(agg.maxs, np.fmax)
-            cum_cnt = np.cumsum(agg.counts)
             t = target_ords[bid]
             upper = t - lag
             lower = t - lag - w + 1
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            li = int(np.searchsorted(agg.unique_times, lower, side="left"))
-            c = (cum_cnt[ui] if ui >= 0 else 0.0) - (cum_cnt[li - 1] if li > 0 else 0.0)
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            li = int(np.searchsorted(ut, lower, side="left"))
+            # Inclusive agg window ``[li, ui]``; reduce over the ``O(window)``
+            # slice with NaN-skipping ``fmax`` instead of rebuilding a sparse
+            # table each recursive predict step (see RollingMin).
+            c = agg.counts[li : ui + 1].sum()
             if c >= min_samples and c > 0:
-                val = _query_sparse_table(
-                    sparse, np.array([li]), np.array([ui]), np.fmax
-                )
-                result[bid] = float(val[0])
+                result[bid] = float(np.fmax.reduce(agg.maxs[li : ui + 1]))
             else:
                 result[bid] = float("nan")
         return result
