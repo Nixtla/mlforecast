@@ -1255,12 +1255,23 @@ def _seasonal_mean_from_agg(
     sums = agg.sums
     counts = agg.counts
     win_sum = np.zeros(len(target_ords))
+    # Neumaier compensation: seasonal steps stride newest-to-oldest, so summing
+    # per-timestamp sums naively can drop a small residual added after a large
+    # partial (e.g. [1, -1e16, 1e16]). Counts are small exact integers, so their
+    # plain running sum needs no compensation.
+    comp = np.zeros(len(target_ords))
     win_cnt = np.zeros(len(target_ords))
     for pos, valid in _seasonal_step_positions(
         agg.unique_times, target_ords, lag, season_length, window_size
     ):
-        win_sum += np.where(valid, sums[pos], 0.0)
+        v = np.where(valid, sums[pos], 0.0)
+        t = win_sum + v
+        comp += np.where(
+            np.abs(win_sum) >= np.abs(v), (win_sum - t) + v, (v - t) + win_sum
+        )
+        win_sum = t
         win_cnt += np.where(valid, counts[pos], 0.0)
+    win_sum = win_sum + comp
     safe_cnt = np.where(win_cnt > 0, win_cnt, 1.0)
     return np.where(
         (win_cnt >= min_samples) & (win_cnt > 0), win_sum / safe_cnt, np.nan
@@ -1275,20 +1286,35 @@ def _seasonal_std_from_agg(
     sums = agg.sums
     counts = agg.counts
     sum_sq = agg.sum_sq
-    win_sum = np.zeros(len(target_ords))
-    win_cnt = np.zeros(len(target_ords))
-    win_sq = np.zeros(len(target_ords))
+    # Combine the seasonal steps' per-timestamp moments with the numerically
+    # stable parallel (Chan et al.) algorithm rather than the textbook
+    # ``sum_sq - sum**2 / n``: for large-magnitude targets with small spread the
+    # latter cancels catastrophically (both terms ~n*mean**2) and collapses the
+    # variance to 0. The combine only ever forms differences of nearby means, so
+    # it stays accurate. ``M2_i`` is each timestamp's own sum of squared
+    # deviations (0 for single-row timestamps, exactly ``x**2 - x**2``).
+    n = len(target_ords)
+    count_n = np.zeros(n)
+    mean = np.zeros(n)
+    m2 = np.zeros(n)
     for pos, valid in _seasonal_step_positions(
         agg.unique_times, target_ords, lag, season_length, window_size
     ):
-        win_sum += np.where(valid, sums[pos], 0.0)
-        win_cnt += np.where(valid, counts[pos], 0.0)
-        win_sq += np.where(valid, sum_sq[pos], 0.0)
-    safe_n = np.where(win_cnt > 0, win_cnt, 1.0)
-    den = np.where(win_cnt > 1, win_cnt - 1, 1.0)
-    var = (win_sq - win_sum**2 / safe_n) / den
-    var = np.maximum(var, 0.0)
-    return np.where((win_cnt >= min_samples) & (win_cnt > 1), np.sqrt(var), np.nan)
+        ni = np.where(valid, counts[pos], 0.0)
+        has = ni > 0
+        safe_ni = np.where(has, ni, 1.0)
+        si = np.where(has, sums[pos], 0.0)
+        mean_i = si / safe_ni
+        m2_i = np.maximum(np.where(has, sum_sq[pos] - si * si / safe_ni, 0.0), 0.0)
+        new_n = count_n + ni
+        safe_new_n = np.where(new_n > 0, new_n, 1.0)
+        delta = mean_i - mean
+        mean = np.where(has, mean + delta * ni / safe_new_n, mean)
+        m2 = np.where(has, m2 + m2_i + delta * delta * count_n * ni / safe_new_n, m2)
+        count_n = new_n
+    den = np.where(count_n > 1, count_n - 1, 1.0)
+    var = np.maximum(m2 / den, 0.0)
+    return np.where((count_n >= min_samples) & (count_n > 1), np.sqrt(var), np.nan)
 
 
 def _seasonal_min_from_agg(

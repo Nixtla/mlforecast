@@ -2758,6 +2758,64 @@ def test_fast_predict_matches_forced_slow(engine, mode_kwargs, tfm_factory, tfm_
     np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
 
 
+def _seasonal_fit_transform(engine, tfm, lag, y):
+    """fit_transform a single-series global_ pooled seasonal transform and return
+    its feature column (the aggregate fast path)."""
+    n = len(y)
+    df = _make_df(
+        engine,
+        {"unique_id": ["s0"] * n, "ds": list(range(n)), "y": [float(v) for v in y]},
+    )
+    col = tfm._get_name(lag)
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    out = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    return np.asarray(out[col])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_seasonal_mean_stable_summation(engine):
+    """Regression: the seasonal fast path strides its steps newest-to-oldest, so
+    naive accumulation drops a small residual added after a large partial. The
+    window for the last row is ordinals {2, 1, 0} = [1, -1e16, 1e16], whose mean
+    is exactly 1/3 -- a plain running sum collapses it to 0."""
+    tfm = SeasonalRollingMean(
+        season_length=1, window_size=3, min_samples=1, global_=True
+    )
+    vals = _seasonal_fit_transform(engine, tfm, 1, [1e16, -1e16, 1.0, 0.0])
+    np.testing.assert_allclose(vals[-1], 1.0 / 3.0, rtol=1e-12)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_seasonal_std_stable_moments(engine, monkeypatch):
+    """Regression: for large-magnitude targets with small spread the textbook
+    ``sum_sq - sum**2 / n`` variance cancels catastrophically and collapses to 0.
+    The stable moment combine must match the row-level slow path."""
+    y = (1e8 + np.arange(12) % 3).astype(float).tolist()
+    fast = _seasonal_fit_transform(
+        engine,
+        SeasonalRollingStd(season_length=2, window_size=4, min_samples=2, global_=True),
+        1,
+        y,
+    )
+    slow_tfm = SeasonalRollingStd(
+        season_length=2, window_size=4, min_samples=2, global_=True
+    )
+    _force_slow_path(monkeypatch, SeasonalRollingStd)
+    slow = _seasonal_fit_transform(engine, slow_tfm, 1, y)
+    np.testing.assert_allclose(fast, slow, rtol=1e-9, atol=1e-9, equal_nan=True)
+    # the fixed fast path recovers a real (non-zero) std where cancellation used
+    # to zero it out
+    finite = fast[~np.isnan(fast)]
+    assert finite.size and np.all(finite > 0.5)
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_predict_x_df_partition_column_has_nan(engine):
     """predict with an X_df whose partition column is NaN routes to the existing
