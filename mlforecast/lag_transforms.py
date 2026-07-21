@@ -187,7 +187,7 @@ class _BaseLagTransform(BaseEstimator):
         return None
 
     def _latest_from_aggs_impl(
-        self, _ts_aggs, _target_ords
+        self, _ts_aggs, _target_ords, _cache=None
     ) -> Optional[Dict[int, float]]:
         return None
 
@@ -223,16 +223,25 @@ class _BaseLagTransform(BaseEstimator):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        cache: Optional[dict] = None,
     ) -> Optional[Dict[int, float]]:
         """Compute feature value at the target timestamp per bucket from cached aggregates.
 
         ``target_ords`` maps bucket_id to the time-index ordinal at which to
         evaluate the statistic (typically ``next_time_index_by_bucket``).
-        Returns None if this transform doesn't support the fast path.
+        ``cache`` is an optional per-(state, transform) dict, owned by
+        ``TimeSeries._backup`` and thus scoped to a single model's recursive
+        predict walk; prefix-dependent transforms (Expanding*/EWM) use it to
+        carry a running accumulator so they avoid rescanning the full aggregate
+        vectors every step. ``None`` (the default) forces a full recompute --
+        the behaviour every other ``_impl`` ignores it and keeps. Returns None
+        if this transform doesn't support the fast path.
         """
         if not ts_aggs:
             return None
-        return self._latest_from_aggs_impl(self._maybe_reagg(ts_aggs), target_ords)
+        return self._latest_from_aggs_impl(
+            self._maybe_reagg(ts_aggs), target_ords, cache
+        )
 
     def _compute_ts_level_from_aggs(self, ts_aggs):
         if not ts_aggs:
@@ -457,6 +466,7 @@ class LookupLag(_BaseLagTransform):
         self,
         ts_aggs,
         _target_ords,
+        _cache=None,
     ) -> Optional[Dict[int, float]]:
         # Fast predict path: the looked-up value is the target `lag` occurrences
         # back. In local partition mode each bucket is a single series (one
@@ -651,6 +661,7 @@ class RollingMean(_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -784,6 +795,7 @@ class RollingStd(_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -872,6 +884,7 @@ class RollingMin(_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -930,6 +943,7 @@ class RollingMax(_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -1069,6 +1083,7 @@ class RollingQuantile(_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Optional[Dict[int, float]]:
         lag = self._core_tfm.lag
         w = self.window_size
@@ -1381,6 +1396,7 @@ class SeasonalRollingMean(_Seasonal_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -1428,6 +1444,7 @@ class SeasonalRollingStd(_Seasonal_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -1475,6 +1492,7 @@ class SeasonalRollingMin(_Seasonal_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -1522,6 +1540,7 @@ class SeasonalRollingMax(_Seasonal_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Dict[int, float]:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -1631,6 +1650,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         self,
         ts_aggs,
         target_ords: Dict[int, int],
+        _cache=None,
     ) -> Optional[Dict[int, float]]:
         lag = self._core_tfm.lag
         sl = self.season_length
@@ -1778,21 +1798,33 @@ class ExpandingMean(_ExpandingBase):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, cache=None):
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            cum_sum = np.cumsum(agg.sums)
-            cum_cnt = np.cumsum(agg.counts)
             t = target_ords[bid]
             upper = t - lag
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            s = cum_sum[ui] if ui >= 0 else 0.0
-            c = cum_cnt[ui] if ui >= 0 else 0.0
-            result[bid] = s / c if c > 0 else float("nan")
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            # Carry the running prefix sum/count across recursive predict steps:
+            # only the newly consumable ordinals ``(prev_ui, ui]`` are summed,
+            # so a horizon walk costs ``O(history + horizon)`` total instead of
+            # an ``O(n)`` cumsum per step. ``cache=None`` (non-predict callers)
+            # recomputes the whole prefix.
+            prev_ui, run_sum, run_cnt = (
+                cache.get(bid, (-1, 0.0, 0.0)) if cache is not None else (-1, 0.0, 0.0)
+            )
+            if prev_ui > ui:  # non-monotone target ordinal: drop the stale prefix
+                prev_ui, run_sum, run_cnt = -1, 0.0, 0.0
+            if ui > prev_ui:
+                run_sum += agg.sums[prev_ui + 1 : ui + 1].sum()
+                run_cnt += agg.counts[prev_ui + 1 : ui + 1].sum()
+            if cache is not None:
+                cache[bid] = (ui, run_sum, run_cnt)
+            result[bid] = float(run_sum / run_cnt) if run_cnt > 0 else float("nan")
         return result
 
     def _ts_level_from_aggs_impl(self, ts_aggs):
@@ -1831,24 +1863,34 @@ class ExpandingStd(_ExpandingBase):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, cache=None):
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            cum_sum = np.cumsum(agg.sums)
-            cum_cnt = np.cumsum(agg.counts)
-            cum_sum_sq = np.cumsum(agg.sum_sq)
             t = target_ords[bid]
             upper = t - lag
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            s = cum_sum[ui] if ui >= 0 else 0.0
-            c = cum_cnt[ui] if ui >= 0 else 0.0
-            sq = cum_sum_sq[ui] if ui >= 0 else 0.0
-            if c > 1:
-                var = (sq - s**2 / c) / (c - 1)
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            # Carry running prefix sum/count/sum_sq across steps (see
+            # ExpandingMean); only ``(prev_ui, ui]`` is summed per step.
+            prev_ui, run_sum, run_cnt, run_sq = (
+                cache.get(bid, (-1, 0.0, 0.0, 0.0))
+                if cache is not None
+                else (-1, 0.0, 0.0, 0.0)
+            )
+            if prev_ui > ui:  # non-monotone target ordinal: drop the stale prefix
+                prev_ui, run_sum, run_cnt, run_sq = -1, 0.0, 0.0, 0.0
+            if ui > prev_ui:
+                run_sum += agg.sums[prev_ui + 1 : ui + 1].sum()
+                run_cnt += agg.counts[prev_ui + 1 : ui + 1].sum()
+                run_sq += agg.sum_sq[prev_ui + 1 : ui + 1].sum()
+            if cache is not None:
+                cache[bid] = (ui, run_sum, run_cnt, run_sq)
+            if run_cnt > 1:
+                var = (run_sq - run_sum**2 / run_cnt) / (run_cnt - 1)
                 var = max(var, 0.0)
                 result[bid] = float(np.sqrt(var))
             else:
@@ -1889,18 +1931,31 @@ class ExpandingMin(_ExpandingBase):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, cache=None):
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            prefix_min = np.fmin.accumulate(agg.mins)
             t = target_ords[bid]
             upper = t - lag
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            result[bid] = float(prefix_min[ui]) if ui >= 0 else float("nan")
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            # Carry the running prefix min across steps: fold only the newly
+            # consumable ordinals ``(prev_ui, ui]`` with NaN-skipping fmin, so a
+            # horizon walk costs ``O(history + horizon)`` instead of an ``O(n)``
+            # fmin.accumulate per step.
+            prev_ui, run = (
+                cache.get(bid, (-1, np.nan)) if cache is not None else (-1, np.nan)
+            )
+            if prev_ui > ui:  # non-monotone target ordinal: drop the stale prefix
+                prev_ui, run = -1, np.nan
+            if ui > prev_ui:
+                run = np.fmin(run, np.fmin.reduce(agg.mins[prev_ui + 1 : ui + 1]))
+            if cache is not None:
+                cache[bid] = (ui, run)
+            result[bid] = float(run) if ui >= 0 and not np.isnan(run) else float("nan")
         return result
 
     def _ts_level_from_aggs_impl(self, ts_aggs):
@@ -1923,18 +1978,29 @@ class ExpandingMax(_ExpandingBase):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, cache=None):
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
-            prefix_max = np.fmax.accumulate(agg.maxs)
             t = target_ords[bid]
             upper = t - lag
-            ui = int(np.searchsorted(agg.unique_times, upper, side="right")) - 1
-            result[bid] = float(prefix_max[ui]) if ui >= 0 else float("nan")
+            ui = int(np.searchsorted(ut, upper, side="right")) - 1
+            # Carry the running prefix max across steps (see ExpandingMin);
+            # fold only ``(prev_ui, ui]`` with NaN-skipping fmax per step.
+            prev_ui, run = (
+                cache.get(bid, (-1, np.nan)) if cache is not None else (-1, np.nan)
+            )
+            if prev_ui > ui:  # non-monotone target ordinal: drop the stale prefix
+                prev_ui, run = -1, np.nan
+            if ui > prev_ui:
+                run = np.fmax(run, np.fmax.reduce(agg.maxs[prev_ui + 1 : ui + 1]))
+            if cache is not None:
+                cache[bid] = (ui, run)
+            result[bid] = float(run) if ui >= 0 and not np.isnan(run) else float("nan")
         return result
 
     def _ts_level_from_aggs_impl(self, ts_aggs):
@@ -2024,7 +2090,7 @@ class ExpandingQuantile(_ExpandingBase):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, _cache=None):
         lag = self._core_tfm.lag
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
@@ -2214,30 +2280,40 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             result[idxs] = feat_u[inv]
         return result
 
-    def _latest_from_aggs_impl(self, ts_aggs, target_ords):
+    def _latest_from_aggs_impl(self, ts_aggs, target_ords, cache=None):
         lag = self._core_tfm.lag
         alpha = self.alpha
         result: Dict[int, float] = {}
         for bid, agg in ts_aggs.items():
-            if len(agg.unique_times) == 0:
+            ut = agg.unique_times
+            if len(ut) == 0:
                 result[bid] = float("nan")
                 continue
             t = target_ords[bid]
-            counts = agg.counts
-            mean_per_ord = np.full(len(agg.unique_times), np.nan)
-            np.divide(agg.sums, counts, out=mean_per_ord, where=counts > 0)
-            ewm = np.nan
             upper = t - lag
-            for k in range(len(agg.unique_times)):
-                if agg.unique_times[k] > upper:
-                    break
-                if not np.isnan(mean_per_ord[k]):
-                    ewm = (
-                        mean_per_ord[k]
-                        if np.isnan(ewm)
-                        else alpha * mean_per_ord[k] + (1 - alpha) * ewm
-                    )
-            result[bid] = float(ewm) if not np.isnan(ewm) else float("nan")
+            # Resume the EWM recurrence from the last consumed ordinal. The fold
+            # is sequential, so the saved ``(k, ewm)`` is an exact midpoint and
+            # the result is identical to replaying from ``k=0`` -- but a horizon
+            # walk costs ``O(history + horizon)`` instead of refolding the whole
+            # prefix each step. ``cache=None`` (non-predict callers) refolds from
+            # scratch. Each observed timestamp contributes its bucket mean once.
+            k, ewm, has = (
+                cache.get(bid, (0, np.nan, False))
+                if cache is not None
+                else (0, np.nan, False)
+            )
+            sums = agg.sums
+            counts = agg.counts
+            while k < len(ut) and ut[k] <= upper:
+                c = counts[k]
+                if c > 0:
+                    m = sums[k] / c
+                    ewm = m if not has else alpha * m + (1 - alpha) * ewm
+                    has = True
+                k += 1
+            if cache is not None:
+                cache[bid] = (k, ewm, has)
+            result[bid] = float(ewm) if has else float("nan")
         return result
 
     def _ts_level_from_aggs_impl(self, ts_aggs):
@@ -2296,8 +2372,8 @@ class Offset(_BaseLagTransform):
     def _compute_ts_level_from_aggs(self, ts_aggs):
         return self.tfm._compute_ts_level_from_aggs(ts_aggs)
 
-    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
-        return self.tfm._compute_latest_from_aggs(ts_aggs, target_ords)
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords, cache=None):
+        return self.tfm._compute_latest_from_aggs(ts_aggs, target_ords, cache)
 
     def _compute_bucket_feature(
         self,
@@ -2389,9 +2465,15 @@ class Combine(_BaseLagTransform):
             return {bid: self.operator(r1[bid], r2[bid]) for bid in r1 if bid in r2}
         return None
 
-    def _compute_latest_from_aggs(self, ts_aggs, target_ords):
-        r1 = self.tfm1._compute_latest_from_aggs(ts_aggs, target_ords)
-        r2 = self.tfm2._compute_latest_from_aggs(ts_aggs, target_ords)
+    def _compute_latest_from_aggs(self, ts_aggs, target_ords, cache=None):
+        # Each operand keys its cache by bucket id, so give them separate
+        # sub-dicts (string keys can't collide with the int bucket ids inside).
+        c1 = c2 = None
+        if cache is not None:
+            c1 = cache.setdefault("_tfm1", {})
+            c2 = cache.setdefault("_tfm2", {})
+        r1 = self.tfm1._compute_latest_from_aggs(ts_aggs, target_ords, c1)
+        r2 = self.tfm2._compute_latest_from_aggs(ts_aggs, target_ords, c2)
         if r1 is not None and r2 is not None:
             return {bid: self.operator(r1[bid], r2[bid]) for bid in r1 if bid in r2}
         return None

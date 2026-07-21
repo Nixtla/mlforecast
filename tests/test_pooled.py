@@ -2816,6 +2816,184 @@ def test_seasonal_std_stable_moments(engine, monkeypatch):
     assert finite.size and np.all(finite > 0.5)
 
 
+def _pooled_predict_fixture(engine, mode_kwargs, h, n_series=4, n_times=24, seed=8):
+    """Build (df, X_df, static_features) for a pooled recursive-predict case in
+    any of the ``_PREDICT_EQUIV_MODES``. Buckets keep enough history that the
+    expanding/EWM statistics stay finite from the first predicted step."""
+    rng = np.random.default_rng(seed)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times) + 5.0
+    data = {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()}
+    static_features: list = []
+    if "groupby" in mode_kwargs:
+        half = n_series // 2
+        data["grp"] = np.repeat(["A"] * half + ["B"] * (n_series - half), n_times).tolist()
+        static_features = ["grp"]
+    X_df = None
+    if "partition_by" in mode_kwargs:
+        data["promo"] = np.tile((np.arange(n_times) % 3 == 0).astype(float), n_series).tolist()
+    df = _make_df(engine, data)
+    if "partition_by" in mode_kwargs:
+        fut_ds = np.tile(np.arange(n_times, n_times + h), n_series)
+        X_df = _make_df(
+            engine,
+            {
+                "unique_id": np.repeat([f"s{i}" for i in range(n_series)], h).tolist(),
+                "ds": fut_ds.tolist(),
+                "promo": (fut_ds % 3 == 0).astype(float).tolist(),
+            },
+        )
+    return df, X_df, static_features
+
+
+_EXPANDING_EWM_FACTORIES = [
+    (lambda m: ExpandingMean(**m), ExpandingMean),
+    (lambda m: ExpandingStd(**m), ExpandingStd),
+    (lambda m: ExpandingMin(**m), ExpandingMin),
+    (lambda m: ExpandingMax(**m), ExpandingMax),
+    (lambda m: ExponentiallyWeightedMean(alpha=0.5, **m), ExponentiallyWeightedMean),
+]
+_EXPANDING_EWM_IDS = [
+    "ExpandingMean",
+    "ExpandingStd",
+    "ExpandingMin",
+    "ExpandingMax",
+    "EWM",
+]
+
+
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls", _EXPANDING_EWM_FACTORIES, ids=_EXPANDING_EWM_IDS
+)
+@pytest.mark.parametrize(
+    "mode_kwargs",
+    [m[1] for m in _PREDICT_EQUIV_MODES],
+    ids=[m[0] for m in _PREDICT_EQUIV_MODES],
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_expanding_ewm_fast_predict_matches_forced_slow(
+    engine, mode_kwargs, tfm_factory, tfm_cls, monkeypatch
+):
+    """The prefix-dependent transforms carry a per-model running accumulator
+    across recursive predict steps (commit 2). The cached fast path must match
+    the same model predicted through the row-level slow path (hooks disabled),
+    including the per-step ``append_predictions`` extension."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 6
+    df, X_df, static_features = _pooled_predict_fixture(engine, mode_kwargs, h)
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: [tfm_factory(dict(mode_kwargs))]},
+        )
+        fcst.fit(df, static_features=static_features)
+        return np.asarray(fcst.predict(h, X_df=X_df)["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    "mode_kwargs",
+    [m[1] for m in _PREDICT_EQUIV_MODES],
+    ids=[m[0] for m in _PREDICT_EQUIV_MODES],
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_latest_cache_matches_no_cache(engine, mode_kwargs, monkeypatch):
+    """The per-model predict cache produces the same forecasts as recomputing
+    the full aggregate prefix at every step. Forcing ``cache=None`` into each
+    prefix-dependent ``_latest_from_aggs_impl`` exercises the recompute branch."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 8
+    df, X_df, static_features = _pooled_predict_fixture(engine, mode_kwargs, h)
+
+    def fit_predict():
+        tfms = [
+            ExpandingMean(**mode_kwargs),
+            ExpandingStd(**mode_kwargs),
+            ExpandingMin(**mode_kwargs),
+            ExpandingMax(**mode_kwargs),
+            ExponentiallyWeightedMean(alpha=0.4, **mode_kwargs),
+        ]
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: tfms},
+        )
+        fcst.fit(df, static_features=list(static_features))
+        return np.asarray(fcst.predict(h, X_df=X_df)["LinearRegression"])
+
+    preds_cached = fit_predict()
+    for cls in (
+        ExpandingMean,
+        ExpandingStd,
+        ExpandingMin,
+        ExpandingMax,
+        ExponentiallyWeightedMean,
+    ):
+        orig = cls._latest_from_aggs_impl
+
+        def no_cache(self, ts_aggs, target_ords, _cache=None, _orig=orig):
+            return _orig(self, ts_aggs, target_ords, None)
+
+        monkeypatch.setattr(cls, "_latest_from_aggs_impl", no_cache)
+    preds_nocache = fit_predict()
+    np.testing.assert_allclose(preds_cached, preds_nocache, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_multi_model_latest_cache_isolation(engine):
+    """The predict cache is created and dropped inside ``_backup``, so it is
+    scoped to one model's recursive walk. Two models that predict different
+    values (hence append different aggregates) must forecast identically whether
+    run together or alone -- a leaked prefix would corrupt the second model."""
+    from sklearn.linear_model import LinearRegression, Ridge
+    from mlforecast.forecast import MLForecast
+
+    h = 8
+    df, X_df, static_features = _pooled_predict_fixture(engine, {"global_": True}, h)
+
+    def make_tfms():
+        return {
+            1: [
+                ExpandingMean(global_=True),
+                ExponentiallyWeightedMean(alpha=0.5, global_=True),
+                RollingMean(window_size=4, min_samples=1, global_=True),
+            ]
+        }
+
+    fcst = MLForecast(
+        models={"lr": LinearRegression(), "ridge": Ridge(alpha=1.0)},
+        freq=1,
+        lags=[1],
+        lag_transforms=make_tfms(),
+    )
+    fcst.fit(df, static_features=static_features)
+    both = fcst.predict(h, X_df=X_df)
+
+    for name, model in [("lr", LinearRegression()), ("ridge", Ridge(alpha=1.0))]:
+        solo = MLForecast(
+            models={name: model}, freq=1, lags=[1], lag_transforms=make_tfms()
+        )
+        solo.fit(df, static_features=static_features)
+        solo_preds = np.asarray(solo.predict(h, X_df=X_df)[name])
+        np.testing.assert_allclose(
+            np.asarray(both[name]), solo_preds, rtol=1e-12, atol=1e-12
+        )
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_predict_x_df_partition_column_has_nan(engine):
     """predict with an X_df whose partition column is NaN routes to the existing

@@ -1347,10 +1347,17 @@ class TimeSeries:
             state = self._pooled_states[key]
             n_series = len(self.uids)
             slow_tfms: Dict[str, _BaseLagTransform] = {}
+            cache_root = getattr(self, "_latest_agg_cache", None)
             for name, tfm in tfms.items():
+                sub_cache = (
+                    cache_root.setdefault((key, name), {})
+                    if cache_root is not None
+                    else None
+                )
                 latest = tfm._compute_latest_from_aggs(
                     state._ts_aggs,
                     state.next_time_index_by_bucket,
+                    sub_cache,
                 )
                 if latest is not None:
                     if state.groups is None:
@@ -1597,6 +1604,12 @@ class TimeSeries:
         # them faithfully without deep-copying every aggregate array per model.
         pooled_states = getattr(self, "_pooled_states", {})
         pooled_snaps = {key: state.snapshot() for key, state in pooled_states.items()}
+        # Per-model cache for the pooled predict fast paths, keyed by
+        # (state_key, feature_name) -> per-bucket running accumulators. Created
+        # on enter and dropped on exit, so it is scoped to a single model's
+        # recursive walk and can never carry a stale prefix across restores
+        # (a later model predicts different values for the same appended dates).
+        self._latest_agg_cache: Dict[Tuple, dict] = {}
         try:
             yield
         finally:
@@ -1604,6 +1617,7 @@ class TimeSeries:
             self.transforms = lag_tfms
             for key, snap in pooled_snaps.items():
                 self._pooled_states[key].restore(snap)
+            self._latest_agg_cache = {}
 
     def _predict_setup(self) -> None:
         # TODO: move to utils
