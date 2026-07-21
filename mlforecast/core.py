@@ -376,9 +376,10 @@ class TimeSeries:
 
         Parity with the ``self.ga`` trim: a pooled state whose transforms are
         *all* finite-window drops its unused history prefix, while a state
-        containing any Expanding*/EWM transform keeps full history (pooled has
-        no carried accumulator -- it recomputes over the full aggregate vectors
-        at predict, so trimming those would move predictions).
+        containing any Expanding*/EWM transform keeps full history (its
+        predict-time accumulator is initialized from the whole aggregate prefix
+        before being carried across steps, so trimming those would move
+        predictions).
 
         Retention is ``max(keep_last_n, W_state)`` ordinals, where ``W_state``
         is the state's largest finite window. The floor is required and is where

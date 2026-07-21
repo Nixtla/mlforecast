@@ -317,8 +317,9 @@ class _BaseLagTransform(BaseEstimator):
         A pooled state may be trimmed under ``keep_last_n`` only if *every* one
         of its transforms is finite-window: the dropped prefix can then never
         enter a window, so trimming is prediction-neutral. Unbounded transforms
-        (Expanding*/EWM) recompute over the full aggregate vectors at predict —
-        pooled has no carried accumulator — so they must keep full history.
+        (Expanding*/EWM) depend on the whole history prefix — their predict-time
+        accumulator is initialized from it before being carried across steps —
+        so they must keep full history.
 
         Defaults to ``False`` so an unknown/custom transform is never silently
         trimmed (it keeps full history; correctness over the perf win).
@@ -1732,9 +1733,10 @@ class _ExpandingBase(_BaseLagTransform):
 
     @property
     def _is_finite_window(self) -> bool:
-        # Pooled Expanding* recomputes cumsum over the FULL aggregate vectors at
-        # predict (no carried accumulator, unlike the local coreforecast path),
-        # so its window is effectively unbounded -- its state is never trimmed.
+        # Pooled Expanding* depends on the whole history prefix: its predict-time
+        # accumulator is initialized from the FULL aggregate vectors before being
+        # carried across steps, so its window is effectively unbounded and its
+        # state is never trimmed.
         return False
 
     def _bucket_feature_rows_impl(
@@ -2220,9 +2222,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
 
     @property
     def _is_finite_window(self) -> bool:
-        # Pooled EWM consumes every observed bucket-aggregate mean up to the lag
-        # at predict (no carried running state), so it depends on the full
-        # history -- its state is never trimmed.
+        # Pooled EWM folds every observed bucket-aggregate mean up to the lag at
+        # predict: its per-model accumulator resumes from an exact prefix
+        # midpoint across steps, but that midpoint is seeded from the full
+        # history, so it depends on all of it -- its state is never trimmed.
         return False
 
     def _bucket_feature_rows_impl(
