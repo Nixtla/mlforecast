@@ -5,7 +5,13 @@ from sklearn.linear_model import LinearRegression
 from utilsforecast.losses import smape
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import RollingMax, RollingMean, RollingMin
+from mlforecast.lag_transforms import (
+    ExpandingMean,
+    ExponentiallyWeightedMean,
+    RollingMax,
+    RollingMean,
+    RollingMin,
+)
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import generate_daily_series
 
@@ -100,6 +106,51 @@ def test_predict(benchmark, fcst, series, use_exog, series_with_exog, exogs, sta
     evaluation = smape(full_preds, models=models)
     summary = evaluation[models].mean(axis=0)
     assert summary["lr"] < summary["seas_naive"]
+
+
+@pytest.fixture(scope="module")
+def pooled_series(series):
+    """``series`` plus a low-cardinality categorical static so the groupby
+    pooled transform has real groups (the generated statics are all floats)."""
+    s = series.copy()
+    uids = s["unique_id"].unique()
+    grp_map = {u: f"g{i % 10}" for i, u in enumerate(uids)}
+    s["grp"] = s["unique_id"].map(grp_map).astype("category")
+    return s
+
+
+@pytest.fixture
+def pooled_fcst():
+    # Exercises every pooled predict fast path PR C touches: the finite-window
+    # tail-window path (RollingMean/Max) and the carried per-model prefix caches
+    # (ExpandingMean, EWM). Non-local pooled transforms need equal ends, which
+    # the ``series`` fixture provides.
+    return MLForecast(
+        models={"lr": LinearRegression()},
+        freq="D",
+        lags=[1, 7],
+        lag_transforms={
+            1: [
+                RollingMean(7, global_=True),
+                ExpandingMean(global_=True),
+                ExponentiallyWeightedMean(alpha=0.9, global_=True),
+            ],
+            7: [RollingMax(7, groupby=["grp"])],
+        },
+        date_features=["dayofweek"],
+    )
+
+
+@pytest.mark.parametrize("num_threads", [1, 2])
+def test_predict_pooled(benchmark, pooled_fcst, pooled_series, statics, num_threads):
+    horizon = 14
+    valid = pooled_series.groupby("unique_id").tail(horizon)
+    train = pooled_series.drop(valid.index)
+    pooled_fcst.ts.num_threads = num_threads
+    pooled_fcst.fit(train, static_features=statics + ["grp"])
+    preds = benchmark(pooled_fcst.predict, horizon)
+    assert len(preds) == pooled_series["unique_id"].nunique() * horizon
+    assert np.isfinite(preds["lr"].to_numpy()).all()
 
 
 def test_drop_auxiliary_columns_default_drops_groupby(series):
