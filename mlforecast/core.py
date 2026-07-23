@@ -689,6 +689,10 @@ class TimeSeries:
                 df_for_pooled = df
             for key, tfms in pooled_tfms.items():
                 mode, group_cols_t, part_cols_t = key
+                # A state stores raw per-ordinal values only if one of its
+                # transforms needs them (a raw-row quantile); the flag is fixed
+                # here and threaded through every later rebuild via the state.
+                store_values = any(tfm._needs_value_store for tfm in tfms.values())
                 if mode == "global" and not part_cols_t:
                     self._pooled_states[key] = PooledState.from_global(
                         sorted_df,
@@ -697,6 +701,7 @@ class TimeSeries:
                         target_col=target_col,
                         ga_data_dtype=ga.data.dtype,
                         n_series=len(ga.indptr) - 1,
+                        store_values=store_values,
                     )
                 elif mode == "groupby" and not part_cols_t:
                     for col in group_cols_t:
@@ -723,6 +728,7 @@ class TimeSeries:
                         target_col=target_col,
                         ga_data_dtype=ga.data.dtype,
                         static_features=self.static_features_,
+                        store_values=store_values,
                     )
                 else:
                     all_cols = list(group_cols_t) + list(part_cols_t)
@@ -743,6 +749,7 @@ class TimeSeries:
                         ga_data_dtype=ga.data.dtype,
                         static_features=self.static_features_,
                         n_series=len(ga.indptr) - 1,
+                        store_values=store_values,
                     )
             for key, state in self._pooled_states.items():
                 if state.groups is not None:
