@@ -35,6 +35,7 @@ from mlforecast.forecast import MLForecast
 from mlforecast.lag_transforms import (
     Combine,
     ExpandingMean,
+    ExpandingQuantile,
     ExponentiallyWeightedMean,
     Offset,
     RollingMax,
@@ -417,3 +418,134 @@ def test_g2_4_offset_and_combine_respect_inner_transform():
     }
     state = _preprocess_states(df, 3, unbounded)[("global", (), ())]
     assert state.next_time_index_by_bucket[0] == T  # not trimmed
+
+
+# --------------------------------------------------------------------------- #
+# Per-state retention: with an INFERRED keep_last_n, each finite pooled state
+# keeps only its own window instead of the global max. Two partition columns
+# with different windows (the on_display/promo example) exercise this.
+# --------------------------------------------------------------------------- #
+def _mixed_window_panel(T=30):
+    """Balanced panel with two dynamic partition columns that vary over time."""
+    ids, ds, y, col_a, col_b = [], [], [], [], []
+    for sid, base in {"a": 1.0, "b": 3.0, "c": 7.0, "d": 11.0}.items():
+        for t in range(1, T + 1):
+            ids.append(sid)
+            ds.append(t)
+            y.append(base + 2.0 * t + ((t * 3) % 5))
+            col_a.append(t % 2)  # small-window partition key
+            col_b.append((t // 3) % 2)  # large-window partition key
+    return pd.DataFrame({ID: ids, TIME: ds, TARGET: y, "col_a": col_a, "col_b": col_b})
+
+
+def _mixed_future_X(last_t, h):
+    rows = []
+    for sid in ["a", "b", "c", "d"]:
+        for t in range(last_t + 1, last_t + 1 + h):
+            rows.append({ID: sid, TIME: t, "col_a": t % 2, "col_b": (t // 3) % 2})
+    return pd.DataFrame(rows)
+
+
+def _mixed_update_rows(t):
+    return pd.DataFrame(
+        {
+            ID: ["a", "b", "c", "d"],
+            TIME: [t] * 4,
+            TARGET: [50.0, 60.0, 70.0, 80.0],
+            "col_a": [t % 2] * 4,
+            "col_b": [(t // 3) % 2] * 4,
+        }
+    )
+
+
+def _fit_ts(df, keep_last_n, lag_transforms, static_features):
+    fcst = _build_fcst(lag_transforms)
+    fcst.preprocess(
+        df,
+        id_col=ID,
+        time_col=TIME,
+        target_col=TARGET,
+        keep_last_n=keep_last_n,
+        static_features=static_features,
+        dropna=False,
+    )
+    return fcst.ts
+
+
+_MIXED = {
+    1: [
+        RollingMean(3, min_samples=1, partition_by=["col_a"]),
+        RollingMean(8, min_samples=1, partition_by=["col_b"]),
+    ]
+}
+
+
+def test_per_state_inferred_trims_to_own_window():
+    """Inferred keep_last_n: the small-window state keeps only its own window,
+    NOT the global max. Before the per-state fix this state was padded to the
+    global inferred keep_last_n (8)."""
+    T = 30
+    df = _mixed_window_panel(T)
+    ts = _fit_ts(df, None, _MIXED, static_features=[])  # keep_last_n inferred
+
+    # global inference is the widest window across all transforms (lag 1 + RM 8)
+    assert ts.keep_last_n == 8
+    a_state = ts._pooled_states[("local", (), ("col_a",))]
+    b_state = ts._pooled_states[("local", (), ("col_b",))]
+    # each state keeps exactly its own window (= its transforms' update_samples)
+    assert set(a_state.next_time_index_by_bucket.values()) == {3}
+    assert set(b_state.next_time_index_by_bucket.values()) == {8}
+    # the small state keeps strictly less than the global keep_last_n
+    assert max(a_state.next_time_index_by_bucket.values()) < ts.keep_last_n
+
+
+def test_per_state_inferred_predictions_and_update_match_full():
+    """The per-state trim is prediction-neutral through predict + update()."""
+    T = 30
+    h = 5
+    df = _mixed_window_panel(T)
+    X1 = _mixed_future_X(T, h)
+    upd = _mixed_update_rows(T + 1)
+    X2 = _mixed_future_X(T + 1, h)
+
+    def run(keep_last_n):
+        fcst = _build_fcst(_MIXED)
+        fcst.fit(
+            df,
+            id_col=ID,
+            time_col=TIME,
+            target_col=TARGET,
+            static_features=[],
+            keep_last_n=keep_last_n,
+        )
+        p1 = _sorted_preds(fcst.predict(h=h, X_df=X1))
+        fcst.update(upd)
+        p2 = _sorted_preds(fcst.predict(h=h, X_df=X2))
+        return p1, p2
+
+    inf1, inf2 = run(None)  # inferred -> per-state windows (3 and 8)
+    full1, full2 = run(_NO_TRIM)  # full history retained everywhere
+    np.testing.assert_allclose(inf1, full1, rtol=1e-9, atol=1e-9)
+    np.testing.assert_allclose(inf2, full2, rtol=1e-9, atol=1e-9)
+
+
+def test_boundary_unbounded_transform_disables_pooled_trim():
+    """Explicit non-goal: when an unbounded transform makes keep_last_n
+    un-inferrable it stays None, so self.ga is not trimmed and finite pooled
+    states are NOT trimmed either (today's behavior, deliberately preserved)."""
+    T = 30
+    df = _mixed_window_panel(T)
+    lag_transforms = {
+        1: [
+            RollingMean(3, min_samples=1, partition_by=["col_a"]),  # finite
+            ExpandingQuantile(p=0.5, global_=True),  # update_samples == -1
+        ]
+    }
+    ts = _fit_ts(df, None, lag_transforms, static_features=[])
+
+    assert ts.keep_last_n is None  # inference failed -> no resolved keep_last_n
+    # self.ga keeps full per-series history
+    assert int(np.diff(ts.ga.indptr).min()) == T
+    # the finite col_a state is NOT trimmed (no resolved keep_last_n)
+    a_state = ts._pooled_states[("local", (), ("col_a",))]
+    assert set(a_state.next_time_index_by_bucket.values()) == {T}

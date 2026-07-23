@@ -371,27 +371,29 @@ class TimeSeries:
             local[name] = tfm
         return local
 
-    def _trim_pooled_states(self) -> None:
-        """Trim each pooled state's history under ``keep_last_n``.
+    def _trim_pooled_states(self, keep_last_n: Optional[int]) -> None:
+        """Trim each pooled state to only the history its own transforms need.
 
-        Parity with the ``self.ga`` trim: a pooled state whose transforms are
-        *all* finite-window drops its unused history prefix, while a state
-        containing any Expanding*/EWM transform keeps full history (its
-        predict-time accumulator is initialized from the whole aggregate prefix
-        before being carried across steps, so trimming those would move
-        predictions).
+        A pooled state whose transforms are *all* finite-window drops its unused
+        history prefix, while a state containing any Expanding*/EWM transform
+        keeps full history (its predict-time accumulator is initialized from the
+        whole aggregate prefix before being carried across steps, so trimming
+        those would move predictions).
 
-        Retention is ``max(keep_last_n, W_state)`` ordinals, where ``W_state``
-        is the state's largest finite window. The floor is required and is where
-        pooled legitimately diverges from the local coreforecast path: local
-        rolling survives an undersized explicit ``keep_last_n`` because
-        coreforecast carries a per-transform window buffer; pooled has none (the
-        aggregates *are* the buffer), so trimming below ``W_state`` would compute
-        windows off a truncated prefix. When ``keep_last_n`` is inferred it
-        already equals the global max window, so the floor is then a no-op.
+        Retention is ``max(keep_last_n or 0, W_state)`` ordinals, where
+        ``W_state`` is the state's largest finite window and ``keep_last_n`` is
+        the value the *user* passed (``None`` when it was inferred). Each state
+        is therefore trimmed to its own window regardless of the global inferred
+        ``keep_last_n`` — a small-window state next to a wide-window one keeps
+        only what it needs. The ``W_state`` floor is required and is where pooled
+        legitimately diverges from the local coreforecast path: local rolling
+        survives an undersized explicit ``keep_last_n`` because coreforecast
+        carries a per-transform window buffer; pooled has none (the aggregates
+        *are* the buffer), so trimming below ``W_state`` would compute windows
+        off a truncated prefix. An *explicit* ``keep_last_n`` is honored as a
+        floor (parity with the ``self.ga`` trim / extra buffer for ``update``).
         """
-        if self.keep_last_n is None:
-            return
+        floor = keep_last_n if keep_last_n is not None else 0
         for key, tfms in self._get_pooled_tfms().items():
             state = self._pooled_states.get(key)
             if state is None:
@@ -400,7 +402,7 @@ class TimeSeries:
             if not all(tfm._is_finite_window for tfm in tfm_list):
                 continue
             w_state = max(tfm.update_samples for tfm in tfm_list)
-            state.trim_to_last(max(self.keep_last_n, w_state))
+            state.trim_to_last(max(floor, w_state))
 
     def _apply_keep_last_n(self) -> None:
         """Resolve ``keep_last_n`` and trim the stored history accordingly.
@@ -411,6 +413,10 @@ class TimeSeries:
         the lag transforms have computed their state, since local stateful
         transforms (Expanding*/EWM) warm their buffers from the full history.
         """
+        # the user-provided value (``None`` when inferred below) is the only
+        # retention floor the pooled states honor — each is otherwise trimmed to
+        # its own window, not the global inferred ``keep_last_n``.
+        user_keep_last_n = self.keep_last_n
         update_samples = [
             getattr(tfm, "update_samples", -1) for tfm in self.transforms.values()
         ]
@@ -423,7 +429,7 @@ class TimeSeries:
             self.keep_last_n = max(update_samples)
         if self.keep_last_n is not None:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
-            self._trim_pooled_states()
+            self._trim_pooled_states(user_keep_last_n)
 
     def _initialize_lag_transform_states(self) -> None:
         """Materialize lag transform state for subsequent update-based prediction.
