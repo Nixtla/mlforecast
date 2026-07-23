@@ -654,6 +654,11 @@ class PooledState:
         ord_raw = np.searchsorted(unique_ts, ts_raw).astype(np.int64)
         bid_arr = np.zeros(len(global_df), dtype=np.int64)
         y_float = y_raw.astype(float)
+        # The stored bucket_df is only ever keyed on (id_col, time_col) after
+        # construction (slow-path join + idsorted permutation); the target lives
+        # in ``y``. Drop everything else so we don't retain a full-history copy
+        # of columns nothing reads.
+        global_df = global_df[_dedupe_preserve_order([id_col, time_col])]
         return cls(
             bucket_df=global_df,
             groups=None,
@@ -697,6 +702,12 @@ class PooledState:
         bid_raw = bucket_df["_bucket_id"].to_numpy()
         bucket_df = ufp.drop_index_if_pandas(bucket_df)
         bid_arr = bid_raw.astype(np.int64)
+        # The stored bucket_df is only ever keyed on (id_col, time_col) after
+        # construction (slow-path join + idsorted permutation); the group values
+        # are recoverable from ``groups`` + ``bucket_id`` and the target lives in
+        # ``y``. Drop everything else so we don't retain a full-history copy of
+        # the (static) group columns for every series.
+        bucket_df = bucket_df[_dedupe_preserve_order([id_col, time_col])]
         ord_arr, next_by_bucket = _compute_time_index(bid_arr, ts_raw)
         series_bucket_id = lookup_bucket_ids(
             static_features, groups, group_cols_list
@@ -1274,7 +1285,8 @@ class PooledState:
         ``_idsorted_to_bucket_pos``) is regenerated through the same primitives
         the constructors/append paths use, so all representations stay mutually
         consistent. The caller must pass an ``n_ordinals`` covering every
-        transform's window (see the retention rule in ``TimeSeries._transform``),
+        transform's window (see the retention rule in
+        ``TimeSeries._trim_pooled_states``),
         so the dropped prefix can never enter a window and the trim is
         prediction-neutral.
 

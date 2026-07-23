@@ -189,6 +189,42 @@ def test_group_update_preserves_bucket_df(engine, lag):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_bucket_df_stores_only_id_and_time(engine):
+    """global/groupby states retain only ``[id_col, time_col]`` in bucket_df:
+    the (static) group columns and the target are not kept per row -- they live
+    in ``groups``/``bucket_id`` and ``y``. Asserts the exact schema (robust even
+    when a group column coincides with the id column)."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a", "b", "b"],
+            "ds": [1, 2, 1, 2],
+            "y": [1.0, 2.0, 10.0, 20.0],
+            "brand": ["x", "x", "y", "y"],
+        },
+    )
+    ts = TimeSeries(
+        freq=1,
+        lag_transforms={
+            1: [RollingMean(2, global_=True), RollingMean(2, groupby=["brand"])]
+        },
+    )
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+        keep_last_n=10_000,
+    )
+    for key in (("global", (), ()), ("groupby", ("brand",), ())):
+        state = ts._pooled_states[key]
+        assert list(state.bucket_df.columns) == ["unique_id", "ds"], key
+        assert len(state.bucket_df) == len(df), key  # rows preserved
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
 def test_global_sequential_updates(engine, lag):
     """Sequential update() calls correctly increment time_index."""
