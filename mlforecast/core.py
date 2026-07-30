@@ -445,13 +445,34 @@ class TimeSeries:
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
 
-    def _check_null_target_support(self) -> None:
+    def _resolve_skipna(self, allow_null_target: bool) -> List[str]:
+        """Apply every transform's deferred `skipna=None`.
+
+        `skipna` defaults to None, meaning "follow `allow_null_target`", so
+        opting into null targets is enough to get NaN-skipping features without
+        also annotating every transform. Runs on each fit, so re-fitting with a
+        different flag re-resolves rather than inheriting the previous answer.
+
+        Returns the names of transforms that should have skipped nulls but can't,
+        because the installed coreforecast ignores `skipna` in its incremental
+        `update` (see `mlforecast.compat`). Those fall back to propagating.
+        """
+        unsupported = []
+        for tfm in self.transforms.values():
+            if not isinstance(tfm, _BaseLagTransform):
+                continue
+            name = tfm._resolve_skipna(allow_null_target)
+            if name is not None:
+                unsupported.append(name)
+        return unsupported
+
+    def _check_null_target_support(self, skipna_unsupported: List[str]) -> None:
         """Validate the configured transforms against a target that contains nulls.
 
         Target transforms are a hard error when they'd propagate the null through
-        every fitted value and prediction; lag transforms only get a warning,
-        since NaN-propagating features are a defensible choice and the rows they
-        poison are dropped by `dropna` rather than silently wrong.
+        every fitted value and prediction. Lag transforms that wanted to skip
+        nulls but can't only get a warning, so a configuration that worked before
+        `allow_null_target` existed doesn't start failing.
         """
         unsafe_target_tfms = [
             type(tfm).__name__
@@ -468,23 +489,19 @@ class TimeSeries:
                 "accept `skipna=True`, which computes their statistics over the "
                 "observed values only and is supported here."
             )
-        # Only flag transforms that *have* a skipna knob: a null lag is genuinely
-        # null, so Lag/LookupLag propagating it is correct, not a mistake.
-        propagating = sorted(
-            name
-            for name, tfm in self.transforms.items()
-            if isinstance(tfm, _BaseLagTransform)
-            and getattr(tfm, "skipna", True) is False
-            and not tfm._is_pooled
-        )
-        if propagating:
+        if skipna_unsupported:
+            names = reprlib.repr(sorted(set(skipna_unsupported)))
             warnings.warn(
-                "The target contains nulls and these local lag transforms will "
-                f"propagate them instead of skipping them: {reprlib.repr(propagating)}.\n"
-                "A single null makes every later value of that series null too, so "
-                "with `dropna=True` the rows after it are dropped from training.\n"
-                "Pass `skipna=True` to those transforms to exclude nulls from their "
-                "statistics (and from their sample counts) instead."
+                f"The target contains nulls and {names} can't skip them: the "
+                "installed coreforecast honors `skipna` when computing the "
+                "features but ignores it when updating them step by step, so "
+                "skipping would make training and prediction disagree.\n"
+                "They propagate the nulls instead, which makes every later value "
+                "of an affected series null too (with `dropna=True` those rows "
+                "are then dropped from training).\n"
+                "Use a pooled scope (`global_=True`, `groupby=[...]`, "
+                "`partition_by=[...]`), which keeps its own NaN-aware aggregates, "
+                "or a rolling transform, whose updates do honor `skipna`."
             )
 
     def _check_aligned_ends(self) -> None:
@@ -600,6 +617,10 @@ class TimeSeries:
         validate_format(df, id_col, time_col, target_col)
         validate_freq(df[time_col], self.freq)
         self.allow_null_target = allow_null_target
+        # Resolve deferred `skipna=None` on every fit, before any feature is
+        # computed, so `update`-supplied nulls are handled the same way even when
+        # this particular frame has none.
+        skipna_unsupported = self._resolve_skipna(allow_null_target)
         if ufp.is_nan_or_none(df[target_col]).any():
             if not allow_null_target:
                 raise ValueError(
@@ -608,7 +629,7 @@ class TimeSeries:
                     "for feature computation and have them dropped before the "
                     "models are fitted."
                 )
-            self._check_null_target_support()
+            self._check_null_target_support(skipna_unsupported)
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col

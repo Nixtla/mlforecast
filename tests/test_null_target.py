@@ -5,6 +5,7 @@ grid, but for a stretch in the middle the target is unknown (the product didn't
 exist / was out of range) rather than zero.
 """
 
+import operator
 import warnings
 
 import numpy as np
@@ -22,6 +23,7 @@ from mlforecast.lag_transforms import (
     ExpandingQuantile,
     ExpandingStd,
     ExponentiallyWeightedMean,
+    Offset,
     RollingMean,
     RollingQuantile,
     RollingStd,
@@ -77,9 +79,7 @@ def _quiet_propagation_warning():
     precedence over this filter.
     """
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message=".*propagate them instead of skipping.*"
-        )
+        warnings.filterwarnings("ignore", message=".*can't skip them.*")
         yield
 
 
@@ -178,14 +178,14 @@ def test_skipna_does_not_inflate_the_sample_count(series):
 @pytest.mark.skipif(
     not core_supports_skipna(), reason="coreforecast without skipna support"
 )
-def test_without_skipna_the_feature_is_poisoned(series):
-    """Documents why skipna is needed: coreforecast propagates by default."""
-    prep = _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(
+def test_explicit_skipna_false_propagates(series):
+    """The opt-out: `skipna=False` keeps coreforecast's propagating semantics."""
+    prep = _fcst(lag_transforms={1: [RollingMean(3, 1, skipna=False)]}).preprocess(
         series, allow_null_target=True, dropna=False
     )
     tail = prep.loc[
         prep["ds"].gt(pd.Timestamp("2020-01-11")),
-        "rolling_mean_lag1_window_size3_min_samples1",
+        "rolling_mean_lag1_window_size3_min_samples1_skipnaFalse",
     ]
     assert tail.isna().all()
 
@@ -272,8 +272,18 @@ def test_pooled_skips_nulls_regardless_of_skipna(two_series):
 # ---------------------------------------------------------------- warning
 
 
-def test_warns_for_propagating_local_transforms(series):
-    with pytest.warns(UserWarning, match="propagate them instead of skipping"):
+@pytest.mark.parametrize(
+    "make", [lambda: ExpandingMean(), lambda: ExponentiallyWeightedMean(0.5)]
+)
+def test_warns_when_inferred_skipna_cannot_be_honored(series, make):
+    """Inferred skipna falls back to propagating rather than raising."""
+    with pytest.warns(UserWarning, match="can't skip them"):
+        _fcst(lag_transforms={1: [make()]}).preprocess(series, allow_null_target=True)
+
+
+def test_no_warning_for_transforms_that_can_skip(series):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
         _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(
             series, allow_null_target=True
         )
@@ -718,3 +728,108 @@ def test_weighted_transfer_inherits_allow_null_target(method):
     preds = fcst.predict(2, new_df=new_df, level=[80], transfer_conformal=method)
     assert preds["LinearRegression-lo-80"].notna().all()
     assert preds["LinearRegression-hi-80"].notna().all()
+
+
+# ------------------------------------------------------------ tri-state skipna
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_skipna_inferred_from_allow_null_target(series):
+    """`allow_null_target=True` alone is enough; no per-transform annotation."""
+    prep = _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(
+        series, allow_null_target=True, dropna=False
+    )
+    col = "rolling_mean_lag1_window_size3_min_samples1"
+    # would be NaN from 01-12 onwards if the nulls were propagating
+    assert prep.loc[prep["ds"].gt(pd.Timestamp("2020-01-12")), col].notna().all()
+    # and equals what an explicit skipna=True produces
+    explicit = _fcst(lag_transforms={1: [RollingMean(3, 1, skipna=True)]}).preprocess(
+        series, allow_null_target=True, dropna=False
+    )
+    np.testing.assert_allclose(
+        prep[col].to_numpy(),
+        explicit[col + "_skipnaTrue"].to_numpy(),
+        rtol=1e-12,
+        equal_nan=True,
+    )
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_default_still_propagates_without_the_flag():
+    """Without `allow_null_target` nothing changes for existing users."""
+    df = _one_series(gap=False)[["unique_id", "ds", "y"]]
+    prep = _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(df, dropna=False)
+    tfm = next(
+        iter(_fcst(lag_transforms={1: [RollingMean(3, 1)]}).ts.transforms.values())
+    )
+    assert tfm.skipna is None  # declared value untouched
+    assert "rolling_mean_lag1_window_size3_min_samples1" in prep.columns
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_inference_does_not_change_feature_names(series):
+    """The name reflects the declared spec, so it can't move under the flag."""
+    clean = _one_series(gap=False)[["unique_id", "ds", "y"]]
+    with_flag = _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(
+        series, allow_null_target=True, dropna=False
+    )
+    without = _fcst(lag_transforms={1: [RollingMean(3, 1)]}).preprocess(
+        clean, dropna=False
+    )
+    assert list(with_flag.columns) == list(without.columns)
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_refitting_re_resolves_the_flag(series):
+    """The declared None is never overwritten, so a second fit re-decides."""
+    fcst = _fcst(lag_transforms={1: [RollingMean(3, 1)]})
+    fcst.preprocess(series, allow_null_target=True, dropna=False)
+    tfm = next(iter(fcst.ts.transforms.values()))
+    assert tfm.skipna is None and tfm._core_tfm.skipna is True
+
+    clean = _one_series(gap=False)[["unique_id", "ds", "y"]]
+    fcst.preprocess(clean, dropna=False)
+    tfm = next(iter(fcst.ts.transforms.values()))
+    assert tfm.skipna is None and tfm._core_tfm.skipna is False
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_inference_reaches_wrapped_transforms(series):
+    """Offset/Combine take no skipna of their own and must delegate."""
+    from mlforecast.lag_transforms import Combine
+
+    fcst = _fcst(
+        lag_transforms={
+            1: [
+                Offset(RollingMean(3, 1), 1),
+                Combine(RollingMean(3, 1), RollingMean(2, 1), operator.truediv),
+            ]
+        }
+    )
+    prep = fcst.preprocess(series, allow_null_target=True, dropna=False)
+    feats = [c for c in prep.columns if c not in ("unique_id", "ds", "y")]
+    assert len(feats) == 2
+    for col in feats:
+        assert prep.loc[prep["ds"].eq(DATES[-1]), col].notna().all()
+
+
+@pytest.mark.skipif(
+    not core_supports_skipna(), reason="coreforecast without skipna support"
+)
+def test_inferred_skipna_survives_predict(series):
+    """Resolution happens in `_fit`, which every rebuild path goes through."""
+    fcst = _fcst(lags=[1], lag_transforms={1: [RollingMean(3, 1)]})
+    fcst.fit(series, allow_null_target=True)
+    direct = fcst.predict(2)
+    rebuilt = fcst.predict(2, new_df=series)
+    pd.testing.assert_frame_equal(direct, rebuilt)
