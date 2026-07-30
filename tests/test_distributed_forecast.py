@@ -129,6 +129,20 @@ def test_dask_distributed_weight_col_affects_predictions(small_ordered_series):
     assert not np.allclose(preds_uniform["stub"], preds_skewed["stub"])
 
 
+def test_dask_distributed_preprocess_weight_col_is_not_static(small_ordered_series):
+    """weight_col must be forwarded so it isn't inferred as a static feature."""
+    weighted = small_ordered_series.copy()
+    weighted["weight"] = np.arange(len(weighted), dtype=float)
+    partitioned = _make_partitioned_series(weighted, npartitions=2)
+    fcst = DistributedMLForecast(models=[], freq="D", lags=[1])
+
+    prep = fcst.preprocess(partitioned, weight_col="weight").compute()
+
+    assert "weight" in prep.columns
+    # a static feature is constant per id; the weights must survive as dynamic values
+    assert prep.groupby("unique_id")["weight"].nunique().gt(1).all()
+
+
 def test_dask_distributed_forecast_with_x_df():
     """predict() with X_df as a Dask DataFrame must give the same result as pandas X_df."""
     h = 7
