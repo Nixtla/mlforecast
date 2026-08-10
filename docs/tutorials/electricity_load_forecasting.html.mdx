@@ -291,9 +291,9 @@ models ={
 
 ```
 
-The we can instanciate the `MLForecast` class with the models we want to
-try along side `target_transforms`, `lags`, `lag_transforms`, and
-`date_features`. All this features are applied to the models we
+Then we can instantiate the `MLForecast` class with the models we want
+to try alongside `target_transforms`, `lags`, `lag_transforms`, and
+`date_features`. All these features are applied to the models we
 selected.
 
 In this case we use the 1st, 12th and 24th lag, which are passed as a
@@ -387,8 +387,8 @@ plot_cv(df_train, crossvalidation_df, 'PJM_Load_hourly', 'load_forecasting__pred
 ![](../../figs/load_forecasting__predictions.png)
 
 Visually examining the forecasts can give us some idea of how the model
-is behaving, yet in order to asses the performace we need to evaluate
-them trough metrics. For that we use the
+is behaving, yet in order to assess the performance we need to evaluate
+them through metrics. For that we use the
 [utilsforecast](https://nixtlaverse.nixtla.io/utilsforecast/) library
 that contains many useful metrics and an evaluate function.
 
@@ -527,8 +527,8 @@ forecasts.head()
 | 3   | PJM_Load_hourly | 2001-12-31 04:00:00 | 26976.104125 | 27661.572733 | 25249.961527 | 25286.024722 | 28666.183529 | 28702.246724 | 25911.133521 | 25959.815715 | 29363.329750 | 29412.011944 |
 | 4   | PJM_Load_hourly | 2001-12-31 05:00:00 | 26694.246238 | 27393.922370 | 25044.220845 | 25051.548832 | 28336.943644 | 28344.271631 | 25751.547897 | 25762.524815 | 29025.319924 | 29036.296843 |
 
-The `predict` method returns a DataFrame witht the predictions for each
-model (`lasso` and `lgbm`) along side the prediction tresholds. The
+The `predict` method returns a DataFrame with the predictions for each
+model (`lasso` and `lgbm`) alongside the prediction thresholds. The
 high-threshold is indicated by the keyword `hi`, the low-threshold by
 the keyword `lo`, and the level by the number in the column names.
 
