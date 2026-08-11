@@ -174,6 +174,7 @@ class LightGBMCV:
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
+        allow_null_target: bool = False,
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -198,6 +199,7 @@ class LightGBMCV:
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
             weight_col (str, optional):Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. The rows are kept while each window's features are computed and dropped before training. Defaults to False.
 
         Returns:
             (LightGBMCV): CV object with internal data structures for partial_fit.
@@ -246,6 +248,7 @@ class LightGBMCV:
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 weight_col=weight_col,
+                allow_null_target=allow_null_target,
             )
             assert isinstance(prep, pd.DataFrame)
 
@@ -266,6 +269,32 @@ class LightGBMCV:
             self.items.append((ts, bst, valid))
         return self
 
+    def _eval_metric(self, preds: pd.DataFrame, weight_col: Optional[str]) -> float:
+        """Score one window's predictions, ignoring unobserved actuals.
+
+        With `allow_null_target` a validation timestamp can have no actual, which
+        would make every metric (and therefore early stopping) NaN.
+        """
+        valid_target = preds[self.target_col].notna()
+        if not valid_target.all():
+            preds = preds[valid_target]
+            if preds.empty:
+                raise ValueError(
+                    "A cross validation window has no observed target values, so "
+                    f"the {self.metric_name} metric can't be computed. Reduce "
+                    "`n_windows`/`h` or use a history whose tail is observed."
+                )
+        extra = {}
+        if weight_col is not None:
+            extra["weight_series"] = preds[weight_col]
+        return self.metric_fn(
+            preds[self.target_col],
+            preds["Booster"],
+            preds[self.id_col],
+            preds[self.time_col],
+            **extra,
+        )
+
     def _single_threaded_partial_fit(
         self,
         metric_values,
@@ -285,21 +314,7 @@ class LightGBMCV:
                 after_predict_callback=after_predict_callback,
                 weight_col=weight_col,
             )
-            if weight_col is not None:
-                metric_values[j] = self.metric_fn(
-                    preds[self.target_col],
-                    preds["Booster"],
-                    preds[self.id_col],
-                    preds[self.time_col],
-                    weight_series=preds[weight_col],
-                )
-            else:
-                metric_values[j] = self.metric_fn(
-                    preds[self.target_col],
-                    preds["Booster"],
-                    preds[self.id_col],
-                    preds[self.time_col],
-                )
+            metric_values[j] = self._eval_metric(preds, weight_col)
 
     def _multithreaded_partial_fit(
         self,
@@ -325,27 +340,7 @@ class LightGBMCV:
                 )
                 futures.append(future)
             cv_preds = [f.result() for f in futures]
-        if weight_col:
-            metric_values[:] = [
-                self.metric_fn(
-                    preds[self.target_col],
-                    preds["Booster"],
-                    preds[self.id_col],
-                    preds[self.time_col],
-                    weight_series=preds[weight_col].values,
-                )
-                for preds in cv_preds
-            ]
-        else:
-            metric_values[:] = [
-                self.metric_fn(
-                    preds[self.target_col],
-                    preds["Booster"],
-                    preds[self.id_col],
-                    preds[self.time_col],
-                )
-                for preds in cv_preds
-            ]
+        metric_values[:] = [self._eval_metric(preds, weight_col) for preds in cv_preds]
 
     def partial_fit(
         self,
@@ -426,6 +421,7 @@ class LightGBMCV:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
+        allow_null_target: bool = False,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -461,6 +457,7 @@ class LightGBMCV:
                 The series identifier is on the index. Defaults to None.
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. See `MLForecast.preprocess` for the semantics. Defaults to False.
 
         Returns:
             (list of tuple): List of (boosting rounds, metric value) tuples.
@@ -481,6 +478,7 @@ class LightGBMCV:
             weights=weights,
             metric=metric,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         hist = []
         for i in range(0, num_iterations, eval_every):
@@ -523,7 +521,14 @@ class LightGBMCV:
                     [f.result().assign(window=i) for i, f in enumerate(futures)]
                 )
         self.ts._fit(
-            df, id_col, time_col, target_col, static_features, keep_last_n, weight_col
+            df,
+            id_col,
+            time_col,
+            target_col,
+            static_features,
+            keep_last_n,
+            weight_col,
+            allow_null_target=allow_null_target,
         )
         self.ts.as_numpy = False
         return hist

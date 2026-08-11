@@ -313,6 +313,12 @@ class TimeSeries:
             namer=lag_transforms_namer,
         )
         self.horizon_features_: Dict[int, List[str]] = {}
+        # Set by `_fit`; internal history rebuilds (predict(new_df=...),
+        # non-refit CV windows, recursive fitted values, the distributed
+        # per-partition path) read it back so they don't reject a target the
+        # original fit explicitly accepted. Read with `getattr(..., False)`
+        # so instances pickled before this existed still load.
+        self.allow_null_target = False
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
@@ -439,6 +445,65 @@ class TimeSeries:
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
 
+    def _resolve_skipna(self, allow_null_target: bool) -> List[str]:
+        """Apply every transform's deferred `skipna=None`.
+
+        `skipna` defaults to None, meaning "follow `allow_null_target`", so
+        opting into null targets is enough to get NaN-skipping features without
+        also annotating every transform. Runs on each fit, so re-fitting with a
+        different flag re-resolves rather than inheriting the previous answer.
+
+        Returns the names of transforms that should have skipped nulls but can't,
+        because the installed coreforecast ignores `skipna` in its incremental
+        `update` (see `mlforecast.compat`). Those fall back to propagating.
+        """
+        unsupported = []
+        for tfm in self.transforms.values():
+            if not isinstance(tfm, _BaseLagTransform):
+                continue
+            name = tfm._resolve_skipna(allow_null_target)
+            if name is not None:
+                unsupported.append(name)
+        return unsupported
+
+    def _check_null_target_support(self, skipna_unsupported: List[str]) -> None:
+        """Validate the configured transforms against a target that contains nulls.
+
+        Target transforms are a hard error when they'd propagate the null through
+        every fitted value and prediction. Lag transforms that wanted to skip
+        nulls but can't only get a warning, so a configuration that worked before
+        `allow_null_target` existed doesn't start failing.
+        """
+        unsafe_target_tfms = [
+            type(tfm).__name__
+            for tfm in (self.target_transforms or [])
+            if not getattr(tfm, "_nan_safe", False)
+        ]
+        if unsafe_target_tfms:
+            raise ValueError(
+                "allow_null_target=True is not supported with these target "
+                f"transforms: {unsafe_target_tfms}. They propagate nulls into "
+                "every value of the affected series, which would make the fitted "
+                "values and predictions null as well. The local scalers "
+                "(LocalStandardScaler, LocalMinMaxScaler, LocalRobustScaler) "
+                "accept `skipna=True`, which computes their statistics over the "
+                "observed values only and is supported here."
+            )
+        if skipna_unsupported:
+            names = reprlib.repr(sorted(set(skipna_unsupported)))
+            warnings.warn(
+                f"The target contains nulls and {names} can't skip them: the "
+                "installed coreforecast honors `skipna` when computing the "
+                "features but ignores it when updating them step by step, so "
+                "skipping would make training and prediction disagree.\n"
+                "They propagate the nulls instead, which makes every later value "
+                "of an affected series null too (with `dropna=True` those rows "
+                "are then dropped from training).\n"
+                "Use a pooled scope (`global_=True`, `groupby=[...]`, "
+                "`partition_by=[...]`), which keeps its own NaN-aware aggregates, "
+                "or a rolling transform, whose updates do honor `skipna`."
+            )
+
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
         if not self._get_pooled_tfms():
@@ -546,12 +611,25 @@ class TimeSeries:
         static_features: Optional[List[str]] = None,
         keep_last_n: Optional[int] = None,
         weight_col: Optional[str] = None,
+        allow_null_target: bool = False,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
         validate_format(df, id_col, time_col, target_col)
         validate_freq(df[time_col], self.freq)
+        self.allow_null_target = allow_null_target
+        # Resolve deferred `skipna=None` on every fit, before any feature is
+        # computed, so `update`-supplied nulls are handled the same way even when
+        # this particular frame has none.
+        skipna_unsupported = self._resolve_skipna(allow_null_target)
         if ufp.is_nan_or_none(df[target_col]).any():
-            raise ValueError(f"{target_col} column contains null values.")
+            if not allow_null_target:
+                raise ValueError(
+                    f"{target_col} column contains null values. Set "
+                    "`allow_null_target=True` to keep those rows on the time grid "
+                    "for feature computation and have them dropped before the "
+                    "models are fitted."
+                )
+            self._check_null_target_support(skipna_unsupported)
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
@@ -956,12 +1034,21 @@ class TimeSeries:
             target = target[keep_rows]
             df = ufp.filter_with_mask(df, keep_rows)
             df = ufp.copy_if_pandas(df, deep=False)
-            last_idxs = self.ga.indptr[1:] - 1
-            if self._sort_idxs is not None:
-                last_idxs = self._sort_idxs[last_idxs]
-            last_vals_nan = ~keep_rows[last_idxs]
-            if last_vals_nan.any():
-                self._dropped_series = np.where(last_vals_nan)[0]
+            # A series is dropped only when *none* of its rows survived. Testing
+            # the last row instead would misreport a series that merely ends on a
+            # null target (possible with `allow_null_target`) as fully dropped,
+            # and its scaler state would then be discarded while its rows are
+            # still in the training frame.
+            keep_sorted = (
+                keep_rows if self._sort_idxs is None else keep_rows[self._sort_idxs]
+            )
+            kept_cumsum = np.append(0, np.cumsum(keep_sorted))
+            kept_per_series = (
+                kept_cumsum[self.ga.indptr[1:]] - kept_cumsum[self.ga.indptr[:-1]]
+            )
+            fully_dropped = kept_per_series == 0
+            if fully_dropped.any():
+                self._dropped_series = np.where(fully_dropped)[0]
                 dropped_ids = reprlib.repr(list(self.uids[self._dropped_series]))
                 warnings.warn(
                     "The following series were dropped completely "
@@ -1199,6 +1286,7 @@ class TimeSeries:
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        allow_null_target: bool = False,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -1210,6 +1298,9 @@ class TimeSeries:
             max_horizon: Train models for all horizons 1 to max_horizon.
             horizons: Train models only for specific horizons (1-indexed).
                       Mutually exclusive with max_horizon.
+            allow_null_target: Allow nulls in the target column. The rows are kept
+                on the time grid while the features are computed and dropped from
+                the returned features/target afterwards.
         """
         self.dropna = dropna
         self.as_numpy = as_numpy
@@ -1221,6 +1312,7 @@ class TimeSeries:
             static_features=static_features,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         return self._transform(
             df=data,
@@ -1244,6 +1336,7 @@ class TimeSeries:
         horizons: Optional[List[int]] = None,
         as_numpy: Optional[bool] = None,
         trim: bool = True,
+        allow_null_target: bool = False,
     ) -> "TimeSeries":
         """Build all internal state from `df` without materializing features.
 
@@ -1273,6 +1366,7 @@ class TimeSeries:
             trim: Apply the `keep_last_n` trim after warming the transform
                 state. `predict(new_df=...)` disables this to keep the full
                 provided history.
+            allow_null_target: Allow nulls in the target column.
         """
         self._fit(
             df=df,
@@ -1282,6 +1376,7 @@ class TimeSeries:
             static_features=static_features,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         # must run before trimming: local stateful transforms (Expanding*/EWM)
         # warm their buffers from the full history
