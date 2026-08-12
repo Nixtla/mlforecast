@@ -148,7 +148,7 @@ Type | Description
 #### `DistributedMLForecast.preprocess`
 
 ```python
-preprocess(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None)
+preprocess(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, weight_col=None)
 ```
 
 Add the features to `data`.
@@ -164,6 +164,7 @@ Name | Type | Description | Default
 `static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 
 **Returns:**
 
