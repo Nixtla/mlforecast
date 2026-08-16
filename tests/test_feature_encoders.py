@@ -3,8 +3,8 @@ import pandas as pd
 import polars as pl
 from sklearn.dummy import DummyRegressor
 
-from mlforecast import (
-    MLForecast,
+from mlforecast import MLForecast
+from mlforecast.feature_encoders import (
     PolarsTargetEncoder,
     PolarsCountEncoder,
     PolarsOneHotEncoder,
