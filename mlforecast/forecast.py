@@ -64,6 +64,21 @@ _get_conformal_method = get_conformal_method  # backward compat
 _get_transfer_method_spec = get_transfer_method_spec
 
 
+def _ensure_h_int64(res):
+    """Cast the ``h`` column to Int64, preserving the input backend.
+
+    Deep-copies the pandas result so callers can mutate it without writing
+    through to the cached ``fcst_fitted_values_`` (narwhals' ``with_columns``
+    shares column buffers on pandas without copy-on-write).
+    """
+    res = (
+        nw.from_native(res, eager_only=True)
+        .with_columns(nw.col("h").cast(nw.Int64))
+        .to_native()
+    )
+    return ufp.copy_if_pandas(res, deep=True)
+
+
 def _frozen_backtest(
     fcst: "MLForecast",
     new_df: DFType,
@@ -136,6 +151,11 @@ def _frozen_backtest(
 
 
 class MLForecast:
+    # Calibration state (set in ``fit``/``history_warmup``/``load``). Declared
+    # here so mypy has a type regardless of method processing order.
+    _cs_df: Optional[DataFrame]
+    _cs_source_scales_: Optional[Dict]
+
     def __init__(
         self,
         models: Models,
@@ -226,6 +246,33 @@ class MLForecast:
         time_col: str,
     ) -> None:
         validate_df(df, id_col, time_col, self.freq)
+
+    def _validate_data_or_warn(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+        validate_data: bool,
+    ) -> None:
+        if validate_data:
+            self._validate_data(df, id_col, time_col)
+        else:
+            has_pooled = any(
+                getattr(v, "global_", False)
+                or getattr(v, "groupby", None)
+                or getattr(v, "partition_by", None)
+                for v in self.ts.transforms.values()
+            )
+            if has_pooled:
+                warnings.warn(
+                    "Pooled (global/groupby/partition_by) lag transforms assume "
+                    "a continuous, gap-free time grid. Data validation has been "
+                    "disabled (validate_data=False), so timestamp gaps may "
+                    "silently produce incorrect feature values. Consider "
+                    "enabling validation or pre-validating your data.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
     def _get_dynamic_exog_cols(
         self,
@@ -421,25 +468,7 @@ class MLForecast:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
         # Run data validations if requested
-        if validate_data:
-            self._validate_data(df, id_col, time_col)
-        else:
-            has_pooled = any(
-                getattr(v, "global_", False)
-                or getattr(v, "groupby", None)
-                or getattr(v, "partition_by", None)
-                for v in self.ts.transforms.values()
-            )
-            if has_pooled:
-                warnings.warn(
-                    "Pooled (global/groupby/partition_by) lag transforms assume "
-                    "a continuous, gap-free time grid. Data validation has been "
-                    "disabled (validate_data=False), so timestamp gaps may "
-                    "silently produce incorrect feature values. Consider "
-                    "enabling validation or pre-validating your data.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+        self._validate_data_or_warn(df, id_col, time_col, validate_data)
         self.ts.horizon_features_ = self._resolve_horizon_features(
             df=df,
             id_col=id_col,
@@ -467,6 +496,118 @@ class MLForecast:
             as_numpy=as_numpy,
             weight_col=weight_col,
         )
+
+    def history_warmup(
+        self,
+        df: DFType,
+        id_col: str = "unique_id",
+        time_col: str = "ds",
+        target_col: str = "y",
+        static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
+        weight_col: Optional[str] = None,
+        max_horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
+        horizon_features: Optional[Dict[int, List[str]]] = None,
+        horizon_feature_templates: Optional[List[str]] = None,
+        as_numpy: Optional[bool] = None,
+        validate_data: bool = True,
+    ) -> "MLForecast":
+        """Build the internal state from `df` without computing the features.
+
+        Runs the same state-building steps as `preprocess` (series storage,
+        target transforms, lag-transform buffers, pooled aggregates, feature
+        order) but skips materializing the features dataframe, which makes it
+        much cheaper when the features themselves aren't needed. Use it to warm
+        an instance whose models are already trained -- e.g. after unpickling,
+        `MLForecast.load`, or assigning externally trained models to `models_`
+        -- so that `update` and `predict` can be used without calling `fit` or
+        `preprocess` first.
+
+        History is trimmed like in `fit`: `keep_last_n` (explicit or inferred
+        from the transforms) is applied after the transform states are warmed,
+        so only the observations required for updates are kept.
+
+        Args:
+            df (pandas or polars DataFrame): Series data in long format.
+            id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
+            time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
+            target_col (str): Column that contains the target. Defaults to 'y'.
+            static_features (list of str, optional): Names of the features that are static and will be repeated when forecasting. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Inferred from the transforms when None. Defaults to None.
+            weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            max_horizon (int, optional): Horizon the models were trained for when using one model per horizon. Leave None for recursive models; when None, any value from a previous fit is preserved. Defaults to None.
+            horizons (list of int, optional): Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. Defaults to None.
+            horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns the models were trained with. When None, any mapping from a previous fit is preserved. Defaults to None.
+            horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None.
+            as_numpy (bool, optional): Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None.
+            validate_data (bool): Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True.
+
+        Returns:
+            MLForecast: Forecast object with the internal state built from `df`.
+        """
+        self._validate_data_or_warn(df, id_col, time_col, validate_data)
+        if horizon_features is not None or horizon_feature_templates is not None:
+            effective_max_horizon = max_horizon
+            if effective_max_horizon is None and horizons is None:
+                # preserve model-shape metadata from a previous fit (e.g. an
+                # unpickled instance being re-warmed), same as TimeSeries.history_warmup
+                effective_max_horizon = getattr(self.ts, "max_horizon", None)
+            self.ts.horizon_features_ = self._resolve_horizon_features(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                max_horizon=effective_max_horizon,
+                horizons=horizons,
+                horizon_features=horizon_features,
+                horizon_feature_templates=horizon_feature_templates,
+                weight_col=weight_col,
+            )
+        elif self.ts.horizon_features_:
+            # Preserving the mapping from a previous fit (the explicit branch
+            # above re-validates it). `_fit` rebuilds `features_order_` from
+            # `df.columns`, so a preserved mapping referencing exog columns
+            # absent from `df` would otherwise surface as a raw ``KeyError``
+            # deep inside ``predict``. Validate it eagerly here instead.
+            exog_cols = set(
+                self._get_dynamic_exog_cols(
+                    list(df.columns),
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    static_features=static_features,
+                    weight_col=weight_col,
+                )
+            )
+            missing = {
+                col for cols in self.ts.horizon_features_.values() for col in cols
+            } - exog_cols
+            if missing:
+                raise ValueError(
+                    "Preserved `horizon_features` reference columns missing from "
+                    f"the warmup data's dynamic exogenous features: {sorted(missing)}. "
+                    "Pass `horizon_features` explicitly to reconfigure the model "
+                    "shape, or include the columns in `df`."
+                )
+        if not hasattr(self, "_cs_df"):
+            self._cs_df = None
+        if not hasattr(self, "_cs_source_scales_"):
+            self._cs_source_scales_ = None
+        self.ts.history_warmup(
+            df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+            max_horizon=max_horizon,
+            horizons=horizons,
+            as_numpy=as_numpy,
+        )
+        return self
 
     def fit_models(
         self,
@@ -508,6 +649,7 @@ class MLForecast:
                     fit_kwargs["sample_weight"] = X[weight_col]
                     X = ufp.drop_columns(X, weight_col)
             if isinstance(model, CatBoostRegressor):
+                # CatBoost consumes pandas, not polars; convert at the model input boundary
                 if isinstance(X, pl_DataFrame):
                     X = X.to_pandas()
                 sample_weight = fit_kwargs.get("sample_weight")
@@ -865,12 +1007,14 @@ class MLForecast:
                 )
             train_df = self._fitted_train_df_
 
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(train_df, pd.DataFrame):
             train_pd = train_df.copy()
         else:
             train_pd = train_df.to_pandas()
 
         one_step = self.fcst_fitted_values_
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(one_step, pd.DataFrame):
             one_step_pd = one_step[[self.ts.id_col, self.ts.time_col]].copy()
         else:
@@ -893,6 +1037,7 @@ class MLForecast:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
         model_names = list(self.models_.keys())
+        # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(self.ts.static_features_, pd.DataFrame):
             static_features_pd = self.ts.static_features_.copy(deep=True)
         else:
@@ -1043,8 +1188,8 @@ class MLForecast:
             for tfm in self.ts.target_transforms:
                 if hasattr(tfm, "store_fitted"):
                     tfm.store_fitted = True
-        self._cs_df: Optional[DataFrame] = None
-        self._cs_source_scales_: Optional[Dict] = None
+        self._cs_df = None
+        self._cs_source_scales_ = None
         if prediction_intervals is not None:
             self.prediction_intervals = prediction_intervals
             self._cs_df = self._conformity_scores(
@@ -1236,12 +1381,7 @@ class MLForecast:
             res = self.fcst_fitted_values_
             if "h" not in res.columns:
                 res = ufp.assign_columns(res, "h", np.int64(h))
-            if isinstance(res, pd.DataFrame):
-                res = res.copy()
-                res["h"] = res["h"].astype(np.int64)
-            else:
-                res = res.with_columns(pl.col("h").cast(pl.Int64))
-            return res
+            return _ensure_h_int64(res)
 
         first_model = next(iter(self.models_.values()))
         is_direct = isinstance(first_model, dict)
@@ -1252,12 +1392,16 @@ class MLForecast:
                     "Direct fitted values are missing horizon information. "
                     "Please refit the model with the current version."
                 )
-            if isinstance(res, pd.DataFrame):
-                res = res[res["h"].eq(h)].reset_index(drop=True)
-                available = sorted(self.fcst_fitted_values_["h"].unique().tolist())
-            else:
-                res = res.filter(pl.col("h") == h)
-                available = sorted(self.fcst_fitted_values_["h"].unique().to_list())
+            res = ufp.drop_index_if_pandas(
+                nw.to_native(
+                    nw.from_native(res, eager_only=True).filter(nw.col("h") == h)
+                )
+            )
+            available = sorted(
+                nw.from_native(self.fcst_fitted_values_, eager_only=True)["h"]
+                .unique()
+                .to_list()
+            )
             if len(res) == 0:
                 raise ValueError(
                     f"No fitted values found for h={h}. Available horizons: {available}."
@@ -1282,17 +1426,14 @@ class MLForecast:
                 res_pd = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
                 )
+                # convert the pandas-only recursive result back to the origin backend
                 if isinstance(self.fcst_fitted_values_, pd.DataFrame):
                     res = res_pd
                 else:
                     res = pl.from_pandas(res_pd)
         if "h" not in res.columns:
             res = ufp.assign_columns(res, "h", np.int64(h))
-        if isinstance(res, pd.DataFrame):
-            res = res.copy()
-            res["h"] = res["h"].astype(np.int64)
-        else:
-            res = res.with_columns(pl.col("h").cast(pl.Int64))
+        res = _ensure_h_int64(res)
         if level is not None:
             res = ufp.add_insample_levels(
                 res,
@@ -1410,8 +1551,11 @@ class MLForecast:
                 drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
             )
             # Builds `_pooled_states` (global/groupby/partition_by), whose
-            # `_ts_aggs` are computed from the full `new_df` history here.
-            new_ts._fit(
+            # `_ts_aggs` are computed from the full `new_df` history, and warms
+            # up local (coreforecast) lag-transform buffers before the first
+            # update-based prediction step. trim=False keeps the full provided
+            # history rather than applying the `keep_last_n` trim.
+            new_ts.history_warmup(
                 new_df,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
@@ -1419,10 +1563,8 @@ class MLForecast:
                 static_features=self.ts.static_features,
                 keep_last_n=self.ts.keep_last_n,
                 weight_col=self.ts.weight_col,
+                trim=False,
             )
-            # Warms up local (coreforecast) lag-transform buffers before the
-            # first update-based prediction step.
-            new_ts._initialize_lag_transform_states()
             new_ts.max_horizon = self.ts.max_horizon
             new_ts._horizons = self.ts._horizons
             new_ts.as_numpy = self.ts.as_numpy
@@ -1563,10 +1705,11 @@ class MLForecast:
                     )
                     warnings.warn(warn_msg, UserWarning)
                 else:
-                    if isinstance(self._cs_df, pl_DataFrame):
-                        cs_ids = set(self._cs_df[self.ts.id_col].unique().to_list())
-                    else:
-                        cs_ids = set(self._cs_df[self.ts.id_col].unique().tolist())
+                    cs_ids = set(
+                        nw.from_native(self._cs_df, eager_only=True)[self.ts.id_col]
+                        .unique()
+                        .to_list()
+                    )
                     if ids is None:
                         active_ids = set(self.ts.uids)
                         if cs_ids != active_ids and new_df is None:

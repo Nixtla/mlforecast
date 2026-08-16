@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -66,7 +66,7 @@ jobs:
       - name: Clone repo
         uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -94,4 +94,8 @@ jobs:
       - name: Run pytest
         env:
           RAY_ENABLE_UV_RUN_RUNTIME_ENV: 0
+          # ray >=2.56 converts blocks to pandas with pd.ArrowDtype columns, which
+          # lightgbm rejects ("pandas dtypes must be int, float or bool"). Keep the
+          # pre-2.56 numpy dtypes until the ray models cast the features themselves.
+          RAY_DATA_ENABLE_ARROW_BACKED_PANDAS_CONVERSION: 0
         run: uv run pytest --reruns=2 --reruns-delay=2 --only-rerun="Socket recv error"
