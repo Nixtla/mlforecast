@@ -4,14 +4,14 @@ __version__ = version("mlforecast")
 __all__ = [
     "MLForecast",
     "PolarsTargetEncoder",
-    "PolarsFrequencyEncoder",
+    "PolarsCountEncoder",
     "PolarsOneHotEncoder",
     "PolarsOrdinalEncoder",
 ]
 from mlforecast.forecast import MLForecast
 from mlforecast.feature_encoders import (
     PolarsTargetEncoder,
-    PolarsFrequencyEncoder,
+    PolarsCountEncoder,
     PolarsOneHotEncoder,
     PolarsOrdinalEncoder,
 )

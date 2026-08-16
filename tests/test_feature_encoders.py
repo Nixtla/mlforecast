@@ -6,7 +6,7 @@ from sklearn.dummy import DummyRegressor
 from mlforecast import (
     MLForecast,
     PolarsTargetEncoder,
-    PolarsFrequencyEncoder,
+    PolarsCountEncoder,
     PolarsOneHotEncoder,
     PolarsOrdinalEncoder,
 )
@@ -23,20 +23,25 @@ def test_polars_ordinal_encoder_handles_unseen_categories():
     assert future["category__ordinal"].to_list() == [1, -1]
 
 
-def test_polars_frequency_and_one_hot_encoders():
+def test_polars_count_frequency_and_one_hot_encoders():
     X = pl.DataFrame({"category": ["a", "b", "a"]})
-    frequency = PolarsFrequencyEncoder(["category"], drop_original=True)
+    count = PolarsCountEncoder(["category"], drop_original=True)
+    frequency = PolarsCountEncoder(["category"], normalize=True, drop_original=True)
     one_hot = PolarsOneHotEncoder(["category"], drop_original=True)
 
+    encoded_count = count.fit_transform(X, np.zeros(3))
     encoded_frequency = frequency.fit_transform(X, np.zeros(3))
     encoded_one_hot = one_hot.fit_transform(X, np.zeros(3))
+    unknown_count = count.transform(pl.DataFrame({"category": ["missing"]}))
     unknown_frequency = frequency.transform(pl.DataFrame({"category": ["missing"]}))
     unknown_one_hot = one_hot.transform(pl.DataFrame({"category": ["missing"]}))
 
     np.testing.assert_allclose(
         encoded_frequency["category__frequency"], [2 / 3, 1 / 3, 2 / 3]
     )
+    assert encoded_count["category__count"].to_list() == [2, 1, 2]
     assert encoded_one_hot.columns == ["category__onehot_0", "category__onehot_1"]
+    assert unknown_count["category__count"].to_list() == [0]
     assert unknown_frequency["category__frequency"].to_list() == [0.0]
     assert unknown_one_hot.row(0) == (0, 0)
 

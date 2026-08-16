@@ -12,7 +12,7 @@ from utilsforecast.compat import pl, pl_DataFrame
 
 __all__ = [
     "PolarsTargetEncoder",
-    "PolarsFrequencyEncoder",
+    "PolarsCountEncoder",
     "PolarsOneHotEncoder",
     "PolarsOrdinalEncoder",
 ]
@@ -110,17 +110,31 @@ class PolarsOrdinalEncoder(_PolarsEncoder):
         return self._drop_sources(out)
 
 
-class PolarsFrequencyEncoder(_PolarsEncoder):
-    """Frequency encoder for Polars dataframes; unseen categories map to ``0``."""
+class PolarsCountEncoder(_PolarsEncoder):
+    """Count encoder for Polars dataframes; unseen categories map to ``0``.
+
+    Set ``normalize=True`` to encode category frequencies instead of raw counts.
+    """
+
+    def __init__(
+        self,
+        columns: Iterable[str],
+        normalize: bool = False,
+        drop_original: bool = False,
+    ):
+        super().__init__(columns=columns, drop_original=drop_original)
+        self.normalize = normalize
 
     def fit_transform(self, X: pl_DataFrame, y: np.ndarray) -> pl_DataFrame:
         self._validate_X(X)
         self.mappings_ = {}
         for column in self.columns:
-            encoded_name = f"{column}__frequency"
+            encoded_name = f"{column}__frequency" if self.normalize else f"{column}__count"
+            expression = pl.len() / len(X) if self.normalize else pl.len()
+            dtype = pl.Float32 if self.normalize else pl.UInt32
             self.mappings_[column] = (
                 X.group_by(column)
-                .agg((pl.len() / len(X)).cast(pl.Float32).alias(encoded_name))
+                .agg(expression.cast(dtype).alias(encoded_name))
             )
         return self.transform(X)
 
@@ -129,8 +143,9 @@ class PolarsFrequencyEncoder(_PolarsEncoder):
         out = X
         for column, mapping in self.mappings_.items():
             encoded_name = mapping.columns[-1]
+            dtype = pl.Float32 if self.normalize else pl.UInt32
             out = out.join(mapping, on=column, how="left").with_columns(
-                pl.col(encoded_name).fill_null(0.0).cast(pl.Float32)
+                pl.col(encoded_name).fill_null(0).cast(dtype)
             )
         return self._drop_sources(out)
 
