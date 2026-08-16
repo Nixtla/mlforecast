@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import polars as pl
+import pytest
 from sklearn.dummy import DummyRegressor
+from sklearn.pipeline import make_pipeline
 
 from mlforecast import MLForecast
 from mlforecast.feature_encoders import (
@@ -92,6 +94,27 @@ def test_mlforecast_feature_encoder_hook_fits_and_transforms():
     fitted_encoder = fcst.models_["DummyRegressor"].encoders[0]
     assert fitted_encoder.fit_called
     assert fitted_encoder.transform_called
+
+
+def test_existing_sklearn_category_encoder_pipeline_is_compatible():
+    category_encoders = pytest.importorskip("category_encoders")
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], 6),
+            "ds": list(range(6)) * 2,
+            "y": np.arange(12, dtype=float),
+            "category": np.repeat(["first", "second"], 6),
+        }
+    )
+    model = make_pipeline(
+        category_encoders.TargetEncoder(cols=["category"]), DummyRegressor()
+    )
+    fcst = MLForecast(models=model, freq=1, lags=[1])
+
+    fcst.fit(df, static_features=["category"])
+    forecast = fcst.predict(1)
+
+    assert forecast.shape == (2, 3)
 
 
 def test_mlforecast_polars_target_encoder_fits_and_predicts():
