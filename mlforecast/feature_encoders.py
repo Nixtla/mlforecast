@@ -84,6 +84,13 @@ class _EncodedModel:
             raise AttributeError(name)
         return getattr(model, name)
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Keep wrapper attributes intact across cloudpickle versions."""
+        return self.__dict__.copy()
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+
 
 class _PolarsEncoder:
     """Shared validation and output handling for Polars feature encoders."""
