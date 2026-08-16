@@ -64,7 +64,7 @@ def test_polars_target_encoder_uses_only_prior_timestamps():
 
 def test_mlforecast_feature_encoder_hook_fits_and_transforms():
     class RecordingEncoder:
-        def fit_transform(self, X, y):
+        def fit_transform(self, X, _y):
             self.fit_called = True
             return X.assign(encoded_feature=1.0)
 
@@ -134,15 +134,15 @@ def test_polars_encoder_works_with_cross_validation_and_automl():
     assert cv_results.shape == (4, 5)
 
     auto = AutoMLForecast(
-        models={"dummy": AutoModel(DummyRegressor(), lambda trial: {})},
+        models={"dummy": AutoModel(DummyRegressor(), lambda _trial: {})},
         freq=1,
-        init_config=lambda trial: {
+        init_config=lambda _trial: {
             "lags": [1],
             "feature_encoders": [
                 PolarsTargetEncoder(["category"], drop_original=True)
             ],
         },
-        fit_config=lambda trial: {"static_features": ["category"]},
+        fit_config=lambda _trial: {"static_features": ["category"]},
     )
     auto.fit(df, n_windows=2, h=1, num_samples=1)
 

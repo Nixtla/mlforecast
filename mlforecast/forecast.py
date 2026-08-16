@@ -1163,7 +1163,7 @@ class MLForecast:
                 if self.feature_encoders:
                     encoder_context = {"times": base[time_col].to_numpy()}
                 if as_numpy:
-                    X = _to_numpy_compact(X)
+                    X = ufp.to_numpy(X)
                 del prep
             self.fit_models(
                 X,

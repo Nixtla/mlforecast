@@ -88,7 +88,7 @@ class _PolarsEncoder:
 class PolarsOrdinalEncoder(_PolarsEncoder):
     """Ordinal encoder for Polars dataframes; unseen categories map to ``-1``."""
 
-    def fit_transform(self, X: pl_DataFrame, y: np.ndarray) -> pl_DataFrame:
+    def fit_transform(self, X: pl_DataFrame, _y: np.ndarray) -> pl_DataFrame:
         self._validate_X(X)
         self.mappings_ = {}
         for column in self.columns:
@@ -125,7 +125,7 @@ class PolarsCountEncoder(_PolarsEncoder):
         super().__init__(columns=columns, drop_original=drop_original)
         self.normalize = normalize
 
-    def fit_transform(self, X: pl_DataFrame, y: np.ndarray) -> pl_DataFrame:
+    def fit_transform(self, X: pl_DataFrame, _y: np.ndarray) -> pl_DataFrame:
         self._validate_X(X)
         self.mappings_ = {}
         for column in self.columns:
@@ -157,7 +157,7 @@ class PolarsOneHotEncoder(_PolarsEncoder):
     category; unseen categories produce zeros in every feature for that column.
     """
 
-    def fit_transform(self, X: pl_DataFrame, y: np.ndarray) -> pl_DataFrame:
+    def fit_transform(self, X: pl_DataFrame, _y: np.ndarray) -> pl_DataFrame:
         self._validate_X(X)
         self.categories_ = {
             column: X.get_column(column).unique(maintain_order=True).to_list()
