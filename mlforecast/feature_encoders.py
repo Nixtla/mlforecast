@@ -10,6 +10,8 @@ import numpy as np
 from sklearn.base import clone
 from utilsforecast.compat import pl, pl_DataFrame
 
+from .compat import CatBoostRegressor
+
 __all__ = [
     "PolarsTargetEncoder",
     "PolarsCountEncoder",
@@ -53,20 +55,34 @@ class _EncodedModel:
         y: np.ndarray,
         *,
         encoder_context: Optional[Any] = None,
+        store_fitted_X: bool = False,
         **fit_kwargs: Any,
     ) -> "_EncodedModel":
         for encoder in self.encoders:
             X = _fit_transform(encoder, X, y, encoder_context)
-        self.model.fit(X, y, **fit_kwargs)
+        if store_fitted_X:
+            self.fitted_X_ = X
+        self.model.fit(self._prepare_for_model(X), y, **fit_kwargs)
         return self
 
     def predict(self, X: Any, **predict_kwargs: Any) -> np.ndarray:
         for encoder in self.encoders:
             X = encoder.transform(X)
-        return self.model.predict(X, **predict_kwargs)
+        return self.model.predict(self._prepare_for_model(X), **predict_kwargs)
+
+    def predict_fitted(self) -> np.ndarray:
+        return self.model.predict(self._prepare_for_model(self.fitted_X_))
+
+    def _prepare_for_model(self, X: Any) -> Any:
+        if isinstance(self.model, CatBoostRegressor) and isinstance(X, pl_DataFrame):
+            return X.to_pandas()
+        return X
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self.model, name)
+        model = self.__dict__.get("model")
+        if model is None:
+            raise AttributeError(name)
+        return getattr(model, name)
 
 
 class _PolarsEncoder:

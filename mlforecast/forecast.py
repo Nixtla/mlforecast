@@ -616,6 +616,7 @@ class MLForecast:
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         generator_factory: Optional[Callable[[], Iterator]] = None,
         encoder_context: Optional[Any] = None,
+        store_fitted_X: bool = False,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
@@ -638,7 +639,12 @@ class MLForecast:
             )
 
         def fit_model(
-            model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
+            model,
+            X,
+            y,
+            weight_col,
+            model_fit_kwargs: Optional[dict[str, Any]],
+            encoder_context_: Optional[Any],
         ):
             fit_kwargs = model_fit_kwargs or {}
             if weight_col is not None:
@@ -648,21 +654,24 @@ class MLForecast:
                 else:
                     fit_kwargs["sample_weight"] = X[weight_col]
                     X = ufp.drop_columns(X, weight_col)
-            if isinstance(model, CatBoostRegressor):
-                # CatBoost consumes pandas, not polars; convert at the model input boundary
-                if isinstance(X, pl_DataFrame):
-                    X = X.to_pandas()
-                sample_weight = fit_kwargs.get("sample_weight")
-                if isinstance(sample_weight, pl_Series):
-                    fit_kwargs["sample_weight"] = sample_weight.to_numpy()
+            if isinstance(fit_kwargs.get("sample_weight"), pl_Series):
+                fit_kwargs["sample_weight"] = fit_kwargs["sample_weight"].to_numpy()
             fitted_model = clone(model)
             if not self.feature_encoders:
+                if isinstance(fitted_model, CatBoostRegressor) and isinstance(
+                    X, pl_DataFrame
+                ):
+                    X = X.to_pandas()
                 return fitted_model.fit(X, y, **fit_kwargs)
             fitted_encoders = [
                 _clone_encoder(encoder) for encoder in self.feature_encoders
             ]
             return _EncodedModel(fitted_model, fitted_encoders).fit(
-                X, y, encoder_context=encoder_context, **fit_kwargs
+                X,
+                y,
+                encoder_context=encoder_context_,
+                store_fitted_X=store_fitted_X,
+                **fit_kwargs,
             )
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
@@ -675,9 +684,9 @@ class MLForecast:
                 self.models_[name] = {}
                 # Create fresh generator for each model (generators are single-use)
                 horizon_gen = generator_factory()
-                for h, X_h, y_h in horizon_gen:
+                for h, X_h, y_h, context_h in horizon_gen:
                     fitted = fit_model(
-                        model, X_h, y_h, self.ts.weight_col, model_fit_kwargs
+                        model, X_h, y_h, self.ts.weight_col, model_fit_kwargs, context_h
                     )
                     self.models_[name][h] = fitted
         else:
@@ -688,7 +697,7 @@ class MLForecast:
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
                 self.models_[name] = fit_model(
-                    model, X, y, self.ts.weight_col, model_fit_kwargs
+                    model, X, y, self.ts.weight_col, model_fit_kwargs, encoder_context
                 )
         return self
 
@@ -842,7 +851,11 @@ class MLForecast:
             fitted_values = ufp.assign_columns(base, target_col, y)
             for name, model in self.models_.items():
                 assert not isinstance(model, dict)  # mypy
-                preds = model.predict(X)
+                if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
+                    preds = model.predict_fitted()
+                    del model.fitted_X_
+                else:
+                    preds = model.predict(X)
                 fitted_values = ufp.assign_columns(fitted_values, name, preds)
             fitted_values = self._invert_transforms_fitted(fitted_values)
         else:
@@ -963,7 +976,11 @@ class MLForecast:
                     X_pred = (
                         ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
                     )
-                    preds_valid = model.predict(X_pred)
+                    if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
+                        preds_valid = model.predict_fitted()
+                        del model.fitted_X_
+                    else:
+                        preds_valid = model.predict(X_pred)
                     preds = np.full(len(X_h), np.nan)
                     preds[valid] = preds_valid
                     horizon_fitted_values[h] = ufp.assign_columns(
@@ -1256,7 +1273,9 @@ class MLForecast:
 
             # Train models using generator factory
             self.fit_models(
-                generator_factory=generator_factory, models_fit_kwargs=models_fit_kwargs
+                generator_factory=generator_factory,
+                models_fit_kwargs=models_fit_kwargs,
+                store_fitted_X=fitted,
             )
 
             if fitted:
@@ -1317,6 +1336,7 @@ class MLForecast:
                 y,
                 models_fit_kwargs,
                 encoder_context=encoder_context,
+                store_fitted_X=fitted,
             )
             if fitted:
                 fitted_values = self._compute_fitted_values(

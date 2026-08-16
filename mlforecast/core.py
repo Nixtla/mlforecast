@@ -1065,8 +1065,8 @@ class TimeSeries:
         horizons: List[int],
         target_col: str,
         as_numpy: bool = False,
-    ) -> Iterator[Tuple[int, Union[DFType, np.ndarray], np.ndarray]]:
-        """Generator that yields (h, X, y) tuples for each horizon.
+    ) -> Iterator[Tuple[int, Union[DFType, np.ndarray], np.ndarray, dict[str, Any]]]:
+        """Generator that yields (h, X, y, context) tuples for each horizon.
 
         For horizon h:
         - Dynamic exogenous features are aligned to predict h steps ahead
@@ -1179,11 +1179,14 @@ class TimeSeries:
 
             X_h = ufp.filter_with_mask(X_h, valid)
             y_h = y_h[valid]
+            context = {
+                "times": ufp.filter_with_mask(prep[self.time_col], valid).to_numpy()
+            }
 
             if as_numpy:
                 X_h = ufp.to_numpy(X_h)
 
-            yield h, X_h, y_h
+            yield h, X_h, y_h, context
 
     def fit_transform(
         self,

@@ -3,6 +3,7 @@ import pandas as pd
 import polars as pl
 import pytest
 from sklearn.dummy import DummyRegressor
+from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.pipeline import make_pipeline
 
 from mlforecast import MLForecast
@@ -13,6 +14,14 @@ from mlforecast.feature_encoders import (
     PolarsOrdinalEncoder,
 )
 from mlforecast.auto import AutoMLForecast, AutoModel
+
+
+class _EncodedColumnRegressor(BaseEstimator, RegressorMixin):
+    def fit(self, _X, _y):
+        return self
+
+    def predict(self, X):
+        return X["category__mean"].to_numpy()
 
 
 def test_polars_ordinal_encoder_handles_unseen_categories():
@@ -137,6 +146,57 @@ def test_mlforecast_polars_target_encoder_fits_and_predicts():
     forecast = fcst.predict(1)
 
     assert forecast.shape == (2, 3)
+
+
+def test_polars_target_encoder_supports_direct_models_and_save_load(tmp_path):
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 10,
+            "ds": range(10),
+            "y": np.arange(10, dtype=float),
+            "category": ["x"] * 10,
+        }
+    ).with_columns(pl.col("category").cast(pl.Categorical))
+    fcst = MLForecast(
+        models=DummyRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[PolarsTargetEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, max_horizon=2, static_features=["category"])
+    assert fcst.predict(2).shape == (2, 3)
+    path = tmp_path / "model"
+    fcst.save(path)
+    assert MLForecast.load(path).predict(2).shape == (2, 3)
+
+
+def test_fitted_values_reuse_target_encoder_training_features():
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 6,
+            "ds": range(6),
+            "y": np.arange(6, dtype=float),
+            "category": ["x"] * 6,
+        }
+    ).with_columns(pl.col("category").cast(pl.Categorical))
+    fcst = MLForecast(
+        models=_EncodedColumnRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[
+            PolarsTargetEncoder(
+                ["category"], smoothing=0.0, prior=0.0, drop_original=True
+            )
+        ],
+    )
+
+    fcst.fit(df, fitted=True, static_features=["category"])
+    fitted = fcst.forecast_fitted_values()
+
+    np.testing.assert_allclose(
+        fitted["_EncodedColumnRegressor"], [0.0, 1.0, 1.5, 2.0, 2.5]
+    )
 
 
 def test_polars_encoder_works_with_cross_validation_and_automl():
