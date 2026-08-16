@@ -516,7 +516,9 @@ class MLForecast:
             fitted_model = clone(model)
             if not self.feature_encoders:
                 return fitted_model.fit(X, y, **fit_kwargs)
-            fitted_encoders = [_clone_encoder(encoder) for encoder in self.feature_encoders]
+            fitted_encoders = [
+                _clone_encoder(encoder) for encoder in self.feature_encoders
+            ]
             return _EncodedModel(fitted_model, fitted_encoders).fit(
                 X, y, encoder_context=encoder_context, **fit_kwargs
             )

@@ -28,8 +28,7 @@ def _clone_encoder(encoder: Any) -> Any:
 def _accepts_context(method: Any) -> bool:
     parameters = inspect.signature(method).parameters.values()
     return any(
-        parameter.name == "context"
-        or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        parameter.name == "context" or parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in parameters
     )
 
@@ -129,12 +128,13 @@ class PolarsCountEncoder(_PolarsEncoder):
         self._validate_X(X)
         self.mappings_ = {}
         for column in self.columns:
-            encoded_name = f"{column}__frequency" if self.normalize else f"{column}__count"
+            encoded_name = (
+                f"{column}__frequency" if self.normalize else f"{column}__count"
+            )
             expression = pl.len() / len(X) if self.normalize else pl.len()
             dtype = pl.Float32 if self.normalize else pl.UInt32
-            self.mappings_[column] = (
-                X.group_by(column)
-                .agg(expression.cast(dtype).alias(encoded_name))
+            self.mappings_[column] = X.group_by(column).agg(
+                expression.cast(dtype).alias(encoded_name)
             )
         return self.transform(X)
 
@@ -240,16 +240,29 @@ class PolarsTargetEncoder:
                 )
                 .sort([column, "__encoder_time"])
                 .with_columns(
-                    pl.col("__sum").cum_sum().shift(1).over(column).alias("__prior_sum"),
-                    pl.col("__count").cum_sum().shift(1).over(column).alias("__prior_count"),
+                    pl.col("__sum")
+                    .cum_sum()
+                    .shift(1)
+                    .over(column)
+                    .alias("__prior_sum"),
+                    pl.col("__count")
+                    .cum_sum()
+                    .shift(1)
+                    .over(column)
+                    .alias("__prior_count"),
                 )
-                .join(global_by_time, on="__encoder_time", how="left", suffix="__global")
+                .join(
+                    global_by_time, on="__encoder_time", how="left", suffix="__global"
+                )
                 .with_columns(
                     (
                         (
                             pl.col("__prior_sum").fill_null(0.0)
                             + self.smoothing
-                            * (pl.col("__prior_sum__global") / pl.col("__prior_count__global"))
+                            * (
+                                pl.col("__prior_sum__global")
+                                / pl.col("__prior_count__global")
+                            )
                             .fill_nan(None)
                             .fill_null(self.prior)
                         )
@@ -270,7 +283,10 @@ class PolarsTargetEncoder:
                     pl.len().alias("__count"),
                 )
                 .with_columns(
-                    ((pl.col("__sum") + self.smoothing * self.global_mean_) / (pl.col("__count") + self.smoothing))
+                    (
+                        (pl.col("__sum") + self.smoothing * self.global_mean_)
+                        / (pl.col("__count") + self.smoothing)
+                    )
                     .cast(pl.Float32)
                     .alias(f"{column}__mean")
                 )
@@ -290,7 +306,9 @@ class PolarsTargetEncoder:
         out = X.with_row_index("__encoder_row")
         for column, mapping in self.mappings_.items():
             out = out.join(mapping, on=column, how="left")
-            out = out.with_columns(pl.col(f"{column}__mean").fill_null(self.global_mean_))
+            out = out.with_columns(
+                pl.col(f"{column}__mean").fill_null(self.global_mean_)
+            )
         out = out.sort("__encoder_row").drop("__encoder_row")
         if self.drop_original:
             out = out.drop(self.columns)

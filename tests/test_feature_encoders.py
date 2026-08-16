@@ -15,7 +15,9 @@ from mlforecast.auto import AutoMLForecast, AutoModel
 
 def test_polars_ordinal_encoder_handles_unseen_categories():
     encoder = PolarsOrdinalEncoder(["category"], drop_original=True)
-    train = encoder.fit_transform(pl.DataFrame({"category": ["b", "a", "b"]}), np.zeros(3))
+    train = encoder.fit_transform(
+        pl.DataFrame({"category": ["b", "a", "b"]}), np.zeros(3)
+    )
     future = encoder.transform(pl.DataFrame({"category": ["a", "missing"]}))
 
     assert train.columns == ["category__ordinal"]
@@ -138,9 +140,7 @@ def test_polars_encoder_works_with_cross_validation_and_automl():
         freq=1,
         init_config=lambda _trial: {
             "lags": [1],
-            "feature_encoders": [
-                PolarsTargetEncoder(["category"], drop_original=True)
-            ],
+            "feature_encoders": [PolarsTargetEncoder(["category"], drop_original=True)],
         },
         fit_config=lambda _trial: {"static_features": ["category"]},
     )
@@ -176,7 +176,9 @@ def test_target_encoder_cross_validation_is_leakage_free():
         freq=1,
         lags=[1],
         feature_encoders=[
-            AuditedTargetEncoder(["category"], smoothing=0.0, prior=0.0, drop_original=True)
+            AuditedTargetEncoder(
+                ["category"], smoothing=0.0, prior=0.0, drop_original=True
+            )
         ],
     )
 
