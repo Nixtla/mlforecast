@@ -42,6 +42,7 @@ from mlforecast.core import (
 )
 
 from .grouped_array import GroupedArray
+from .feature_encoders import _EncodedModel, _clone_encoder
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
@@ -147,6 +148,7 @@ class MLForecast:
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
+        feature_encoders: Optional[Sequence[Any]] = None,
     ):
         """Forecasting pipeline
 
@@ -161,6 +163,7 @@ class MLForecast:
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
+            feature_encoders (sequence, optional): Encoders applied after MLForecast generates features and before each model is fitted. Each encoder must implement ``fit_transform(X, y)`` and ``transform(X)``. Encoders that require temporal metadata can declare a keyword-only ``context`` argument in ``fit_transform``; MLForecast provides ``{"times": ...}`` for recursive fitting. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -170,6 +173,7 @@ class MLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        self.feature_encoders = list(feature_encoders or [])
         num_threads = _resolve_num_threads(num_threads)
         self.ts = TimeSeries(
             freq=freq,
@@ -470,6 +474,7 @@ class MLForecast:
         y: Union[np.ndarray, None] = None,
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         generator_factory: Optional[Callable[[], Iterator]] = None,
+        encoder_context: Optional[Any] = None,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
@@ -508,7 +513,13 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            return clone(model).fit(X, y, **fit_kwargs)
+            fitted_model = clone(model)
+            if not self.feature_encoders:
+                return fitted_model.fit(X, y, **fit_kwargs)
+            fitted_encoders = [_clone_encoder(encoder) for encoder in self.feature_encoders]
+            return _EncodedModel(fitted_model, fitted_encoders).fit(
+                X, y, encoder_context=encoder_context, **fit_kwargs
+            )
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
@@ -1126,6 +1137,7 @@ class MLForecast:
                     delattr(self, "_fitted_train_df_")
         else:
             # Standard recursive path (unchanged)
+            encoder_context = None
             prep = self.preprocess(
                 df=df,
                 id_col=id_col,
@@ -1137,7 +1149,8 @@ class MLForecast:
                 max_horizon=max_horizon,
                 horizon_features=horizon_features,
                 horizon_feature_templates=horizon_feature_templates,
-                return_X_y=not fitted,
+                # Encoders need the timestamp-aligned feature rows while fitting.
+                return_X_y=not (fitted or self.feature_encoders),
                 as_numpy=as_numpy,
                 weight_col=weight_col,
                 validate_data=validate_data,
@@ -1147,10 +1160,17 @@ class MLForecast:
             else:
                 base = prep[[id_col, time_col]]
                 X, y = self._extract_X_y(prep, target_col, weight_col)
+                if self.feature_encoders:
+                    encoder_context = {"times": base[time_col].to_numpy()}
                 if as_numpy:
-                    X = ufp.to_numpy(X)
+                    X = _to_numpy_compact(X)
                 del prep
-            self.fit_models(X, y, models_fit_kwargs)
+            self.fit_models(
+                X,
+                y,
+                models_fit_kwargs,
+                encoder_context=encoder_context,
+            )
             if fitted:
                 fitted_values = self._compute_fitted_values(
                     base=base,
