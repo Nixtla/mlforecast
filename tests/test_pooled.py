@@ -10,13 +10,20 @@ from mlforecast.lag_transforms import (
     ExpandingMax,
     ExpandingMean,
     ExpandingMin,
+    ExpandingQuantile,
     ExpandingStd,
     ExponentiallyWeightedMean,
     LookupLag,
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
+    SeasonalRollingMax,
+    SeasonalRollingMean,
+    SeasonalRollingMin,
+    SeasonalRollingQuantile,
+    SeasonalRollingStd,
 )
 
 _LAGS = [1, 3]
@@ -179,6 +186,42 @@ def test_group_update_preserves_bucket_df(engine, lag):
     ts.update(update_df)
     new_len = len(ts._pooled_states[("groupby", ("brand",), ())].bucket_df)
     assert new_len == orig_len + 2
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_bucket_df_stores_only_id_and_time(engine):
+    """global/groupby states retain only ``[id_col, time_col]`` in bucket_df:
+    the (static) group columns and the target are not kept per row -- they live
+    in ``groups``/``bucket_id`` and ``y``. Asserts the exact schema (robust even
+    when a group column coincides with the id column)."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a", "b", "b"],
+            "ds": [1, 2, 1, 2],
+            "y": [1.0, 2.0, 10.0, 20.0],
+            "brand": ["x", "x", "y", "y"],
+        },
+    )
+    ts = TimeSeries(
+        freq=1,
+        lag_transforms={
+            1: [RollingMean(2, global_=True), RollingMean(2, groupby=["brand"])]
+        },
+    )
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+        keep_last_n=10_000,
+    )
+    for key in (("global", (), ()), ("groupby", ("brand",), ())):
+        state = ts._pooled_states[key]
+        assert list(state.bucket_df.columns) == ["unique_id", "ds"], key
+        assert len(state.bucket_df) == len(df), key  # rows preserved
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -2211,6 +2254,13 @@ def test_pooled_transforms_lag2_groupby(engine):
         lambda m: ExpandingMin(**m),
         lambda m: ExpandingMax(**m),
         lambda m: ExponentiallyWeightedMean(alpha=0.3, **m),
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        lambda m: RollingQuantile(p=0.5, window_size=4, **m),
+        lambda m: ExpandingQuantile(p=0.5, **m),
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2222,6 +2272,13 @@ def test_pooled_transforms_lag2_groupby(engine):
         "ExpandingMin",
         "ExpandingMax",
         "EWM",
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2371,6 +2428,13 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         lambda m: ExpandingMin(**m),
         lambda m: ExpandingMax(**m),
         lambda m: ExponentiallyWeightedMean(alpha=0.3, **m),
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        lambda m: RollingQuantile(p=0.5, window_size=4, **m),
+        lambda m: ExpandingQuantile(p=0.5, **m),
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
     ],
     ids=[
         "RollingMean",
@@ -2382,6 +2446,13 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
         "ExpandingMin",
         "ExpandingMax",
         "EWM",
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
     ],
 )
 @pytest.mark.parametrize("lag", _LAGS)
@@ -2505,9 +2576,20 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
     )
 
 
+@pytest.mark.parametrize(
+    "tfm_factory",
+    [
+        lambda m: RollingMean(window_size=2, min_samples=1, **m),
+        lambda m: SeasonalRollingMean(
+            season_length=2, window_size=2, min_samples=1, **m
+        ),
+        lambda m: RollingQuantile(p=0.5, window_size=2, min_samples=1, **m),
+    ],
+    ids=["RollingMean", "SeasonalRollingMean", "RollingQuantile"],
+)
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
-def test_fast_vs_slow_local_partition_with_nan(engine, lag):
+def test_fast_vs_slow_local_partition_with_nan(engine, lag, tfm_factory):
     """Local partition_by with a missing partition value: the slow-path join
     (forced by clearing the aggregate cache and the idsorted permutation) keys on
     (id, time), so missing-partition rows are matched, not dropped — matching the
@@ -2534,7 +2616,7 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
         },
     )
 
-    tfm = RollingMean(window_size=2, min_samples=1, partition_by=["promo"])
+    tfm = tfm_factory({"partition_by": ["promo"]})
     col = tfm._get_name(lag)
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     fast = np.asarray(
@@ -2550,9 +2632,7 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
 
     ts_slow = TimeSeries(
         freq=1,
-        lag_transforms={
-            lag: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
-        },
+        lag_transforms={lag: [tfm_factory({"partition_by": ["promo"]})]},
     )
     ts_slow._fit(
         df,
@@ -2576,6 +2656,412 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
     # the NaN-partition rows must receive values from the slow-path join, not be
     # dropped (which would leave them NaN where the fast path has a value).
     assert not np.all(np.isnan(slow))
+
+
+def _force_slow_path(monkeypatch, *tfm_classes):
+    """Route the given transform classes through the row-level slow path by
+    restoring the base-class (None-returning) aggregate hooks."""
+    from mlforecast.lag_transforms import _BaseLagTransform
+
+    for cls in tfm_classes:
+        for impl in (
+            "_ts_level_from_aggs_impl",
+            "_latest_from_aggs_impl",
+            "_bucket_feature_from_aggs_impl",
+        ):
+            if impl in cls.__dict__:
+                monkeypatch.setattr(cls, impl, getattr(_BaseLagTransform, impl))
+
+
+_PREDICT_EQUIV_MODES = [
+    ("global", {"global_": True}),
+    ("groupby", {"groupby": ["grp"]}),
+    ("global+partition", {"global_": True, "partition_by": ["promo"]}),
+    ("local+partition", {"partition_by": ["promo"]}),
+]
+
+
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls",
+    [
+        (
+            lambda m: SeasonalRollingMean(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMean,
+        ),
+        (
+            lambda m: SeasonalRollingStd(
+                season_length=3, window_size=3, min_samples=2, **m
+            ),
+            SeasonalRollingStd,
+        ),
+        (
+            lambda m: SeasonalRollingMin(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMin,
+        ),
+        (
+            lambda m: SeasonalRollingMax(
+                season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingMax,
+        ),
+        (
+            lambda m: RollingQuantile(p=0.5, window_size=6, min_samples=1, **m),
+            RollingQuantile,
+        ),
+        (
+            lambda m: ExpandingQuantile(p=0.5, **m),
+            ExpandingQuantile,
+        ),
+        (
+            lambda m: SeasonalRollingQuantile(
+                p=0.5, season_length=3, window_size=3, min_samples=1, **m
+            ),
+            SeasonalRollingQuantile,
+        ),
+    ],
+    ids=[
+        "SeasonalRollingMean",
+        "SeasonalRollingStd",
+        "SeasonalRollingMin",
+        "SeasonalRollingMax",
+        "RollingQuantile",
+        "ExpandingQuantile",
+        "SeasonalRollingQuantile",
+    ],
+)
+@pytest.mark.parametrize(
+    "mode_kwargs", [m[1] for m in _PREDICT_EQUIV_MODES], ids=[m[0] for m in _PREDICT_EQUIV_MODES]
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_fast_predict_matches_forced_slow(engine, mode_kwargs, tfm_factory, tfm_cls, monkeypatch):
+    """Multi-step recursive predict through the aggregate fast path matches the
+    same model predicted with the class's fast-path hooks disabled (row-level
+    slow path), including the per-step append_predictions aggregate extension.
+
+    ``season_length`` matches the promo period (both 3, with the transform on
+    lag 3) so every seasonal target falls in the queried partition bucket's own
+    residue class: partition buckets keep calendar holes (value-space matching
+    is exercised) while windows stay populated, keeping features finite for the
+    sklearn model at every recursive step."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    rng = np.random.default_rng(8)
+    n_series, n_times, h = 4, 24, 6
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times) + 5.0
+    data = {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()}
+    static_features = []
+    if "groupby" in mode_kwargs:
+        data["grp"] = np.repeat(["A"] * 2 + ["B"] * 2, n_times).tolist()
+        static_features = ["grp"]
+    needs_xdf = "partition_by" in mode_kwargs
+    if needs_xdf:
+        data["promo"] = np.tile((np.arange(n_times) % 3 == 0).astype(float), n_series).tolist()
+    df = _make_df(engine, data)
+    X_df = None
+    if needs_xdf:
+        fut_ds = np.tile(np.arange(n_times, n_times + h), n_series)
+        X_df = _make_df(
+            engine,
+            {
+                "unique_id": np.repeat([f"s{i}" for i in range(n_series)], h).tolist(),
+                "ds": fut_ds.tolist(),
+                "promo": (fut_ds % 3 == 0).astype(float).tolist(),
+            },
+        )
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={3: [tfm_factory(dict(mode_kwargs))]},
+        )
+        fcst.fit(df, static_features=static_features)
+        preds = fcst.predict(h, X_df=X_df)
+        return np.asarray(preds["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
+
+
+def _seasonal_fit_transform(engine, tfm, lag, y):
+    """fit_transform a single-series global_ pooled seasonal transform and return
+    its feature column (the aggregate fast path)."""
+    n = len(y)
+    df = _make_df(
+        engine,
+        {"unique_id": ["s0"] * n, "ds": list(range(n)), "y": [float(v) for v in y]},
+    )
+    col = tfm._get_name(lag)
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    out = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    return np.asarray(out[col])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_seasonal_mean_stable_summation(engine):
+    """Regression: the seasonal fast path strides its steps newest-to-oldest, so
+    naive accumulation drops a small residual added after a large partial. The
+    window for the last row is ordinals {2, 1, 0} = [1, -1e16, 1e16], whose mean
+    is exactly 1/3 -- a plain running sum collapses it to 0."""
+    tfm = SeasonalRollingMean(
+        season_length=1, window_size=3, min_samples=1, global_=True
+    )
+    vals = _seasonal_fit_transform(engine, tfm, 1, [1e16, -1e16, 1.0, 0.0])
+    np.testing.assert_allclose(vals[-1], 1.0 / 3.0, rtol=1e-12)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_seasonal_std_stable_moments(engine, monkeypatch):
+    """Regression: for large-magnitude targets with small spread the textbook
+    ``sum_sq - sum**2 / n`` variance cancels catastrophically and collapses to 0.
+    The stable moment combine must match the row-level slow path."""
+    y = (1e8 + np.arange(12) % 3).astype(float).tolist()
+    fast = _seasonal_fit_transform(
+        engine,
+        SeasonalRollingStd(season_length=2, window_size=4, min_samples=2, global_=True),
+        1,
+        y,
+    )
+    slow_tfm = SeasonalRollingStd(
+        season_length=2, window_size=4, min_samples=2, global_=True
+    )
+    _force_slow_path(monkeypatch, SeasonalRollingStd)
+    slow = _seasonal_fit_transform(engine, slow_tfm, 1, y)
+    np.testing.assert_allclose(fast, slow, rtol=1e-9, atol=1e-9, equal_nan=True)
+    # the fixed fast path recovers a real (non-zero) std where cancellation used
+    # to zero it out
+    finite = fast[~np.isnan(fast)]
+    assert finite.size and np.all(finite > 0.5)
+
+
+def _pooled_predict_fixture(engine, mode_kwargs, h, n_series=4, n_times=24, seed=8):
+    """Build (df, X_df, static_features) for a pooled recursive-predict case in
+    any of the ``_PREDICT_EQUIV_MODES``. Buckets keep enough history that the
+    expanding/EWM statistics stay finite from the first predicted step."""
+    rng = np.random.default_rng(seed)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(range(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times) + 5.0
+    data = {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()}
+    static_features: list = []
+    if "groupby" in mode_kwargs:
+        half = n_series // 2
+        data["grp"] = np.repeat(["A"] * half + ["B"] * (n_series - half), n_times).tolist()
+        static_features = ["grp"]
+    X_df = None
+    if "partition_by" in mode_kwargs:
+        data["promo"] = np.tile((np.arange(n_times) % 3 == 0).astype(float), n_series).tolist()
+    df = _make_df(engine, data)
+    if "partition_by" in mode_kwargs:
+        fut_ds = np.tile(np.arange(n_times, n_times + h), n_series)
+        X_df = _make_df(
+            engine,
+            {
+                "unique_id": np.repeat([f"s{i}" for i in range(n_series)], h).tolist(),
+                "ds": fut_ds.tolist(),
+                "promo": (fut_ds % 3 == 0).astype(float).tolist(),
+            },
+        )
+    return df, X_df, static_features
+
+
+_EXPANDING_EWM_FACTORIES = [
+    (lambda m: ExpandingMean(**m), ExpandingMean),
+    (lambda m: ExpandingStd(**m), ExpandingStd),
+    (lambda m: ExpandingMin(**m), ExpandingMin),
+    (lambda m: ExpandingMax(**m), ExpandingMax),
+    (lambda m: ExponentiallyWeightedMean(alpha=0.5, **m), ExponentiallyWeightedMean),
+]
+_EXPANDING_EWM_IDS = [
+    "ExpandingMean",
+    "ExpandingStd",
+    "ExpandingMin",
+    "ExpandingMax",
+    "EWM",
+]
+
+
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls", _EXPANDING_EWM_FACTORIES, ids=_EXPANDING_EWM_IDS
+)
+@pytest.mark.parametrize(
+    "mode_kwargs",
+    [m[1] for m in _PREDICT_EQUIV_MODES],
+    ids=[m[0] for m in _PREDICT_EQUIV_MODES],
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_expanding_ewm_fast_predict_matches_forced_slow(
+    engine, mode_kwargs, tfm_factory, tfm_cls, monkeypatch
+):
+    """The prefix-dependent transforms carry a per-model running accumulator
+    across recursive predict steps (commit 2). The cached fast path must match
+    the same model predicted through the row-level slow path (hooks disabled),
+    including the per-step ``append_predictions`` extension."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 6
+    df, X_df, static_features = _pooled_predict_fixture(engine, mode_kwargs, h)
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: [tfm_factory(dict(mode_kwargs))]},
+        )
+        fcst.fit(df, static_features=static_features)
+        return np.asarray(fcst.predict(h, X_df=X_df)["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    "mode_kwargs",
+    [m[1] for m in _PREDICT_EQUIV_MODES],
+    ids=[m[0] for m in _PREDICT_EQUIV_MODES],
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_latest_cache_matches_no_cache(engine, mode_kwargs, monkeypatch):
+    """The per-model predict cache produces the same forecasts as recomputing
+    the full aggregate prefix at every step. Forcing ``cache=None`` into each
+    prefix-dependent ``_latest_from_aggs_impl`` exercises the recompute branch."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 8
+    df, X_df, static_features = _pooled_predict_fixture(engine, mode_kwargs, h)
+
+    def fit_predict():
+        tfms = [
+            ExpandingMean(**mode_kwargs),
+            ExpandingStd(**mode_kwargs),
+            ExpandingMin(**mode_kwargs),
+            ExpandingMax(**mode_kwargs),
+            ExponentiallyWeightedMean(alpha=0.4, **mode_kwargs),
+        ]
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: tfms},
+        )
+        fcst.fit(df, static_features=list(static_features))
+        return np.asarray(fcst.predict(h, X_df=X_df)["LinearRegression"])
+
+    preds_cached = fit_predict()
+    for cls in (
+        ExpandingMean,
+        ExpandingStd,
+        ExpandingMin,
+        ExpandingMax,
+        ExponentiallyWeightedMean,
+    ):
+        orig = cls._latest_from_aggs_impl
+
+        def no_cache(self, ts_aggs, target_ords, _cache=None, _orig=orig):
+            return _orig(self, ts_aggs, target_ords, None)
+
+        monkeypatch.setattr(cls, "_latest_from_aggs_impl", no_cache)
+    preds_nocache = fit_predict()
+    np.testing.assert_allclose(preds_cached, preds_nocache, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_multi_model_latest_cache_isolation(engine):
+    """The predict cache is created and dropped inside ``_backup``, so it is
+    scoped to one model's recursive walk. Two models that predict different
+    values (hence append different aggregates) must forecast identically whether
+    run together or alone -- a leaked prefix would corrupt the second model."""
+    from sklearn.linear_model import LinearRegression, Ridge
+    from mlforecast.forecast import MLForecast
+
+    h = 8
+    df, X_df, static_features = _pooled_predict_fixture(engine, {"global_": True}, h)
+
+    def make_tfms():
+        return {
+            1: [
+                ExpandingMean(global_=True),
+                ExponentiallyWeightedMean(alpha=0.5, global_=True),
+                RollingMean(window_size=4, min_samples=1, global_=True),
+            ]
+        }
+
+    fcst = MLForecast(
+        models={"lr": LinearRegression(), "ridge": Ridge(alpha=1.0)},
+        freq=1,
+        lags=[1],
+        lag_transforms=make_tfms(),
+    )
+    fcst.fit(df, static_features=static_features)
+    both = fcst.predict(h, X_df=X_df)
+
+    for name, model in [("lr", LinearRegression()), ("ridge", Ridge(alpha=1.0))]:
+        solo = MLForecast(
+            models={name: model}, freq=1, lags=[1], lag_transforms=make_tfms()
+        )
+        solo.fit(df, static_features=static_features)
+        solo_preds = np.asarray(solo.predict(h, X_df=X_df)[name])
+        np.testing.assert_allclose(
+            np.asarray(both[name]), solo_preds, rtol=1e-12, atol=1e-12
+        )
+
+
+@pytest.mark.parametrize(
+    "tfm_factory,tfm_cls", _EXPANDING_EWM_FACTORIES, ids=_EXPANDING_EWM_IDS
+)
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_expanding_ewm_multi_horizon_matches_forced_slow(
+    engine, tfm_factory, tfm_cls, monkeypatch
+):
+    """Direct (``max_horizon``) forecasting drives the prefix caches through the
+    ``_predict_multi`` path, which advances the target ordinal each step without
+    feeding predictions back. The cached fast path must still match the same
+    model predicted through the row-level slow path."""
+    from sklearn.linear_model import LinearRegression
+    from mlforecast.forecast import MLForecast
+
+    h = 6
+    df, _, static_features = _pooled_predict_fixture(engine, {"global_": True}, h)
+
+    def fit_predict():
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq=1,
+            lags=[1],
+            lag_transforms={1: [tfm_factory({"global_": True})]},
+        )
+        fcst.fit(df, static_features=static_features, max_horizon=h)
+        return np.asarray(fcst.predict(h)["LinearRegression"])
+
+    preds_fast = fit_predict()
+    assert np.isfinite(preds_fast).all()
+    _force_slow_path(monkeypatch, tfm_cls)
+    preds_slow = fit_predict()
+    np.testing.assert_allclose(preds_fast, preds_slow, rtol=1e-9, atol=1e-9)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -3526,9 +4012,11 @@ def _range_quantile_oracle(
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("mode", ["local", "global"])
 def test_slow_path_quantile_with_partition_by(engine, mode):
-    """RollingQuantile has no aggregate fast path, so partition_by routes it
-    through the row-level slow path at fit and through build_query_arrays at
-    predict. Pin both against a RANGE-window oracle."""
+    """RollingQuantile with partition_by, pinned against a RANGE-window oracle at
+    fit and across recursive predict steps. It now runs the aggregate fast path
+    (per-ordinal value store); ``test_slow_path_quantile_with_partition_by_forced``
+    below monkeypatches the hooks off to keep the row/build_query_arrays slow path
+    covered too."""
     from mlforecast.lag_transforms import RollingQuantile
 
     n_series, n_times = 3, 10
@@ -3621,6 +4109,179 @@ def test_slow_path_quantile_with_partition_by(engine, mode):
             )
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("mode", ["local", "global"])
+def test_slow_path_quantile_with_partition_by_forced(engine, mode, monkeypatch):
+    """Forced-slow twin of the test above: with RollingQuantile's aggregate
+    hooks disabled the row-level fit path must still match the RANGE-window
+    oracle, keeping the slow path covered now that the fast path is default."""
+    from mlforecast.lag_transforms import RollingQuantile
+
+    _force_slow_path(monkeypatch, RollingQuantile)
+    n_series, n_times = 3, 10
+    rng = np.random.default_rng(11)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    promos = np.tile([0, 1, 0, 0, 1, 1, 0, 1, 0, 1], n_series)
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ids.tolist(),
+            "ds": times.tolist(),
+            "y": y.tolist(),
+            "promo": promos.tolist(),
+        },
+    )
+    tfm = RollingQuantile(
+        0.5, 3, min_samples=1, global_=(mode == "global"), partition_by=["promo"]
+    )
+    col = tfm._get_name(1)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    res = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    hist = list(zip(ids, times, y, promos))
+    expected_fit = np.array(
+        [_range_quantile_oracle(hist, i, t, pr, mode) for i, t, _, pr in hist]
+    )
+    np.testing.assert_allclose(
+        np.asarray(res[col], dtype=float), expected_fit, atol=1e-12, equal_nan=True
+    )
+
+
+def _assert_csr_ok(agg):
+    """CSR value-store invariants for one bucket's aggregates."""
+    assert agg.values is not None and agg.row_offsets is not None
+    assert agg.row_offsets.dtype == np.intp
+    assert len(agg.row_offsets) == len(agg.unique_times) + 1
+    assert agg.row_offsets[0] == 0
+    assert np.all(np.diff(agg.row_offsets) >= 0)  # monotone
+    assert len(agg.values) == int(agg.row_offsets[-1])
+    # per-ordinal slice length == non-NaN count for that ordinal
+    np.testing.assert_array_equal(
+        np.diff(agg.row_offsets).astype(np.intp), agg.counts.astype(np.intp)
+    )
+
+
+def test_csr_value_store_invariants_across_mutations():
+    """The CSR store stays consistent (offsets integer & monotone, values length
+    == last offset, window slice == masked selection) through build,
+    append_predictions, append_observations and trim_to_last."""
+    from mlforecast.pooled import PooledState
+
+    def slice_matches_rows(agg, time_index, y):
+        for k, o in enumerate(agg.unique_times):
+            got = np.sort(agg.values[agg.row_offsets[k] : agg.row_offsets[k + 1]])
+            want = np.sort(y[(time_index == o) & ~np.isnan(y)])
+            np.testing.assert_array_equal(got, want)
+
+    n_series = 4
+    ids = np.repeat([f"s{i}" for i in range(n_series)], 5)
+    times = np.tile(np.arange(5), n_series)
+    y = np.arange(n_series * 5, dtype=float)
+    df = pd.DataFrame({"unique_id": ids, "ds": times, "y": y})
+
+    def fresh_state():
+        return PooledState.from_global(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            ga_data_dtype=np.dtype("float64"),
+            n_series=n_series,
+            store_values=True,
+        )
+
+    # build
+    state = fresh_state()
+    assert state._store_values is True
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+    # append_predictions: one new ordinal whose slice is the step's non-NaN preds
+    state = fresh_state()
+    preds = np.array([100.0, np.nan, 102.0, 103.0])
+    state.append_predictions(np.array([5]), preds, n_series)
+    agg = state._ts_aggs[0]
+    _assert_csr_ok(agg)
+    last = agg.values[agg.row_offsets[-2] : agg.row_offsets[-1]]
+    np.testing.assert_array_equal(np.sort(last), np.sort(preds[~np.isnan(preds)]))
+    slice_matches_rows(agg, state.time_index, state.y)
+
+    # append_observations: rebuild keeps the store
+    state = fresh_state()
+    new = pd.DataFrame(
+        {
+            "unique_id": [f"s{i}" for i in range(n_series)],
+            "ds": [5] * n_series,
+            "y": [7.0, 8.0, 9.0, 10.0],
+        }
+    )
+    state.append_observations(
+        new,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        ga_data_dtype=np.dtype("float64"),
+    )
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+    # trim_to_last: suffix-slice keeps the store consistent (fit-time only, so a
+    # fresh state before any append -- bucket_df is still row-aligned)
+    state = fresh_state()
+    state.trim_to_last(3)
+    _assert_csr_ok(state._ts_aggs[0])
+    slice_matches_rows(state._ts_aggs[0], state.time_index, state.y)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", _LAGS)
+def test_pooled_expanding_quantile_matches_numpy_oracle(engine, lag):
+    """Pooled ExpandingQuantile (global_) fit output equals a numpy
+    expanding-quantile oracle over the per-timestamp pooled series."""
+    n_series, n_times = 4, 9
+    rng = np.random.default_rng(5)
+    ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
+    times = np.tile(np.arange(n_times), n_series)
+    y = rng.standard_normal(n_series * n_times)
+    df = _make_df(
+        engine,
+        {"unique_id": ids.tolist(), "ds": times.tolist(), "y": y.tolist()},
+    )
+    p = 0.4
+    tfm = ExpandingQuantile(p=p, global_=True)
+    col = tfm._get_name(lag)
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    res = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    # ordinals == ds (dense integer calendar); oracle read from res's own columns
+    rt = np.asarray(res["ds"], dtype=float)
+    ry = np.asarray(res["y"], dtype=float)
+    got = np.asarray(res[col], dtype=float)
+    exp = np.full(len(rt), np.nan)
+    for r in range(len(rt)):
+        upper = rt[r] - lag
+        if upper < 0:
+            continue
+        vals = ry[(rt <= upper) & ~np.isnan(ry)]
+        if len(vals) > 0:
+            exp[r] = float(np.quantile(vals, p))
+    np.testing.assert_allclose(got, exp, atol=1e-12, equal_nan=True)
+
+
 # ---------------------------------------------------------------------------
 # time_agg: pre-aggregate rows sharing a timestamp within each bucket, then
 # apply the transform over that per-timestamp series.
@@ -3631,10 +4292,7 @@ from sklearn.base import clone as _sk_clone  # noqa: E402
 
 from mlforecast.lag_transforms import (  # noqa: E402
     Combine,
-    ExpandingQuantile,
     Offset,
-    RollingQuantile,
-    SeasonalRollingMean,
 )
 from mlforecast.pooled import (  # noqa: E402
     _build_ts_aggs,
@@ -3798,6 +4456,28 @@ _TIME_AGG_FACTORIES = [
     (lambda m: ExpandingMin(**m), "ExpandingMin"),
     (lambda m: ExpandingMax(**m), "ExpandingMax"),
     (lambda m: ExponentiallyWeightedMean(alpha=0.3, **m), "EWM"),
+    (
+        lambda m: SeasonalRollingMean(season_length=3, window_size=2, **m),
+        "SeasonalRollingMean",
+    ),
+    (
+        lambda m: SeasonalRollingStd(season_length=3, window_size=2, **m),
+        "SeasonalRollingStd",
+    ),
+    (
+        lambda m: SeasonalRollingMin(season_length=3, window_size=2, **m),
+        "SeasonalRollingMin",
+    ),
+    (
+        lambda m: SeasonalRollingMax(season_length=3, window_size=2, **m),
+        "SeasonalRollingMax",
+    ),
+    (lambda m: RollingQuantile(p=0.5, window_size=4, **m), "RollingQuantile"),
+    (lambda m: ExpandingQuantile(p=0.5, **m), "ExpandingQuantile"),
+    (
+        lambda m: SeasonalRollingQuantile(p=0.5, season_length=3, window_size=2, **m),
+        "SeasonalRollingQuantile",
+    ),
 ]
 
 
@@ -3930,8 +4610,10 @@ def test_ewm_time_agg_mean_is_noop(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_time_agg_quantile_slow_path_literal(engine):
-    """RollingQuantile has no fast path: time_agg goes through row-collapse."""
+def test_time_agg_quantile_literal(engine):
+    """A time_agg RollingQuantile runs its aggregate fast path over the single
+    collapsed scalar per timestamp (the reaggregated value store, not a raw
+    O(rows) store); the hand-computed literals pin that it matches row-collapse."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums [11,22,33,44,55,66]; median over window=3 == middle value
@@ -3947,7 +4629,9 @@ def test_time_agg_quantile_slow_path_literal(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_time_agg_seasonal_slow_path_literal(engine):
+def test_time_agg_seasonal_literal(engine):
+    """Hand-computed seasonal rolling mean of daily sums; the values are pinned
+    so the aggregate fast path must reproduce the row-collapse results exactly."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums [11,22,33,44,55,66]; season_length=2, window=2, lag=1
