@@ -135,6 +135,8 @@ class FitReport:
     rss_start_bytes: Optional[int]
     rss_end_bytes: Optional[int]
     model_fit_report: Optional[ModelFitReport]
+    calibration_model_fit_report: Optional[ModelFitReport]
+    final_model_fit_report: Optional[ModelFitReport]
 
     @property
     def rss_delta_bytes(self) -> Optional[int]:
@@ -158,7 +160,36 @@ class FitReport:
                 if self.model_fit_report is None
                 else self.model_fit_report.to_dict()
             ),
+            "calibration_model_fit_report": (
+                None
+                if self.calibration_model_fit_report is None
+                else self.calibration_model_fit_report.to_dict()
+            ),
+            "final_model_fit_report": (
+                None
+                if self.final_model_fit_report is None
+                else self.final_model_fit_report.to_dict()
+            ),
         }
+
+
+def aggregate_model_fit_reports(
+    reports: List[ModelFitReport],
+) -> Optional[ModelFitReport]:
+    """Combine sequential model-fit reports into one aggregate report."""
+    if not reports:
+        return None
+    model_seconds: Dict[str, float] = {}
+    for report in reports:
+        for name, seconds in report.model_seconds.items():
+            model_seconds[name] = model_seconds.get(name, 0.0) + seconds
+    return ModelFitReport(
+        elapsed_seconds=sum(report.elapsed_seconds for report in reports),
+        fit_calls=sum(report.fit_calls for report in reports),
+        model_seconds=model_seconds,
+        rss_start_bytes=reports[0].rss_start_bytes,
+        rss_end_bytes=reports[-1].rss_end_bytes,
+    )
 
 
 @dataclass

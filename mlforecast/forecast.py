@@ -64,6 +64,7 @@ from .model_report import (
     FitReport,
     ModelFitReport,
     PredictReport,
+    aggregate_model_fit_reports,
     get_process_rss_bytes,
     make_feature_preparation_report,
 )
@@ -717,6 +718,8 @@ class MLForecast:
             rss_start_bytes=model_fit_rss_start,
             rss_end_bytes=get_process_rss_bytes(),
         )
+        if hasattr(self, "_calibration_fit_reports"):
+            self._calibration_fit_reports.append(self.model_fit_report_)
         return self
 
     def _conformity_scores(
@@ -1213,6 +1216,9 @@ class MLForecast:
         """
         fit_start = perf_counter()
         fit_rss_start = get_process_rss_bytes()
+        has_calibration = prediction_intervals is not None
+        if has_calibration:
+            self._calibration_fit_reports: List[ModelFitReport] = []
         if fitted and self.ts.target_transforms is not None:
             for tfm in self.ts.target_transforms:
                 if hasattr(tfm, "store_fitted"):
@@ -1355,11 +1361,23 @@ class MLForecast:
                     self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
                 elif hasattr(self, "_fitted_train_df_"):
                     delattr(self, "_fitted_train_df_")
+        final_model_fit_report = getattr(self, "model_fit_report_", None)
+        calibration_model_fit_report = None
+        model_fit_report = final_model_fit_report
+        if has_calibration:
+            all_model_fit_reports = self._calibration_fit_reports
+            calibration_model_fit_report = aggregate_model_fit_reports(
+                all_model_fit_reports[:-1]
+            )
+            model_fit_report = aggregate_model_fit_reports(all_model_fit_reports)
+            del self._calibration_fit_reports
         self.fit_report_ = FitReport(
             elapsed_seconds=perf_counter() - fit_start,
             rss_start_bytes=fit_rss_start,
             rss_end_bytes=get_process_rss_bytes(),
-            model_fit_report=getattr(self, "model_fit_report_", None),
+            model_fit_report=model_fit_report,
+            calibration_model_fit_report=calibration_model_fit_report,
+            final_model_fit_report=final_model_fit_report,
         )
         return self
 

@@ -4,6 +4,7 @@ import polars as pl
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.utils import PredictionIntervals
 
 
 def _data(backend):
@@ -66,3 +67,24 @@ def test_fit_and_predict_reports():
 
     assert fcst.predict_report_.elapsed_seconds >= 0
     assert fcst.predict_report_.horizon == 2
+
+
+def test_fit_report_includes_interval_calibration_fits():
+    fcst = MLForecast(models=LinearRegression(), freq=1, lags=[1])
+
+    fcst.fit(
+        _data("pandas"),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=1),
+    )
+
+    report = fcst.fit_report_
+    assert report.model_fit_report is not None
+    assert report.calibration_model_fit_report is not None
+    assert report.final_model_fit_report is not None
+    assert report.calibration_model_fit_report.fit_calls == 1
+    assert report.final_model_fit_report.fit_calls == 1
+    assert report.model_fit_report.fit_calls == 2
+    assert report.model_fit_report.model_seconds["LinearRegression"] >= (
+        report.calibration_model_fit_report.model_seconds["LinearRegression"]
+        + report.final_model_fit_report.model_seconds["LinearRegression"]
+    )
