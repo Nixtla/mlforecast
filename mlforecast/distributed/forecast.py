@@ -432,16 +432,28 @@ class DistributedMLForecast:
                 raise NotImplementedError(
                     "Only spark and dask engines currently support sample weights."
                 )
-            prep_selected = prep.select_columns(
-                cols=features + [target_col]
-            ).materialize()
-            X = RayDMatrix(
-                prep_selected,
-                label=target_col,
+            data_context = prep.context
+            arrow_backed = getattr(
+                data_context, "enable_arrow_backed_pandas_conversion", None
             )
-            for name, model in self.models.items():
-                trained_model = clone(model).fit(X, y=None)
-                self.models_[name] = trained_model.model_
+            if arrow_backed is not None:
+                data_context.enable_arrow_backed_pandas_conversion = False
+            try:
+                prep_selected = prep.select_columns(
+                    cols=features + [target_col]
+                ).materialize()
+                X = RayDMatrix(
+                    prep_selected,
+                    label=target_col,
+                )
+                for name, model in self.models.items():
+                    trained_model = clone(model).fit(X, y=None)
+                    self.models_[name] = trained_model.model_
+            finally:
+                if arrow_backed is not None:
+                    data_context.enable_arrow_backed_pandas_conversion = (
+                        arrow_backed
+                    )
         else:
             raise NotImplementedError(
                 "Only spark, dask, and ray engines are supported."
