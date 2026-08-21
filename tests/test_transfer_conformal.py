@@ -5,7 +5,7 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import ExpandingMean
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import (
     PredictionIntervals,
     TransferConformal,
@@ -89,6 +89,42 @@ def test_transfer_conformal_with_dynamic_exog(method):
     )
     assert "LinearRegression-lo-90" in result
     assert "LinearRegression-hi-90" in result
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_transfer_conformal_with_dynamic_partition_columns(method):
+    df = _dynamic_exog_system()
+    df["promo"] = np.arange(len(df)) % 2
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].copy()
+    new_df.loc[40:44, "y"] = -100
+    X_df = df[["unique_id", "ds", "u", "promo"]].iloc[45:50]
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={
+            1: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
+        },
+    )
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
+    )
+
+    assert "promo" not in fcst.ts.features_order_
+    assert fcst.ts._partition_cols == {"promo"}
+    baseline = fcst.predict(h=5, new_df=new_df, X_df=X_df)
+    result = fcst.predict(
+        h=5,
+        new_df=new_df,
+        X_df=X_df,
+        transfer_conformal=method,
+        level=[90],
+    )
+
+    np.testing.assert_allclose(result["LinearRegression"], baseline["LinearRegression"])
 
 
 # ---------------------------------------------------------------------------
