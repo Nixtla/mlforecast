@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -115,6 +116,12 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
+    static_cols = set(fcst.ts.static_features_.columns)
+    dynamic_cols = [
+        col
+        for col in fcst.ts.features_order_
+        if col in new_df.columns and col not in static_cols
+    ]
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -126,7 +133,10 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for cutoffs, train, valid in splits:
-        preds = fcst.predict(h=h, new_df=train)
+        X_df = None
+        if dynamic_cols:
+            X_df = valid[[id_col, time_col, *dynamic_cols]]
+        preds = fcst.predict(h=h, new_df=train, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
         joined = ufp.join(
             valid[[id_col, time_col, target_col]],
@@ -1594,6 +1604,15 @@ class MLForecast:
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
             scratch = self._with_ts(self.ts._clone_cold())
+            transfer_preprocess = None
+            if spec.needs_preprocess:
+                transfer_preprocess = partial(
+                    scratch.preprocess,
+                    id_col=self.ts.id_col,
+                    time_col=self.ts.time_col,
+                    target_col=self.ts.target_col,
+                    static_features=self.ts.static_features,
+                )
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
@@ -1603,7 +1622,7 @@ class MLForecast:
                 target_col=self.ts.target_col,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
-                preprocess_fn=(scratch.preprocess if spec.needs_preprocess else None),
+                preprocess_fn=transfer_preprocess,
                 source_cs_df=(self._cs_df if spec.needs_source_cs else None),
                 source_scales=(
                     self._cs_source_scales_ if spec.needs_source_cs else None
