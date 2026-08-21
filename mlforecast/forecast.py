@@ -121,6 +121,10 @@ def _frozen_backtest(
             for col in fcst.ts.features_order_
             if col in new_df.columns and col not in static_cols
         ]
+        partition_cols = sorted(
+            col for col in fcst.ts._partition_cols if col in new_df.columns
+        )
+        future_cols = list(dict.fromkeys([*dynamic_cols, *partition_cols]))
         all_results = []
         splits = ufp.backtest_splits(
             new_df,
@@ -133,8 +137,8 @@ def _frozen_backtest(
         )
         for cutoffs, train, valid in splits:
             X_df = None
-            if dynamic_cols:
-                X_df = valid[[id_col, time_col, *dynamic_cols]]
+            if future_cols:
+                X_df = valid[[id_col, time_col, *future_cols]]
             preds = fcst.predict(h=h, new_df=train, X_df=X_df)
             preds = ufp.join(preds, cutoffs, on=id_col, how="left")
             joined = ufp.join(
