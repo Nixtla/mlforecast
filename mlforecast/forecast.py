@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from time import perf_counter
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -57,6 +58,15 @@ from .conformal_prediction import (
     get_conformal_method,
     get_transfer_method_spec,
     compute_conformity_scores,
+)
+from .model_report import (
+    FeaturePreparationReport,
+    FitReport,
+    ModelFitReport,
+    PredictReport,
+    aggregate_model_fit_reports,
+    get_process_rss_bytes,
+    make_feature_preparation_report,
 )
 
 _get_conformal_method = get_conformal_method  # backward compat
@@ -154,6 +164,10 @@ class MLForecast:
     # here so mypy has a type regardless of method processing order.
     _cs_df: Optional[DataFrame]
     _cs_source_scales_: Optional[Dict]
+    feature_preparation_report_: FeaturePreparationReport
+    fit_report_: FitReport
+    model_fit_report_: ModelFitReport
+    predict_report_: PredictReport
 
     def __init__(
         self,
@@ -463,6 +477,7 @@ class MLForecast:
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
+        preprocess_start = perf_counter()
         # Run data validations if requested
         self._validate_data_or_warn(df, id_col, time_col, validate_data)
         self.ts.horizon_features_ = self._resolve_horizon_features(
@@ -478,7 +493,7 @@ class MLForecast:
             weight_col=weight_col,
         )
 
-        return self.ts.fit_transform(
+        result = self.ts.fit_transform(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -492,6 +507,14 @@ class MLForecast:
             as_numpy=as_numpy,
             weight_col=weight_col,
         )
+        features = result[0] if isinstance(result, tuple) else result
+        self.feature_preparation_report_ = make_feature_preparation_report(
+            df,
+            features,
+            as_numpy=as_numpy,
+            elapsed_seconds=perf_counter() - preprocess_start,
+        )
+        return result
 
     def history_warmup(
         self,
@@ -623,6 +646,10 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with trained models.
         """
+        model_fit_start = perf_counter()
+        model_fit_rss_start = get_process_rss_bytes()
+        model_seconds: Dict[str, float] = {}
+        fit_calls = 0
         models_fit_kwargs = models_fit_kwargs or {}
         # Check that all keys in models_fit_kwargs match known models
         unknown_models = set(models_fit_kwargs) - set(self.models)
@@ -633,8 +660,9 @@ class MLForecast:
             )
 
         def fit_model(
-            model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
+            name, model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
         ):
+            nonlocal fit_calls
             fit_kwargs = model_fit_kwargs or {}
             if weight_col is not None:
                 if isinstance(X, np.ndarray):
@@ -650,7 +678,13 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            return clone(model).fit(X, y, **fit_kwargs)
+            start = perf_counter()
+            fitted_model = clone(model).fit(X, y, **fit_kwargs)
+            model_seconds[name] = model_seconds.get(name, 0.0) + (
+                perf_counter() - start
+            )
+            fit_calls += 1
+            return fitted_model
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
@@ -664,7 +698,7 @@ class MLForecast:
                 horizon_gen = generator_factory()
                 for h, X_h, y_h in horizon_gen:
                     fitted = fit_model(
-                        model, X_h, y_h, self.ts.weight_col, model_fit_kwargs
+                        name, model, X_h, y_h, self.ts.weight_col, model_fit_kwargs
                     )
                     self.models_[name][h] = fitted
         else:
@@ -675,8 +709,17 @@ class MLForecast:
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
                 self.models_[name] = fit_model(
-                    model, X, y, self.ts.weight_col, model_fit_kwargs
+                    name, model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
+        self.model_fit_report_ = ModelFitReport(
+            elapsed_seconds=perf_counter() - model_fit_start,
+            fit_calls=fit_calls,
+            model_seconds=model_seconds,
+            rss_start_bytes=model_fit_rss_start,
+            rss_end_bytes=get_process_rss_bytes(),
+        )
+        if hasattr(self, "_calibration_fit_reports"):
+            self._calibration_fit_reports.append(self.model_fit_report_)
         return self
 
     def _conformity_scores(
@@ -1171,6 +1214,11 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with series values and trained models.
         """
+        fit_start = perf_counter()
+        fit_rss_start = get_process_rss_bytes()
+        has_calibration = prediction_intervals is not None
+        if has_calibration:
+            self._calibration_fit_reports: List[ModelFitReport] = []
         if fitted and self.ts.target_transforms is not None:
             for tfm in self.ts.target_transforms:
                 if hasattr(tfm, "store_fitted"):
@@ -1313,6 +1361,24 @@ class MLForecast:
                     self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
                 elif hasattr(self, "_fitted_train_df_"):
                     delattr(self, "_fitted_train_df_")
+        final_model_fit_report = getattr(self, "model_fit_report_", None)
+        calibration_model_fit_report = None
+        model_fit_report = final_model_fit_report
+        if has_calibration:
+            all_model_fit_reports = self._calibration_fit_reports
+            calibration_model_fit_report = aggregate_model_fit_reports(
+                all_model_fit_reports[:-1]
+            )
+            model_fit_report = aggregate_model_fit_reports(all_model_fit_reports)
+            del self._calibration_fit_reports
+        self.fit_report_ = FitReport(
+            elapsed_seconds=perf_counter() - fit_start,
+            rss_start_bytes=fit_rss_start,
+            rss_end_bytes=get_process_rss_bytes(),
+            model_fit_report=model_fit_report,
+            calibration_model_fit_report=calibration_model_fit_report,
+            final_model_fit_report=final_model_fit_report,
+        )
         return self
 
     def forecast_fitted_values(
@@ -1495,6 +1561,8 @@ class MLForecast:
                 "No fitted models found. You have to call fit or preprocess + fit_models. "
                 "If you used cross_validation before please fit again."
             )
+        predict_start = perf_counter()
+        predict_rss_start = get_process_rss_bytes()
         first_model = next(iter(self.models_.values()))
         # Models are stored as dict for direct forecasting
         first_model_is_multi = isinstance(first_model, dict)
@@ -1851,6 +1919,12 @@ class MLForecast:
                         forecasts = _rescale_interval_columns(
                             forecasts, list(model_names), level_, sigma_tgt
                         )
+            self.predict_report_ = PredictReport(
+                elapsed_seconds=perf_counter() - predict_start,
+                rss_start_bytes=predict_rss_start,
+                rss_end_bytes=get_process_rss_bytes(),
+                horizon=h,
+            )
             return forecasts
         finally:
             if _saved_cs_df is not None:
