@@ -1059,3 +1059,215 @@ def test_quantile_engines_agree_mixed_with_expression_transforms():
         ]
     }
     assert_engines_agree(df, tfms, ["store"], atol=1e-9)
+
+
+def _assert_narwhals_partition_path():
+    """Every `partition_by` differential test below relies on `from_partition`
+    actually routing through `NarwhalsPooledState` -- otherwise both sides of
+    `assert_engines_agree` run the SAME legacy engine and the test passes
+    vacuously regardless of what the narwhals engine does. Confirmed by
+    reverting `mlforecast/{core,pooled,_pooled_engine}.py` to pre-Task-8 HEAD
+    (`git stash`) and rerunning: every test below still PASSED (core.py still
+    hardcoded `PooledState.from_partition`), which is exactly this failure
+    mode -- hence this explicit assertion in each one."""
+    import mlforecast.pooled as mp
+
+    assert hasattr(mp.NarwhalsPooledState, "from_partition"), (
+        "narwhals partition path missing"
+    )
+
+
+def _partition_df(backend, n_series, n_times, seed, n_promo_values=2):
+    """`_panel` plus a `promo` partition_by column, `n_promo_values` distinct values."""
+    df = _panel(backend, n_series=n_series, n_times=n_times)
+    rng = np.random.default_rng(seed)
+    promo = rng.integers(0, n_promo_values, len(df))
+    if isinstance(df, pl.DataFrame):
+        df = df.with_columns(promo=pl.Series(promo))
+    else:
+        df = df.assign(promo=promo)
+    return df
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_partition_by_global_engines_agree(backend):
+    df = _partition_df(backend, n_series=30, n_times=60, seed=3)
+    import mlforecast.pooled as mp
+
+    assert hasattr(mp.NarwhalsPooledState, "from_partition"), (
+        "narwhals partition path missing"
+    )
+    assert_engines_agree(
+        df,
+        {1: [RollingMean(7, global_=True, partition_by=["promo"], min_samples=1)]},
+        [],
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_partition_by_groupby_engines_agree(backend):
+    df = _partition_df(backend, n_series=30, n_times=60, seed=4)
+    import mlforecast.pooled as mp
+
+    assert hasattr(mp.NarwhalsPooledState, "from_partition"), (
+        "narwhals partition path missing"
+    )
+    assert_engines_agree(
+        df,
+        {1: [RollingMean(7, groupby=["store"], partition_by=["promo"], min_samples=1)]},
+        ["store"],
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_partition_by_local_engines_agree(backend):
+    """local mode (no global_/groupby): bucket key is (unique_id, promo), parent
+    scope is the series' own calendar -- the third `from_partition` branch,
+    not exercised by the two tests above."""
+    _assert_narwhals_partition_path()
+    df = _partition_df(backend, n_series=24, n_times=50, seed=5)
+    assert_engines_agree(
+        df,
+        {1: [RollingMean(7, partition_by=["promo"], min_samples=1)]},
+        [],
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_partition_by_quantile_engines_agree(backend):
+    _assert_narwhals_partition_path()
+    df = _partition_df(backend, n_series=24, n_times=70, seed=7)
+    assert_engines_agree(
+        df,
+        {
+            1: [
+                RollingQuantile(
+                    p=0.5,
+                    window_size=7,
+                    global_=True,
+                    partition_by=["promo"],
+                    min_samples=1,
+                )
+            ]
+        },
+        [],
+        atol=0.0,
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_partition_by_expanding_minmax_engines_agree(backend):
+    """PUBLIC-API proof for the cum_min/cum_max forward-fill (ruling F17).
+
+    A NaN target is rejected at fit (`ValueError: y column contains null
+    values`), so a gap ordinal cannot be produced through plain `fit` -- it
+    arises only from partition_by densified holes and predict-time
+    placeholders. This test is therefore the first place the gap path is
+    reachable through the public API: a time-varying partition key leaves
+    each bucket without an observation at many parent-calendar ordinals, and
+    legacy's np.fmin.accumulate carries the running extremum THROUGH those
+    holes.
+    """
+    _assert_narwhals_partition_path()
+    df = _partition_df(backend, n_series=24, n_times=70, seed=11, n_promo_values=3)
+    assert_engines_agree(
+        df,
+        {
+            1: [
+                ExpandingMin(global_=True, partition_by=["promo"]),
+                ExpandingMax(global_=True, partition_by=["promo"]),
+            ]
+        },
+        [],
+        atol=0.0,
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_lookup_lag_partition_engines_agree(backend):
+    """LookupLag must NOT be densified -- its lag counts OCCURRENCES, not
+    calendar ordinals. A gappy partition (n_promo_values=3 on a small panel)
+    exercises that directly: densifying would silently convert the
+    occurrence lag into an ordinal lag."""
+    _assert_narwhals_partition_path()
+    df = _partition_df(backend, n_series=24, n_times=70, seed=8, n_promo_values=3)
+    assert_engines_agree(df, {1: [LookupLag(partition_by=["promo"])]}, [], atol=0.0)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_ewm_partition_gapped_lag_gt1_engines_agree(backend):
+    """`ExponentiallyWeightedMean` MUST be densified for partition_by (ruling
+    F25): its `_pooled_expr` shifts by row POSITION, which only matches
+    legacy's calendar-ORDINAL threshold fold when the grid is dense or
+    `lag == 1`. At `lag == 1` the bug is invisible (consecutive ordinals
+    differ by at least 1), so this test uses `lag=2` on a deliberately
+    gapped partition (n_promo_values=3, small panel -> frequent gaps) --
+    exactly the configuration the task brief measured diverging (11.0/31.0
+    vs legacy's 16.0/36.0) before densification."""
+    _assert_narwhals_partition_path()
+    df = _partition_df(backend, n_series=20, n_times=40, seed=13, n_promo_values=3)
+    assert_engines_agree(
+        df,
+        {
+            2: [
+                ExponentiallyWeightedMean(
+                    alpha=0.3, global_=True, partition_by=["promo"]
+                )
+            ]
+        },
+        [],
+        atol=1e-9,
+    )
+
+
+def test_lookup_lag_and_ewm_same_partition_state_raises():
+    """The one configuration the two densification carve-outs cannot both
+    satisfy (ruling F17 vs F25): a LookupLag and an EWM(lag>1) sharing the
+    SAME partition_by key (mode/groupby/partition_by all identical) forces
+    one shared aggregate table to be simultaneously sparse (for LookupLag)
+    and dense (for EWM) -- refused loudly rather than computed silently
+    wrong."""
+    df = _partition_df("polars", n_series=20, n_times=40, seed=13, n_promo_values=3)
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import importlib
+
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        import mlforecast.core
+
+        importlib.reload(mlforecast.core)
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            # LookupLag has no `global_`/`groupby` param -- it is always
+            # "local" mode (bucket = (id_col, *partition_cols)). EWM must
+            # match that exact mode/groupby/partition_by combination to land
+            # in the SAME pooled state (`_get_pooled_tfms`'s key is
+            # `(mode, group_cols, partition_cols)`); `global_=True` (as in
+            # the standalone EWM test above) gives "nonlocal" instead and
+            # never collides.
+            lag_transforms={
+                2: [
+                    LookupLag(partition_by=["promo"]),
+                    ExponentiallyWeightedMean(alpha=0.3, partition_by=["promo"]),
+                ]
+            },
+        )
+        with pytest.raises(NotImplementedError, match="LookupLag"):
+            fcst.preprocess(df, static_features=[], dropna=False)
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import importlib
+
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        import mlforecast.core
+
+        importlib.reload(mlforecast.core)

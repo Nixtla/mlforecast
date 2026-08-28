@@ -413,3 +413,10 @@ def test_quantile_feature_contiguous_fast_path_matches_naive_gather(offsets, lab
         values, row_offsets, n_ordinals, offsets, 0.5, 2
     )
     np.testing.assert_array_equal(got_fast, got_naive)
+
+
+def test_should_densify_threshold():
+    from mlforecast._pooled_engine import should_densify
+
+    assert should_densify(n_buckets=2, n_calendar=100, n_sparse_rows=100)
+    assert not should_densify(n_buckets=1000, n_calendar=1000, n_sparse_rows=5000)

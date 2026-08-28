@@ -414,6 +414,90 @@ def quantile_values_collapsed(agg_native, time_agg):
     return v[valid], row_offsets
 
 
+def should_densify(n_buckets, n_calendar, n_sparse_rows, k=4):
+    """Whether a dense (bucket x parent-calendar) grid is worth materializing.
+
+    Densifying turns a RANGE window into a row window, but costs
+    ``n_buckets * n_calendar`` rows. Heuristic: densify while that is within
+    ``k``x the sparse row count.
+
+    ``k=4`` measured (Task 8, scratch benchmark, not committed): a 2000
+    series x 200 day panel (400k rows), `RollingMean(28, global_=True,
+    partition_by=["promo"])`, with `promo` cardinality swept from 400 to
+    32000 to push the bucket-count : sparse-row ratio from ~1x to ~16.5x
+    (`should_densify`'s own guard forced to always return True, to measure
+    densifying's cost independent of where the size guard would normally
+    decline). Densifying end-to-end (grid build + evaluation) beat the
+    legacy engine at EVERY ratio tried, by a WIDENING margin, not a
+    narrowing one: 6x faster at ratio 1x (0.054s vs 0.324s), 9x at ratio
+    1.6x, 17x at ratio 2.5x, 19x at ratio 4.5x, 20x at ratio 8.5x, 21x at
+    ratio 16.5x. No crossover was found in this range -- the legacy engine's
+    own per-bucket Python loop scales WORSE with bucket count than the
+    vectorized dense-grid join does, so higher cardinality favors
+    densifying, not the reverse. ``k=4`` is therefore not a
+    performance-derived breakeven (none was found) but a conservative MEMORY
+    bound: it caps how large a dense grid this will materialize relative to
+    the actual data, independent of how fast that materialization runs.
+    """
+    if n_sparse_rows == 0:
+        return True
+    return n_buckets * n_calendar <= k * n_sparse_rows
+
+
+def densify_to_parent(agg_native, keys, time_col, parent_keys_native):
+    """Left-join a bucket's sparse aggregates onto its full parent calendar.
+
+    ``parent_keys_native`` is the FULLY EXPANDED dense skeleton the caller
+    wants materialized: one row per (bucket, parent-calendar timestamp) pair,
+    already carrying the bucket key column(s) (``keys``) -- e.g. one row per
+    ``(_bucket_id, ds)`` for every ``ds`` in THAT bucket's own parent scope's
+    calendar. On a dense grid a ROW-based window IS a RANGE window -- which is
+    what the legacy engine's parent-calendar ordinal bookkeeping exists to
+    emulate. Holes (skeleton rows with no matching sparse row) get
+    zero-filled counts/sums so they occupy an ordinal without contributing
+    observations; the per-timestamp ``mn``/``mx``/``ewm`` family and any
+    ``time_agg``-suffixed variants stay null at a hole (no value was
+    observed), exactly like an absent legacy ``unique_times`` entry.
+
+    DEVIATION from the plan's Step-3 snippet: that version built the
+    skeleton itself via ``buckets.join(cal, how="cross")`` against a single
+    flat calendar (``cal`` holding only ``time_col``). That is only correct
+    when every bucket shares ONE calendar -- the ``global_ + partition_by``
+    case. ``local`` and ``groupby + partition_by`` give each bucket its OWN
+    parent scope's calendar (mirroring legacy's per-scope
+    ``_parent_time_grids``): a blanket cross join would leak another scope's
+    calendar rows into a bucket that never observed them. The scoped
+    expansion is therefore done by the caller
+    (``NarwhalsPooledState._dense_skeleton``, an equi-join on the parent
+    scope columns -- the vectorized form of the same "cross join per scope"
+    the brief's snippet did unconditionally for the single-scope case); this
+    function's only job is the final left-join-and-zero-fill against that
+    already-scoped skeleton.
+
+    A second deviation: the brief's ``zero_fill`` list only matched the bare
+    ``s``/``c``/``q`` columns. A state needing more than one ``time_agg``
+    family also carries suffixed derived columns (``s__mean``, ``c__mean``,
+    ...) built by ``build_agg_table`` from those same three aggregates --
+    left unfilled, a hole's ``c__mean`` stays null instead of 0, and the
+    hole is silently treated as "unknown" rather than "no observation",
+    corrupting e.g. a ``time_agg="mean"`` EWM's forward-fill-through-holes
+    invariant. Matched by base name (split on the first ``__``) instead.
+    """
+    keys = list(keys)
+    a = nw.from_native(agg_native, eager_only=True)
+    cal = nw.from_native(parent_keys_native, eager_only=True).sort(keys + [time_col])
+    out = cal.join(a, on=keys + [time_col], how="left")
+    zero_fill = [c for c in out.columns if c.split("__", 1)[0] in ("s", "c", "q")]
+    if zero_fill:
+        out = out.with_columns([nw.col(c).fill_null(0.0) for c in zero_fill])
+    # A left join is not guaranteed order-preserving on every backend (see
+    # `_order_preserving_left_join`'s docstring) -- re-sort defensively so
+    # `_add_ordinals`'s row-order-dependent cumulative count is correct
+    # regardless of how the backend actually implemented the join.
+    out = out.sort(keys + [time_col])
+    return out.to_native()
+
+
 def quantile_feature(values, row_offsets, n_ordinals, offsets, p, min_samples):
     """Quantile per ordinal over the union of the ordinals at ``offsets`` back.
 

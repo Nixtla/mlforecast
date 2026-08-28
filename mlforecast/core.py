@@ -746,7 +746,7 @@ class TimeSeries:
                                 f"partition_by/groupby column '{col}' not found in dataframe."
                             )
                     part_group_cols = list(group_cols_t) if group_cols_t else None
-                    self._pooled_states[key] = PooledState.from_partition(
+                    self._pooled_states[key] = _pooled_state_cls().from_partition(
                         df_for_pooled,
                         mode=mode,
                         group_cols_list=part_group_cols,

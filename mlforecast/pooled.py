@@ -20,6 +20,7 @@ from ._pooled_engine import PooledCtx, build_agg_table
 from ._pooled_keys import (  # noqa: F401
     _attach_bucket_id,
     _dedupe_preserve_order,
+    _encode_join_keys,
     _extend_groups,
     _order_preserving_left_join,
     add_bucket_id,
@@ -126,6 +127,19 @@ class NarwhalsPooledState:
         self._pending: list = []
         self._next_ord = None
         self._seeds = None
+        # partition_by / densification bookkeeping (Task 8). Harmless no-ops
+        # for `global_`/`groupby` states (`mode` is always in
+        # `_KNOWN_DENSE_MODES` for those, so `ensure_densified` returns
+        # immediately and none of this is ever read).
+        self.key_cols: Optional[List[str]] = None
+        self.partition_cols: Optional[List[str]] = None
+        self._parent_scope_cols: Optional[List[str]] = None
+        self._densified = False
+        self._densify_declined = False
+        self._skeleton = None
+        self._n_buckets: Optional[int] = None
+        self._n_calendar_est: Optional[int] = None
+        self._n_sparse_rows: Optional[int] = None
 
     @classmethod
     def from_global(
@@ -174,6 +188,322 @@ class NarwhalsPooledState:
             mode="groupby",
         )._build(df, time_col, target_col, ga_data_dtype)
 
+    @classmethod
+    def from_partition(
+        cls,
+        sorted_df,
+        mode: str,
+        group_cols_list: Optional[List[str]],
+        partition_cols_list: List[str],
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        ga_data_dtype,
+        static_features,
+        n_series: int,
+    ):
+        """Build a partition_by state; densification is decided lazily.
+
+        Mirrors legacy ``PooledState.from_partition``'s key/parent-scope
+        derivation exactly (see ``_pooled_legacy.py``):
+
+        - ``mode == "local"``: bucket key is ``(id_col, *partition_cols)``;
+          the parent scope is each series' own calendar (``[id_col]``).
+        - ``groupby + partition_by``: bucket key is
+          ``(*group_cols, *partition_cols)``; the parent scope is the
+          group's shared calendar (``group_cols``).
+        - ``global_ + partition_by``: bucket key is ``(*partition_cols,)``;
+          the parent scope is the single global calendar
+          (``parent_scope_cols=None``).
+
+        Builds the SPARSE aggregate table (one row per observed
+        ``(bucket, timestamp)``) up front -- identical to ``from_groupby``
+        -- and caches the (bucket count, parent-calendar size, sparse row
+        count) needed for the ``should_densify`` size guard. The grid is
+        NOT densified here: whether a state may/must densify depends on
+        which TRANSFORMS share it (`LookupLag` forbids it; everything else
+        needs it -- rulings F17/F25), and that set isn't known at
+        construction time in the legacy call signature this mirrors -- and
+        `core.py`'s single call site (`_pooled_state_cls().from_partition(...)`)
+        is shared with the legacy engine's `PooledState.from_partition`, so
+        this signature can't grow a `tfms` parameter the legacy one doesn't
+        have. See ``ensure_densified``, invoked lazily from ``feature_frame``
+        once the actual transforms for this state are visible (the same
+        pattern ``ensure_time_aggs``/``ensure_accumulates`` already use).
+        """
+        if mode == "local":
+            key_cols = _dedupe_preserve_order([id_col] + list(partition_cols_list))
+            parent_scope_cols: Optional[List[str]] = [id_col]
+        elif group_cols_list:
+            key_cols = _dedupe_preserve_order(
+                list(group_cols_list) + list(partition_cols_list)
+            )
+            parent_scope_cols = list(group_cols_list)
+        else:
+            key_cols = _dedupe_preserve_order(list(partition_cols_list))
+            parent_scope_cols = None
+
+        keep = _dedupe_preserve_order([id_col] + key_cols + [time_col, target_col])
+        df = ufp.drop_index_if_pandas(sorted_df[keep])
+        df, groups = add_bucket_id(df, key_cols)
+        sf_cols = set(static_features.columns)
+        if set(key_cols).issubset(sf_cols):
+            sbid = lookup_bucket_ids(static_features, groups, key_cols).astype(
+                np.int64, copy=False
+            )
+        else:
+            sbid = np.zeros(n_series, dtype=np.int64)
+
+        state = cls(
+            agg=None,
+            groups=groups,
+            group_cols=group_cols_list,
+            series_bucket_id=sbid,
+            join_cols=[id_col, time_col],
+            keys=["_bucket_id"],
+            time_col=time_col,
+            mode=mode,
+        )
+        state.key_cols = key_cols
+        state.partition_cols = list(partition_cols_list)
+        state._parent_scope_cols = parent_scope_cols
+        built = state._build(df, time_col, target_col, ga_data_dtype)
+        built._compute_density_estimate()
+        return built
+
+    def _compute_density_estimate(self):
+        """Cache (bucket count, parent-calendar size, sparse row count).
+
+        Cheap: group-by counts only, no cross product materialized. Used by
+        `ensure_densified`'s `should_densify` call. Scopes can have
+        DIFFERENT calendar lengths (a `local` state's series may start/end
+        at different dates; a `groupby + partition_by` state's groups may
+        span different date ranges) -- a single ``(n_buckets, n_calendar)``
+        pair can't represent that exactly, so the scoped branch folds the
+        EXACT total dense-row count into ``n_calendar`` with ``n_buckets``
+        pinned to 1, rather than reporting a possibly-misleading average or
+        an underestimate that could pick "densify" for a state whose real
+        dense grid is much bigger than a naive per-bucket-average implies.
+        """
+        self._n_sparse_rows = len(nw.from_native(self.agg, eager_only=True))
+        d = nw.from_native(self._df, eager_only=True)
+        if self._parent_scope_cols is None:
+            self._n_buckets = len(nw.from_native(self.groups, eager_only=True))
+            self._n_calendar_est = len(d.select(self.time_col).unique())
+            return
+        scope_cols = self._parent_scope_cols
+        enc_cols = [f"__enc_{c}" for c in scope_cols]
+        # Null-safe: a `groupby + partition_by` scope column (e.g. `brand`)
+        # can itself be null for some series (mirrors legacy's own
+        # sentinel-encoding of `parent_scope_cols` in `PooledState.
+        # from_partition` -- "a null/NaN scope value ... matches itself and
+        # only itself"). A plain `group_by`/`join` on the raw column would
+        # treat two null scope values as NOT equal (standard null
+        # semantics), silently splitting one scope's buckets/calendar across
+        # what looks like two different (mismatched, unmatched) groups.
+        groups_nw = nw.from_native(self.groups, eager_only=True)
+        left_enc, right_enc = _encode_join_keys(
+            groups_nw.select(scope_cols + ["_bucket_id"]),
+            d.select(scope_cols + [self.time_col]).unique(),
+            scope_cols,
+        )
+        bucket_counts = left_enc.group_by(enc_cols).agg(
+            nw.col("_bucket_id").count().alias("_n_buckets_in_scope")
+        )
+        cal_lens = right_enc.group_by(enc_cols).agg(
+            nw.col(self.time_col).count().alias("_cal_len")
+        )
+        joined = bucket_counts.join(cal_lens, on=enc_cols, how="left")
+        total = (
+            joined.with_columns(
+                (nw.col("_n_buckets_in_scope") * nw.col("_cal_len").fill_null(0)).alias(
+                    "_prod"
+                )
+            )
+            .get_column("_prod")
+            .sum()
+        )
+        self._n_buckets = 1
+        self._n_calendar_est = int(total) if total is not None else 0
+
+    def _dense_skeleton(self):
+        """Every (bucket, parent-calendar-timestamp) pair to materialize.
+
+        Built lazily (only when a state actually needs densifying) and
+        cached: computed once per state, reused if `ensure_time_aggs`
+        rebuilds `self.agg` from scratch later and must re-densify.
+        """
+        if self._skeleton is not None:
+            return self._skeleton
+        d = nw.from_native(self._df, eager_only=True)
+        groups_nw = nw.from_native(self.groups, eager_only=True)
+        if self._parent_scope_cols is None:
+            cal = d.select([self.time_col]).unique()
+            buckets = groups_nw.select(["_bucket_id"]).unique()
+            skeleton = buckets.join(cal, how="cross")
+        else:
+            scope_cols = self._parent_scope_cols
+            enc_cols = [f"__enc_{c}" for c in scope_cols]
+            cal = d.select(scope_cols + [self.time_col]).unique()
+            bucket_scope = groups_nw.select(["_bucket_id"] + scope_cols)
+            # Null-safe join -- see `_compute_density_estimate`'s comment: a
+            # scope column can be null (e.g. a null `groupby` key), and two
+            # null scope values must match each other, not fail to match at
+            # all (standard join null semantics).
+            left_enc, right_enc = _encode_join_keys(bucket_scope, cal, scope_cols)
+            skeleton = left_enc.join(
+                right_enc.select(enc_cols + [self.time_col]), on=enc_cols, how="inner"
+            ).select(["_bucket_id", self.time_col])
+        self._skeleton = skeleton.to_native()
+        return self._skeleton
+
+    def _apply_densification(self):
+        """Rebuild `self.agg` as the dense (bucket x parent-calendar) grid.
+
+        The `E`-prefixed prefix-sum columns and `ord` were computed over the
+        SPARSE row order (in `build_agg_table`, called from `_build`/
+        `ensure_time_aggs`) and are stale for the new dense row set: a
+        densified hole changes which row is `lag` positions back from any
+        given row. Rebuilt from scratch here, mirroring exactly what
+        `build_agg_table` itself does after aggregation (assign ordinals,
+        then a per-bucket cumulative sum of every base aggregate column) --
+        just against the dense base table instead of the sparse one.
+        """
+        from ._pooled_engine import (
+            _add_ordinals,
+            _PREFIX_AGGS,
+            densify_to_parent,
+            grouped_accumulate,
+        )
+
+        skeleton = self._dense_skeleton()
+        a = nw.from_native(self.agg, eager_only=True)
+        base_cols = [c for c in a.columns if c != "ord" and not c.startswith("E")]
+        dense = densify_to_parent(
+            a.select(base_cols).to_native(), self.keys, self.time_col, skeleton
+        )
+        t = _add_ordinals(
+            nw.from_native(dense, eager_only=True).sort(self.keys + [self.time_col]),
+            self.keys,
+            self.time_col,
+        )
+        prefix_cols, prefix_outs = [], []
+        for suffix in [""] + [
+            f"__{a_}" for a_ in sorted(x for x in self._time_aggs if x is not None)
+        ]:
+            for base in _PREFIX_AGGS:
+                prefix_cols.append(f"{base}{suffix}")
+                prefix_outs.append(f"E{base}{suffix}")
+        self.agg = grouped_accumulate(
+            t.to_native(), self.keys, prefix_cols, "cum_sum", prefix_outs
+        )
+        # F4/F5: densification changes the aggregate table's row count, and
+        # `quantile_values` emits one offset per row -- stale offsets would
+        # silently misalign every partition_by quantile.
+        self._qvalues = None
+
+    def ensure_densified(self, leaf_tfms):
+        """Densify this partition_by state so a row-shift IS a RANGE window.
+
+        No-op for `global_`/`groupby` states (`self.mode` is structurally
+        dense already, see `_KNOWN_DENSE_MODES`) and once this state has
+        already settled its decision (`_densified` / `_densify_declined`).
+
+        Two families pull in OPPOSITE directions (rulings F17/F25):
+
+        - `LookupLag` must NEVER see the dense grid: its lag counts
+          OCCURRENCES via a positional shift over the table
+          (`LookupLag._pooled_expr`'s own docstring), and a densified hole
+          would silently convert that occurrence lag into an ordinal lag.
+        - Every other pooled family needs the opposite. `PooledCtx.shift`/
+          `.window` (window transforms), the accumulate shim
+          (`ensure_accumulates`, e.g. `ExpandingMin`/`Max`/EWM), and the
+          quantile store's `ord` column are all ROW-position operations,
+          which equal a calendar-RANGE window only when the grid has no
+          gaps -- true for `global_`/`groupby` states (legacy renumbers
+          `unique_times` to `0..n-1`) but NOT for a sparse `partition_by`
+          state, whose ordinals are real, possibly-gapped parent-calendar
+          positions. `ExponentiallyWeightedMean` at `lag > 1` is simply the
+          family this was *measured* on (11.0/31.0 vs legacy's 16.0/36.0 on
+          a gapped bucket) -- the same row-vs-ordinal mismatch applies to
+          every other non-`LookupLag` family, not only EWM.
+
+        A state needing both is a real conflict this architecture can't
+        satisfy (one shared aggregate table can't be simultaneously sparse
+        for one family and dense for another) -- refused loudly rather than
+        computed silently wrong. Likewise if the dense grid is simply too
+        big (`should_densify` declines) for a state that isn't pure
+        `LookupLag`.
+        """
+        if self.mode in self._KNOWN_DENSE_MODES:
+            return
+        if self.key_cols is None:
+            # Not a state actually built by `from_partition` (e.g. a state
+            # constructed directly, as some unit tests do, to probe
+            # `_guard_ewm_positional_shift` in isolation) -- no density
+            # bookkeeping (`_n_buckets`/`_n_calendar_est`/`_n_sparse_rows`,
+            # `_dense_skeleton`) was computed for it, and there is no size
+            # guard or LookupLag/EWM conflict to resolve. Fall through to
+            # `_guard_ewm_positional_shift`, which still fires for that case.
+            return
+        if self._densified or self._densify_declined:
+            return
+        from .lag_transforms import LookupLag
+
+        has_lookup = any(isinstance(t, LookupLag) for t in leaf_tfms)
+        others = sorted(
+            {type(t).__name__ for t in leaf_tfms if not isinstance(t, LookupLag)}
+        )
+        if has_lookup and others:
+            raise NotImplementedError(
+                "partition_by state mixes LookupLag (requires the sparse, "
+                f"occurrence-indexed table) with {others} (require the "
+                "dense parent-calendar grid for correct RANGE-window "
+                "semantics) -- the two can't share one aggregate table. "
+                "Give LookupLag its own partition_by grouping (a separate "
+                "lag_transforms entry with no other transform sharing its "
+                "exact mode/groupby/partition_by combination), or run this "
+                "key with MLFORECAST_POOLED_ENGINE=numpy."
+            )
+        if has_lookup:
+            self._densify_declined = True
+            return
+        from ._pooled_engine import should_densify
+
+        if should_densify(self._n_buckets, self._n_calendar_est, self._n_sparse_rows):
+            self._apply_densification()
+            self._densified = True
+            return
+        self._densify_declined = True
+        ewm_names = sorted(
+            {
+                type(t).__name__
+                for t in leaf_tfms
+                if getattr(t, "_pooled_accumulate", None) == ("ewm", "ewm_mean")
+                and t._get_configured_lag() > 1
+            }
+        )
+        if ewm_names:
+            raise NotImplementedError(
+                f"partition_by state needs densification for {ewm_names} "
+                "(lag > 1) but the dense grid "
+                f"({self._n_buckets}x{self._n_calendar_est} rows) exceeds "
+                f"the should_densify size guard against "
+                f"{self._n_sparse_rows} sparse rows; refusing rather than "
+                "computing a row-position shift against sparse ordinals "
+                "(measured divergence: 11.0/31.0 vs legacy's 16.0/36.0 at "
+                "lag=2 on a gapped bucket). Run this key with "
+                "MLFORECAST_POOLED_ENGINE=numpy."
+            )
+        raise NotImplementedError(
+            "partition_by state needs the dense parent-calendar grid for "
+            f"correct RANGE-window semantics ({sorted({type(t).__name__ for t in leaf_tfms})}) "
+            f"but the dense grid ({self._n_buckets}x{self._n_calendar_est} "
+            f"rows) exceeds the should_densify size guard against "
+            f"{self._n_sparse_rows} sparse rows. Run this key with "
+            "MLFORECAST_POOLED_ENGINE=numpy."
+        )
+
     def _build(self, df, time_col, target_col, ga_data_dtype):
         # cast through the model's working dtype before float, matching the
         # legacy engine so numerics stay bit-identical with the model's
@@ -204,6 +534,14 @@ class NarwhalsPooledState:
             self.agg = build_agg_table(
                 self._df, self.keys, self.time_col, self._target_col, self._time_aggs
             )
+            # `build_agg_table` always rebuilds from the SPARSE `self._df` --
+            # re-apply densification (Task 8) if this state had already
+            # densified, or the fresh rebuild would silently revert to the
+            # sparse grid. Row count changes either way -> invalidate qvalues
+            # (F4/F5: one offset per aggregate-table row).
+            self._qvalues = None
+            if self._densified:
+                self._apply_densification()
 
     def ensure_accumulates(self, leaf_tfms):
         """Materialize ``A<col>`` columns for transforms needing a running min/max/ewm.
@@ -269,8 +607,9 @@ class NarwhalsPooledState:
     # STRUCTURALLY dense (0..n-1 with no calendar gaps): legacy renumbers
     # `unique_times` the same way for `global_`/`groupby` buckets. A
     # `partition_by` state ("nonlocal"/"local") keeps real, non-renumbered
-    # parent-calendar ordinals and can be gapped. See
-    # `_guard_ewm_positional_shift` and `ExponentiallyWeightedMean._pooled_expr`.
+    # parent-calendar ordinals and can be gapped -- UNLESS densified (Task 8,
+    # `ensure_densified`/`_densified`). See `_guard_ewm_positional_shift` and
+    # `ExponentiallyWeightedMean._pooled_expr`.
     _KNOWN_DENSE_MODES = ("global", "groupby")
 
     def _guard_ewm_positional_shift(self, leaf_tfms):
@@ -279,20 +618,22 @@ class NarwhalsPooledState:
         `ExponentiallyWeightedMean._pooled_expr` shifts by row POSITION,
         which only matches legacy's calendar-ORDINAL threshold fold when the
         bucket is dense or `lag == 1`. That information -- this state's
-        `mode` -- isn't visible from inside `_pooled_expr` (`PooledCtx`
-        carries only `keys`/`lag`/`min_samples`/`time_agg`, not how the
-        bucket's ordinals were built), so the check lives here instead,
-        where `self.mode` is available.
+        `mode` (and, since Task 8, whether it was densified) -- isn't
+        visible from inside `_pooled_expr` (`PooledCtx` carries only
+        `keys`/`lag`/`min_samples`/`time_agg`, not how the bucket's ordinals
+        were built), so the check lives here instead, where `self.mode` /
+        `self._densified` are available.
 
-        Dormant today: a `NarwhalsPooledState` is only ever built for
-        `global_`/`groupby` keys (`core.py` still routes every `partition_by`
-        state through the legacy engine), so `self.mode` is always in
-        `_KNOWN_DENSE_MODES` right now and this never fires. It exists so
-        that whenever a future task (Task 8) wires a `partition_by` state
-        through this class, an un-densified state with `lag > 1` fails loudly
-        instead of returning a silently wrong number.
+        A `partition_by` state reaching `feature_frame` with an EWM(lag>1)
+        leaf has already been forced through `ensure_densified` (which
+        raises first if densifying isn't possible), so `self._densified`
+        is true by the time this runs -- this guard is then a no-op backstop
+        for that path, and the one that actually fires for a state that
+        DECLINED densification (pure `LookupLag`, no EWM present -- and if
+        an EWM ever were present in that mix, `ensure_densified` would have
+        already raised before this method is ever reached).
         """
-        if self.mode in self._KNOWN_DENSE_MODES:
+        if self.mode in self._KNOWN_DENSE_MODES or self._densified:
             return
         for tfm in leaf_tfms:
             if getattr(tfm, "_pooled_accumulate", None) != ("ewm", "ewm_mean"):
@@ -406,6 +747,12 @@ class NarwhalsPooledState:
         # always reports the trivial default. See `_iter_leaf_tfms`.
         leaves = [leaf for t in transforms.values() for leaf in _iter_leaf_tfms(t)]
         self.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
+        # Must run before `ensure_accumulates`/the quantile store: a
+        # partition_by state's row order only means "calendar order" once
+        # densified (Task 8), and both of those read `self.agg` in row
+        # order. Also decides the LookupLag-vs-everything-else conflict
+        # (rulings F17/F25) -- see `ensure_densified`'s docstring.
+        self.ensure_densified(leaves)
         self.ensure_accumulates(leaves)
         self._guard_ewm_positional_shift(leaves)
         # Quantiles have no narwhals expression (no sufficient statistic --
@@ -447,11 +794,21 @@ class NarwhalsPooledState:
         on = ([] if not self.keys else self.keys) + [time_col]
         left = nw.from_native(df_sorted, eager_only=True)
         if self.keys:
-            # attach _bucket_id to the panel rows via the group registry
+            # attach _bucket_id to the panel rows via the group registry.
+            # `key_cols` (set by `from_partition`) is the bucket key
+            # actually used to build `self.groups` -- `(*group_cols,
+            # *partition_cols)`, `(id_col, *partition_cols)`, or
+            # `(*partition_cols,)` -- which for a `partition_by` state is
+            # NOT the same as `self.group_cols` (the plain `groupby=` cols,
+            # None for `local`/`global_ + partition_by`). `from_groupby`
+            # states never set `key_cols`, so fall back to `group_cols`.
+            bucket_key_cols = (
+                self.key_cols if self.key_cols is not None else (self.group_cols)
+            )
             left_native = _attach_bucket_id(
-                left.select(self.group_cols + [time_col]).to_native(),
+                left.select(bucket_key_cols + [time_col]).to_native(),
                 self.groups,
-                self.group_cols,
+                bucket_key_cols,
             )
             left = nw.from_native(left_native, eager_only=True)
         joined = _order_preserving_left_join(left, feats.select(on + names), on=on)
