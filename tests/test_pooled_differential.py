@@ -23,6 +23,10 @@ from mlforecast.lag_transforms import (
     RollingMean,
     RollingMin,
     RollingStd,
+    SeasonalRollingMax,
+    SeasonalRollingMean,
+    SeasonalRollingMin,
+    SeasonalRollingStd,
 )
 
 BACKENDS = ["polars", "pandas"]
@@ -426,3 +430,186 @@ def test_float32_target_engines_agree(backend):
         {1: [RollingMean(4, groupby=["store"]), RollingMean(9, groupby=["store"])]},
         ["store"],
     )
+
+
+SEASONAL = [
+    (
+        "seas_mean",
+        SeasonalRollingMean(season_length=7, window_size=4, groupby=["store"]),
+    ),
+    ("seas_std", SeasonalRollingStd(season_length=7, window_size=4, groupby=["store"])),
+    ("seas_min", SeasonalRollingMin(season_length=7, window_size=4, groupby=["store"])),
+    ("seas_max", SeasonalRollingMax(season_length=7, window_size=4, groupby=["store"])),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("label,tfm", SEASONAL, ids=[x[0] for x in SEASONAL])
+def test_seasonal_engines_agree(backend, label, tfm):  # noqa: ARG001
+    assert_engines_agree(_panel(backend, n_times=90), {1: [tfm]}, ["store"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_seasonal_rolling_std_window1_min_samples1_no_inf(backend):
+    """Finding 1's defect (RollingStd), reproduced for the seasonal family:
+    with ``window_size=1`` the seasonal count reduces to a single shifted
+    per-ordinal count (``_pooled_count`` sums ``sum_horizontal`` over exactly
+    one offset, ``lag``), so a lone series per bucket reaches ``cnt == 1``
+    just as reliably as ``RollingStd(window_size=1)`` does. At ``cnt == 1``
+    the numerator is not exactly 0 -- it carries a cancellation residue from
+    subtracting shifted sums -- so dividing by ``(cnt - 1) == 0`` under a
+    bare ``cnt > 0`` guard gives +-inf, not NaN. The mask must be
+    ``cnt > 1``, matching ``_seasonal_stat``'s own ``len(vals) > 1`` guard.
+
+    ONE SERIES PER BUCKET IS REQUIRED, exactly as in
+    ``test_rolling_std_window1_min_samples1_no_inf``: ``n_series=n_groups``
+    gives ``store=i%n_groups`` exactly one series per bucket, so
+    ``cnt in {0, 1}``."""
+    import narwhals as nw
+
+    from mlforecast._pooled_engine import PooledCtx, build_agg_table
+
+    n_series = 8
+    df = _panel(backend, n_series=n_series, n_times=30, n_groups=n_series)
+
+    tfm = SeasonalRollingStd(
+        season_length=3, window_size=1, min_samples=1, groupby=["store"]
+    )
+
+    # Verify the fixture actually reaches cnt == 1 on the real aggregate
+    # table, so this test cannot silently stop biting again if the fixture
+    # ever changes.
+    tbl = build_agg_table(df, ["store"], "ds", "y", {None})
+    ctx = PooledCtx(keys=["store"], lag=1, min_samples=1, time_agg=None)
+    cnt_vals = set(
+        nw.from_native(tbl, eager_only=True)
+        .with_columns(tfm._pooled_count(ctx).alias("cnt"))["cnt"]
+        .to_list()
+    )
+    assert 1.0 in cnt_vals, f"fixture never reaches cnt == 1: {cnt_vals}"
+
+    tfms = {1: [tfm]}
+    b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    feat_cols = [c for c in b.columns if c not in ("unique_id", "ds", "store", "y")]
+    assert feat_cols, "no feature columns produced"
+    for c in feat_cols:
+        vals = b[c].cast(pl.Float64).to_numpy()
+        assert not np.isinf(vals).any(), f"{c}: found {np.isinf(vals).sum()} infinities"
+    assert_engines_agree(df, tfms, ["store"])
+
+
+def _seasonal_negative_residue_dates(df_pl, tfm, min_samples):
+    """Same precondition-and-reference role as ``_negative_residue_dates``,
+    but built from the seasonal family's own ``sum_horizontal``-based
+    ``cnt``/``num``/``sq`` (offsets ``lag + k*season_length``), which is a
+    different summation path than ``RollingStd``'s prefix-sum window
+    subtraction and so must be checked independently rather than assumed to
+    share ``_negative_residue_dates``'s result set."""
+    import narwhals as nw
+
+    from mlforecast._pooled_engine import PooledCtx, build_agg_table
+
+    tbl = build_agg_table(df_pl, ["store"], "ds", "y", {None})
+    ctx = PooledCtx(keys=["store"], lag=1, min_samples=min_samples, time_agg=None)
+    offs = tfm._pooled_offsets(ctx)
+    cnt = tfm._pooled_count(ctx)
+    num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
+    sq = nw.sum_horizontal(*[ctx.shift("q", o).alias(f"_sq{o}") for o in offs])
+    raw_var = (sq - num * num / cnt) / (cnt - 1)
+    o = (
+        nw.from_native(tbl, eager_only=True)
+        .with_columns(raw_var.alias("raw_var"), cnt.alias("cnt"))
+        .to_native()
+    )
+    o = o if isinstance(o, pl.DataFrame) else pl.from_pandas(o)
+    o = o.filter(pl.col("cnt") >= min_samples)
+    raw = o["raw_var"].cast(pl.Float64).to_numpy()
+    assert len(raw) > 0 and (raw < 0).any(), (
+        "precondition failed: this construction no longer produces a "
+        "negative raw variance for SeasonalRollingStd -- the test below "
+        "would pass vacuously without this guard. "
+        f"min raw_var seen: {raw.min() if len(raw) else 'n/a'}"
+    )
+    neg = o.filter(pl.col("raw_var") < 0)
+    return set(neg["ds"].to_list())
+
+
+def _assert_narwhals_clips_to_zero_at(df_pl, tfms, neg_dates, backend):
+    """At the rows identified by ``_seasonal_negative_residue_dates``, the
+    narwhals engine must emit EXACTLY 0.0 -- the defining property of
+    Finding 3's fix (``.clip(lower_bound=0.0)``, not ``.abs()``).
+
+    This deliberately checks ONLY the narwhals side, unlike
+    ``_assert_both_engines_clip_to_zero_at`` (used by RollingStd/
+    ExpandingStd's analogous test) which checks both. That is not a
+    weakened test -- it is the correct one, for a reason specific to this
+    family: RollingStd/ExpandingStd's LEGACY path shares the exact same
+    sum-of-squares aggregate formula as narwhals (see
+    ``_rolling_std_from_agg``), so legacy ALSO clips to 0 at these dates and
+    the two-sided check is meaningful. SeasonalRollingStd's legacy path has
+    NO aggregate fast path at all (see the class docstring) -- it computes
+    ``np.std(vals, ddof=1)`` directly on raw values, a numerically STABLE
+    two-pass computation. At this magnitude (near-constant data around
+    1e11), legacy therefore reports the TRUE small nonzero std (order 1e-4),
+    not 0. Verified by measurement (see the task-5 report): every valid row
+    in this panel diverges between engines by more than 1e-6, up to 1863 in
+    absolute terms, because the sum/sum_sq aggregates lose the entire true
+    signal (~1e-8 in the sum-of-squared-deviations term) to floating-point
+    noise (~1e7 at this magnitude) long before either engine's `.clip`
+    guard runs. No choice of clip/abs recovers that signal -- this is
+    catastrophic cancellation, not a bug -- so asserting full engine
+    agreement here would be false, not just strict. What IS true and
+    revert-proof is that the fix in this file behaves as designed: even
+    though the narwhals computation itself is numerically ruined at this
+    magnitude, it still clips its (meaningless) negative residue to exactly
+    0.0 rather than reporting some wildly-wrong large value via `.abs()`."""
+    df = df_pl if backend == "polars" else df_pl.to_pandas()
+    b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
+    b = (b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)).sort(
+        "unique_id", "ds"
+    )
+    feat_cols = [c for c in b.columns if c not in ("unique_id", "ds", "store", "y")]
+    assert feat_cols, "no feature columns produced"
+    for c in feat_cols:
+        b_at = (
+            b.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
+        )
+        assert len(b_at) > 0, "no rows matched the negative-residue dates"
+        np.testing.assert_allclose(b_at, 0.0, atol=0.0, err_msg=f"narwhals, {c}")
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_seasonal_rolling_std_large_magnitude_cancellation_clips_to_zero(backend):
+    """Finding 3's defect (RollingStd/ExpandingStd large-magnitude
+    cancellation), reproduced for SeasonalRollingStd: ``season_length=1``
+    makes the seasonal offsets ``lag, lag+1, ..., lag+window_size-1`` -- the
+    same window ``RollingStd(5, ...)`` would use -- so the identical
+    near-constant, large-magnitude construction (``mag=1e11``, 6 series in
+    one bucket, see ``_large_magnitude_panel``) reaches a negative raw
+    variance residue through the seasonal family's own
+    ``sum_horizontal``-based ``cnt``/``num``/``sq``, independently confirmed
+    by ``_seasonal_negative_residue_dates`` rather than assumed from the
+    rolling case.
+
+    NOTE (disclosed finding, see the task-5 report for the full writeup):
+    this test does NOT assert full engine agreement, because at this
+    magnitude engine agreement genuinely does not hold for
+    SeasonalRollingStd -- unlike RollingStd/ExpandingStd, whose legacy path
+    shares the same unstable aggregate formula, SeasonalRollingStd's legacy
+    path is numerically stable (direct ``np.std`` on raw values) and reports
+    the true small nonzero std, while the narwhals aggregate formula loses
+    that signal entirely to floating-point noise. This is an inherent
+    limitation of computing variance from ``sum``/``sum_sq`` aggregates at
+    extreme magnitude / near-constant data, not fixable by any clip/abs
+    choice. What this test DOES verify, and what IS revert-proof: the
+    ``.clip(lower_bound=0.0)`` fix still behaves correctly here, so the
+    already-unreliable narwhals computation degrades to exactly 0.0 rather
+    than to some wildly-wrong large value via ``.abs()``."""
+    df_pl = _large_magnitude_panel()
+    tfm = SeasonalRollingStd(
+        season_length=1, window_size=5, min_samples=2, groupby=["store"]
+    )
+    neg_dates = _seasonal_negative_residue_dates(df_pl, tfm, min_samples=2)
+    tfms = {1: [tfm]}
+    _assert_narwhals_clips_to_zero_at(df_pl, tfms, neg_dates, backend)

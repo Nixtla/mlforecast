@@ -25,7 +25,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Callable, Dict, Optional, Protocol, Sequence
+from typing import Callable, Dict, List, Optional, Protocol, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import narwhals as nw
@@ -1181,25 +1181,71 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             f"{self.__class__.__name__} must implement `_seasonal_stat`."
         )
 
+    def _pooled_offsets(self, ctx) -> List[int]:
+        """Ordinal offsets of the seasonal lags: lag, lag+sl, lag+2*sl, ..."""
+        return [ctx.lag + k * self.season_length for k in range(self.window_size)]
+
+    def _pooled_count(self, ctx) -> "nw.Expr":
+        parts = [ctx.shift("c", o).alias(f"_sc{o}") for o in self._pooled_offsets(ctx)]
+        return nw.sum_horizontal(*parts)
+
 
 class SeasonalRollingMean(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.mean(vals))
+
+    def _pooled_expr(self, ctx):
+        offs = self._pooled_offsets(ctx)
+        cnt = self._pooled_count(ctx)
+        num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(num / cnt)
 
 
 class SeasonalRollingStd(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
+    def _pooled_expr(self, ctx):
+        offs = self._pooled_offsets(ctx)
+        cnt = self._pooled_count(ctx)
+        num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
+        sq = nw.sum_horizontal(*[ctx.shift("q", o).alias(f"_sq{o}") for o in offs])
+        # clip, not abs() -- see RollingStd._pooled_expr: a cancellation
+        # residue from subtracting large prefix sums can round slightly
+        # negative even though the true variance is >= 0; np.maximum(var, 0)
+        # is what legacy does, and abs() turns a tiny negative residue into a
+        # wildly wrong (large, positive) standard deviation.
+        var = ((sq - num * num / cnt) / (cnt - 1)).clip(lower_bound=0.0)
+        # cnt > 1, not cnt > 0: at cnt == 1 the numerator is not exactly 0 due
+        # to the same cancellation residue, so dividing by (cnt - 1) == 0
+        # gives +-inf, not NaN -- legacy's own guard is `len(vals) >
+        # min_samples ... len(vals) > 1` for exactly this reason (see
+        # `_seasonal_stat` above: `np.std` only called when `len(vals) > 1`).
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 1)).then(var.sqrt())
+
 
 class SeasonalRollingMin(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
+    def _pooled_expr(self, ctx):
+        cnt = self._pooled_count(ctx)
+        vals = [ctx.shift("mn", o).alias(f"_smn{o}") for o in self._pooled_offsets(ctx)]
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(
+            nw.min_horizontal(*vals)
+        )
+
 
 class SeasonalRollingMax(_Seasonal_RollingBase):
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
+
+    def _pooled_expr(self, ctx):
+        cnt = self._pooled_count(ctx)
+        vals = [ctx.shift("mx", o).alias(f"_smx{o}") for o in self._pooled_offsets(ctx)]
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(
+            nw.max_horizontal(*vals)
+        )
 
 
 class SeasonalRollingQuantile(_Seasonal_RollingBase):
