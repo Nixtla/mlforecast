@@ -176,3 +176,6 @@ nbs/_extensions
 *.png
 
 docs/superpowers
+
+# subagent-driven-development scratch workspace
+.superpowers
