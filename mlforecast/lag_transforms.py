@@ -28,6 +28,7 @@ import warnings
 from typing import Callable, Dict, Optional, Protocol, Sequence
 
 import coreforecast.lag_transforms as core_tfms
+import narwhals as nw
 import numpy as np
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator
@@ -179,6 +180,15 @@ class _BaseLagTransform(BaseEstimator):
     def _bucket_feature_from_aggs_impl(
         self, _bid_arr, _ord_arr, _ts_aggs
     ) -> Optional[np.ndarray]:
+        return None
+
+    def _pooled_expr(self, _ctx) -> Optional["nw.Expr"]:
+        """The pooled statistic as one narwhals expression over the aggregate table.
+
+        Returning ``None`` means this transform has no narwhals expression yet;
+        the engine falls back to the numpy path for it. Iteration two removes
+        both the fallback and the four ``_impl`` hooks this replaces.
+        """
         return None
 
     def _bucket_feature_rows_impl(
@@ -633,6 +643,11 @@ def _rolling_mean_from_agg(agg, lag, window_size, min_samples):
 
 
 class RollingMean(_RollingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", self.window_size)
+        num = ctx.window("s", self.window_size)
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(num / cnt)
+
     def _latest_from_aggs_impl(
         self,
         ts_aggs,

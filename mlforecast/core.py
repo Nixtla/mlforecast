@@ -49,16 +49,25 @@ from .data_validation import _index_to_series
 from .grouped_array import GroupedArray
 from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
+    POOLED_ENGINE,
+    NarwhalsPooledState,
     PooledState,
     _order_preserving_left_join,
     compute_pooled_features,
 )
+from .pooled import _resolve_ctx as _resolve_ctx_for
 from .utils import (
     _DUMMY_FEATURE_VALUES,
     _ShortSeriesException,
     _compute_date_dummies,
     _resolve_num_threads,
 )
+
+
+def _pooled_state_cls():
+    """The state class for the active engine."""
+    return NarwhalsPooledState if POOLED_ENGINE == "narwhals" else PooledState
+
 
 date_features_dtypes = {
     "year": np.uint16,
@@ -395,6 +404,11 @@ class TimeSeries:
             state = self._pooled_states.get(key)
             if state is None:
                 continue
+            if isinstance(state, NarwhalsPooledState):
+                # narwhals states don't carry a trim path yet (later task);
+                # trimming is a memory optimization only -- skipping it never
+                # changes computed feature values, since it keeps full history.
+                continue
             tfm_list = list(tfms.values())
             if not all(tfm._is_finite_window for tfm in tfm_list):
                 continue
@@ -690,7 +704,7 @@ class TimeSeries:
             for key, tfms in pooled_tfms.items():
                 mode, group_cols_t, part_cols_t = key
                 if mode == "global" and not part_cols_t:
-                    self._pooled_states[key] = PooledState.from_global(
+                    self._pooled_states[key] = _pooled_state_cls().from_global(
                         sorted_df,
                         id_col=id_col,
                         time_col=time_col,
@@ -715,7 +729,7 @@ class TimeSeries:
                             "Groupby columns must be static features. "
                             f"Missing from static_features: {missing}."
                         )
-                    self._pooled_states[key] = PooledState.from_groupby(
+                    self._pooled_states[key] = _pooled_state_cls().from_groupby(
                         df_for_pooled,
                         group_cols_list=group_cols_list,
                         id_col=id_col,
@@ -745,7 +759,7 @@ class TimeSeries:
                         n_series=len(ga.indptr) - 1,
                     )
             for key, state in self._pooled_states.items():
-                if state.groups is not None:
+                if isinstance(state, PooledState) and state.groups is not None:
                     from .pooled import _compute_idsorted_to_bucket_pos
 
                     state._idsorted_to_bucket_pos = _compute_idsorted_to_bucket_pos(
@@ -877,6 +891,27 @@ class TimeSeries:
                 df_sorted = df
             for key, tfms in pooled_tfms.items():
                 state = self._pooled_states[key]
+                if isinstance(state, NarwhalsPooledState):
+                    expr_tfms = {
+                        n: t
+                        for n, t in tfms.items()
+                        if t._pooled_expr(_resolve_ctx_for(t, state.keys)) is not None
+                    }
+                    legacy_tfms = {n: t for n, t in tfms.items() if n not in expr_tfms}
+                    if expr_tfms:
+                        features.update(
+                            state.join_to_panel(
+                                df_sorted, expr_tfms, self.id_col, self.time_col
+                            )
+                        )
+                    if legacy_tfms:
+                        raise NotImplementedError(
+                            "no narwhals expression for "
+                            f"{sorted(type(t).__name__ for t in legacy_tfms.values())}; "
+                            "run with MLFORECAST_POOLED_ENGINE=numpy until it lands"
+                        )
+                    continue
+                # ---- existing numpy path unchanged below ----
                 fast_features: Dict[str, Any] = {}
                 slow_tfms: Dict[str, _BaseLagTransform] = {}
                 for name, tfm in tfms.items():
