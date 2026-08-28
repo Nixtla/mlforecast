@@ -20,6 +20,7 @@ from mlforecast.lag_transforms import (
     ExpandingMax,
     ExpandingMean,
     ExpandingMin,
+    ExpandingQuantile,
     ExpandingStd,
     ExponentiallyWeightedMean,
     LookupLag,
@@ -27,10 +28,12 @@ from mlforecast.lag_transforms import (
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
     SeasonalRollingMax,
     SeasonalRollingMean,
     SeasonalRollingMin,
+    SeasonalRollingQuantile,
     SeasonalRollingStd,
 )
 
@@ -796,3 +799,214 @@ def test_ewm_positional_shift_guard_fires_for_gapped_partition_lag_gt_1():
     # a known-dense mode is safe even at lag > 1.
     state.mode = "groupby"
     state.feature_frame({"feat": ewm_lag2})
+
+
+# ---------------------------------------------------------------------------
+# Task 7: the quantile shim. Quantiles have no sufficient statistic (unlike
+# every other pooled family in this suite), so both engines run
+# `np.quantile` over the identical value multiset -- any divergence is a pure
+# windowing bug, hence `atol=0.0` everywhere below, not the suite's usual
+# `atol=1e-10`.
+# ---------------------------------------------------------------------------
+
+QUANTILES = [
+    ("roll_q", RollingQuantile(p=0.5, window_size=14, groupby=["store"])),
+    ("roll_q90", RollingQuantile(p=0.9, window_size=14, groupby=["store"])),
+    ("exp_q", ExpandingQuantile(p=0.5, groupby=["store"])),
+    (
+        "seas_q",
+        SeasonalRollingQuantile(
+            p=0.5, season_length=7, window_size=4, groupby=["store"]
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("label,tfm", QUANTILES, ids=[x[0] for x in QUANTILES])
+def test_quantile_engines_agree(backend, label, tfm):  # noqa: ARG001
+    """Quantiles must match EXACTLY -- both engines run np.quantile on the
+    same value multiset, so any difference is a windowing bug."""
+    assert_engines_agree(_panel(backend, n_times=90), {1: [tfm]}, ["store"], atol=0.0)
+
+
+# Task 6's retrospective (see its report) found that every required test used
+# `lag=1`, which hid a wrong-offset bug entirely, and separately that a
+# happy-path N(10, 2) fixture alone missed a defect that produced 2405 where
+# 0.0 was correct. Cover: lag > 1, the extreme quantiles p=0.0/1.0, the
+# `keys=[]` (global_) branch of `_quantile_columns` (the groupby-only
+# QUANTILES list above never reaches it), and window_size=1 (a window with at
+# most one element per series).
+QUANTILE_PARAM_CASES = [
+    ("roll_q_lag3", 3, RollingQuantile(p=0.25, window_size=10, groupby=["store"])),
+    ("roll_q_p0", 1, RollingQuantile(p=0.0, window_size=10, groupby=["store"])),
+    ("roll_q_p1", 1, RollingQuantile(p=1.0, window_size=10, groupby=["store"])),
+    (
+        "roll_q_window1",
+        1,
+        RollingQuantile(p=0.5, window_size=1, min_samples=1, groupby=["store"]),
+    ),
+    ("exp_q_lag4", 4, ExpandingQuantile(p=0.75, groupby=["store"])),
+    ("exp_q_global", 1, ExpandingQuantile(p=0.5, global_=True)),
+    (
+        "seas_q_lag2",
+        2,
+        SeasonalRollingQuantile(
+            p=0.3, season_length=5, window_size=3, groupby=["store"]
+        ),
+    ),
+    (
+        "seas_q_p1",
+        1,
+        SeasonalRollingQuantile(
+            p=1.0, season_length=7, window_size=4, groupby=["store"]
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,lag,tfm",
+    QUANTILE_PARAM_CASES,
+    ids=[x[0] for x in QUANTILE_PARAM_CASES],
+)
+def test_quantile_engines_agree_params(backend, label, lag, tfm):  # noqa: ARG001
+    statics = [] if getattr(tfm, "global_", False) else ["store"]
+    assert_engines_agree(_panel(backend, n_times=90), {lag: [tfm]}, statics, atol=0.0)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_quantile_engines_agree_large_magnitude(backend):
+    """Data-regime check (Task 6's retrospective: an N(10, 2) fixture alone
+    missed a defect elsewhere in this plan). Reuses `_large_magnitude_panel`
+    (near-constant values around 1e11). Unlike the Std families, quantiles
+    read raw values directly -- no sum-of-squares cancellation is possible --
+    so exact engine agreement is expected here too, not just "clips to
+    zero"."""
+    df_pl = _large_magnitude_panel(n_series=6, n_times=40)
+    df = df_pl if backend == "polars" else df_pl.to_pandas()
+    tfms = {
+        1: [RollingQuantile(p=0.5, window_size=5, min_samples=2, groupby=["store"])]
+    }
+    assert_engines_agree(df, tfms, ["store"], atol=0.0)
+
+
+def test_quantile_shim_matches_legacy_row_level_directly():
+    """Direct proof against the legacy row-level implementation (not just
+    engine-vs-engine agreement), covering RollingQuantile, ExpandingQuantile,
+    and SeasonalRollingQuantile's `_bucket_feature_rows_impl`/`_window_stat`/
+    `_expanding_stat`/`_seasonal_stat` bodies at once, on a panel with more
+    than one series per bucket (so `min_samples` counts across series) and
+    lag > 1."""
+    import narwhals as nw
+
+    from mlforecast.pooled import NarwhalsPooledState
+
+    n_series, n_times = 6, 40
+    df = _panel("polars", n_series=n_series, n_times=n_times, n_groups=3)
+    store = df["store"].to_numpy().astype(np.int64)
+    ds = df["ds"].to_numpy()
+    y_arr = df["y"].to_numpy().astype(float)
+    ordv = np.zeros(len(df), dtype=np.int64)
+    for b in np.unique(store):
+        m = store == b
+        u = np.unique(ds[m])
+        ordv[m] = np.searchsorted(u, ds[m])
+
+    cases = [
+        (RollingQuantile(p=0.4, window_size=6, min_samples=3, groupby=["store"]), 2),
+        (ExpandingQuantile(p=0.6, groupby=["store"]), 3),
+        (
+            SeasonalRollingQuantile(
+                p=0.2,
+                season_length=4,
+                window_size=3,
+                min_samples=2,
+                groupby=["store"],
+            ),
+            1,
+        ),
+    ]
+    for tfm, lag in cases:
+        tfm = tfm._set_core_tfm(lag)
+        want = tfm._bucket_feature_rows_impl(store, ordv, y_arr)
+
+        state = NarwhalsPooledState(
+            agg=None,
+            groups=None,
+            group_cols=None,
+            series_bucket_id=np.zeros(1, dtype=np.int64),
+            join_cols=["unique_id", "ds"],
+            keys=["store"],
+            time_col="ds",
+            mode="groupby",
+        )._build(df, "ds", "y", np.float64)
+        got_cols = state._quantile_columns({"feat": tfm})
+        agg_nw = nw.from_native(state.agg, eager_only=True)
+        agg_store = agg_nw.get_column("store").to_numpy().astype(np.int64)
+        agg_ord = agg_nw.get_column("ord").to_numpy().astype(np.int64)
+        # one row per (store, ord) in `state.agg`; build a lookup and apply it
+        # positionally to every original row via its own (store, ord).
+        lut = {
+            (int(b), int(o)): v for b, o, v in zip(agg_store, agg_ord, got_cols["feat"])
+        }
+        got = np.array([lut[(int(b), int(o))] for b, o in zip(store, ordv)])
+
+        np.testing.assert_allclose(
+            got,
+            want,
+            atol=0.0,
+            equal_nan=True,
+            err_msg=f"{type(tfm).__name__} lag={lag}",
+        )
+
+
+def test_quantile_time_agg_guard_fires_instead_of_silently_wrong_number():
+    """Not requested by the task-7 brief, added because it is a real defect
+    found while implementing this task: `NarwhalsPooledState._quantile_columns`
+    reads raw per-row target values, but `time_agg` requires collapsing every
+    row sharing a (bucket, timestamp) to ONE value first (the time_agg
+    aggregate) before the window statistic runs -- exactly what legacy's
+    `_compute_bucket_feature_collapsed` does for this family, and exactly
+    what the flat values+offsets store does NOT do. Uninstrumented, this
+    combination does not raise -- it silently returns the wrong number
+    (verified below via the same literal case as the pre-existing,
+    unmodifiable `test_pooled.py::test_time_agg_quantile_slow_path_literal`,
+    which cannot itself prove this: it always crashes first at Task 9's
+    un-wired predict-path `AttributeError`, before ever reaching its own
+    value assertion). The fix fails loudly instead, matching the precedent
+    set by `_guard_ewm_positional_shift` for a different unsupported
+    combination in an otherwise-implemented family."""
+    y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+    dates = pl.datetime_range(
+        pl.datetime(2020, 1, 1), pl.datetime(2020, 1, 6), interval="1d", eager=True
+    )
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 6 + ["b"] * 6,
+            "ds": np.tile(dates.to_numpy(), 2),
+            "y": y_a + y_b,
+            "grp": ["X"] * 12,
+        }
+    )
+    tfms = {1: [RollingQuantile(p=0.5, window_size=3, groupby=["grp"], time_agg="sum")]}
+    with pytest.raises(NotImplementedError, match="time_agg"):
+        _preprocess_with_engine("narwhals", df, tfms, ["grp"])
+
+
+def test_quantile_engines_agree_mixed_with_expression_transforms():
+    """A state holding BOTH a quantile transform (no `_pooled_expr`, routed
+    through `_quantile_columns`) and an ordinary expression transform in the
+    SAME `feature_frame` call -- proves `feature_frame`'s split between
+    `with_columns(exprs)` and the `nw.new_series` quantile attachment doesn't
+    clobber or misalign either family."""
+    df = _panel("polars", n_times=90)
+    tfms = {
+        1: [
+            RollingQuantile(p=0.5, window_size=14, groupby=["store"]),
+            RollingMean(14, groupby=["store"]),
+        ]
+    }
+    assert_engines_agree(df, tfms, ["store"], atol=1e-9)

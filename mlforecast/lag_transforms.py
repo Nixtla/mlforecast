@@ -1052,6 +1052,18 @@ class RollingQuantile(_RollingBase):
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
 
+    # Quantiles have no sufficient statistic -- unlike every other family in
+    # this module, they need the raw values, which no aggregate (sum/count/
+    # min/max) can reconstruct. No `_pooled_expr`; `NarwhalsPooledState`
+    # routes transforms carrying this marker through the flat values+offsets
+    # store instead (`_pooled_engine.quantile_values`/`quantile_feature`).
+    _pooled_quantile = True
+
+    def _pooled_quantile_offsets(self, ctx, _n_ordinals):
+        """Ordinal offsets whose union is this row's window: ``lag..lag+w-1``,
+        matching ``_bucket_feature_rows_impl``'s ``[o-lag-w+1, o-lag]``."""
+        return list(range(ctx.lag, ctx.lag + self.window_size))
+
 
 class _Seasonal_RollingBase(_BaseLagTransform):
     """Rolling statistic over seasonal periods
@@ -1302,6 +1314,17 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
 
     def _seasonal_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+    # See RollingQuantile's identical marker comment: no sufficient statistic,
+    # so no `_pooled_expr` -- routed through the flat values+offsets store.
+    _pooled_quantile = True
+
+    def _pooled_quantile_offsets(self, ctx, _n_ordinals):
+        """Seasonal strides, matching ``_pooled_offsets``/``_seasonal_stat``'s
+        ``[o - lag - i*season_length for i in range(w)]`` (negatives dropped
+        by the caller's ``0 <= t - o`` bound, same as legacy's own
+        ``target_ords >= 0`` filter)."""
+        return [ctx.lag + k * self.season_length for k in range(self.window_size)]
 
 
 class _ExpandingBase(_BaseLagTransform):
@@ -1646,6 +1669,18 @@ class ExpandingQuantile(_ExpandingBase):
 
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.quantile(vals, self.p))
+
+    # See RollingQuantile's identical marker comment: no sufficient statistic,
+    # so no `_pooled_expr` -- routed through the flat values+offsets store.
+    _pooled_quantile = True
+
+    def _pooled_quantile_offsets(self, ctx, n_ordinals):
+        """All ordinals from ``lag`` up to the table's end; the caller's own
+        ``0 <= t - o < n_ordinals`` bound keeps only ``o`` in ``[lag, t]`` for
+        each row ``t``, matching ``_bucket_feature_rows_impl``'s
+        ``mask = ord_b <= upper`` (``upper = o - lag``, i.e. every ordinal
+        from 0 up to ``t - lag``)."""
+        return list(range(ctx.lag, n_ordinals))
 
 
 def _ewm_from_agg(agg, lag, alpha):

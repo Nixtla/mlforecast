@@ -311,6 +311,93 @@ class NarwhalsPooledState:
                     "wired for partition_by states."
                 )
 
+    def _quantile_columns(self, transforms):
+        """Quantile features computed over the flat values+offsets store.
+
+        Quantiles have no sufficient statistic (no aggregate reconstructs
+        them), so this is the one family that reads raw values instead of an
+        expression over `self.agg`'s aggregate columns. Built and cached
+        lazily: `self._qvalues` must be invalidated (set back to ``None``)
+        anywhere `self.agg` changes shape (see `quantile_values`'s
+        docstring) -- currently only `_build`, since Task 7's states are
+        never densified/trimmed/appended.
+        """
+        from ._pooled_engine import quantile_feature, quantile_values
+
+        # Not in the brief, added because it is a real, silently-wrong-number
+        # defect: `quantile_values` reads raw per-row target values, but
+        # `time_agg` means every row sharing a (bucket, timestamp) must first
+        # collapse to ONE value (the time_agg aggregate) before the window
+        # statistic runs -- exactly what legacy's own
+        # `_compute_bucket_feature_collapsed` does for this family. This
+        # store does not do that collapse. Verified silently wrong (not just
+        # theoretically): `RollingQuantile(window_size=3, groupby=["grp"],
+        # time_agg="sum")` on daily sums `[11,22,33,44,55,66]` must produce
+        # `[nan,nan,nan,22,33,44]` (the existing, unmodifiable
+        # `test_pooled.py::test_time_agg_quantile_slow_path_literal`) but
+        # this store instead produced `[nan,nan,6.,6.5,12.,17.5]` -- the
+        # median of raw per-row values, ignoring the sum collapse entirely.
+        # Fail loudly instead, matching the precedent set by
+        # `_guard_ewm_positional_shift` for a different unsupported
+        # combination in an otherwise-implemented family.
+        for name, tfm in transforms.items():
+            if tfm.time_agg is not None:
+                raise NotImplementedError(
+                    f"{type(tfm).__name__}(time_agg={tfm.time_agg!r}) (feature "
+                    f"{name!r}) is not yet supported by the narwhals pooled "
+                    "engine's quantile shim: quantiles read raw per-row target "
+                    "values (see `quantile_values`), and this store does not "
+                    "yet re-derive them from the time_agg-collapsed aggregate "
+                    "the way every other pooled family does. Run with "
+                    "MLFORECAST_POOLED_ENGINE=numpy for this combination."
+                )
+
+        if self._qvalues is None:
+            # agg is the ordinal-grid authority -- see quantile_values' docstring.
+            self._qvalues = quantile_values(
+                self._df, self.agg, self.keys, self.time_col, self._target_col
+            )
+        values, row_offsets = self._qvalues
+        t = nw.from_native(self.agg, eager_only=True)
+        bucket_of = (
+            t.get_column(self.keys[0]).to_numpy()
+            if self.keys
+            else np.zeros(len(t), dtype=np.int64)
+        )
+        ords = t.get_column("ord").to_numpy()
+        cols = {}
+        for name, tfm in transforms.items():
+            ctx = _resolve_ctx(tfm, self.keys)
+            out = np.full(len(t), np.nan)
+            for b in np.unique(bucket_of):
+                sel = np.flatnonzero(bucket_of == b)
+                n_ord = int(ords[sel].max()) + 1
+                base = int(sel.min())  # rows are bucket-contiguous and ord-sorted
+                offs = tfm._pooled_quantile_offsets(ctx, n_ord)
+                # DEVIATION from the brief's verbatim Step-4 code: it passed
+                # the FULL GLOBAL `values` array together with LOCALIZED
+                # offsets (`row_offsets[...] - row_offsets[base]`), so
+                # `quantile_feature`'s `values[row_offsets[i]:row_offsets[i+1]]`
+                # indexed the wrong slice for every bucket after the first
+                # (`base > 0`) -- verified: on a 5-bucket panel this produced
+                # wrong values for the ~80% of rows outside bucket 0 (bucket
+                # 0's `base == 0` makes the localized and global offsets
+                # coincide, which is exactly why the bug is invisible on a
+                # single-bucket/global_ fixture). `values` must be sliced to
+                # the same local window as the offsets.
+                local_values = values[row_offsets[base] : row_offsets[base + n_ord]]
+                vals = quantile_feature(
+                    local_values,
+                    row_offsets[base : base + n_ord + 1] - row_offsets[base],
+                    n_ord,
+                    offs,
+                    tfm.p,
+                    ctx.min_samples,
+                )
+                out[sel] = vals[ords[sel]]
+            cols[name] = out
+        return cols
+
     def feature_frame(self, transforms: Dict[str, Any]):
         """Evaluate every transform's expression in one pass over the table."""
         # Flatten composites (Offset/Combine) so their INNER transforms' own
@@ -320,12 +407,31 @@ class NarwhalsPooledState:
         self.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
         self.ensure_accumulates(leaves)
         self._guard_ewm_positional_shift(leaves)
+        # Quantiles have no narwhals expression (no sufficient statistic --
+        # see `_quantile_columns`); split them out and compute separately.
+        quantile_tfms = {
+            n: tfm
+            for n, tfm in transforms.items()
+            if getattr(tfm, "_pooled_quantile", False)
+        }
+        expr_tfms = {n: tfm for n, tfm in transforms.items() if n not in quantile_tfms}
         t = nw.from_native(self.agg, eager_only=True)
         exprs = []
-        for name, tfm in transforms.items():
+        for name, tfm in expr_tfms.items():
             expr = tfm._pooled_expr(_resolve_ctx(tfm, self.keys))
             exprs.append(expr.alias(name))
-        return t.with_columns(exprs).to_native()
+        if exprs:
+            t = t.with_columns(exprs)
+        if quantile_tfms:
+            qcols = self._quantile_columns(quantile_tfms)
+            backend = nw.get_native_namespace(t)
+            t = t.with_columns(
+                *[
+                    nw.new_series(name, vals, dtype=nw.Float64, backend=backend)
+                    for name, vals in qcols.items()
+                ]
+            )
+        return t.to_native()
 
     def join_to_panel(self, df_sorted, transforms, _id_col, time_col):
         """Feature values aligned positionally with ``df_sorted``'s rows.
@@ -363,6 +469,12 @@ def compute_pooled_features(state, transforms, query_arrays=None):
         return _legacy_compute(state, transforms, query_arrays=query_arrays)
     fast, slow = {}, {}
     for name, tfm in transforms.items():
+        if getattr(tfm, "_pooled_quantile", False):
+            # No `_pooled_expr` at all (no sufficient statistic) -- routed
+            # through `NarwhalsPooledState._quantile_columns` instead, inside
+            # `feature_frame`/`join_to_panel`.
+            fast[name] = tfm
+            continue
         probe = tfm._pooled_expr(_resolve_ctx(tfm, getattr(state, "keys", [])))
         (fast if probe is not None else slow)[name] = tfm
     if slow:

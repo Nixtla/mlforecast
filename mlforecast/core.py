@@ -892,10 +892,16 @@ class TimeSeries:
             for key, tfms in pooled_tfms.items():
                 state = self._pooled_states[key]
                 if isinstance(state, NarwhalsPooledState):
+                    # Quantile transforms have no sufficient statistic, so
+                    # they never define `_pooled_expr` (it stays the base
+                    # class's `None`); `_pooled_quantile` marks them for
+                    # `join_to_panel`/`feature_frame`'s separate
+                    # `_quantile_columns` path instead of the raise below.
                     expr_tfms = {
                         n: t
                         for n, t in tfms.items()
-                        if t._pooled_expr(_resolve_ctx_for(t, state.keys)) is not None
+                        if getattr(t, "_pooled_quantile", False)
+                        or t._pooled_expr(_resolve_ctx_for(t, state.keys)) is not None
                     }
                     legacy_tfms = {n: t for n, t in tfms.items() if n not in expr_tfms}
                     if expr_tfms:

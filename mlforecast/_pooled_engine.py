@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 import narwhals as nw
+import numpy as np
 import polars as pl
+
+from ._pooled_keys import _order_preserving_left_join
 
 _BASE_AGGS = ("s", "c", "q", "mn", "mx")
 _PREFIX_AGGS = ("s", "c", "q")
@@ -323,3 +326,85 @@ class PooledCtx:
             return hi
         lo = self.shift(f"E{base}", self.lag + w).fill_null(0.0)
         return hi - lo
+
+
+def quantile_values(df, agg_native, keys, time_col, target_col):
+    """Non-null target values grouped by (bucket, ordinal), flat + offsets.
+
+    Returns ``(values, row_offsets)`` where the values for the aggregate
+    table's row ``i`` are ``values[row_offsets[i]:row_offsets[i + 1]]``. One
+    contiguous slice per row, so a window is a small set of slice ranges and
+    needs no mask scan.
+
+    ``agg_native`` is the ORDINAL-GRID AUTHORITY: ``row_offsets`` has one
+    entry per row of ``agg_native`` (plus a trailing sentinel), IN
+    ``agg_native``'s OWN ROW ORDER -- not recomputed from ``df``. Every raw
+    row of ``df`` is matched to its ``(bucket, ord)`` grid cell via a left
+    join on ``keys + [time_col]`` against ``agg_native``, so a grid row with
+    no matching raw data (a densified hole -- see Task 8) gets an empty
+    slice, and the store stays aligned with ``agg_native`` whether or not the
+    state was densified for RANGE windows.
+
+    DEVIATION from the plan's Step-3 code: that snippet accepted
+    ``agg_native`` but never used it -- it recomputed the (bucket, timestamp)
+    grid straight from ``df`` via ``_dense_codes``, which happens to coincide
+    with ``agg_native``'s row order today (no state is densified yet in this
+    task's scope) but is exactly the misalignment this docstring (and the
+    task's own "CRITICAL INTERFACE DETAIL") warns against for Task 8. Fixed
+    to actually treat ``agg_native`` as the grid authority.
+
+    Quantiles have no sufficient statistic -- they need the raw values -- so
+    this store is built ONLY when a quantile transform is present, and must
+    be invalidated (``self._qvalues = None``) whenever ``agg`` changes shape
+    (densify, trim, append).
+    """
+    keys = list(keys)
+    grid_cols = keys + [time_col]
+    a = nw.from_native(agg_native, eager_only=True)
+    n_groups = len(a)
+    grid = a.select(grid_cols).with_row_index(name="_qv_grid_idx")
+
+    d = nw.from_native(df, eager_only=True)
+    d = d.with_columns(nw.col(target_col).cast(nw.Float64).alias(target_col))
+    joined = _order_preserving_left_join(
+        d.select(grid_cols + [target_col]), grid, on=grid_cols
+    )
+
+    y = joined.get_column(target_col).to_numpy().astype(float)
+    codes = joined.get_column("_qv_grid_idx").to_numpy().astype(np.int64)
+    valid = ~np.isnan(y)
+    codes_v, y_v = codes[valid], y[valid]
+
+    counts = np.bincount(codes_v, minlength=n_groups)
+    row_offsets = np.zeros(n_groups + 1, dtype=np.intp)
+    np.cumsum(counts, out=row_offsets[1:])
+    order = np.argsort(codes_v, kind="stable")
+    return y_v[order], row_offsets
+
+
+def quantile_feature(values, row_offsets, n_ordinals, offsets, p, min_samples):
+    """Quantile per ordinal over the union of the ordinals at ``offsets`` back.
+
+    ``offsets`` is the list of ordinal distances contributing to each window --
+    ``range(lag, lag + w)`` for rolling, the seasonal strides for seasonal, and
+    ``range(lag, n_ordinals)`` for expanding (the caller filters to ``<= t``
+    via the ``0 <= t - o`` bound below). Contiguity means each contributing
+    ordinal is one slice, so a window is a small list of slices concatenated
+    once.
+    """
+    out = np.full(n_ordinals, np.nan)
+    for t in range(n_ordinals):
+        src = [t - o for o in offsets if 0 <= t - o < n_ordinals]
+        if not src:
+            continue
+        chunks = [
+            values[row_offsets[i] : row_offsets[i + 1]]
+            for i in src
+            if row_offsets[i + 1] > row_offsets[i]
+        ]
+        if not chunks:
+            continue
+        win = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        if len(win) >= min_samples and len(win) > 0:
+            out[t] = np.quantile(win, p, method="linear")
+    return out

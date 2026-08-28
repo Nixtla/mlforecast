@@ -21,7 +21,13 @@ import numpy as np
 import polars as pl
 import pytest
 
-from mlforecast._pooled_engine import PooledCtx, build_agg_table, grouped_accumulate
+from mlforecast._pooled_engine import (
+    PooledCtx,
+    build_agg_table,
+    grouped_accumulate,
+    quantile_feature,
+    quantile_values,
+)
 
 BACKENDS = ["polars", "pandas"]
 
@@ -319,3 +325,35 @@ def test_ctx_window_matches_manual_rolling_sum(backend):
             lo, hi = max(i - 1 - 3 + 1, 0), i - 1 + 1  # ordinals (t-lag-w, t-lag]
             want = s[lo:hi].sum() if hi > lo else 0.0
             assert blk["w3"][i] == pytest.approx(want, abs=1e-12), f"bucket {b} row {i}"
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_quantile_values_layout_is_flat_csr(backend):
+    """DEVIATION from the task-7 brief's Step-1 snippet: that snippet calls
+    ``quantile_values(df, ["store"], "ds", "y")`` -- 4 positional args, which
+    would bind ``["store"]`` to the ``agg_native`` parameter and drop ``keys``
+    entirely. This contradicts the task's own CRITICAL INTERFACE DETAIL
+    (``quantile_values(df, agg_native, keys, time_col, target_col)``, with
+    ``agg_native`` as the ordinal-grid authority) and Step 4's own caller
+    (``quantile_values(self._df, self.agg, self.keys, self.time_col,
+    self._target_col)``, 5 args). Fixed here to build the real aggregate
+    table and pass it as ``agg_native``, matching the required signature and
+    the only caller that actually exists in ``pooled.py``.
+    """
+    df = _panel(backend, n_buckets=2, n_times=4, n_series_per_bucket=3)
+    agg = build_agg_table(df, ["store"], "ds", "y", {None})
+    vals, offs = quantile_values(df, agg, ["store"], "ds", "y")
+    assert offs[0] == 0
+    assert offs[-1] == len(vals)
+    assert len(offs) == 2 * 4 + 1, "one offset per (bucket, ordinal), plus a sentinel"
+    assert np.diff(offs).tolist() == [3] * 8, "3 series contribute per timestamp"
+
+
+def test_quantile_feature_matches_numpy_oracle():
+    # 1 bucket, 5 ordinals, 2 values each
+    vals = np.arange(10, dtype=float)
+    offs = np.arange(0, 11, 2, dtype=np.intp)
+    got = quantile_feature(vals, offs, 5, offsets=[1, 2], p=0.5, min_samples=4)
+    # ordinal 2 sees ordinals 1 and 0 -> values [2,3,0,1]
+    assert got[2] == pytest.approx(np.quantile([2.0, 3.0, 0.0, 1.0], 0.5))
+    assert np.isnan(got[0]) and np.isnan(got[1]), "warm-up below min_samples"
