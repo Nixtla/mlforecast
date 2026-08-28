@@ -93,6 +93,90 @@ def test_build_agg_table_emits_no_complex_groupby_warning(backend):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
+def test_nan_targets_do_not_poison_prefix_sums(backend):
+    """NaN is not null: an unguarded sum() would make one NaN target turn that
+    bucket's ENTIRE prefix sum into NaN, and count() would count it as present.
+    The legacy engine treats NaN as missing; so must we."""
+    df = _panel(backend, n_buckets=2, n_times=5, n_series_per_bucket=2)
+    o = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    # Poison exactly one raw row: series "b0_s0" at ds=0. There are 2 series
+    # per bucket in this fixture, so (store=0, ds=0) has 2 contributing rows;
+    # poisoning only one of them (not both, via unique_id) leaves 1 surviving
+    # observation, which is what the assertions below check against.
+    o = o.with_columns(
+        pl.when((pl.col("unique_id") == "b0_s0") & (pl.col("ds") == 0))
+        .then(None)
+        .otherwise(pl.col("y"))
+        .alias("y")
+    ).with_columns(pl.col("y").fill_null(float("nan")))
+    src = o if isinstance(df, pl.DataFrame) else o.to_pandas()
+
+    tbl = build_agg_table(src, ["store"], "ds", "y", {None})
+    t = tbl if isinstance(tbl, pl.DataFrame) else pl.from_pandas(tbl)
+    t = t.sort(["store", "ord"])
+    b0 = t.filter(pl.col("store") == 0)
+    assert b0["c"][0] == 1.0, "the NaN row must not be counted as an observation"
+    es = b0["Es"].cast(pl.Float64).to_numpy()
+    assert not np.isnan(es).any(), f"NaN leaked into the prefix sum: {es}"
+    assert b0["s"][0] == pytest.approx(
+        o.filter((pl.col("store") == 0) & (pl.col("ds") == 0) & ~pl.col("y").is_nan())[
+            "y"
+        ].sum()
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_grouped_accumulate_rejects_empty_keys(backend):
+    with pytest.raises(ValueError, match="non-empty"):
+        grouped_accumulate(_panel(backend), [], ["y"], "cum_sum", ["Ey"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_grouped_accumulate_ewm_mean_requires_explicit_adjust(backend):
+    with pytest.raises(ValueError, match="adjust"):
+        grouped_accumulate(
+            _panel(backend, n_buckets=1, n_times=5, n_series_per_bucket=1),
+            ["store"],
+            ["y"],
+            "ewm_mean",
+            ["Ey"],
+            alpha=0.5,
+        )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_grouped_accumulate_ewm_mean_requires_explicit_alpha(backend):
+    with pytest.raises(ValueError, match="alpha"):
+        grouped_accumulate(
+            _panel(backend, n_buckets=1, n_times=5, n_series_per_bucket=1),
+            ["store"],
+            ["y"],
+            "ewm_mean",
+            ["Ey"],
+            adjust=False,
+        )
+
+
+def test_grouped_accumulate_ewm_mean_backends_agree_with_explicit_adjust():
+    """With adjust and alpha both explicit, polars and pandas must agree --
+    otherwise the shim silently reintroduces the divergence it exists to
+    prevent (polars' native ewm_mean defaults adjust=True; the two backends'
+    unadjusted-vs-adjusted recursions diverge without an explicit value)."""
+    polars_df = _panel(backend="polars", n_buckets=1, n_times=6, n_series_per_bucket=1)
+    pandas_df = polars_df.to_pandas()
+
+    pl_out = grouped_accumulate(
+        polars_df, ["store"], ["y"], "ewm_mean", ["Ey"], alpha=0.5, adjust=False
+    )
+    pd_out = grouped_accumulate(
+        pandas_df, ["store"], ["y"], "ewm_mean", ["Ey"], alpha=0.5, adjust=False
+    )
+    pl_vals = pl_out.sort("ds")["Ey"].to_list()
+    pd_vals = pl.from_pandas(pd_out).sort("ds")["Ey"].to_list()
+    assert pl_vals == pytest.approx(pd_vals)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
 def test_ctx_col_respects_time_agg_suffix(backend):  # noqa: ARG001 (parametrized for uniformity; backend-independent)
     plain = PooledCtx(keys=["store"], lag=1, min_samples=7, time_agg=None)
     agg = PooledCtx(keys=["store"], lag=1, min_samples=7, time_agg="sum")

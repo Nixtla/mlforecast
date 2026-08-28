@@ -24,10 +24,22 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
 
     ``op`` is one of ``cum_sum``, ``cum_min``, ``cum_max``, ``ewm_mean``. The
     frame must already be sorted by ``keys`` plus its ordering column.
+    ``keys`` must be non-empty -- both backends raise on an empty grouping key
+    list, so this is rejected up front with a clear message. (Callers in
+    ``global_`` mode, where there is a single implicit bucket, must bypass
+    this function entirely rather than call it with ``keys=[]``.)
 
     Prefix sums MUST be per-group: a global accumulate with a per-group baseline
     subtracted drifts to 6.85e-10 on a 146k-row table and fails the pooled
     suite's atol=1e-10.
+
+    For ``op == "ewm_mean"``, ``alpha`` and ``adjust`` must both be passed
+    explicitly in ``**kw``. polars' native ``Expr.ewm_mean`` defaults
+    ``adjust`` to ``True``; pandas' ``.ewm(...).mean()`` was previously
+    defaulted here to ``adjust=False``. Relying on either backend's default
+    makes the two backends silently diverge (e.g. alpha=0.5 gives
+    ``[1.0, 1.667, 2.429]`` on polars vs. ``[1.0, 1.5, 2.25]`` on pandas for
+    the same input) with no error -- so no default is assumed here at all.
     """
     if op not in _PANDAS_OPS and op != "ewm_mean":
         raise ValueError(
@@ -36,6 +48,23 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
         )
     if len(cols) != len(out_names):
         raise ValueError("cols and out_names must be the same length")
+    if not keys:
+        raise ValueError(
+            "grouped_accumulate requires a non-empty `keys`; callers in "
+            "global_ mode (a single implicit bucket) must bypass this "
+            "function rather than call it with keys=[]"
+        )
+    if op == "ewm_mean":
+        if "alpha" not in kw:
+            raise ValueError(
+                "grouped_accumulate op='ewm_mean' requires explicit 'alpha'"
+            )
+        if "adjust" not in kw:
+            raise ValueError(
+                "grouped_accumulate op='ewm_mean' requires explicit 'adjust'; "
+                "polars' and pandas' native ewm_mean defaults for 'adjust' "
+                "disagree, so no default is assumed here"
+            )
 
     if isinstance(frame_native, pl.DataFrame):
         if op == "ewm_mean":
@@ -55,7 +84,7 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
     gb = out.groupby(keys, sort=False, observed=True)
     if op == "ewm_mean":
         alpha = kw["alpha"]
-        adjust = kw.get("adjust", False)
+        adjust = kw["adjust"]
         ignore_na = kw.get("ignore_nulls", True)
         for c, o in zip(cols, out_names):
             out[o] = gb[c].transform(
@@ -105,6 +134,28 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
     """
     keys = list(keys)
     d = nw.from_native(df, eager_only=True)
+    # NaN IS NOT NULL. On polars, `sum()` over a group containing NaN returns
+    # NaN -- which then poisons that bucket's ENTIRE prefix sum -- and `count()`
+    # counts the NaN as present. The legacy engine treats NaN as MISSING
+    # (`_build_ts_aggs` masks with `~np.isnan(y_b)` before summing). Normalize
+    # NaN -> null ONCE, before any aggregation or derived column, so every
+    # aggregate below inherits the legacy engine's missing-value semantics.
+    # Cast first: `is_nan()` is only valid on float dtypes.
+    d = d.with_columns(nw.col(target_col).cast(nw.Float64).alias(target_col))
+    d = d.with_columns(
+        nw.when(nw.col(target_col).is_nan())
+        .then(None)
+        .otherwise(nw.col(target_col))
+        # `.then(None)` on the pandas-like backend produces an object-dtype
+        # column (float 1.0 next to python `None`), which then breaks native
+        # pandas groupby cumsum/cummin/cummax ("not implemented for dtype
+        # object"). Casting back to Float64 restores a real float column
+        # where pandas' own null representation (NaN) carries the meaning
+        # "missing" -- which is exactly what we want after this point, since
+        # every aggregation below already ignores nulls.
+        .cast(nw.Float64)
+        .alias(target_col)
+    )
     d = d.with_columns((nw.col(target_col) ** 2).alias("_y2"))
     tbl = (
         d.group_by(keys + [time_col])
