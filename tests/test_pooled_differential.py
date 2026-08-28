@@ -268,6 +268,148 @@ def test_expanding_minmax_interior_gap_matches_legacy(backend, tfm, legacy_fn_na
         )
 
 
+def _large_magnitude_panel(n_series=6, n_times=30, mag=1e11, seed=0):
+    """Near-constant, LARGE-magnitude target: `sq` and `num**2/cnt` (both
+    reconstructed from prefix-sum subtraction) are each huge, so their
+    difference is pure floating-point cancellation noise that can round
+    negative -- this is reproducible, not a random fluke: 296/300 randomized
+    trials (magnitudes 1e6..1e12, 2-8 series/bucket, window 2-7) produced a
+    negative residue. A large, near-constant series is an entirely ordinary
+    input in practice (counts, populations, revenue), not an exotic corner
+    case -- no NaN, no unusual config. Single bucket (all series share
+    store=0) so every series' aggregate feeds the same `cnt`/`num`/`sq`,
+    matching the coordinator's construction exactly."""
+    rng = np.random.default_rng(seed)
+    dates = pl.datetime_range(
+        pl.datetime(2020, 1, 1),
+        pl.datetime(2020, 1, 1) + pl.duration(days=n_times - 1),
+        interval="1d",
+        eager=True,
+    )
+    y = mag * (1.0 + rng.normal(0, 1e-15, n_series * n_times))
+    return pl.DataFrame(
+        {
+            "unique_id": np.repeat([f"id_{s}" for s in range(n_series)], n_times),
+            "ds": np.tile(dates.to_numpy(), n_series),
+            "y": y,
+            "store": np.zeros(n_series * n_times, dtype=np.int64),
+        }
+    ).sort("unique_id", "ds")
+
+
+def _negative_residue_dates(df_pl, window_size, min_samples):
+    """The set of `ds` values where the raw (unclamped) variance is negative,
+    computed ONCE via a fixed (polars) build of the aggregate table -- this
+    is the precondition guard (requirement 2: fail loudly, not vacuously, if
+    `_large_magnitude_panel` ever stops reproducing this) AND the reference
+    row set used by the tests below.
+
+    IMPORTANT, discovered while building this test (see the fix-round-3
+    section of the report for the full evidence): the raw variance's SIGN at
+    these near-cancellation magnitudes is not just a property of the input
+    data -- it also depends on the summation ORDER used to build `sq`/`num`,
+    which genuinely differs between polars' and pandas' native `.sum()`
+    (measured: up to an 8388608-ULP difference in the per-timestamp `q`
+    aggregate at mag=1e11, i.e. exactly a rounding-unit-scale disagreement,
+    NOT a bug in either backend). Because the TRUE mathematical variance
+    here is >= 0, the only source of negativity is this same rounding noise,
+    so it is mathematically impossible to construct a "deeply negative"
+    residue immune to this effect: any residue large enough to be robust to
+    the backend's own noise floor is large enough to BE the true, positive
+    variance instead (verified empirically over jitter 1e-15..1e-5 -- see
+    tmp/scan_jitter2.py in the fix-round-3 investigation). A full-column,
+    per-row atol=0.0 comparison between arbitrary summation paths therefore
+    does not hold everywhere in this construction. What DOES hold, checked
+    directly: at the SPECIFIC dates this function identifies (via one FIXED
+    reference computation, reused for both backend parametrizations), both
+    the legacy and narwhals engines emit EXACTLY 0.0 on BOTH backends -- see
+    the two tests below, which assert exactly that."""
+    import narwhals as nw
+
+    from mlforecast._pooled_engine import PooledCtx, build_agg_table
+
+    tbl = build_agg_table(df_pl, ["store"], "ds", "y", {None})
+    ctx = PooledCtx(keys=["store"], lag=1, min_samples=min_samples, time_agg=None)
+    cnt = ctx.window("c", window_size)
+    num = ctx.window("s", window_size)
+    sq = ctx.window("q", window_size)
+    raw_var = (sq - num * num / cnt) / (cnt - 1)
+    o = (
+        nw.from_native(tbl, eager_only=True)
+        .with_columns(raw_var.alias("raw_var"), cnt.alias("cnt"))
+        .to_native()
+    )
+    o = o if isinstance(o, pl.DataFrame) else pl.from_pandas(o)
+    o = o.filter(pl.col("cnt") >= min_samples)
+    raw = o["raw_var"].cast(pl.Float64).to_numpy()
+    assert len(raw) > 0 and (raw < 0).any(), (
+        "precondition failed: _large_magnitude_panel no longer produces a "
+        "negative raw variance for this window_size/min_samples -- the "
+        "tests below would pass vacuously without this guard. "
+        f"min raw_var seen: {raw.min() if len(raw) else 'n/a'}"
+    )
+    neg = o.filter(pl.col("raw_var") < 0)
+    return set(neg["ds"].to_list())
+
+
+def _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend):
+    """At the rows identified by `_negative_residue_dates`, both the legacy
+    numpy engine and the narwhals engine must emit EXACTLY 0.0 -- the
+    defining property of Finding 3's fix (`np.maximum(var, 0.0)` /
+    `.clip(lower_bound=0.0)`, not `.abs()`)."""
+    df = df_pl if backend == "polars" else df_pl.to_pandas()
+    a = _preprocess_with_engine("numpy", df, tfms, ["store"])
+    b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
+    a = (a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)).sort(
+        "unique_id", "ds"
+    )
+    b = (b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)).sort(
+        "unique_id", "ds"
+    )
+    feat_cols = [c for c in a.columns if c not in ("unique_id", "ds", "store", "y")]
+    assert feat_cols, "no feature columns produced"
+    for c in feat_cols:
+        a_at = (
+            a.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
+        )
+        b_at = (
+            b.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
+        )
+        assert len(a_at) > 0, "no rows matched the negative-residue dates"
+        np.testing.assert_allclose(a_at, 0.0, atol=0.0, err_msg=f"legacy, {c}")
+        np.testing.assert_allclose(b_at, 0.0, atol=0.0, err_msg=f"narwhals, {c}")
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_rolling_std_large_magnitude_cancellation_clips_to_zero(backend):
+    """Finding 3 regression, re-classified CRITICAL: near-identical
+    LARGE-magnitude values make `sq` and `num**2/cnt` both huge, so their
+    difference is pure floating-point cancellation noise that rounds
+    negative. legacy clamps with `np.maximum(var, 0.0)`; the pre-fix
+    narwhals code used `.abs()`, which turned a large-magnitude negative
+    residue into a standard deviation of thousands where the true value is
+    exactly 0.0 -- a magnitude error of O(1e3), reachable through the
+    ordinary public API with no NaN and no exotic config. See
+    `_negative_residue_dates`'s docstring for why the assertion is scoped to
+    the identified rows rather than the whole column."""
+    df_pl = _large_magnitude_panel()
+    neg_dates = _negative_residue_dates(df_pl, window_size=5, min_samples=2)
+    tfms = {1: [RollingStd(5, min_samples=2, groupby=["store"])]}
+    _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_expanding_std_large_magnitude_cancellation_clips_to_zero(backend):
+    """Same construction as the RollingStd case above. Verified separately
+    reachable for ExpandingStd: `cnt >= 2` does not prevent the residue from
+    going negative -- 7 of 29 eligible rows go negative on this panel (min
+    raw variance -3.36e6)."""
+    df_pl = _large_magnitude_panel()
+    neg_dates = _negative_residue_dates(df_pl, window_size=None, min_samples=2)
+    tfms = {1: [ExpandingStd(groupby=["store"])]}
+    _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend)
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_float32_target_engines_agree(backend):
     """A float32 target reaches `ga.data.dtype` as float32, and BOTH engines must
