@@ -16,7 +16,14 @@ import narwhals as nw
 import numpy as np
 import utilsforecast.processing as ufp
 
-from ._pooled_engine import PooledCtx, build_agg_table
+from ._pooled_engine import (
+    PooledCtx,
+    _add_ordinals,
+    _add_prefix_sums,
+    _derive_time_agg_family,
+    apply_accumulate,
+    build_agg_table,
+)
 from ._pooled_keys import (  # noqa: F401
     _attach_bucket_id,
     _dedupe_preserve_order,
@@ -67,6 +74,69 @@ def _resolve_ctx(tfm, keys):
         min_samples=min_samples,
         time_agg=getattr(tfm, "time_agg", None),
     )
+
+
+def _pooled_retention(tfm) -> Optional[int]:
+    """Historical ordinals (relative to the query row) a leaf transform's
+    pooled expression can reach back into, i.e. the minimum tail retention
+    that keeps its feature value correct once the earlier history is
+    discarded (Task 9's seed mechanism).
+
+    * ``window_size`` + ``season_length`` (Seasonal* family): the strided
+      offsets are ``lag, lag+season_length, ..., lag+(window_size-1)*season_length``
+      -- the last is the furthest back reference.
+    * ``window_size`` alone (Rolling* / RollingQuantile): ``ctx.window``'s
+      ``lo`` shift reaches ``lag + window_size`` back (one further than the
+      window itself, the boundary the ``fill_null(0.0)`` relies on); RollingMin/
+      RollingMax's own direct shifts only reach ``lag + window_size - 1``, so
+      this is a safe (by exactly one row) upper bound for them too.
+    * Neither (Expanding*/EWM/LookupLag): these read a CUMULATIVE prefix sum
+      or accumulate column (``Es``/``Ec``/``Eq``/``Amn``/``Amx``/``Aewm``) or,
+      for ``LookupLag``, a raw positional shift over the (sparse) occurrence
+      table -- in every case exactly ``lag`` ordinals back, made correct
+      beyond that by the seed row's carried baseline rather than more
+      retained raw history.
+    * Quantile transforms with neither (``ExpandingQuantile``): no sufficient
+      statistic exists for an unbounded window (unlike ``ExpandingMean``'s
+      prefix sum), so no seed can compress arbitrarily old history -- signals
+      "keep everything" via ``None``.
+    """
+    lag = tfm._get_configured_lag()
+    window_size = getattr(tfm, "window_size", None)
+    season_length = getattr(tfm, "season_length", None)
+    if window_size is not None and season_length is not None:
+        return lag + season_length * (window_size - 1)
+    if window_size is not None:
+        return lag + window_size
+    if getattr(tfm, "_pooled_quantile", False):
+        return None
+    return max(lag, 0)
+
+
+def _accumulate_specs(leaf_tfms):
+    """``{(col, op, sorted kwargs items): out_name}`` for every leaf transform's
+    ``_pooled_accumulate`` requirement.
+
+    Shared by ``ensure_accumulates`` (fit: materialize once against the full
+    aggregate table) and ``NarwhalsPooledState._make_seeds``/``_rebuild_tail``
+    (predict: re-derive the same columns from a seed baseline over the small
+    tail) so the two call sites can never drift on which ``(col, op, kwargs)``
+    a transform needs.
+    """
+    need = {}
+    for tfm in leaf_tfms:
+        spec = getattr(tfm, "_pooled_accumulate", None)
+        if spec is None:
+            continue
+        base, op = spec
+        suffix = "" if getattr(tfm, "time_agg", None) is None else f"__{tfm.time_agg}"
+        kw = (
+            tfm._pooled_accumulate_kwargs()
+            if hasattr(tfm, "_pooled_accumulate_kwargs")
+            else {}
+        )
+        need[(f"{base}{suffix}", op, tuple(sorted(kw.items())))] = f"A{base}{suffix}"
+    return need
 
 
 def _iter_leaf_tfms(tfm):
@@ -125,8 +195,23 @@ class NarwhalsPooledState:
         # mutated during recursive prediction (Task 9); initialized here so
         # snapshot()/restore() never touch a missing attribute
         self._pending: list = []
+        self._pending_raw: list = []
         self._next_ord = None
         self._seeds = None
+        # Predict-time tail machinery (Task 9), computed once lazily on the
+        # first `latest_features` call and reused for the rest of this
+        # predict run (and every subsequent model's, since they only depend
+        # on the transforms/fit-time history, never on appended predictions):
+        # `_retention` (int, or None for "keep everything" -- see
+        # `_pooled_retention`), `_seed_rows`/`_hist_suffix` (native frames,
+        # `self.agg`'s own schema), `_hist_suffix_df` (native frame,
+        # `self._df`'s own schema, for the raw quantile store) and
+        # `_accum_specs` (see `_accumulate_specs`).
+        self._retention: Optional[int] = None
+        self._seed_rows = None
+        self._hist_suffix = None
+        self._hist_suffix_df = None
+        self._accum_specs: Dict[Any, str] = {}
         # partition_by / densification bookkeeping (Task 8). Harmless no-ops
         # for `global_`/`groupby` states (`mode` is always in
         # `_KNOWN_DENSE_MODES` for those, so `ensure_densified` returns
@@ -560,48 +645,17 @@ class NarwhalsPooledState:
         itself never carries ``_pooled_accumulate``, only its inner
         transform(s) do.
         """
-        from ._pooled_engine import grouped_accumulate
-
-        need = {}
-        for tfm in leaf_tfms:
-            spec = getattr(tfm, "_pooled_accumulate", None)
-            if spec is None:
-                continue
-            base, op = spec
-            suffix = (
-                "" if getattr(tfm, "time_agg", None) is None else f"__{tfm.time_agg}"
-            )
-            kw = (
-                tfm._pooled_accumulate_kwargs()
-                if hasattr(tfm, "_pooled_accumulate_kwargs")
-                else {}
-            )
-            need[(f"{base}{suffix}", op, tuple(sorted(kw.items())))] = (
-                f"A{base}{suffix}"
-            )
+        need = _accumulate_specs(leaf_tfms)
         present = set(nw.from_native(self.agg, eager_only=True).columns)
         for (col, op, kw_items), out in need.items():
             if out in present:
                 continue
             kw = dict(kw_items)
-            if self.keys:
-                self.agg = grouped_accumulate(
-                    self.agg, self.keys, [col], op, [out], **kw
-                )
-            else:
-                # Single implicit bucket (global_ mode, no keys): apply the op
-                # directly and forward-fill, mirroring `grouped_accumulate`'s
-                # documented invariant (gap ordinals carry the previous
-                # running value) for the un-partitioned case too.
-                self.agg = (
-                    nw.from_native(self.agg, eager_only=True)
-                    .with_columns(
-                        getattr(nw.col(col), op)(**kw)
-                        .fill_null(strategy="forward")
-                        .alias(out)
-                    )
-                    .to_native()
-                )
+            # `apply_accumulate` dispatches on `self.keys`: grouped per-bucket
+            # when non-empty, else a single un-partitioned accumulate with the
+            # same forward-fill-through-gaps invariant (see its docstring and
+            # `grouped_accumulate`'s).
+            self.agg = apply_accumulate(self.agg, self.keys, col, op, out, **kw)
 
     # Modes for which `NarwhalsPooledState`'s per-bucket `ord` column is
     # STRUCTURALLY dense (0..n-1 with no calendar gaps): legacy renumbers
@@ -814,6 +868,471 @@ class NarwhalsPooledState:
         joined = _order_preserving_left_join(left, feats.select(on + names), on=on)
         out = nw.to_native(joined)
         return {n: nw.from_native(out, eager_only=True)[n].to_numpy() for n in names}
+
+    # ---- Predict path (Task 9): tail evaluation + per-bucket seed rows ----
+    #
+    # Correctness needs only a bounded window per transform (`_pooled_retention`):
+    # a FINITE window (Rolling*/Seasonal*/RollingQuantile) needs its own
+    # `lag + window` raw history, since its feature is a DIFFERENCE of two
+    # prefix sums (or, for quantile, a union of raw-value slices) that cancels
+    # any constant baseline before the retained window -- truncating history
+    # never changes the answer as long as both endpoints stay inside the
+    # retained suffix. A PREFIX-DEPENDENT transform (Expanding*/EWM/LookupLag)
+    # instead reads an ABSOLUTE cumulative value (a prefix sum, an
+    # accumulate-column value, or a raw positional shift over the sparse
+    # occurrence table) with no such cancellation -- so one SEED row per
+    # bucket carries the exact state as of the ordinal just before the
+    # retained suffix (`Es`/`Ec`/`Eq` and any consumed accumulate column's
+    # value), and a fresh cumsum/accumulate over
+    # ``[seed, retained history, pending predictions]`` reconstructs the true
+    # absolute value at every ordinal from there on -- this is the "carried
+    # accumulator" the legacy engine lacks (see `_make_seeds`'s docstring).
+    #
+    # `_pending`/`_pending_raw` grow by one entry per recursive predict step;
+    # `_rebuild_tail` concatenates the (fixed-size) seed + retained history
+    # with all of `_pending` and reruns the ordinal/prefix-sum/accumulate
+    # machinery once over that small frame -- O(buckets + retention +
+    # pending), never O(full history), replacing the legacy engine's six
+    # ``np.append`` calls per bucket per step.
+    #
+    # Fit (`feature_frame`, above) and predict (`latest_features`, below)
+    # evaluate the IDENTICAL `_pooled_expr`/`_quantile_columns` -- `latest_features`
+    # only ever swaps which (seed+tail vs. full-history) aggregate table
+    # `feature_frame` runs over, never reimplements a transform's statistic.
+
+    _APPEND_FIELDS = ("agg", "_pending", "_pending_raw", "_next_ord")
+
+    def snapshot(self):
+        """Reference copy of the mutated fields.
+
+        Prediction replaces frames wholesale rather than mutating in place, so
+        references suffice -- no per-bucket dict walk, unlike the legacy engine.
+        """
+        return {f: getattr(self, f) for f in self._APPEND_FIELDS}
+
+    def restore(self, snap):
+        for k, v in snap.items():
+            setattr(self, k, v)
+
+    def _leaf_tfms(self, transforms):
+        return [leaf for t in transforms.values() for leaf in _iter_leaf_tfms(t)]
+
+    def _ensure_predict_init(self, transforms):
+        """Lazily compute the retention/seed/tail machinery and, the first
+        time this runs for the CURRENT model's predict loop, reduce
+        ``self.agg`` from the full fit-time table down to the small persisted
+        tail. Retention/seeds are pure functions of the fit-time history and
+        the (fixed, per pooled key) transform set, so they are computed once
+        ever and simply reused by every later model -- ``TimeSeries._backup``
+        resets ``self.agg``/``_pending``/``_next_ord`` to their pre-model
+        values between models (see ``snapshot``/``restore``), which is
+        exactly the ``not self._pending`` signal this checks: a restored (or
+        genuinely fresh) state always has empty ``_pending``, and it is only
+        empty again mid-model if this is the very first step.
+        """
+        if self._pending:
+            return
+        if self._seeds is None:
+            self._make_seeds(transforms)
+            self._seeds = True
+        self._rebuild_tail()
+
+    def _make_seeds(self, transforms):
+        """Compute (once) ``_retention``, ``_accum_specs``, the per-bucket
+        seed row (``_seed_rows``) and the retained historical suffix
+        (``_hist_suffix``/``_hist_suffix_df``) that ``_rebuild_tail`` then
+        concatenates with ``_pending``/``_pending_raw`` at every step.
+
+        A bucket's own last historical ordinal is ``last_ord``; the boundary
+        ordinal is ``last_ord - retention``. Rows with ``ord >`` that boundary
+        are the retained suffix, copied verbatim (their aggregate/accumulate
+        columns are already correct, computed over the FULL history at fit
+        time -- rerunning the same cumsum/accumulate from the seed forward
+        reproduces them identically, see the accumulate-column argument
+        below). The row AT the boundary (if any -- a bucket shorter than
+        ``retention`` has none) becomes the seed, with its raw ``s``/``c``/
+        ``q`` (+ ``time_agg`` suffixes) columns overwritten by their own
+        ``E``-prefixed cumulative value, and any accumulate-consumed column
+        (``mn``/``mx``/``ewm`` (+suffixes), e.g. for ``ExpandingMin``/EWM)
+        overwritten by its already-computed ``A``-prefixed running value --
+        so a fresh cumsum/accumulate over ``[seed, suffix, pending]``
+        reconstructs the true ABSOLUTE state at every subsequent ordinal, not
+        a value merely relative to where the tail happens to start. A bucket
+        with no boundary row (its whole history already fits within
+        ``retention``, or ``retention is None`` -- see
+        ``_pooled_retention``) gets a synthetic empty seed instead (zero
+        prefix-sum contribution, null accumulate baseline): nothing precedes
+        the retained suffix for it, so the seed must contribute nothing.
+
+        No expression ever actually reads a seed row through a RAW (not
+        ``E``/``A``-prefixed) column: every leaf's own retention is an upper
+        bound on its raw-column reach (by construction, see
+        ``_pooled_retention``), and the query row sits at
+        ``retention + 1 + len(pending)`` -- one past the retained suffix --
+        so shifting back by at most ``retention`` from there lands at
+        position ``>= 1``, never at the seed (position 0). Seed rows are
+        therefore safe to give a nonsense raw value where no accumulate
+        substitution applies (nothing ever reads it).
+        """
+        leaves = self._leaf_tfms(transforms)
+        retentions = [_pooled_retention(t) for t in leaves]
+        self._retention = (
+            None
+            if any(r is None for r in retentions)
+            else (max(retentions) if retentions else 0)
+        )
+        self._accum_specs = _accumulate_specs(leaves)
+
+        a = nw.from_native(self.agg, eager_only=True)
+        backend = nw.get_native_namespace(a)
+        keys = self.keys
+        n = len(a)
+        full_cols = list(a.columns)
+        if n == 0:
+            self._seed_rows = a.to_native()
+            self._hist_suffix = a.to_native()
+            on_cols = (keys + [self.time_col]) if keys else [self.time_col]
+            self._hist_suffix_df = (
+                nw.from_native(self._df, eager_only=True)
+                .select(on_cols + [self._target_col])
+                .head(0)
+                .to_native()
+            )
+            return
+
+        ords = a.get_column("ord").to_numpy()
+        bucket_arr = (
+            a.get_column(keys[0]).to_numpy() if keys else np.zeros(n, dtype=np.int64)
+        )
+        order = np.argsort(bucket_arr, kind="stable")
+        sb, so = bucket_arr[order], ords[order]
+        uniq_b, start_idx = np.unique(sb, return_index=True)
+        end_idx = np.append(start_idx[1:], len(sb))
+        last_ord = {int(b): int(so[e - 1]) for b, e in zip(uniq_b, end_idx)}
+        if self._retention is None:
+            baseline = {b: -1 for b in last_ord}
+        else:
+            baseline = {b: last_ord[b] - self._retention for b in last_ord}
+        baseline_arr = np.array([baseline[int(b)] for b in bucket_arr])
+
+        hist_mask = ords > baseline_arr
+        boundary_mask = ords == baseline_arr
+        a_tagged = a.with_columns(
+            nw.new_series("_hist_mask", hist_mask, dtype=nw.Boolean, backend=backend),
+            nw.new_series(
+                "_boundary_mask", boundary_mask, dtype=nw.Boolean, backend=backend
+            ),
+        )
+        self._hist_suffix = (
+            a_tagged.filter(nw.col("_hist_mask"))
+            .drop(["_hist_mask", "_boundary_mask"])
+            .select(full_cols)
+            .to_native()
+        )
+        boundary_rows = a_tagged.filter(nw.col("_boundary_mask")).drop(
+            ["_hist_mask", "_boundary_mask"]
+        )
+
+        subs = []
+        for base in ("s", "c", "q"):
+            for suffix in [""] + [
+                f"__{ta}" for ta in sorted(x for x in self._time_aggs if x is not None)
+            ]:
+                col = f"{base}{suffix}"
+                if col in boundary_rows.columns:
+                    subs.append(nw.col(f"E{col}").alias(col))
+        for (col, _op, _kw), out in self._accum_specs.items():
+            if col in boundary_rows.columns and out in boundary_rows.columns:
+                subs.append(nw.col(out).alias(col))
+        if subs:
+            boundary_rows = boundary_rows.with_columns(subs)
+
+        # A bucket with no boundary row (its whole history already fits
+        # within `retention`, or `retention is None`) simply gets NO seed
+        # row at all -- `_hist_suffix` already carries its ENTIRE history
+        # starting at ordinal 0, so a fresh cumsum/accumulate over
+        # `[(no seed), full history, pending]` starts from an implicit empty
+        # baseline, exactly like `build_agg_table` does for that bucket. This
+        # also sidesteps needing a null placeholder `time_col` (pandas can't
+        # hold a null in a plain int64 column, and any real placeholder value
+        # risks colliding with an actual observation in the raw quantile
+        # join) -- a bucket simply absent from `self._seed_rows` needs none.
+        self._seed_rows = boundary_rows.select(full_cols).to_native()
+
+        # Reduced to exactly the columns `quantile_values` reads
+        # (`keys + [time_col, target_col]`) -- matches `_pending_raw_frame`'s
+        # schema exactly, so `_rebuild_tail`'s vertical concat of the two
+        # never hits a width/column mismatch (polars' `concat` requires an
+        # exact schema match, unlike pandas' outer-join fallback).
+        on_cols = (keys + [self.time_col]) if keys else [self.time_col]
+        grid = (
+            nw.from_native(self._hist_suffix, eager_only=True).select(on_cols).unique()
+        )
+        df_nw = nw.from_native(self._df, eager_only=True)
+        self._hist_suffix_df = (
+            df_nw.join(grid, on=on_cols, how="inner")
+            .select(on_cols + [self._target_col])
+            .to_native()
+        )
+
+    def _pending_agg_frame(self, entry, backend, time_dtype):
+        """One synthetic (already-aggregated) row per bucket for one new
+        pending timestamp, in ``self.agg``'s bare-column shape (``s``/``c``/
+        ``q``/``mn``/``mx`` plus their ``time_agg`` derivations) --
+        ``_rebuild_tail`` pads it with placeholder ``E``/``A``-prefixed
+        columns and recomputes those fresh over the whole tail.
+        """
+        ts, s, c, q, mn, mx = entry
+        n_b = len(s)
+        data: Dict[str, Any] = {}
+        if self.keys:
+            data[self.keys[0]] = np.arange(n_b, dtype=np.int64)
+        data[self.time_col] = np.full(n_b, ts)
+        data["s"] = np.asarray(s, dtype=np.float64)
+        data["c"] = np.asarray(c, dtype=np.float64)
+        data["q"] = np.asarray(q, dtype=np.float64)
+        data["mn"] = np.asarray(mn, dtype=np.float64)
+        data["mx"] = np.asarray(mx, dtype=np.float64)
+        tbl = nw.from_dict(data, backend=backend)
+        tbl = tbl.with_columns(
+            nw.col(self.time_col).cast(time_dtype),
+            nw.lit(0).cast(nw.Int64).alias("ord"),
+        )
+        tbl = _derive_time_agg_family(tbl, self._time_aggs)
+        return tbl
+
+    def _pending_raw_frame(self, bids_arr, y_arr, ts, backend, time_dtype):
+        """One raw row per SERIES prediction for one pending timestamp, in
+        ``self._df``'s own schema -- feeds the raw quantile store
+        (``quantile_values``) the individual (not bucket-aggregated) values a
+        window over un-collapsed raw observations needs.
+        """
+        data: Dict[str, Any] = {}
+        if self.keys:
+            data[self.keys[0]] = np.asarray(bids_arr, dtype=np.int64)
+        data[self.time_col] = np.full(len(y_arr), ts)
+        data[self._target_col] = np.asarray(y_arr, dtype=np.float64)
+        tbl = nw.from_dict(data, backend=backend)
+        tbl = tbl.with_columns(nw.col(self.time_col).cast(time_dtype))
+        return tbl.to_native()
+
+    def _rebuild_tail(self):
+        """Reconstruct ``self.agg`` as
+        ``[seed rows, retained history, *pending]`` and recompute the
+        ordinal/prefix-sum/accumulate columns fresh over that (small) frame --
+        called once per ``append_predictions`` (extending ``_pending`` by one
+        entry) and once, lazily, before the very first ``latest_features``
+        call for a model (see ``_ensure_predict_init``).
+        """
+        seed_nw = nw.from_native(self._seed_rows, eager_only=True)
+        backend = nw.get_native_namespace(seed_nw)
+        time_dtype = seed_nw.schema[self.time_col]
+        full_cols = list(seed_nw.columns)
+
+        parts = [self._seed_rows, self._hist_suffix]
+        for entry in self._pending:
+            pend = self._pending_agg_frame(entry, backend, time_dtype)
+            missing_cols = [c for c in full_cols if c not in pend.columns]
+            if missing_cols:
+                pend = pend.with_columns([nw.lit(0.0).alias(c) for c in missing_cols])
+            parts.append(pend.select(full_cols).to_native())
+
+        combined = nw.from_native(ufp.vertical_concat(parts), eager_only=True)
+        combined = _add_ordinals(combined, self.keys, self.time_col)
+        # `_quantile_columns` indexes `self.agg` positionally, assuming each
+        # bucket's rows occupy a CONTIGUOUS row range (`base = sel.min()`,
+        # `values[row_offsets[base]:row_offsets[base+n_ord]]`) -- true of the
+        # fit-time table (built bucket-sorted) but NOT of the physical
+        # concatenation order above (seed rows for every bucket, then history
+        # for every bucket, then one pending row per bucket per step
+        # interleaves buckets). Sorting by (bucket, ord) restores bucket
+        # contiguity while preserving each bucket's own chronological order
+        # (ord was assigned in exactly that order), matching the fit-time
+        # invariant every downstream reader of `self.agg` relies on.
+        sort_cols = (self.keys + ["ord"]) if self.keys else ["ord"]
+        combined = combined.sort(sort_cols)
+        combined_native = _add_prefix_sums(
+            combined.to_native(), self.keys, self._time_aggs
+        )
+        for (col, op, kw_items), out in self._accum_specs.items():
+            combined_native = apply_accumulate(
+                combined_native, self.keys, col, op, out, **dict(kw_items)
+            )
+        self.agg = combined_native
+        self._qvalues = None
+
+        raw_parts = [self._hist_suffix_df]
+        for bids_arr, y_arr, ts in self._pending_raw:
+            raw_parts.append(
+                self._pending_raw_frame(bids_arr, y_arr, ts, backend, time_dtype)
+            )
+        self._tail_df = (
+            ufp.vertical_concat(raw_parts) if len(raw_parts) > 1 else raw_parts[0]
+        )
+
+        a = nw.from_native(self.agg, eager_only=True)
+        bucket_arr = (
+            a.get_column(self.keys[0]).to_numpy()
+            if self.keys
+            else np.zeros(len(a), dtype=np.int64)
+        )
+        ords = a.get_column("ord").to_numpy()
+        next_ord = {}
+        for b in np.unique(bucket_arr):
+            next_ord[int(b)] = int(ords[bucket_arr == b].max()) + 1
+        self._next_ord = next_ord
+
+    def append_predictions(self, curr_dates, predictions, _n_series):
+        """Append one row per bucket for the new timestamp.
+
+        Rows accumulate in ``_pending``/``_pending_raw`` and are concatenated
+        once per step by ``_rebuild_tail``, replacing the legacy engine's six
+        ``np.append`` calls per bucket per step. Builds a NEW list each call
+        (rather than mutating ``self._pending`` in place) so an earlier
+        ``snapshot()``'s reference copy is unaffected -- ``.append()`` would
+        corrupt it, since both would then point at the identical, now-mutated,
+        list object; see ``test_two_models_do_not_leak_state``.
+
+        ``_n_series`` is accepted for call-site symmetry with the legacy
+        engine (``PooledState.append_predictions``'s same signature): the
+        bucket count is derived from ``series_bucket_id`` instead.
+        """
+        new_ts = np.asarray(curr_dates)[:1]
+        y = np.asarray(predictions, dtype=float)
+        bids = self.series_bucket_id
+        n_b = int(bids.max()) + 1 if len(bids) else 1
+        s = np.bincount(bids, weights=np.nan_to_num(y), minlength=n_b)
+        valid = ~np.isnan(y)
+        c = np.bincount(bids, weights=valid.astype(float), minlength=n_b)
+        q = np.bincount(bids, weights=np.nan_to_num(y) ** 2, minlength=n_b)
+        mn = np.full(n_b, np.nan)
+        mx = np.full(n_b, np.nan)
+        if valid.any():
+            np.fmin.at(mn, bids[valid], y[valid])
+            np.fmax.at(mx, bids[valid], y[valid])
+        self._pending = self._pending + [(new_ts[0], s, c, q, mn, mx)]
+        self._pending_raw = self._pending_raw + [(bids.copy(), y.copy(), new_ts[0])]
+        self._rebuild_tail()
+
+    def build_query_arrays(self, curr_dates, _n_series):
+        """The persisted tail extended by one query row per bucket at the
+        next ordinal (raw contribution zero/null -- no observation yet),
+        with ordinals/prefix sums/accumulate columns recomputed fresh over
+        that extension. Returns the extended native frame with an extra
+        boolean ``_is_query`` column marking the newly appended query rows
+        (a column, rather than a positional mask, survives the
+        bucket-contiguity sort below).
+
+        ``_n_series`` is accepted for call-site symmetry with the legacy
+        engine's same-named method: the bucket count is derived from
+        ``series_bucket_id`` instead.
+        """
+        del curr_dates  # every bucket shares one new timestamp; see append_predictions
+        n_b = int(self.series_bucket_id.max()) + 1 if len(self.series_bucket_id) else 1
+        zeros = np.zeros(n_b)
+        nans = np.full(n_b, np.nan)
+        # placeholder timestamp: never read (query rows are identified by
+        # `_is_query`, not by time_col), but must satisfy the schema/dtype --
+        # in particular it must not be null, or casting it to an integer
+        # `time_col` dtype (e.g. a plain `ds=0,1,2,...` calendar) raises. A
+        # bucket whose entire history fits within the retention window gets a
+        # synthetic seed with a NULL time_col (`_empty_seed_rows`), so this is
+        # read from `self.agg` (seed + retained history + pending), not from
+        # `self._seed_rows` alone, and the first NON-null value is taken.
+        agg_nw = nw.from_native(self.agg, eager_only=True)
+        backend = nw.get_native_namespace(agg_nw)
+        time_dtype = agg_nw.schema[self.time_col]
+        ts_col = agg_nw.get_column(self.time_col).drop_nulls()
+        placeholder_ts = ts_col.to_numpy()[0] if len(ts_col) else None
+        query = self._pending_agg_frame(
+            (placeholder_ts, zeros, zeros, zeros, nans, nans), backend, time_dtype
+        )
+        full_cols = list(nw.from_native(self.agg, eager_only=True).columns)
+        missing_cols = [c for c in full_cols if c not in query.columns]
+        if missing_cols:
+            query = query.with_columns([nw.lit(0.0).alias(c) for c in missing_cols])
+        base = nw.from_native(self.agg, eager_only=True).select(full_cols)
+        base = base.with_columns(
+            nw.new_series(
+                "_is_query",
+                np.zeros(len(base), dtype=bool),
+                dtype=nw.Boolean,
+                backend=backend,
+            )
+        )
+        query = query.select(full_cols).with_columns(
+            nw.new_series(
+                "_is_query", np.ones(n_b, dtype=bool), dtype=nw.Boolean, backend=backend
+            )
+        )
+        combined = nw.from_native(
+            ufp.vertical_concat([base.to_native(), query.to_native()]),
+            eager_only=True,
+        )
+        combined = _add_ordinals(combined, self.keys, self.time_col)
+        # See `_rebuild_tail`'s identical comment: restore bucket contiguity
+        # (base rows for every bucket, then one query row per bucket,
+        # interleaves buckets) so `_quantile_columns`'s positional slicing
+        # stays correct.
+        sort_cols = (self.keys + ["ord"]) if self.keys else ["ord"]
+        combined = combined.sort(sort_cols)
+        combined_native = _add_prefix_sums(
+            combined.to_native(), self.keys, self._time_aggs
+        )
+        for (col, op, kw_items), out in self._accum_specs.items():
+            combined_native = apply_accumulate(
+                combined_native, self.keys, col, op, out, **dict(kw_items)
+            )
+        return combined_native
+
+    def latest_features(self, transforms, n_series):
+        """Feature values at the next (not-yet-observed) ordinal, one entry
+        per bucket broadcast through ``series_bucket_id`` to ``n_series``.
+
+        Temporarily extends the persisted tail with one query row per bucket
+        (``build_query_arrays``), evaluates the SAME ``feature_frame`` used at
+        fit time over that extension, reads off the query rows, then restores
+        the persisted (non-extended) tail so the next ``append_predictions``
+        rebuilds from the correct base.
+        """
+        self._ensure_predict_init(transforms)
+        persisted_agg, persisted_df, persisted_qvalues = (
+            self.agg,
+            self._df,
+            self._qvalues,
+        )
+        extended_agg = self.build_query_arrays(None, n_series)
+        self.agg = extended_agg
+        self._df = self._tail_df
+        self._qvalues = None
+        try:
+            feats_native = self.feature_frame(transforms)
+        finally:
+            self.agg, self._df, self._qvalues = (
+                persisted_agg,
+                persisted_df,
+                persisted_qvalues,
+            )
+        feats = nw.from_native(feats_native, eager_only=True)
+        names = list(transforms)
+        bucket_col = self.keys[0] if self.keys else None
+        query_rows = feats.filter(nw.col("_is_query"))
+        bids = (
+            query_rows.get_column(bucket_col).to_numpy()
+            if bucket_col
+            else np.zeros(len(query_rows), dtype=np.int64)
+        )
+        out: Dict[str, np.ndarray] = {}
+        for name in names:
+            vals = query_rows.get_column(name).to_numpy()
+            max_bid = max(
+                int(bids.max()) if len(bids) else -1,
+                int(self.series_bucket_id.max()) if len(self.series_bucket_id) else -1,
+            )
+            lookup = np.full(max_bid + 1, np.nan)
+            lookup[bids] = vals
+            out[name] = lookup[self.series_bucket_id]
+        return out
 
 
 def compute_pooled_features(state, transforms, query_arrays=None):

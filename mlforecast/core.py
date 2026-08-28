@@ -1380,6 +1380,17 @@ class TimeSeries:
         for key, tfms in pooled_tfms.items():
             state = self._pooled_states[key]
             n_series = len(self.uids)
+            if isinstance(state, NarwhalsPooledState):
+                # `latest_features` evaluates the SAME `_pooled_expr`/
+                # `_quantile_columns` `feature_frame` uses at fit, over a tail
+                # (seed row + bounded retained history + appended
+                # predictions) instead of the full history -- see
+                # `NarwhalsPooledState`'s predict-path docstring in pooled.py.
+                # No fast/slow split: unlike the legacy engine's
+                # `_ts_aggs`-keyed cache, there is nothing here to fall back
+                # from.
+                features.update(state.latest_features(tfms, n_series))
+                continue
             slow_tfms: Dict[str, _BaseLagTransform] = {}
             for name, tfm in tfms.items():
                 latest = tfm._compute_latest_from_aggs(

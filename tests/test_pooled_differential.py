@@ -1271,3 +1271,147 @@ def test_lookup_lag_and_ewm_same_partition_state_raises():
         import mlforecast.core
 
         importlib.reload(mlforecast.core)
+
+
+# ---- Task 9: predict -- tail evaluation + per-bucket seed rows ----
+
+
+def _predict_with_engine(engine, df, tfms, statics, h):
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        fcst = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        fcst.fit(df, static_features=statics)
+        return fcst.predict(h)
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+PREDICT_CASES = [
+    ("p_rolling", [RollingMean(7, groupby=["store"]), RollingMean(14, groupby=["store"])]),
+    ("p_expanding", [ExpandingMean(groupby=["store"]), ExpandingStd(groupby=["store"])]),
+    ("p_expanding_minmax", [ExpandingMin(groupby=["store"]), ExpandingMax(groupby=["store"])]),
+    ("p_ewm", [ExponentiallyWeightedMean(alpha=0.3, groupby=["store"])]),
+    ("p_seasonal", [SeasonalRollingMean(season_length=7, window_size=4, groupby=["store"])]),
+    ("p_quantile", [RollingQuantile(p=0.5, window_size=14, groupby=["store"])]),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("label,tfms", PREDICT_CASES, ids=[x[0] for x in PREDICT_CASES])
+def test_predict_engines_agree(backend, label, tfms):
+    df = _panel(backend, n_series=30, n_times=90)
+    a = _predict_with_engine("numpy", df, {1: tfms}, ["store"], 14)
+    b = _predict_with_engine("narwhals", df, {1: tfms}, ["store"], 14)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    a, b = a.sort("unique_id", "ds"), b.sort("unique_id", "ds")
+    np.testing.assert_allclose(
+        a["LinearRegression"].to_numpy(),
+        b["LinearRegression"].to_numpy(),
+        atol=1e-9,
+        err_msg=label,
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_two_models_do_not_leak_state(backend):
+    """_backup/restore must isolate each model's recursive walk: a leaked
+    prefix would make the second model's forecast depend on the first's."""
+    from sklearn.tree import DecisionTreeRegressor
+
+    df = _panel(backend, n_series=20, n_times=60)
+    tfms = {1: [ExpandingMean(groupby=["store"])]}
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        together = MLForecast(
+            models=[LinearRegression(), DecisionTreeRegressor(random_state=0)],
+            freq="1d", lags=[1], lag_transforms=tfms,
+        )
+        together.fit(df, static_features=["store"])
+        both = together.predict(10)
+        alone = MLForecast(
+            models=[DecisionTreeRegressor(random_state=0)],
+            freq="1d", lags=[1], lag_transforms=tfms,
+        )
+        alone.fit(df, static_features=["store"])
+        solo = alone.predict(10)
+        b = both if isinstance(both, pl.DataFrame) else pl.from_pandas(both)
+        s = solo if isinstance(solo, pl.DataFrame) else pl.from_pandas(solo)
+        np.testing.assert_allclose(
+            b.sort("unique_id", "ds")["DecisionTreeRegressor"].to_numpy(),
+            s.sort("unique_id", "ds")["DecisionTreeRegressor"].to_numpy(),
+            atol=0.0,
+        )
+    finally:
+        os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        import mlforecast.pooled, mlforecast.core
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+# ---- Extra Task 9 coverage beyond the brief's PREDICT_CASES ----
+#
+# Lesson from earlier tasks: a test suite using only ``lag=1`` hid a
+# wrong-number bug (Lesson 2). EWM's positional shift is explicitly the
+# family whose row-vs-ordinal divergence was measured at ``lag > 1``
+# (`_guard_ewm_positional_shift`'s docstring); this exercises EWM predict at
+# ``lag=1``, ``lag=3`` and ``lag=5`` over a horizon that outlasts a small
+# window, so a step where the query references an already-*predicted* row
+# (not just historical data) is actually reached.
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("lag", [1, 3, 5])
+def test_predict_ewm_lag_gt_1_engines_agree(backend, lag):
+    df = _panel(backend, n_series=16, n_times=40)
+    tfms = {lag: [ExponentiallyWeightedMean(alpha=0.4, groupby=["store"])]}
+    a = _predict_with_engine("numpy", df, tfms, ["store"], 8)
+    b = _predict_with_engine("narwhals", df, tfms, ["store"], 8)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    a, b = a.sort("unique_id", "ds"), b.sort("unique_id", "ds")
+    np.testing.assert_allclose(
+        a["LinearRegression"].to_numpy(),
+        b["LinearRegression"].to_numpy(),
+        atol=1e-9,
+        err_msg=f"lag={lag}",
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_predict_rolling_min_max_horizon_exceeds_window_engines_agree(backend):
+    """A horizon longer than ``lag + window_size`` forces later recursive
+    steps to read predicted (pending), not historical, rows out of the
+    RollingMin/RollingMax raw ``mn``/``mx`` columns -- the one family whose
+    ``_pooled_expr`` shifts a raw (not prefix-summed) column, so this is the
+    sharpest test of the retention/seed boundary (`_pooled_retention`)."""
+    df = _panel(backend, n_series=16, n_times=40)
+    tfms = {1: [RollingMin(3, groupby=["store"]), RollingMax(3, groupby=["store"])]}
+    a = _predict_with_engine("numpy", df, tfms, ["store"], 10)
+    b = _predict_with_engine("narwhals", df, tfms, ["store"], 10)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    a, b = a.sort("unique_id", "ds"), b.sort("unique_id", "ds")
+    np.testing.assert_allclose(
+        a["LinearRegression"].to_numpy(),
+        b["LinearRegression"].to_numpy(),
+        atol=1e-9,
+    )

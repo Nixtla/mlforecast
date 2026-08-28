@@ -132,6 +132,22 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
     return out
 
 
+def apply_accumulate(native, keys, col, op, out, **kw):
+    """Single-column accumulate, grouped if ``keys`` else over the whole table.
+
+    Factors out the ``keys``/no-``keys`` (``global_``) branch that
+    ``NarwhalsPooledState.ensure_accumulates`` (fit) and the predict tail
+    rebuild (``_rebuild_tail``, Task 9) both need for one ``(col, op)`` pair
+    at a time.
+    """
+    if keys:
+        return grouped_accumulate(native, keys, [col], op, [out], **kw)
+    n = nw.from_native(native, eager_only=True)
+    return n.with_columns(
+        getattr(nw.col(col), op)(**kw).fill_null(strategy="forward").alias(out)
+    ).to_native()
+
+
 def _time_agg_value_expr(time_agg):
     """The single value ``v_t`` a timestamp contributes under ``time_agg``.
 
@@ -205,9 +221,25 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
     # integer ordinal per bucket over its own sorted calendar
     tbl = tbl.with_columns(nw.col("c").cast(nw.Float64))
     tbl = _add_ordinals(tbl, keys, time_col)
+    tbl = _derive_time_agg_family(tbl, time_aggs)
+    native = _add_prefix_sums(tbl.to_native(), keys, time_aggs)
+    return native
 
-    derived, prefix_cols, prefix_outs = [], [], []
-    for a in sorted(x for x in time_aggs if x is not None):
+
+def _derive_time_agg_family(tbl, time_aggs):
+    """Add the suffixed ``{s,c,q,mn,mx}__<agg>`` family plus ``ewm``/``ewm__<agg>``.
+
+    Factored out of :func:`build_agg_table` so the pooled predict tail
+    (``NarwhalsPooledState._rebuild_tail``, Task 9) can derive the identical
+    per-``time_agg`` columns for a synthetic pending row (one already-
+    aggregated row per bucket per new timestamp) without duplicating this
+    derivation. ``tbl`` must already carry the bare ``s``/``c``/``q``/``mn``/
+    ``mx`` columns (from a raw-row aggregation at fit, or directly assigned
+    at predict).
+    """
+    tas = sorted(x for x in time_aggs if x is not None)
+    derived = []
+    for a in tas:
         v = _time_agg_value_expr(a)
         obs = v.is_null().__invert__()
         derived += [
@@ -230,29 +262,42 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
     tbl = tbl.with_columns(
         nw.when(nw.col("c") > 0).then(nw.col("s") / nw.col("c")).alias("ewm")
     )
-    for a in sorted(x for x in time_aggs if x is not None):
+    for a in tas:
         tbl = tbl.with_columns(
             nw.when(nw.col(f"c__{a}") > 0)
             .then(nw.col(f"s__{a}") / nw.col(f"c__{a}"))
             .alias(f"ewm__{a}")
         )
+    return tbl
 
+
+def _prefix_sum_names(time_aggs):
+    """``(prefix_cols, prefix_outs)`` for ``s``/``c``/``q`` and their ``time_agg`` suffixes."""
+    prefix_cols, prefix_outs = [], []
     for suffix in [""] + [
         f"__{a}" for a in sorted(x for x in time_aggs if x is not None)
     ]:
         for base in _PREFIX_AGGS:
             prefix_cols.append(f"{base}{suffix}")
             prefix_outs.append(f"E{base}{suffix}")
+    return prefix_cols, prefix_outs
 
-    native = tbl.to_native()
+
+def _add_prefix_sums(native, keys, time_aggs):
+    """Cumulative per-bucket sum of every prefix-summed base column.
+
+    Shared by :func:`build_agg_table` (fit) and the predict tail rebuild
+    (Task 9): both need the identical ``E``-prefixed cumulative sums over
+    ``s``/``c``/``q`` and their ``time_agg`` suffixes, just over a different
+    (full-history vs. seed+tail) row set.
+    """
+    prefix_cols, prefix_outs = _prefix_sum_names(time_aggs)
     if keys:
-        native = grouped_accumulate(native, keys, prefix_cols, "cum_sum", prefix_outs)
-    else:
-        n = nw.from_native(native, eager_only=True)
-        native = n.with_columns(
-            [nw.col(c).cum_sum().alias(o) for c, o in zip(prefix_cols, prefix_outs)]
-        ).to_native()
-    return native
+        return grouped_accumulate(native, keys, prefix_cols, "cum_sum", prefix_outs)
+    n = nw.from_native(native, eager_only=True)
+    return n.with_columns(
+        [nw.col(c).cum_sum().alias(o) for c, o in zip(prefix_cols, prefix_outs)]
+    ).to_native()
 
 
 def _add_ordinals(tbl, keys, time_col):
