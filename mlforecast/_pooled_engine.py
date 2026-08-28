@@ -382,29 +382,93 @@ def quantile_values(df, agg_native, keys, time_col, target_col):
     return y_v[order], row_offsets
 
 
+def quantile_values_collapsed(agg_native, time_agg):
+    """CSR values+offsets for a ``time_agg``-collapsed quantile.
+
+    Not in the task-7 brief (added in a fix round): under ``time_agg``, every
+    row sharing a (bucket, timestamp) collapses to exactly ONE contributing
+    value ``v_t`` before the window statistic runs -- the same ``v_t``
+    ``build_agg_table``'s ``s__<agg>``/``c__<agg>``/... derived family is
+    built from (``_time_agg_value_expr``), and the same convention legacy's
+    ``_time_agg_values`` uses: NaN means "unobserved timestamp" for
+    ``sum``/``mean``/``min``/``max`` (an empty slice here, exactly like a
+    dropped NaN row in the raw-row store built by ``quantile_values``), while
+    ``count`` is never NaN (0 is a genuine observation).
+
+    Returned in ``agg_native``'s own row order (one offset per row, plus a
+    trailing sentinel) -- the same CSR contract ``quantile_values`` returns,
+    so ``quantile_feature``/``_quantile_columns``'s per-bucket slicing is
+    identical for either store.
+    """
+    a = nw.from_native(agg_native, eager_only=True)
+    n = len(a)
+    v = (
+        a.with_columns(_time_agg_value_expr(time_agg).alias("_qv_collapsed"))
+        .get_column("_qv_collapsed")
+        .to_numpy()
+        .astype(float)
+    )
+    valid = ~np.isnan(v)
+    row_offsets = np.zeros(n + 1, dtype=np.intp)
+    np.cumsum(valid.astype(np.intp), out=row_offsets[1:])
+    return v[valid], row_offsets
+
+
 def quantile_feature(values, row_offsets, n_ordinals, offsets, p, min_samples):
     """Quantile per ordinal over the union of the ordinals at ``offsets`` back.
 
     ``offsets`` is the list of ordinal distances contributing to each window --
     ``range(lag, lag + w)`` for rolling, the seasonal strides for seasonal, and
     ``range(lag, n_ordinals)`` for expanding (the caller filters to ``<= t``
-    via the ``0 <= t - o`` bound below). Contiguity means each contributing
-    ordinal is one slice, so a window is a small list of slices concatenated
-    once.
+    via the ``0 <= t - o`` bound below).
+
+    PERFORMANCE (fix round 1): when ``offsets`` is CONTIGUOUS (rolling and
+    expanding -- both pass a plain ``range(...)``; only seasonal's strided
+    offsets are not), the set of contributing ordinals for a given ``t`` is
+    also a contiguous run, and the flat ``values`` store lays consecutive
+    ordinals out back-to-back (both ``quantile_values`` and
+    ``quantile_values_collapsed`` build it in ordinal order) -- so the whole
+    window is ONE slice, ``values[row_offsets[lo]:row_offsets[hi+1]]``, with
+    no ``np.concatenate`` at all. Measured on a ~1000-series/365-day/100-bucket
+    panel (``RollingQuantile(window_size=28)``): this ran `np.concatenate`
+    once per ordinal (~36.5k times for that panel's aggregate table), which
+    made the narwhals engine 10-14% SLOWER than the legacy engine it replaces
+    (0.831s/1.037s vs 0.755s/0.910s, polars/pandas) despite computing the
+    identical numbers -- see the task-7 report's benchmark section for the
+    full before/after. The multi-chunk gather path is kept, unchanged, for
+    the strided (seasonal) case, which genuinely needs it.
+
+    Bit-identical either way: a "hole" ordinal inside a contiguous run (an
+    empty per-ordinal slice, from a densified gap or an all-NaN timestamp)
+    contributes a zero-width sub-range within the single slice, exactly as it
+    would contribute nothing to a concatenation of the same slices -- so this
+    is a pure performance change, not a numerical one; the `atol=0.0`
+    differential tests are the proof.
     """
     out = np.full(n_ordinals, np.nan)
+    if not offsets:
+        return out
+    o_min, o_max = min(offsets), max(offsets)
+    contiguous = sorted(offsets) == list(range(o_min, o_max + 1))
     for t in range(n_ordinals):
-        src = [t - o for o in offsets if 0 <= t - o < n_ordinals]
-        if not src:
-            continue
-        chunks = [
-            values[row_offsets[i] : row_offsets[i + 1]]
-            for i in src
-            if row_offsets[i + 1] > row_offsets[i]
-        ]
-        if not chunks:
-            continue
-        win = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        if contiguous:
+            lo = max(0, t - o_max)
+            hi = min(n_ordinals - 1, t - o_min)
+            if lo > hi:
+                continue
+            win = values[row_offsets[lo] : row_offsets[hi + 1]]
+        else:
+            src = [t - o for o in offsets if 0 <= t - o < n_ordinals]
+            if not src:
+                continue
+            chunks = [
+                values[row_offsets[i] : row_offsets[i + 1]]
+                for i in src
+                if row_offsets[i + 1] > row_offsets[i]
+            ]
+            if not chunks:
+                continue
+            win = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
         if len(win) >= min_samples and len(win) > 0:
             out[t] = np.quantile(win, p, method="linear")
     return out

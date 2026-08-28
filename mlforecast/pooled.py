@@ -316,48 +316,31 @@ class NarwhalsPooledState:
 
         Quantiles have no sufficient statistic (no aggregate reconstructs
         them), so this is the one family that reads raw values instead of an
-        expression over `self.agg`'s aggregate columns. Built and cached
-        lazily: `self._qvalues` must be invalidated (set back to ``None``)
-        anywhere `self.agg` changes shape (see `quantile_values`'s
-        docstring) -- currently only `_build`, since Task 7's states are
-        never densified/trimmed/appended.
+        expression over `self.agg`'s aggregate columns.
+
+        Two stores, selected per transform by its own `time_agg`:
+          * `time_agg is None`: the raw per-row store (`quantile_values`),
+            cached on `self._qvalues` -- must be invalidated (set back to
+            ``None``) anywhere `self.agg` changes shape (see
+            `quantile_values`'s docstring) -- currently only `_build`, since
+            Task 7's states are never densified/trimmed/appended.
+          * `time_agg` set: every row sharing a (bucket, timestamp) first
+            collapses to ONE value (the time_agg aggregate `v_t`) before the
+            window statistic runs -- exactly what legacy's own
+            `_compute_bucket_feature_collapsed` does for this family
+            (`quantile_values_collapsed`). Not cached across calls (cheap: a
+            single expression pass over `self.agg`, no join), but computed at
+            most once per distinct `time_agg` value within one call, shared
+            by every transform that needs it.
+        Both stores share the identical CSR (values, row_offsets) contract,
+        so the per-bucket windowing loop below is unchanged either way.
         """
-        from ._pooled_engine import quantile_feature, quantile_values
+        from ._pooled_engine import (
+            quantile_feature,
+            quantile_values,
+            quantile_values_collapsed,
+        )
 
-        # Not in the brief, added because it is a real, silently-wrong-number
-        # defect: `quantile_values` reads raw per-row target values, but
-        # `time_agg` means every row sharing a (bucket, timestamp) must first
-        # collapse to ONE value (the time_agg aggregate) before the window
-        # statistic runs -- exactly what legacy's own
-        # `_compute_bucket_feature_collapsed` does for this family. This
-        # store does not do that collapse. Verified silently wrong (not just
-        # theoretically): `RollingQuantile(window_size=3, groupby=["grp"],
-        # time_agg="sum")` on daily sums `[11,22,33,44,55,66]` must produce
-        # `[nan,nan,nan,22,33,44]` (the existing, unmodifiable
-        # `test_pooled.py::test_time_agg_quantile_slow_path_literal`) but
-        # this store instead produced `[nan,nan,6.,6.5,12.,17.5]` -- the
-        # median of raw per-row values, ignoring the sum collapse entirely.
-        # Fail loudly instead, matching the precedent set by
-        # `_guard_ewm_positional_shift` for a different unsupported
-        # combination in an otherwise-implemented family.
-        for name, tfm in transforms.items():
-            if tfm.time_agg is not None:
-                raise NotImplementedError(
-                    f"{type(tfm).__name__}(time_agg={tfm.time_agg!r}) (feature "
-                    f"{name!r}) is not yet supported by the narwhals pooled "
-                    "engine's quantile shim: quantiles read raw per-row target "
-                    "values (see `quantile_values`), and this store does not "
-                    "yet re-derive them from the time_agg-collapsed aggregate "
-                    "the way every other pooled family does. Run with "
-                    "MLFORECAST_POOLED_ENGINE=numpy for this combination."
-                )
-
-        if self._qvalues is None:
-            # agg is the ordinal-grid authority -- see quantile_values' docstring.
-            self._qvalues = quantile_values(
-                self._df, self.agg, self.keys, self.time_col, self._target_col
-            )
-        values, row_offsets = self._qvalues
         t = nw.from_native(self.agg, eager_only=True)
         bucket_of = (
             t.get_column(self.keys[0]).to_numpy()
@@ -365,8 +348,26 @@ class NarwhalsPooledState:
             else np.zeros(len(t), dtype=np.int64)
         )
         ords = t.get_column("ord").to_numpy()
+
+        stores = {}
+        for tfm in transforms.values():
+            ta = tfm.time_agg
+            if ta in stores:
+                continue
+            if ta is None:
+                if self._qvalues is None:
+                    # agg is the ordinal-grid authority -- see quantile_values'
+                    # docstring.
+                    self._qvalues = quantile_values(
+                        self._df, self.agg, self.keys, self.time_col, self._target_col
+                    )
+                stores[ta] = self._qvalues
+            else:
+                stores[ta] = quantile_values_collapsed(self.agg, ta)
+
         cols = {}
         for name, tfm in transforms.items():
+            values, row_offsets = stores[tfm.time_agg]
             ctx = _resolve_ctx(tfm, self.keys)
             out = np.full(len(t), np.nan)
             for b in np.unique(bucket_of):

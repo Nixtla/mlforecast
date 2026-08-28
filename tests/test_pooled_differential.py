@@ -962,22 +962,28 @@ def test_quantile_shim_matches_legacy_row_level_directly():
         )
 
 
-def test_quantile_time_agg_guard_fires_instead_of_silently_wrong_number():
-    """Not requested by the task-7 brief, added because it is a real defect
-    found while implementing this task: `NarwhalsPooledState._quantile_columns`
-    reads raw per-row target values, but `time_agg` requires collapsing every
-    row sharing a (bucket, timestamp) to ONE value first (the time_agg
-    aggregate) before the window statistic runs -- exactly what legacy's
-    `_compute_bucket_feature_collapsed` does for this family, and exactly
-    what the flat values+offsets store does NOT do. Uninstrumented, this
-    combination does not raise -- it silently returns the wrong number
-    (verified below via the same literal case as the pre-existing,
-    unmodifiable `test_pooled.py::test_time_agg_quantile_slow_path_literal`,
-    which cannot itself prove this: it always crashes first at Task 9's
-    un-wired predict-path `AttributeError`, before ever reaching its own
-    value assertion). The fix fails loudly instead, matching the precedent
-    set by `_guard_ewm_positional_shift` for a different unsupported
-    combination in an otherwise-implemented family."""
+def test_quantile_time_agg_slow_path_literal_matches_legacy_fit_values():
+    """Fix-round-1 regression: `time_agg` + quantile must be SUPPORTED (legacy
+    routes it through `_compute_bucket_feature_collapsed`), not refused. This
+    is the same literal scenario as the pre-existing, unmodifiable
+    `tests/test_pooled.py::test_time_agg_quantile_slow_path_literal`
+    (daily sums `[11,22,33,44,55,66]`, `RollingQuantile(window_size=3)` ->
+    `[nan,nan,nan,22,33,44]`), but calling the narwhals engine's FIT stage
+    directly (`_preprocess_with_engine`, no `_predict_setup`/
+    `_update_features`) so the assertion is actually reached: the real test
+    always crashes first at Task 9's un-wired predict-path `AttributeError`
+    (`state._ts_aggs`), before ever checking its own value assertion, so it
+    cannot itself prove the fit-stage number is right or wrong either way.
+
+    Revert-proof: with the (now-removed) `time_agg is not None: raise
+    NotImplementedError` guard restored, this errors instead of computing
+    `[nan, nan, nan, 22.0, 33.0, 44.0]`:
+        NotImplementedError: RollingQuantile(time_agg='sum') ... is not yet
+        supported by the narwhals pooled engine's quantile shim: ...
+    Before that guard existed at all, the same scenario silently returned
+    `[nan, nan, 6.0, 6.5, 12.0, 17.5]` (median of raw per-row values, ignoring
+    the sum collapse) -- see the guard commit for that transcript. With the
+    collapsed-store fix, it now matches the expected value exactly."""
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     dates = pl.datetime_range(
@@ -991,9 +997,52 @@ def test_quantile_time_agg_guard_fires_instead_of_silently_wrong_number():
             "grp": ["X"] * 12,
         }
     )
-    tfms = {1: [RollingQuantile(p=0.5, window_size=3, groupby=["grp"], time_agg="sum")]}
-    with pytest.raises(NotImplementedError, match="time_agg"):
-        _preprocess_with_engine("narwhals", df, tfms, ["grp"])
+    tfm = RollingQuantile(p=0.5, window_size=3, groupby=["grp"], time_agg="sum")
+    out = _preprocess_with_engine("narwhals", df, {1: [tfm]}, ["grp"])
+    out = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+    col = tfm._get_name(1)
+    got = (
+        out.filter(pl.col("unique_id") == "a")
+        .sort("ds")[col]
+        .cast(pl.Float64)
+        .to_numpy()
+    )
+    np.testing.assert_allclose(
+        got, [np.nan, np.nan, np.nan, 22.0, 33.0, 44.0], atol=0.0, equal_nan=True
+    )
+
+
+TIME_AGG_QUANTILES = [
+    (
+        "roll_q_ta_sum",
+        RollingQuantile(p=0.5, window_size=10, groupby=["store"], time_agg="sum"),
+    ),
+    (
+        "exp_q_ta_mean",
+        ExpandingQuantile(p=0.4, groupby=["store"], time_agg="mean"),
+    ),
+    (
+        "seas_q_ta_max",
+        SeasonalRollingQuantile(
+            p=0.6, season_length=5, window_size=3, groupby=["store"], time_agg="max"
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,tfm", TIME_AGG_QUANTILES, ids=[x[0] for x in TIME_AGG_QUANTILES]
+)
+def test_quantile_time_agg_engines_agree(backend, label, tfm):  # noqa: ARG001
+    """`time_agg` requested by the coordinator's fix-round-1: one case per
+    quantile family (`RollingQuantile`/`ExpandingQuantile`/
+    `SeasonalRollingQuantile`), each with a DIFFERENT `time_agg` value
+    (sum/mean/max) to exercise `_time_agg_value_expr`'s distinct branches, at
+    the family's usual `atol=0.0` (both engines run `np.quantile` on the same
+    time_agg-collapsed value multiset, so any difference is a windowing bug,
+    exactly as for the non-time_agg case)."""
+    assert_engines_agree(_panel(backend, n_times=90), {1: [tfm]}, ["store"], atol=0.0)
 
 
 def test_quantile_engines_agree_mixed_with_expression_transforms():

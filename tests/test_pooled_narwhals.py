@@ -357,3 +357,59 @@ def test_quantile_feature_matches_numpy_oracle():
     # ordinal 2 sees ordinals 1 and 0 -> values [2,3,0,1]
     assert got[2] == pytest.approx(np.quantile([2.0, 3.0, 0.0, 1.0], 0.5))
     assert np.isnan(got[0]) and np.isnan(got[1]), "warm-up below min_samples"
+
+
+def _naive_quantile_feature(values, row_offsets, n_ordinals, offsets, p, min_samples):
+    """Reference oracle: always gathers per-ordinal chunks and concatenates,
+    never takes the single-slice contiguous fast path. Used to prove the
+    fix-round-1 performance change (single-slice for contiguous offsets) is
+    bit-identical to the always-gather form it replaces, on both contiguous
+    (rolling/expanding) and strided (seasonal) offset shapes."""
+    out = np.full(n_ordinals, np.nan)
+    for t in range(n_ordinals):
+        src = [t - o for o in offsets if 0 <= t - o < n_ordinals]
+        if not src:
+            continue
+        chunks = [
+            values[row_offsets[i] : row_offsets[i + 1]]
+            for i in src
+            if row_offsets[i + 1] > row_offsets[i]
+        ]
+        if not chunks:
+            continue
+        win = chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+        if len(win) >= min_samples and len(win) > 0:
+            out[t] = np.quantile(win, p, method="linear")
+    return out
+
+
+@pytest.mark.parametrize(
+    "offsets,label",
+    [
+        (list(range(1, 15)), "contiguous_rolling"),
+        (list(range(1, 40)), "contiguous_expanding"),
+        ([1, 3, 5, 7], "strided_seasonal"),
+        ([2, 5, 6, 7], "non_contiguous_arbitrary"),
+    ],
+)
+def test_quantile_feature_contiguous_fast_path_matches_naive_gather(offsets, label):  # noqa: ARG001
+    """Fix-round-1 performance change: `quantile_feature` takes a single-slice
+    fast path when `offsets` is contiguous (rolling/expanding) instead of
+    gathering and `np.concatenate`-ing one chunk per contributing ordinal.
+    Proves BIT-IDENTICAL output against the always-gather reference
+    (`_naive_quantile_feature`) on a randomized, gappy value store, for both
+    a contiguous and a strided offset shape -- not just close, `atol=0.0`,
+    since this must be a pure performance change, never a numerical one."""
+    rng = np.random.default_rng(0)
+    n_ordinals = 60
+    # variable, sometimes-zero counts per ordinal (holes), like a real store
+    counts = rng.integers(0, 4, size=n_ordinals)
+    row_offsets = np.zeros(n_ordinals + 1, dtype=np.intp)
+    np.cumsum(counts, out=row_offsets[1:])
+    values = rng.normal(size=int(row_offsets[-1]))
+
+    got_fast = quantile_feature(values, row_offsets, n_ordinals, offsets, 0.5, 2)
+    got_naive = _naive_quantile_feature(
+        values, row_offsets, n_ordinals, offsets, 0.5, 2
+    )
+    np.testing.assert_array_equal(got_fast, got_naive)
