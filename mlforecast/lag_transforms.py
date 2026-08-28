@@ -416,6 +416,17 @@ class LookupLag(_BaseLagTransform):
         self._core_tfm = core_tfms.Lag(lag=lag)
         return self
 
+    def _pooled_expr(self, ctx):
+        # `lag` here counts OCCURRENCES, not calendar ordinals: legacy
+        # `_compute_latest_from_aggs` indexes `agg.sums[-lag]` positionally
+        # into the bucket's observed timestamps. The aggregate table is
+        # SPARSE (one row per observed (bucket, timestamp)), so a positional
+        # `.shift()` over it is exactly that -- this state must never be
+        # densified (holes would turn the occurrence lag into an ordinal lag;
+        # see Task 8's `from_partition`).
+        num, den = ctx.shift("s", ctx.lag), ctx.shift("c", ctx.lag)
+        return nw.when(den > 0).then(num / den)
+
     def _get_name(self, lag: int) -> str:
         prefix = ""
         if self.partition_by:
@@ -1206,6 +1217,22 @@ class SeasonalRollingStd(_Seasonal_RollingBase):
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
     def _pooled_expr(self, ctx):
+        """Known limitation: diverges from legacy at extreme magnitude.
+
+        At extreme magnitude with near-constant values, this aggregate
+        formulation (variance from raw ``sum``/``sum_sq``) disagrees with the
+        legacy engine -- measured up to 1863x, 174/174 rows in the seasonal
+        differential regression. Legacy ``SeasonalRollingStd._seasonal_stat``
+        calls ``np.std(vals, ddof=1)`` directly on the raw values (numerically
+        stable) and seasonal has no legacy aggregate fast path, whereas
+        ``RollingStd``/``ExpandingStd``'s legacy paths share this same
+        unstable ``sq - num**2/cnt`` formula and therefore agree with us. Not
+        fixable by any clip/abs choice at this site -- see
+        ``test_seasonal_rolling_std_large_magnitude_cancellation_clips_to_zero``.
+        Follow-up remedy identified but not implemented: a shifted-data
+        variance centered on a per-bucket reference value, applied per
+        offset-family, rather than the raw two-moment formula.
+        """
         offs = self._pooled_offsets(ctx)
         cnt = self._pooled_count(ctx)
         num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
@@ -1715,6 +1742,24 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
                 stacklevel=2,
             )
 
+    _pooled_accumulate = ("ewm", "ewm_mean")
+
+    def _pooled_accumulate_kwargs(self):
+        # All three are REQUIRED by grouped_accumulate -- it refuses to guess,
+        # because both backends' defaults diverge silently from legacy:
+        #   adjust=False      -> recursive unadjusted fold seeded with the
+        #                        first observation, matching _ewm_from_agg.
+        #                        adjust=True is wrong by 6.7e-01.
+        #   ignore_nulls=True -> legacy skips missing entries. polars defaults
+        #                        to False, which is wrong (3.1667 vs 3.0 on
+        #                        [1, None, 3, 4] with alpha=0.5).
+        return {"alpha": self.alpha, "adjust": False, "ignore_nulls": True}
+
+    def _pooled_expr(self, ctx):
+        # EWM is not invertible (no prefix-sum decomposition), so it goes
+        # through the accumulate shim instead of a derived window expression.
+        return ctx.shift("Aewm", ctx.lag)
+
     @property
     def update_samples(self) -> int:
         return 1
@@ -1856,6 +1901,16 @@ class Offset(_BaseLagTransform):
     def _get_configured_lag(self) -> int:
         return self.tfm._get_configured_lag() - self.n
 
+    def _pooled_expr(self, ctx):
+        # `_set_core_tfm` above already gave the inner transform the lag + n
+        # core tfm (verified: `self.tfm._core_tfm.lag == lag + self.n`), and
+        # Offset does not mirror `time_agg` onto itself (only the inner
+        # transform's own `time_agg` matters), so rebuild the ctx from the
+        # INNER transform rather than adjusting this one.
+        from .pooled import _resolve_ctx
+
+        return self.tfm._pooled_expr(_resolve_ctx(self.tfm, ctx.keys))
+
     @property
     def update_samples(self) -> int:
         return self.tfm.update_samples + self.n
@@ -1934,6 +1989,31 @@ class Combine(_BaseLagTransform):
         lag1 = getattr(self.tfm1, "lag", lag)
         lag2 = getattr(self.tfm2, "lag", lag)
         return f"{self.tfm1._get_name(lag1)}_{self.operator.__name__}_{self.tfm2._get_name(lag2)}"
+
+    def _pooled_expr(self, ctx):
+        # DEVIATION from the brief's verbatim code (`e1 = self.tfm1._pooled_expr(ctx)`
+        # reusing the outer ctx directly): that reads `ctx.min_samples` and
+        # `ctx.time_agg` as resolved for the outer Combine instance, via
+        # `_resolve_ctx(combine_tfm, keys)` in `feature_frame`. Combine has no
+        # `window_size`, so `_resolve_ctx` falls back to `min_samples=1` for
+        # BOTH inner transforms regardless of their own window sizes, and
+        # Combine's own `time_agg` is always the class default `None`
+        # regardless of tfm1/tfm2's own settings (each applies its own
+        # re-aggregation, per this class's docstring). Verified wrong two
+        # ways: `test_misc_transforms_engines_agree[combine-*]` failed
+        # (RollingMean(7)/RollingMean(14) used min_samples=1 for both,
+        # instead of 7 and 14), and the existing
+        # `test_time_agg_combine_mixed` (sum-family / mean-family, expected
+        # ratio 2.0) silently returned 1.0 -- both inner transforms fell back
+        # to the same unsuffixed raw columns. Rebuilding the ctx per inner
+        # transform, the same way Offset does, fixes both.
+        from .pooled import _resolve_ctx
+
+        e1 = self.tfm1._pooled_expr(_resolve_ctx(self.tfm1, ctx.keys))
+        e2 = self.tfm2._pooled_expr(_resolve_ctx(self.tfm2, ctx.keys))
+        if e1 is None or e2 is None:
+            return None
+        return self.operator(e1, e2)
 
     def transform(self, ga: CoreGroupedArray) -> np.ndarray:
         return self.operator(self.tfm1.transform(ga), self.tfm2.transform(ga))

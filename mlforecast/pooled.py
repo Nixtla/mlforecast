@@ -68,6 +68,32 @@ def _resolve_ctx(tfm, keys):
     )
 
 
+def _iter_leaf_tfms(tfm):
+    """Yield the pooled leaf transform(s) a composite wrapper delegates to.
+
+    ``Offset`` and ``Combine`` compute their pooled expression by calling
+    into inner transform(s), each of which may carry its OWN ``time_agg`` /
+    ``_pooled_accumulate`` requirement -- independent of the wrapper's own
+    attributes, which always read as the class default (``time_agg=None``,
+    no ``_pooled_accumulate``). ``ensure_time_aggs``/``ensure_accumulates``
+    must see every inner transform's real requirement, not just the outer
+    wrapper's always-trivial one, or the suffixed column family an inner
+    transform needs is silently never built. Recurses to handle arbitrary
+    nesting (e.g. ``Offset(Combine(...))``).
+    """
+    tfm1 = getattr(tfm, "tfm1", None)
+    tfm2 = getattr(tfm, "tfm2", None)
+    if tfm1 is not None and tfm2 is not None:
+        yield from _iter_leaf_tfms(tfm1)
+        yield from _iter_leaf_tfms(tfm2)
+        return
+    inner = getattr(tfm, "tfm", None)
+    if inner is not None:
+        yield from _iter_leaf_tfms(inner)
+        return
+    yield tfm
+
+
 class NarwhalsPooledState:
     """Pooled state as a single aggregate table.
 
@@ -179,16 +205,27 @@ class NarwhalsPooledState:
                 self._df, self.keys, self.time_col, self._target_col, self._time_aggs
             )
 
-    def ensure_accumulates(self, transforms):
-        """Materialize ``A<col>`` columns for transforms needing a running min/max.
+    def ensure_accumulates(self, leaf_tfms):
+        """Materialize ``A<col>`` columns for transforms needing a running min/max/ewm.
 
         Not expressible as a narwhals expression (``cum_min``/``cum_max`` cannot
         take ``.over()`` on pandas), so it goes through the shim.
+
+        The accumulate op alone doesn't identify the column: ``ewm_mean`` also
+        needs ``alpha``/``adjust``/``ignore_nulls`` (see
+        ``ExponentiallyWeightedMean._pooled_accumulate_kwargs`` and
+        ``grouped_accumulate``'s docstring for why no default is safe), so the
+        dedup key includes the transform's kwargs alongside the column and op.
+
+        ``leaf_tfms`` is an iterable of already-flattened leaf transforms (see
+        ``_iter_leaf_tfms``): a composite (``Offset``/``Combine``) transform
+        itself never carries ``_pooled_accumulate``, only its inner
+        transform(s) do.
         """
         from ._pooled_engine import grouped_accumulate
 
         need = {}
-        for tfm in transforms.values():
+        for tfm in leaf_tfms:
             spec = getattr(tfm, "_pooled_accumulate", None)
             if spec is None:
                 continue
@@ -196,26 +233,46 @@ class NarwhalsPooledState:
             suffix = (
                 "" if getattr(tfm, "time_agg", None) is None else f"__{tfm.time_agg}"
             )
-            need[(f"{base}{suffix}", op)] = f"A{base}{suffix}"
+            kw = (
+                tfm._pooled_accumulate_kwargs()
+                if hasattr(tfm, "_pooled_accumulate_kwargs")
+                else {}
+            )
+            need[(f"{base}{suffix}", op, tuple(sorted(kw.items())))] = (
+                f"A{base}{suffix}"
+            )
         present = set(nw.from_native(self.agg, eager_only=True).columns)
-        for (col, op), out in need.items():
+        for (col, op, kw_items), out in need.items():
             if out in present:
                 continue
+            kw = dict(kw_items)
             if self.keys:
-                self.agg = grouped_accumulate(self.agg, self.keys, [col], op, [out])
+                self.agg = grouped_accumulate(
+                    self.agg, self.keys, [col], op, [out], **kw
+                )
             else:
+                # Single implicit bucket (global_ mode, no keys): apply the op
+                # directly and forward-fill, mirroring `grouped_accumulate`'s
+                # documented invariant (gap ordinals carry the previous
+                # running value) for the un-partitioned case too.
                 self.agg = (
                     nw.from_native(self.agg, eager_only=True)
-                    .with_columns(getattr(nw.col(col), op)().alias(out))
+                    .with_columns(
+                        getattr(nw.col(col), op)(**kw)
+                        .fill_null(strategy="forward")
+                        .alias(out)
+                    )
                     .to_native()
                 )
 
     def feature_frame(self, transforms: Dict[str, Any]):
         """Evaluate every transform's expression in one pass over the table."""
-        self.ensure_time_aggs(
-            {getattr(t, "time_agg", None) for t in transforms.values()}
-        )
-        self.ensure_accumulates(transforms)
+        # Flatten composites (Offset/Combine) so their INNER transforms' own
+        # time_agg/accumulate requirements are seen -- the wrapper itself
+        # always reports the trivial default. See `_iter_leaf_tfms`.
+        leaves = [leaf for t in transforms.values() for leaf in _iter_leaf_tfms(t)]
+        self.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
+        self.ensure_accumulates(leaves)
         t = nw.from_native(self.agg, eager_only=True)
         exprs = []
         for name, tfm in transforms.items():

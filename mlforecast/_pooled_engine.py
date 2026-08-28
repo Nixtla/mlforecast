@@ -217,6 +217,23 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
     if derived:
         tbl = tbl.with_columns(derived)
 
+    # `ewm` is the per-timestamp mean of the bucket -- the value `_ewm_from_agg`
+    # folds over. Not part of the prefix-sum family below (it's consumed via
+    # `ensure_accumulates`'s `ewm_mean` shim, not a cumulative sum), so it is
+    # materialized here, once for the raw table and once per `time_agg` family
+    # (mirroring the "mean" derivation already used for the `time_agg="mean"`
+    # column: EWM's own `time_agg` defaults to "mean", so most callers select
+    # the suffixed variant, not this bare one).
+    tbl = tbl.with_columns(
+        nw.when(nw.col("c") > 0).then(nw.col("s") / nw.col("c")).alias("ewm")
+    )
+    for a in sorted(x for x in time_aggs if x is not None):
+        tbl = tbl.with_columns(
+            nw.when(nw.col(f"c__{a}") > 0)
+            .then(nw.col(f"s__{a}") / nw.col(f"c__{a}"))
+            .alias(f"ewm__{a}")
+        )
+
     for suffix in [""] + [
         f"__{a}" for a in sorted(x for x in time_aggs if x is not None)
     ]:

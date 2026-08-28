@@ -6,6 +6,7 @@ file proves the two engines agree, so any divergence names itself.
 """
 
 import importlib
+import operator
 import os
 
 import numpy as np
@@ -15,10 +16,14 @@ from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
 from mlforecast.lag_transforms import (
+    Combine,
     ExpandingMax,
     ExpandingMean,
     ExpandingMin,
     ExpandingStd,
+    ExponentiallyWeightedMean,
+    LookupLag,
+    Offset,
     RollingMax,
     RollingMean,
     RollingMin,
@@ -613,3 +618,103 @@ def test_seasonal_rolling_std_large_magnitude_cancellation_clips_to_zero(backend
     neg_dates = _seasonal_negative_residue_dates(df_pl, tfm, min_samples=2)
     tfms = {1: [tfm]}
     _assert_narwhals_clips_to_zero_at(df_pl, tfms, neg_dates, backend)
+
+
+MISC = [
+    ("ewm", ExponentiallyWeightedMean(alpha=0.3, groupby=["store"])),
+    ("offset", Offset(RollingMean(7, groupby=["store"]), n=2)),
+    (
+        "combine",
+        Combine(
+            RollingMean(7, groupby=["store"]),
+            RollingMean(14, groupby=["store"]),
+            operator.truediv,
+        ),
+    ),
+]
+
+TIME_AGGS = [
+    ("ta_sum", RollingMean(7, groupby=["store"], time_agg="sum")),
+    ("ta_mean", RollingMean(7, groupby=["store"], time_agg="mean")),
+    ("ta_count", RollingMean(7, groupby=["store"], time_agg="count")),
+    ("ta_min", RollingMean(7, groupby=["store"], time_agg="min")),
+    ("ta_max", RollingMean(7, groupby=["store"], time_agg="max")),
+    ("ta_std", RollingStd(14, groupby=["store"], time_agg="sum")),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("label,tfm", MISC, ids=[x[0] for x in MISC])
+def test_misc_transforms_engines_agree(backend, label, tfm):  # noqa: ARG001
+    assert_engines_agree(_panel(backend), {1: [tfm]}, ["store"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("label,tfm", TIME_AGGS, ids=[x[0] for x in TIME_AGGS])
+def test_time_agg_engines_agree(backend, label, tfm):  # noqa: ARG001
+    assert_engines_agree(_panel(backend), {1: [tfm]}, ["store"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_mixed_time_aggs_in_one_state_agree(backend):
+    """One state, several time_aggs -> several suffixed column families."""
+    assert_engines_agree(
+        _panel(backend),
+        {
+            1: [
+                RollingMean(7, groupby=["store"]),
+                RollingMean(7, groupby=["store"], time_agg="sum"),
+                RollingMean(7, groupby=["store"], time_agg="mean"),
+            ]
+        },
+        ["store"],
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_lookup_lag_pooled_expr_is_positional_on_sparse_table(backend):
+    """``LookupLag`` has no narwhals state-building path yet: partition_by
+    states always build a legacy ``PooledState`` regardless of
+    ``MLFORECAST_POOLED_ENGINE`` (``core.py`` builds every partition-mode
+    state via the hardcoded ``PooledState.from_partition``, not the
+    engine-dispatched ``_pooled_state_cls()`` -- Task 8 adds a narwhals
+    ``from_partition``). So ``assert_engines_agree`` through the full
+    ``MLForecast`` pipeline would only ever compare legacy against legacy and
+    never invoke ``LookupLag._pooled_expr`` at all -- it would pass whether or
+    not the expression exists, which is not evidence of anything.
+
+    Exercise the expression directly against a hand-built SPARSE
+    (bucket, timestamp) table instead -- one row per *observed* timestamp,
+    with real gaps in the calendar -- and confirm the lag counts occurrences
+    (row position within the bucket), not calendar ordinals: shifting by
+    ``lag`` skips the missing ordinals entirely, exactly matching legacy
+    ``_compute_latest_from_aggs``'s positional ``agg.sums[-lag]`` indexing.
+    """
+    import narwhals as nw
+
+    from mlforecast._pooled_engine import PooledCtx
+
+    # bucket "a": 4 observed rows (real ordinals 0, 1, 3, 6 -- gaps at 2, 4, 5,
+    # but the table only ever stores observed rows, so those gaps are simply
+    # absent, not nulled).
+    # bucket "b": 2 observed rows.
+    data = {
+        "bucket": ["a", "a", "a", "a", "b", "b"],
+        "s": [10.0, 20.0, 30.0, 40.0, 100.0, 200.0],
+        "c": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    }
+    df = pl.DataFrame(data) if backend == "polars" else pl.DataFrame(data).to_pandas()
+
+    tfm = LookupLag(partition_by=["dummy"])
+    ctx = PooledCtx(keys=["bucket"], lag=2, min_samples=1)
+    t = nw.from_native(df, eager_only=True)
+    expr = tfm._pooled_expr(ctx)
+    assert expr is not None, "LookupLag must implement _pooled_expr"
+    out = t.with_columns(expr.alias("feat")).to_native()
+    out_pl = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+    got = out_pl["feat"].to_numpy()
+
+    # Row i's feature is row (i - lag)'s value, purely by position within the
+    # bucket -- 2 occurrences back, not 2 calendar steps back.
+    expected = np.array([np.nan, np.nan, 10.0, 20.0, np.nan, np.nan])
+    np.testing.assert_allclose(got, expected, equal_nan=True)
