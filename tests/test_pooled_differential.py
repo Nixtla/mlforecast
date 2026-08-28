@@ -134,8 +134,36 @@ def test_rolling_std_window1_min_samples1_no_inf(backend):
     min_samples=1)` is a legal, reachable public-API configuration where
     `cnt == 1` is the common case. The pooled expression must mask on
     `cnt > 1`, matching legacy's own `(win_cnt >= min_samples) & (win_cnt >
-    1)`."""
-    df = _panel(backend, n_series=12, n_times=30, n_groups=4)
+    1)`.
+
+    ONE SERIES PER BUCKET IS REQUIRED: with window_size=1, lag=1, the count
+    at ordinal t is the number of observations at ordinal t-1 WITHIN THE
+    BUCKET -- i.e. the number of series sharing that bucket. A fixture with
+    multiple series per store (e.g. the earlier, broken version of this test:
+    n_series=12, n_groups=4, 3 series/bucket) has cnt in {0, 3} and NEVER
+    reaches cnt==1, so it cannot exercise the bug at all -- verified by a
+    reviewer monkeypatching RollingStd back to the pre-fix code and getting a
+    PASS. n_series=n_groups below gives store=i%n_groups exactly one series
+    per bucket, so cnt in {0, 1}."""
+    import narwhals as nw
+
+    from mlforecast._pooled_engine import PooledCtx, build_agg_table
+
+    n_series = 8
+    df = _panel(backend, n_series=n_series, n_times=30, n_groups=n_series)
+
+    # Verify the fixture actually reaches cnt == 1 on the real aggregate
+    # table, so this test cannot silently stop biting again if the fixture
+    # ever changes.
+    tbl = build_agg_table(df, ["store"], "ds", "y", {None})
+    ctx = PooledCtx(keys=["store"], lag=1, min_samples=1, time_agg=None)
+    cnt_vals = set(
+        nw.from_native(tbl, eager_only=True)
+        .with_columns(ctx.window("c", 1).alias("cnt"))["cnt"]
+        .to_list()
+    )
+    assert 1.0 in cnt_vals, f"fixture never reaches cnt == 1: {cnt_vals}"
+
     tfms = {1: [RollingStd(1, min_samples=1, groupby=["store"])]}
     b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
     b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
