@@ -179,11 +179,43 @@ class NarwhalsPooledState:
                 self._df, self.keys, self.time_col, self._target_col, self._time_aggs
             )
 
+    def ensure_accumulates(self, transforms):
+        """Materialize ``A<col>`` columns for transforms needing a running min/max.
+
+        Not expressible as a narwhals expression (``cum_min``/``cum_max`` cannot
+        take ``.over()`` on pandas), so it goes through the shim.
+        """
+        from ._pooled_engine import grouped_accumulate
+
+        need = {}
+        for tfm in transforms.values():
+            spec = getattr(tfm, "_pooled_accumulate", None)
+            if spec is None:
+                continue
+            base, op = spec
+            suffix = (
+                "" if getattr(tfm, "time_agg", None) is None else f"__{tfm.time_agg}"
+            )
+            need[(f"{base}{suffix}", op)] = f"A{base}{suffix}"
+        present = set(nw.from_native(self.agg, eager_only=True).columns)
+        for (col, op), out in need.items():
+            if out in present:
+                continue
+            if self.keys:
+                self.agg = grouped_accumulate(self.agg, self.keys, [col], op, [out])
+            else:
+                self.agg = (
+                    nw.from_native(self.agg, eager_only=True)
+                    .with_columns(getattr(nw.col(col), op)().alias(out))
+                    .to_native()
+                )
+
     def feature_frame(self, transforms: Dict[str, Any]):
         """Evaluate every transform's expression in one pass over the table."""
         self.ensure_time_aggs(
             {getattr(t, "time_agg", None) for t in transforms.values()}
         )
+        self.ensure_accumulates(transforms)
         t = nw.from_native(self.agg, eager_only=True)
         exprs = []
         for name, tfm in transforms.items():

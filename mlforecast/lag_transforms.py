@@ -758,6 +758,15 @@ def _rolling_std_from_agg(agg, lag, window_size, min_samples):
 
 
 class RollingStd(_RollingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", self.window_size)
+        num = ctx.window("s", self.window_size)
+        sq = ctx.window("q", self.window_size)
+        # sample variance from the running sums; abs() guards a tiny negative
+        # from cancellation when every value in the window is identical
+        var = ((sq - num * num / cnt) / (cnt - 1)).abs()
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(var.sqrt())
+
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
@@ -848,6 +857,16 @@ def _rolling_max_from_agg(agg, lag, window_size, min_samples):
 
 
 class RollingMin(_RollingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", self.window_size)
+        vals = [
+            ctx.shift("mn", k).alias(f"_mn{k}")
+            for k in range(ctx.lag, ctx.lag + self.window_size)
+        ]
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(
+            nw.min_horizontal(*vals)
+        )
+
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
@@ -905,6 +924,16 @@ class RollingMin(_RollingBase):
 
 
 class RollingMax(_RollingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", self.window_size)
+        vals = [
+            ctx.shift("mx", k).alias(f"_mx{k}")
+            for k in range(ctx.lag, ctx.lag + self.window_size)
+        ]
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(
+            nw.max_horizontal(*vals)
+        )
+
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
 
@@ -1299,6 +1328,11 @@ def _expanding_mean_from_agg(agg, lag):
 
 
 class ExpandingMean(_ExpandingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", None)
+        num = ctx.window("s", None)
+        return nw.when(cnt >= 1).then(num / cnt)
+
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.mean(vals))
 
@@ -1352,6 +1386,13 @@ def _expanding_std_from_agg(agg, lag):
 
 
 class ExpandingStd(_ExpandingBase):
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", None)
+        num = ctx.window("s", None)
+        sq = ctx.window("q", None)
+        var = ((sq - num * num / cnt) / (cnt - 1)).abs()
+        return nw.when(cnt >= 2).then(var.sqrt())
+
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
@@ -1410,6 +1451,12 @@ def _expanding_max_from_agg(agg, lag):
 
 
 class ExpandingMin(_ExpandingBase):
+    _pooled_accumulate = ("mn", "cum_min")
+
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", None)
+        return nw.when(cnt >= 1).then(ctx.shift("Amn", ctx.lag))
+
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.min(vals))
 
@@ -1444,6 +1491,12 @@ class ExpandingMin(_ExpandingBase):
 
 
 class ExpandingMax(_ExpandingBase):
+    _pooled_accumulate = ("mx", "cum_max")
+
+    def _pooled_expr(self, ctx):
+        cnt = ctx.window("c", None)
+        return nw.when(cnt >= 1).then(ctx.shift("Amx", ctx.lag))
+
     def _expanding_stat(self, vals: np.ndarray) -> float:
         return float(np.max(vals))
 
