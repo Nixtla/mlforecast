@@ -94,8 +94,14 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
                 for c, o in zip(cols, out_names)
             ]
         else:
+            # forward_fill for cum_min/cum_max too: legacy uses
+            # np.fmin.accumulate / np.fmax.accumulate, which IGNORE NaN and so
+            # carry the running extremum THROUGH a gap ordinal. polars'
+            # cum_min/cum_max and pandas' cummin/cummax leave that position
+            # null, emitting a null feature exactly one row after any gap.
+            # Same defect class as the ewm path.
             exprs = [
-                getattr(pl.col(c), op)().over(keys).alias(o)
+                getattr(pl.col(c), op)().forward_fill().over(keys).alias(o)
                 for c, o in zip(cols, out_names)
             ]
         return frame_native.with_columns(exprs)
@@ -116,6 +122,10 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
         acc = getattr(gb[list(cols)], method)()
         for c, o in zip(cols, out_names):
             out[o] = acc[c].to_numpy()
+        # forward-fill within each group, same reason as the polars branch
+        out[list(out_names)] = out.groupby(keys, sort=False, observed=True)[
+            list(out_names)
+        ].ffill()
     return out
 
 

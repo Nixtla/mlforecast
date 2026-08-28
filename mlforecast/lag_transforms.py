@@ -762,10 +762,16 @@ class RollingStd(_RollingBase):
         cnt = ctx.window("c", self.window_size)
         num = ctx.window("s", self.window_size)
         sq = ctx.window("q", self.window_size)
-        # sample variance from the running sums; abs() guards a tiny negative
-        # from cancellation when every value in the window is identical
-        var = ((sq - num * num / cnt) / (cnt - 1)).abs()
-        return nw.when((cnt >= ctx.min_samples) & (cnt > 0)).then(var.sqrt())
+        # sample variance from the running sums, clamped at 0: a cancellation
+        # residue from subtracting large prefix sums can go slightly negative
+        # (legacy uses np.maximum(var, 0.0), not abs() -- abs() turns a
+        # -1e-16 residue into sqrt(1e-16) = 1e-8, well outside atol=1e-10)
+        var = ((sq - num * num / cnt) / (cnt - 1)).clip(lower_bound=0.0)
+        # cnt > 1, not cnt > 0: at cnt == 1 the numerator is not exactly 0 due
+        # to the same cancellation residue, so dividing by (cnt - 1) == 0 gives
+        # +-inf, not NaN -- legacy's own mask is `(win_cnt >= min_samples) &
+        # (win_cnt > 1)` for exactly this reason.
+        return nw.when((cnt >= ctx.min_samples) & (cnt > 1)).then(var.sqrt())
 
     def _window_stat(self, vals: np.ndarray) -> float:
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
@@ -1390,7 +1396,9 @@ class ExpandingStd(_ExpandingBase):
         cnt = ctx.window("c", None)
         num = ctx.window("s", None)
         sq = ctx.window("q", None)
-        var = ((sq - num * num / cnt) / (cnt - 1)).abs()
+        # clip, not abs() -- see RollingStd._pooled_expr for why; cnt >= 2
+        # already implies cnt > 1, so no separate guard is needed here.
+        var = ((sq - num * num / cnt) / (cnt - 1)).clip(lower_bound=0.0)
         return nw.when(cnt >= 2).then(var.sqrt())
 
     def _expanding_stat(self, vals: np.ndarray) -> float:

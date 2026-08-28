@@ -254,6 +254,47 @@ def test_grouped_accumulate_ewm_mean_forward_fills_gaps_per_bucket():
         assert got_b1[1:] == pytest.approx(want_b1[1:]), f"{backend}: bucket 1 mismatch"
 
 
+def test_grouped_accumulate_cum_min_forward_fills_gaps_per_bucket():
+    """Legacy `_expanding_min_from_agg` is `np.fmin.accumulate(agg.mins)`;
+    `np.fmin` IGNORES NaN, so the running minimum carries THROUGH a gap
+    ordinal. polars' `cum_min` and pandas' `cummin` instead leave that exact
+    position null, so `grouped_accumulate(..., "cum_min", ...)` must
+    forward-fill to match -- same defect class as the ewm_mean case above.
+    Two buckets, the second STARTING with a gap, so a frame-level (rather
+    than per-bucket) ffill would wrongly carry bucket 0's trailing minimum
+    into bucket 1's leading gap instead of leaving it null (no observation
+    yet in that bucket)."""
+    # bucket 0: [5.0, None, 2.0, None, 8.0, 1.0] -> running min
+    #   [5.0, 5.0, 2.0, 2.0, 2.0, 1.0]
+    # bucket 1: [None, 10.0, None, None, 3.0, None] -- starts with a gap, so
+    # bucket 1's first row must stay null (no observation yet in THIS
+    # bucket), not inherit bucket 0's final running min of 1.0.
+    rows = []
+    b0_y = [5.0, None, 2.0, None, 8.0, 1.0]
+    b1_y = [None, 10.0, None, None, 3.0, None]
+    for t, y in enumerate(b0_y):
+        rows.append(("s0", t, 0, y))
+    for t, y in enumerate(b1_y):
+        rows.append(("s1", t, 1, y))
+    df = pl.DataFrame(rows, schema=["unique_id", "ds", "store", "y"], orient="row")
+
+    want_b0 = [5.0, 5.0, 2.0, 2.0, 2.0, 1.0]
+    want_b1 = [None, 10.0, 10.0, 10.0, 3.0, 3.0]
+
+    for backend in BACKENDS:
+        src = df if backend == "polars" else df.to_pandas()
+        out = grouped_accumulate(src, ["store"], ["y"], "cum_min", ["Amn"])
+        o = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+        o = o.sort(["store", "ds"])
+        got_b0 = o.filter(pl.col("store") == 0)["Amn"].to_list()
+        got_b1 = o.filter(pl.col("store") == 1)["Amn"].to_list()
+        assert got_b0 == pytest.approx(want_b0), f"{backend}: bucket 0 mismatch"
+        assert got_b1[0] is None, (
+            f"{backend}: bucket 1 must not inherit bucket 0's tail minimum"
+        )
+        assert got_b1[1:] == pytest.approx(want_b1[1:]), f"{backend}: bucket 1 mismatch"
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_ctx_col_respects_time_agg_suffix(backend):  # noqa: ARG001 (parametrized for uniformity; backend-independent)
     plain = PooledCtx(keys=["store"], lag=1, min_samples=7, time_agg=None)
