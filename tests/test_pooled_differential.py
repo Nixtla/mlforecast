@@ -718,3 +718,81 @@ def test_lookup_lag_pooled_expr_is_positional_on_sparse_table(backend):
     # bucket -- 2 occurrences back, not 2 calendar steps back.
     expected = np.array([np.nan, np.nan, 10.0, 20.0, np.nan, np.nan])
     np.testing.assert_allclose(got, expected, equal_nan=True)
+
+
+GLOBAL_ACCUMULATE = [
+    ("expanding_min_global", ExpandingMin(global_=True)),
+    ("expanding_max_global", ExpandingMax(global_=True)),
+    ("ewm_global", ExponentiallyWeightedMean(alpha=0.4, global_=True)),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,tfm", GLOBAL_ACCUMULATE, ids=[x[0] for x in GLOBAL_ACCUMULATE]
+)
+def test_global_mode_accumulate_engines_agree(backend, label, tfm):  # noqa: ARG001
+    """The `global_=True` (no ``keys``) branch of ``ensure_accumulates`` --
+    the one this task's fix touched. Before the fix it called the
+    accumulate op with NO kwargs at all (silently using backend-native
+    ``ewm_mean`` defaults instead of the required
+    ``alpha``/``adjust``/``ignore_nulls``); the first attempted fix then
+    called a `.forward_fill()` that doesn't exist on a narwhals `Expr`
+    (`AttributeError`). Nothing else in this suite exercises this branch:
+    every other case uses `groupby=["store"]`, which goes through
+    `grouped_accumulate` instead. Passing `statics=[]` (no static features)
+    is required for `global_=True` to fit at all.
+    """
+    assert_engines_agree(_panel(backend), {1: [tfm]}, [])
+
+
+def test_ewm_positional_shift_guard_fires_for_gapped_partition_lag_gt_1():
+    """Runtime backstop for the defect in
+    ``ExponentiallyWeightedMean._pooled_expr``: it shifts by row POSITION,
+    which only matches legacy's calendar-ORDINAL threshold fold when the
+    bucket is dense (``global_``/``groupby`` modes, which legacy renumbers to
+    ``0..n-1``) or when ``lag == 1``. A ``partition_by`` state keeps real,
+    non-renumbered parent-calendar ordinals and can be gapped -- measured:
+    at ``lag=2`` on a gapped partition bucket this expression returns
+    11.0/31.0 where legacy returns 16.0/36.0, a silent wrong number on both
+    backends.
+
+    No ``partition_by`` state is ever built through ``NarwhalsPooledState``
+    today (``core.py`` routes every ``partition_by`` key through the legacy
+    ``PooledState.from_partition`` regardless of engine), so this can't be
+    reached through the real ``MLForecast`` pipeline yet -- construct a
+    minimal state directly, with ``mode="nonlocal"`` (what a future
+    ``partition_by`` wiring would use), and confirm
+    ``NarwhalsPooledState.feature_frame`` refuses rather than silently
+    computing a wrong number. Also confirm the two cases that must NOT
+    raise: ``lag == 1`` even in a non-dense mode, and a known-dense mode
+    (``groupby``) even at ``lag > 1``.
+    """
+    import numpy as np
+
+    from mlforecast.pooled import NarwhalsPooledState
+
+    ewm_lag2 = ExponentiallyWeightedMean(alpha=0.5)._set_core_tfm(2)
+    ewm_lag1 = ExponentiallyWeightedMean(alpha=0.5)._set_core_tfm(1)
+
+    df = pl.DataFrame({"ds": [0, 1, 2], "y": [1.0, 2.0, 3.0]})
+    state = NarwhalsPooledState(
+        agg=None,
+        groups=None,
+        group_cols=None,
+        series_bucket_id=np.zeros(1, dtype=np.int64),
+        join_cols=["unique_id", "ds"],
+        keys=[],
+        time_col="ds",
+        mode="nonlocal",
+    )._build(df, "ds", "y", np.float64)
+
+    with pytest.raises(NotImplementedError, match="row-position"):
+        state.feature_frame({"feat": ewm_lag2})
+
+    # lag == 1 is safe even in a non-dense mode.
+    state.feature_frame({"feat": ewm_lag1})
+
+    # a known-dense mode is safe even at lag > 1.
+    state.mode = "groupby"
+    state.feature_frame({"feat": ewm_lag2})

@@ -265,6 +265,52 @@ class NarwhalsPooledState:
                     .to_native()
                 )
 
+    # Modes for which `NarwhalsPooledState`'s per-bucket `ord` column is
+    # STRUCTURALLY dense (0..n-1 with no calendar gaps): legacy renumbers
+    # `unique_times` the same way for `global_`/`groupby` buckets. A
+    # `partition_by` state ("nonlocal"/"local") keeps real, non-renumbered
+    # parent-calendar ordinals and can be gapped. See
+    # `_guard_ewm_positional_shift` and `ExponentiallyWeightedMean._pooled_expr`.
+    _KNOWN_DENSE_MODES = ("global", "groupby")
+
+    def _guard_ewm_positional_shift(self, leaf_tfms):
+        """Refuse rather than silently mis-compute EWM on a possibly-gapped state.
+
+        `ExponentiallyWeightedMean._pooled_expr` shifts by row POSITION,
+        which only matches legacy's calendar-ORDINAL threshold fold when the
+        bucket is dense or `lag == 1`. That information -- this state's
+        `mode` -- isn't visible from inside `_pooled_expr` (`PooledCtx`
+        carries only `keys`/`lag`/`min_samples`/`time_agg`, not how the
+        bucket's ordinals were built), so the check lives here instead,
+        where `self.mode` is available.
+
+        Dormant today: a `NarwhalsPooledState` is only ever built for
+        `global_`/`groupby` keys (`core.py` still routes every `partition_by`
+        state through the legacy engine), so `self.mode` is always in
+        `_KNOWN_DENSE_MODES` right now and this never fires. It exists so
+        that whenever a future task (Task 8) wires a `partition_by` state
+        through this class, an un-densified state with `lag > 1` fails loudly
+        instead of returning a silently wrong number.
+        """
+        if self.mode in self._KNOWN_DENSE_MODES:
+            return
+        for tfm in leaf_tfms:
+            if getattr(tfm, "_pooled_accumulate", None) != ("ewm", "ewm_mean"):
+                continue
+            lag = tfm._get_configured_lag()
+            if lag > 1:
+                raise NotImplementedError(
+                    f"{type(tfm).__name__}._pooled_expr uses a row-position "
+                    f"shift that only matches the legacy engine's calendar-"
+                    f"ordinal threshold fold when the bucket is dense or "
+                    f"lag == 1 (this state's mode={self.mode!r}, lag={lag}). "
+                    "Measured divergence: 11.0/31.0 (this expression) vs "
+                    "16.0/36.0 (legacy) at lag=2 on a gapped partition "
+                    "bucket. This state must be densified (or this "
+                    "transform refused) before evaluating it -- not yet "
+                    "wired for partition_by states."
+                )
+
     def feature_frame(self, transforms: Dict[str, Any]):
         """Evaluate every transform's expression in one pass over the table."""
         # Flatten composites (Offset/Combine) so their INNER transforms' own
@@ -273,6 +319,7 @@ class NarwhalsPooledState:
         leaves = [leaf for t in transforms.values() for leaf in _iter_leaf_tfms(t)]
         self.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
         self.ensure_accumulates(leaves)
+        self._guard_ewm_positional_shift(leaves)
         t = nw.from_native(self.agg, eager_only=True)
         exprs = []
         for name, tfm in transforms.items():

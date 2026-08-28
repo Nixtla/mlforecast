@@ -1758,6 +1758,34 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     def _pooled_expr(self, ctx):
         # EWM is not invertible (no prefix-sum decomposition), so it goes
         # through the accumulate shim instead of a derived window expression.
+        #
+        # WARNING -- `ctx.shift("Aewm", ctx.lag)` moves `lag` ROWS back within
+        # the bucket; it is NOT the same thing as legacy `_ewm_from_agg`,
+        # which instead consumes every observed timestamp satisfying
+        # `unique_times[j] <= t - lag` -- a calendar-ORDINAL threshold, not a
+        # row position. The two coincide only when the bucket's ordinals are
+        # dense (no missing calendar step between observed rows) or when
+        # `lag == 1` (consecutive ordinals differ by at least 1, so one row
+        # back can never be past the threshold).
+        #
+        # `global_`/`groupby` buckets are STRUCTURALLY dense: legacy
+        # renumbers each bucket's `unique_times` to a plain `0..n-1`, and
+        # today a `NarwhalsPooledState` is ONLY ever built for these two
+        # modes -- `core.py` routes every `partition_by` state through the
+        # legacy `PooledState.from_partition` regardless of
+        # `MLFORECAST_POOLED_ENGINE` -- so this expression is safe right now.
+        # A `partition_by` state keeps REAL, non-renumbered parent-calendar
+        # ordinals and IS gapped. Measured: at `lag=2` on a gapped partition
+        # bucket this expression returns 11.0/31.0 where legacy returns
+        # 16.0/36.0 -- a silent wrong number, identical on both backends.
+        #
+        # A `partition_by` state must be DENSIFIED (or refused) before this
+        # expression is evaluated on it -- that is Task 8's job (see the
+        # `LookupLag` no-densify carve-out for the opposite constraint on the
+        # same task: some transforms must NOT be densified, this one MUST
+        # be). `NarwhalsPooledState.feature_frame`'s `_guard_ewm_positional_shift`
+        # is the runtime backstop if that wiring is ever forgotten -- it
+        # refuses rather than silently computing a wrong number.
         return ctx.shift("Aewm", ctx.lag)
 
     @property
