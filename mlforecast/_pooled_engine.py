@@ -1,0 +1,226 @@
+"""narwhals expression machinery for the pooled lag-transform engine.
+
+Everything narwhals cannot express on both backends is confined to this module
+and named explicitly. See the design spec, section 4.
+"""
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+import narwhals as nw
+import polars as pl
+
+_BASE_AGGS = ("s", "c", "q", "mn", "mx")
+_PREFIX_AGGS = ("s", "c", "q")
+
+# narwhals rejects non-elementary `.over(partition_by)` on pandas-like backends
+# ("Only elementary expressions are supported"). `shift` is elementary; the
+# accumulate family is not. Both backends support these natively, so dispatch.
+_PANDAS_OPS = {"cum_sum": "cumsum", "cum_min": "cummin", "cum_max": "cummax"}
+
+
+def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
+    """Per-group accumulate, dispatched to each backend's native implementation.
+
+    ``op`` is one of ``cum_sum``, ``cum_min``, ``cum_max``, ``ewm_mean``. The
+    frame must already be sorted by ``keys`` plus its ordering column.
+
+    Prefix sums MUST be per-group: a global accumulate with a per-group baseline
+    subtracted drifts to 6.85e-10 on a 146k-row table and fails the pooled
+    suite's atol=1e-10.
+    """
+    if op not in _PANDAS_OPS and op != "ewm_mean":
+        raise ValueError(
+            f"unsupported accumulate op {op!r}; "
+            f"expected one of {sorted(set(_PANDAS_OPS) | {'ewm_mean'})}"
+        )
+    if len(cols) != len(out_names):
+        raise ValueError("cols and out_names must be the same length")
+
+    if isinstance(frame_native, pl.DataFrame):
+        if op == "ewm_mean":
+            exprs = [
+                pl.col(c).ewm_mean(**kw).over(keys).alias(o)
+                for c, o in zip(cols, out_names)
+            ]
+        else:
+            exprs = [
+                getattr(pl.col(c), op)().over(keys).alias(o)
+                for c, o in zip(cols, out_names)
+            ]
+        return frame_native.with_columns(exprs)
+
+    # pandas-like
+    out = frame_native.copy()
+    gb = out.groupby(keys, sort=False, observed=True)
+    if op == "ewm_mean":
+        alpha = kw["alpha"]
+        adjust = kw.get("adjust", False)
+        ignore_na = kw.get("ignore_nulls", True)
+        for c, o in zip(cols, out_names):
+            out[o] = gb[c].transform(
+                lambda s: s.ewm(alpha=alpha, adjust=adjust, ignore_na=ignore_na).mean()
+            )
+    else:
+        method = _PANDAS_OPS[op]
+        acc = getattr(gb[list(cols)], method)()
+        for c, o in zip(cols, out_names):
+            out[o] = acc[c].to_numpy()
+    return out
+
+
+def _time_agg_value_expr(time_agg):
+    """The single value ``v_t`` a timestamp contributes under ``time_agg``.
+
+    Mirrors ``_pooled_legacy._time_agg_values``: an all-null timestamp is
+    unobserved for sum/mean/min/max (null), while ``count`` treats 0 as a real
+    observation.
+    """
+    if time_agg == "count":
+        return nw.col("c")
+    if time_agg == "sum":
+        return nw.when(nw.col("c") > 0).then(nw.col("s"))
+    if time_agg == "mean":
+        return nw.when(nw.col("c") > 0).then(nw.col("s") / nw.col("c"))
+    if time_agg == "min":
+        return nw.col("mn")
+    if time_agg == "max":
+        return nw.col("mx")
+    raise ValueError(f"unknown time_agg {time_agg!r}")
+
+
+def build_agg_table(df, keys, time_col, target_col, time_aggs):
+    """One row per (bucket, timestamp) with aggregates and per-bucket prefix sums.
+
+    ``time_aggs`` is the set of ``time_agg`` values used by the transforms in
+    this state (``None`` for raw-row transforms). Each non-None value gets its
+    own suffixed column family, since one state may hold transforms with
+    different ``time_agg``s.
+
+    Every aggregation below is a bare sum/count/min/max. A composite expression
+    inside ``.agg()`` makes narwhals abandon pandas' native group-by for a
+    per-group apply -- measured 250x slower (1.628s -> 0.006s) -- and the
+    warning is invisible on the polars backend. Derived columns are therefore
+    materialized first.
+    """
+    keys = list(keys)
+    d = nw.from_native(df, eager_only=True)
+    d = d.with_columns((nw.col(target_col) ** 2).alias("_y2"))
+    tbl = (
+        d.group_by(keys + [time_col])
+        .agg(
+            nw.col(target_col).sum().alias("s"),
+            nw.col(target_col).count().alias("c"),
+            nw.col("_y2").sum().alias("q"),
+            nw.col(target_col).min().alias("mn"),
+            nw.col(target_col).max().alias("mx"),
+        )
+        .sort(keys + [time_col])
+    )
+    # integer ordinal per bucket over its own sorted calendar
+    tbl = tbl.with_columns(nw.col("c").cast(nw.Float64))
+    tbl = _add_ordinals(tbl, keys, time_col)
+
+    derived, prefix_cols, prefix_outs = [], [], []
+    for a in sorted(x for x in time_aggs if x is not None):
+        v = _time_agg_value_expr(a)
+        obs = v.is_null().__invert__()
+        derived += [
+            nw.when(obs).then(v).otherwise(0.0).alias(f"s__{a}"),
+            obs.cast(nw.Float64).alias(f"c__{a}"),
+            nw.when(obs).then(v * v).otherwise(0.0).alias(f"q__{a}"),
+            v.alias(f"mn__{a}"),
+            v.alias(f"mx__{a}"),
+        ]
+    if derived:
+        tbl = tbl.with_columns(derived)
+
+    for suffix in [""] + [
+        f"__{a}" for a in sorted(x for x in time_aggs if x is not None)
+    ]:
+        for base in _PREFIX_AGGS:
+            prefix_cols.append(f"{base}{suffix}")
+            prefix_outs.append(f"E{base}{suffix}")
+
+    native = tbl.to_native()
+    if keys:
+        native = grouped_accumulate(native, keys, prefix_cols, "cum_sum", prefix_outs)
+    else:
+        n = nw.from_native(native, eager_only=True)
+        native = n.with_columns(
+            [nw.col(c).cum_sum().alias(o) for c, o in zip(prefix_cols, prefix_outs)]
+        ).to_native()
+    return native
+
+
+def _add_ordinals(tbl, keys, time_col):
+    """Dense 0-based ordinal per bucket over its own sorted distinct timestamps.
+
+    The frame is already sorted by ``keys + [time_col]`` and has one row per
+    (bucket, timestamp), so the ordinal is the within-bucket row number. Uses a
+    cumulative count -- not a Python loop over buckets.
+    """
+    native = tbl.to_native()
+    if not keys:
+        return nw.from_native(native, eager_only=True).with_columns(
+            (nw.col(time_col).cum_count() - 1).cast(nw.Int64).alias("ord")
+        )
+    native = grouped_accumulate(
+        nw.from_native(native, eager_only=True)
+        .with_columns(nw.lit(1.0).alias("_one"))
+        .to_native(),
+        keys,
+        ["_one"],
+        "cum_sum",
+        ["ord"],
+    )
+    return (
+        nw.from_native(native, eager_only=True)
+        .with_columns((nw.col("ord") - 1).cast(nw.Int64).alias("ord"))
+        .drop("_one")
+    )
+
+
+@dataclass
+class PooledCtx:
+    """Everything a transform needs to build its pooled expression.
+
+    ``keys`` is empty in ``global_`` mode (a single bucket), in which case the
+    window helpers take the un-partitioned branch -- ``over([])`` is invalid.
+    """
+
+    keys: List[str]
+    lag: int
+    min_samples: int
+    time_agg: Optional[str] = None
+
+    @property
+    def _suffix(self) -> str:
+        return "" if self.time_agg is None else f"__{self.time_agg}"
+
+    def col(self, base: str) -> str:
+        """Resolve a base column name to its ``time_agg`` variant."""
+        return f"{base}{self._suffix}"
+
+    def shift(self, base: str, k: int) -> nw.Expr:
+        """``base`` shifted ``k`` ordinals back, within the bucket."""
+        e = nw.col(self.col(base)).shift(k)
+        return e.over(self.keys) if self.keys else e
+
+    def window(self, base: str, w: Optional[int]) -> nw.Expr:
+        """Per-bucket sum of ``base`` over ordinals ``(t - lag - w, t - lag]``.
+
+        ``w=None`` gives the expanding sum (no lower bound). Derived from the
+        prefix-sum column, so cost is O(1) in ``w``.
+
+        Both shifts are null-filled to 0.0: a shift landing before the bucket's
+        first ordinal means "no data observed yet", i.e. an empty prefix sum,
+        which is 0 -- not null. Without this, `hi - lo` stays null whenever
+        `t - lag` itself predates the bucket's history (e.g. row 0 with
+        lag=1), even though the true windowed sum there is 0.
+        """
+        hi = self.shift(f"E{base}", self.lag).fill_null(0.0)
+        if w is None:
+            return hi
+        lo = self.shift(f"E{base}", self.lag + w).fill_null(0.0)
+        return hi - lo
