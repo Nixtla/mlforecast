@@ -33,13 +33,25 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
     subtracted drifts to 6.85e-10 on a 146k-row table and fails the pooled
     suite's atol=1e-10.
 
-    For ``op == "ewm_mean"``, ``alpha`` and ``adjust`` must both be passed
-    explicitly in ``**kw``. polars' native ``Expr.ewm_mean`` defaults
-    ``adjust`` to ``True``; pandas' ``.ewm(...).mean()`` was previously
-    defaulted here to ``adjust=False``. Relying on either backend's default
-    makes the two backends silently diverge (e.g. alpha=0.5 gives
-    ``[1.0, 1.667, 2.429]`` on polars vs. ``[1.0, 1.5, 2.25]`` on pandas for
-    the same input) with no error -- so no default is assumed here at all.
+    For ``op == "ewm_mean"``, ``alpha``, ``adjust``, and ``ignore_nulls`` must
+    all be passed explicitly in ``**kw``. No soft defaults: the two backends
+    disagree on BOTH ewm defaults, and each disagreement silently produces
+    wrong numbers rather than an error.
+      * ``adjust``: polars' and pandas' native default is ``True``, but the
+        legacy ``_ewm_from_agg`` fold is UNADJUSTED -> callers must pass
+        ``False``.
+      * ``ignore_nulls``: polars' native default is ``False``, which yields
+        ``3.1667`` where legacy yields ``3.0`` on ``[1, null, 3, 4]`` with
+        ``alpha=0.5``. Legacy skips missing entries, i.e. ignore-nulls
+        semantics -> callers must pass ``True``.
+    Both backends also forward-fill the per-ordinal EWM value within each
+    bucket: legacy assigns the running EWM at EVERY ordinal, updating only
+    where an observation exists, so gap ordinals carry the previous value.
+    polars leaves those rows null without an explicit forward-fill; pandas
+    already carries forward (the ffill there is then a no-op, kept for
+    parity/documentation). Verified: with ``ignore_nulls=True`` plus this
+    fill, BOTH backends equal the legacy fold exactly on
+    ``[1.0, None, 3.0, 4.0, None, 6.0]`` -> ``[1.0, 1.0, 2.0, 3.0, 3.0, 4.5]``.
     """
     if op not in _PANDAS_OPS and op != "ewm_mean":
         raise ValueError(
@@ -55,21 +67,30 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
             "function rather than call it with keys=[]"
         )
     if op == "ewm_mean":
-        if "alpha" not in kw:
-            raise ValueError(
-                "grouped_accumulate op='ewm_mean' requires explicit 'alpha'"
-            )
-        if "adjust" not in kw:
-            raise ValueError(
-                "grouped_accumulate op='ewm_mean' requires explicit 'adjust'; "
-                "polars' and pandas' native ewm_mean defaults for 'adjust' "
-                "disagree, so no default is assumed here"
-            )
+        # No soft defaults: the two backends disagree on BOTH ewm defaults, and
+        # each disagreement silently produces wrong numbers rather than an error.
+        #   * `adjust`: polars' native default is True, pandas' is True, but the
+        #     legacy `_ewm_from_agg` fold is UNADJUSTED -> callers must pass False.
+        #   * `ignore_nulls`: polars' default is False, which yields 3.1667 where
+        #     legacy yields 3.0 on [1, null, 3, 4]. Legacy skips missing entries,
+        #     i.e. ignore-nulls semantics -> callers must pass True.
+        # Require all three explicitly and pass identical values to both branches.
+        for required in ("alpha", "adjust", "ignore_nulls"):
+            if required not in kw:
+                raise ValueError(
+                    f"grouped_accumulate(op='ewm_mean') requires an explicit "
+                    f"{required!r}; a per-backend default would diverge silently."
+                )
 
     if isinstance(frame_native, pl.DataFrame):
         if op == "ewm_mean":
+            # forward_fill: legacy assigns the running EWM at EVERY ordinal,
+            # updating only where an observation exists, so gap ordinals carry
+            # the previous value. polars leaves them null; pandas already carries
+            # forward (the ffill is then a no-op). Verified: with ignore_nulls=True
+            # plus this fill, BOTH backends equal the legacy fold exactly.
             exprs = [
-                pl.col(c).ewm_mean(**kw).over(keys).alias(o)
+                pl.col(c).ewm_mean(**kw).forward_fill().over(keys).alias(o)
                 for c, o in zip(cols, out_names)
             ]
         else:
@@ -83,12 +104,12 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
     out = frame_native.copy()
     gb = out.groupby(keys, sort=False, observed=True)
     if op == "ewm_mean":
-        alpha = kw["alpha"]
-        adjust = kw["adjust"]
-        ignore_na = kw.get("ignore_nulls", True)
+        alpha, adjust, ignore_na = kw["alpha"], kw["adjust"], kw["ignore_nulls"]
         for c, o in zip(cols, out_names):
             out[o] = gb[c].transform(
-                lambda s: s.ewm(alpha=alpha, adjust=adjust, ignore_na=ignore_na).mean()
+                lambda s: s.ewm(alpha=alpha, adjust=adjust, ignore_na=ignore_na)
+                .mean()
+                .ffill()
             )
     else:
         method = _PANDAS_OPS[op]

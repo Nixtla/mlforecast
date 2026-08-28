@@ -157,23 +157,101 @@ def test_grouped_accumulate_ewm_mean_requires_explicit_alpha(backend):
         )
 
 
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_grouped_accumulate_ewm_mean_requires_explicit_ignore_nulls(backend):
+    with pytest.raises(ValueError, match="ignore_nulls"):
+        grouped_accumulate(
+            _panel(backend, n_buckets=1, n_times=5, n_series_per_bucket=1),
+            ["store"],
+            ["y"],
+            "ewm_mean",
+            ["Ey"],
+            alpha=0.5,
+            adjust=False,
+        )
+
+
 def test_grouped_accumulate_ewm_mean_backends_agree_with_explicit_adjust():
-    """With adjust and alpha both explicit, polars and pandas must agree --
-    otherwise the shim silently reintroduces the divergence it exists to
-    prevent (polars' native ewm_mean defaults adjust=True; the two backends'
-    unadjusted-vs-adjusted recursions diverge without an explicit value)."""
+    """With alpha, adjust, and ignore_nulls all explicit, polars and pandas
+    must agree -- otherwise the shim silently reintroduces the divergence it
+    exists to prevent (polars' native ewm_mean defaults adjust=True and
+    ignore_nulls=False; the two backends' unadjusted-vs-adjusted recursions,
+    and their null-handling, diverge without explicit values)."""
     polars_df = _panel(backend="polars", n_buckets=1, n_times=6, n_series_per_bucket=1)
     pandas_df = polars_df.to_pandas()
 
     pl_out = grouped_accumulate(
-        polars_df, ["store"], ["y"], "ewm_mean", ["Ey"], alpha=0.5, adjust=False
+        polars_df,
+        ["store"],
+        ["y"],
+        "ewm_mean",
+        ["Ey"],
+        alpha=0.5,
+        adjust=False,
+        ignore_nulls=True,
     )
     pd_out = grouped_accumulate(
-        pandas_df, ["store"], ["y"], "ewm_mean", ["Ey"], alpha=0.5, adjust=False
+        pandas_df,
+        ["store"],
+        ["y"],
+        "ewm_mean",
+        ["Ey"],
+        alpha=0.5,
+        adjust=False,
+        ignore_nulls=True,
     )
     pl_vals = pl_out.sort("ds")["Ey"].to_list()
     pd_vals = pl.from_pandas(pd_out).sort("ds")["Ey"].to_list()
     assert pl_vals == pytest.approx(pd_vals)
+
+
+def test_grouped_accumulate_ewm_mean_forward_fills_gaps_per_bucket():
+    """Legacy `_ewm_from_agg` assigns the running EWM at EVERY ordinal,
+    updating only where an observation exists, so gap ordinals carry the
+    previous value forward. polars' raw ewm_mean leaves those rows null;
+    this must be forward-filled WITHIN each bucket (never bleeding across
+    buckets) to match. Two buckets with interior gaps, offset so a naive
+    frame-level (rather than per-bucket) ffill would leak bucket 0's last
+    value into bucket 1's leading gap and fail this test."""
+    # bucket 0: [1.0, None, 3.0, 4.0, None, 6.0] -> legacy fold
+    #   [1.0, 1.0, 2.0, 3.0, 3.0, 4.5]
+    # bucket 1: [None, 10.0, None, None, 20.0, None] -- starts with a gap, so
+    # a cross-bucket ffill would wrongly carry bucket 0's final value (4.5)
+    # into this bucket's first row instead of leaving it null (no observation
+    # yet in this bucket).
+    rows = []
+    b0_y = [1.0, None, 3.0, 4.0, None, 6.0]
+    b1_y = [None, 10.0, None, None, 20.0, None]
+    for t, y in enumerate(b0_y):
+        rows.append(("s0", t, 0, y))
+    for t, y in enumerate(b1_y):
+        rows.append(("s1", t, 1, y))
+    df = pl.DataFrame(rows, schema=["unique_id", "ds", "store", "y"], orient="row")
+
+    want_b0 = [1.0, 1.0, 2.0, 3.0, 3.0, 4.5]
+    want_b1 = [None, 10.0, 10.0, 10.0, 15.0, 15.0]
+
+    for backend in BACKENDS:
+        src = df if backend == "polars" else df.to_pandas()
+        out = grouped_accumulate(
+            src,
+            ["store"],
+            ["y"],
+            "ewm_mean",
+            ["Ey"],
+            alpha=0.5,
+            adjust=False,
+            ignore_nulls=True,
+        )
+        o = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+        o = o.sort(["store", "ds"])
+        got_b0 = o.filter(pl.col("store") == 0)["Ey"].to_list()
+        got_b1 = o.filter(pl.col("store") == 1)["Ey"].to_list()
+        assert got_b0 == pytest.approx(want_b0), f"{backend}: bucket 0 mismatch"
+        assert got_b1[0] is None, (
+            f"{backend}: bucket 1 must not inherit bucket 0's tail"
+        )
+        assert got_b1[1:] == pytest.approx(want_b1[1:]), f"{backend}: bucket 1 mismatch"
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
