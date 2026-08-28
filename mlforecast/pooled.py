@@ -90,6 +90,25 @@ def _pooled_retention(tfm) -> Optional[int]:
       window itself, the boundary the ``fill_null(0.0)`` relies on); RollingMin/
       RollingMax's own direct shifts only reach ``lag + window_size - 1``, so
       this is a safe (by exactly one row) upper bound for them too.
+
+      This one-row margin is NOT actually tight for the ``ctx.window``
+      (``E``-prefix) families, ``RollingMean``/``RollingStd``: their TRUE
+      minimum is ``lag + window_size - 1``, one row less than returned here
+      -- pinned by ``test_rolling_mean_retention_formula_margin_is_pinned``
+      in ``tests/test_pooled_narwhals.py``, which shows that retention drops
+      to that true minimum with NO change in the predicted value, and only
+      breaks one row further. The reason is that ``_make_seeds`` always
+      emits a seed row when any history precedes the retained suffix, and
+      that seed's own ``Es``/``Ec``/``Eq`` are EXACT at its own ordinal;
+      for a rolling window's first predict step, that ordinal happens to
+      equal exactly the ``lo`` reference, so the seed satisfies it without
+      needing one further retained raw row. RollingMin/RollingMax get no
+      such freebie (their shifts read the RAW, not ``E``-prefixed, ``mn``/
+      ``mx`` columns, and the seed's raw value is never a genuine
+      observation), so they DO need the full ``lag + window_size``. Do not
+      "optimize" this formula down to ``lag + window_size - 1`` uniformly:
+      that would silently break RollingMin/RollingMax while leaving
+      RollingMean/RollingStd looking fine.
     * Neither (Expanding*/EWM/LookupLag): these read a CUMULATIVE prefix sum
       or accumulate column (``Es``/``Ec``/``Eq``/``Amn``/``Amx``/``Aewm``) or,
       for ``LookupLag``, a raw positional shift over the (sparse) occurrence

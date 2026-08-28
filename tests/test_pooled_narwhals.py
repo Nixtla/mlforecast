@@ -420,3 +420,249 @@ def test_should_densify_threshold():
 
     assert should_densify(n_buckets=2, n_calendar=100, n_sparse_rows=100)
     assert not should_densify(n_buckets=1000, n_calendar=1000, n_sparse_rows=5000)
+
+
+# ---- Task 9 fix round 1: structural invariant the quantile CSR store needs ----
+#
+# `_quantile_columns` (mlforecast/pooled.py) indexes `self.agg` POSITIONALLY,
+# assuming each bucket's rows occupy a single contiguous row range
+# (`base = sel.min()`, then `values[row_offsets[base]:row_offsets[base+n_ord]]`).
+# `_rebuild_tail`/`build_query_arrays` build the tail by concatenating
+# [seed rows (all buckets), retained history (all buckets), one pending/query
+# row per bucket] -- interleaving buckets -- so each sorts the result back to
+# bucket-contiguous, ord-monotonic order before returning. Output-equality
+# tests (the differential suite, the sqlite oracle) cannot pin this: every
+# shipped transform has `lag >= 1`, so no transform ever reads a bucket's own
+# CURRENT ordinal, and the two sort sites happen to be mutually compensating
+# for that reason -- removing either one alone still passes every committed
+# numeric test. This checks the structural invariant directly.
+
+
+def _assert_bucket_contiguous_ord_monotonic(native, keys, msg=""):
+    """Each distinct bucket-key value in ``native`` must appear as exactly
+    ONE uninterrupted run of rows (in physical row order), with ``ord``
+    non-decreasing within that run.
+    """
+    df = nw.from_native(native, eager_only=True)
+    bucket_arr = (
+        df.get_column(keys[0]).to_numpy() if keys else np.zeros(len(df), dtype=np.int64)
+    )
+    ords = df.get_column("ord").to_numpy()
+    seen = set()
+    prev_bucket = None
+    prev_ord = None
+    for b, o in zip(bucket_arr, ords):
+        b = int(b)
+        if b != prev_bucket:
+            assert b not in seen, (
+                f"{msg}: bucket {b} is split across more than one run (not contiguous)"
+            )
+            seen.add(b)
+        else:
+            assert o >= prev_ord, (
+                f"{msg}: ord not monotonic within bucket {b}'s run ({prev_ord} -> {o})"
+            )
+        prev_bucket, prev_ord = b, o
+
+
+def _run_predict_and_check_contiguity(n_buckets=3, n_steps=6):
+    """Drive a real recursive predict loop against a `RollingQuantile`
+    pooled state and check the bucket-contiguous/ord-monotonic invariant
+    after every `_rebuild_tail` call (the persisted tail) and every
+    `build_query_arrays` call (the query-extended tail `latest_features`
+    reads from) at every step.
+    """
+    import importlib
+    import os
+
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import mlforecast.core
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        from mlforecast.core import TimeSeries
+        from mlforecast.lag_transforms import RollingQuantile
+
+        n_series_per_bucket, n_times = 2, 20
+        df = _panel(
+            "pandas",
+            n_buckets=n_buckets,
+            n_times=n_times,
+            n_series_per_bucket=n_series_per_bucket,
+            seed=7,
+        )
+        tfm = RollingQuantile(p=0.5, window_size=5, groupby=["store"])
+        ts = TimeSeries(freq=1, lags=[1], lag_transforms={1: [tfm]})
+        ts.fit_transform(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            static_features=["store"],
+            dropna=False,
+        )
+        ts._predict_setup()
+        key = ("groupby", ("store",), ())
+        state = ts._pooled_states[key]
+        n_series = len(ts.uids)
+        for step in range(n_steps):
+            ts._update_features()
+            _assert_bucket_contiguous_ord_monotonic(
+                state.agg, state.keys, f"step {step}: persisted tail (_rebuild_tail)"
+            )
+            extended = state.build_query_arrays(None, n_series)
+            _assert_bucket_contiguous_ord_monotonic(
+                extended,
+                state.keys,
+                f"step {step}: query-extended tail (build_query_arrays)",
+            )
+            ts._update_y(np.arange(n_series, dtype=float) + step)
+            _assert_bucket_contiguous_ord_monotonic(
+                state.agg,
+                state.keys,
+                f"step {step}: persisted tail after append_predictions",
+            )
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.core
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+def test_rebuild_tail_and_query_arrays_keep_buckets_contiguous():
+    """`_rebuild_tail` and `build_query_arrays` (mlforecast/pooled.py) must
+    each leave `self.agg` bucket-contiguous and ord-monotonic -- the
+    invariant `_quantile_columns`'s positional slicing depends on. Proved
+    load-bearing (not incidental) by reverting each of the two `.sort(keys +
+    ["ord"])` call sites INDEPENDENTLY: see the task-9 report's fix-round-1
+    section for the before/after output showing this test fails at each site
+    alone (and that the committed differential/oracle suite does NOT, which
+    is exactly why a structural check -- not output equality -- is required
+    here).
+    """
+    _run_predict_and_check_contiguity(n_buckets=3, n_steps=6)
+
+
+# ---- Task 9 fix round 1: pin the retention margin's true minimum ----
+#
+# `_pooled_retention`'s window-family formula (`lag + window_size`) was
+# derived analytically (see its docstring) but never pinned by a test that
+# would fail if the formula were accidentally loosened AND shrunk by a
+# couple of ordinals -- the committed suite's fixtures all carry enough
+# spare history that an off-by-one-or-two error goes unnoticed. This proves
+# the formula is EXACTLY tight for RollingMean: retention one ordinal
+# smaller changes the predicted value, so there is no slack to "clean up".
+
+
+def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
+    """Pins BOTH the formula's actual margin and the true floor for
+    RollingMean(window_size=W, lag=L): retention `lag + window_size` (the
+    formula) and `lag + window_size - 1` (one row less -- the true minimum,
+    thanks to the seed row's own exactness) both give the correct predicted
+    value; `lag + window_size - 2` does not. A single bucket, `global_=True`
+    scenario with a simple, hand-verifiable ramp target makes the expected
+    value and the effect of shrinking retention directly checkable without
+    depending on the legacy engine.
+    """
+    import importlib
+    import os
+
+    import pandas as pd
+
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import mlforecast.core
+        import mlforecast.pooled as mp2
+
+        importlib.reload(mp2)
+        importlib.reload(mlforecast.core)
+        from mlforecast.core import TimeSeries
+        from mlforecast.lag_transforms import RollingMean
+
+        lag, window_size = 2, 3
+        n_times = 12
+        y = np.arange(1.0, n_times + 1.0)  # 1..12, a simple ramp
+        df = pd.DataFrame(
+            {"unique_id": ["a"] * n_times, "ds": np.arange(n_times), "y": y}
+        )
+        col = RollingMean(window_size, global_=True)._get_name(lag)
+
+        def _first_predicted_feature(retention_delta):
+            ts = TimeSeries(
+                freq=1,
+                lags=[lag],
+                lag_transforms={lag: [RollingMean(window_size, global_=True)]},
+            )
+            ts.fit_transform(
+                df,
+                id_col="unique_id",
+                time_col="ds",
+                target_col="y",
+                static_features=[],
+                dropna=False,
+            )
+            ts._predict_setup()
+            if retention_delta:
+                original = mp2._pooled_retention
+
+                def patched(tfm):
+                    r = original(tfm)
+                    return None if r is None else max(r - retention_delta, 0)
+
+                monkeypatch.setattr(mp2, "_pooled_retention", patched)
+            feats = ts._update_features()
+            return float(np.asarray(feats[col], dtype=float)[0])
+
+        # `_pooled_retention`'s formula (`lag + window_size`) matches the
+        # hand-computed rolling mean of the window `lag` ordinals back from
+        # the first predicted row.
+        formula = _first_predicted_feature(0)
+        expected = float(
+            np.mean(y[n_times - lag - window_size + 1 : n_times - lag + 1])
+        )
+        assert formula == pytest.approx(expected), (formula, expected)
+
+        # The formula's own claimed minimum is NOT the tightest possible:
+        # shrinking by exactly ONE ordinal (to `lag + window_size - 1`)
+        # STILL matches. This is not a bug in the test -- it's because the
+        # seed row (always emitted when any history precedes the retained
+        # suffix) carries the EXACT `Es`/`Ec`/`Eq` cumulative value at its
+        # own ordinal, and for this family's very first predict step that
+        # ordinal happens to equal exactly the window's `lo` reference, so
+        # the seed satisfies it without needing one more retained raw row.
+        # See `_pooled_retention`'s docstring for why the formula keeps this
+        # one extra row of (here, provably inert) margin anyway.
+        true_min = _first_predicted_feature(1)
+        assert true_min == pytest.approx(expected), (true_min, expected)
+
+        # One ordinal past the TRUE minimum: the seed's own ordinal is now
+        # one *after* the window's `lo` reference, which is unreachable (no
+        # row precedes the seed) -- `ctx.window`'s `lo` shift resolves to
+        # null, filled to 0.0 ("no prior data"), and the predicted value
+        # must change.
+        too_short = _first_predicted_feature(2)
+        assert too_short != pytest.approx(expected), (
+            "shrinking retention two ordinals below the formula (one past "
+            "the true minimum) left the predicted value unchanged -- either "
+            "this fixture no longer exercises the boundary, or the formula "
+            "has MORE untested slack than documented"
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.core
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
