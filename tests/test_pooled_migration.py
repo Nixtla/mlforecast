@@ -12,7 +12,13 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import ExpandingMean, RollingMean
+from mlforecast.lag_transforms import (
+    ExpandingMax,
+    ExpandingMean,
+    ExpandingMin,
+    ExponentiallyWeightedMean,
+    RollingMean,
+)
 
 from ._pooled_engine_env import pooled_engine
 
@@ -50,7 +56,21 @@ def test_migrated_model_predicts_identically(tmp_path):
     both failed in the suite and passed in isolation).
     """
     df = _panel()
-    tfms = {1: [RollingMean(7, groupby=["store"]), ExpandingMean(groupby=["store"])]}
+    # ExpandingMin/ExpandingMax/EWM are here deliberately: they are the only
+    # families whose predict seed reads an `A<col>` accumulate column, and a
+    # migrated state reaches `_make_seeds` without ever passing through
+    # `feature_frame`. With `RollingMean`/`ExpandingMean` alone (the shape
+    # this test had) it could not notice `_migrate_one_state` failing to
+    # settle them.
+    tfms = {
+        1: [
+            RollingMean(7, groupby=["store"]),
+            ExpandingMean(groupby=["store"]),
+            ExpandingMin(groupby=["store"]),
+            ExpandingMax(groupby=["store"]),
+            ExponentiallyWeightedMean(alpha=0.3, groupby=["store"]),
+        ]
+    }
 
     with pooled_engine("numpy"):
         old = MLForecast(
@@ -108,7 +128,23 @@ BACKENDS = ["polars", "pandas"]
 # partition_by ("local") -- every pooled mode Task 11's ``_migrate_one_state``
 # branches on. Kept in sync with ``_pooled_migration_worker.py``'s own
 # ``_mode_cases``.
-MODES = ["global", "groupby", "groupby_partition_by", "local_partition_by"]
+MODES = [
+    "global",
+    "groupby",
+    "groupby_partition_by",
+    "local_partition_by",
+    # The accumulate families (ExpandingMin/ExpandingMax/EWM) -- the only ones
+    # whose predict seed reads an `A<col>` accumulate column. Added in the
+    # final fix wave: `_migrate_one_state` never settled
+    # `ensure_time_aggs`/`ensure_accumulates`, so migrating such a model and
+    # predicting raised `RuntimeError: _make_seeds: ... missing accumulate
+    # column(s)` (and, before the seed guard existed, returned a wrong number
+    # silently). Invisible to the four modes above, which use only
+    # `RollingMean`/`ExpandingMean` -- the same two blind control families
+    # that hid the original Critical.
+    "global_accumulate",
+    "groupby_accumulate",
+]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

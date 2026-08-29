@@ -28,7 +28,13 @@ import numpy as np
 import polars as pl
 from sklearn.linear_model import LinearRegression
 
-from mlforecast.lag_transforms import ExpandingMean, RollingMean
+from mlforecast.lag_transforms import (
+    ExpandingMax,
+    ExpandingMean,
+    ExpandingMin,
+    ExponentiallyWeightedMean,
+    RollingMean,
+)
 
 N_SERIES = 20
 N_TIMES = 60
@@ -84,9 +90,16 @@ def _future_x_df(backend, horizon=7):
 
 def _mode_cases():
     return {
+        # `global_=True` is load-bearing and was MISSING here: bare
+        # `RollingMean(7)`/`ExpandingMean()` are LOCAL (coreforecast)
+        # transforms -- `_get_pooled_tfms` skips anything with no
+        # `global_`/`groupby`/`partition_by` -- so this case fitted a model
+        # with `_pooled_states == {}` and migrated nothing at all. Both its
+        # backends were passing vacuously. `main` now asserts a pooled state
+        # actually exists, so this cannot regress silently again.
         "global": (
             ["store"],
-            lambda: {1: [RollingMean(7), ExpandingMean()]},
+            lambda: {1: [RollingMean(7, global_=True), ExpandingMean(global_=True)]},
         ),
         "groupby": (
             ["store"],
@@ -112,6 +125,37 @@ def _mode_cases():
                 1: [
                     RollingMean(7, partition_by=["promo"]),
                     ExpandingMean(partition_by=["promo"]),
+                ]
+            },
+        ),
+        # The accumulate families -- the only ones whose predict seed reads an
+        # `A<col>` column (`_accumulate_specs`). Every mode case above uses
+        # only `RollingMean`/`ExpandingMean`, which never touch one, so the
+        # whole matrix was blind to `_migrate_one_state` never settling
+        # `ensure_time_aggs`/`ensure_accumulates`. `ExponentiallyWeightedMean`
+        # additionally carries `time_agg="mean"` BY DEFAULT, so it also covers
+        # the suffixed (`ewm__mean`) column family that
+        # `_rebuild_agg_from_legacy` does not reconstruct.
+        "global_accumulate": (
+            ["store"],
+            lambda: {
+                1: [
+                    ExpandingMin(global_=True),
+                    ExpandingMax(global_=True),
+                    ExponentiallyWeightedMean(alpha=0.3, global_=True),
+                ]
+            },
+        ),
+        "groupby_accumulate": (
+            ["store"],
+            lambda: {
+                1: [
+                    ExpandingMin(groupby=["store"]),
+                    ExpandingMax(groupby=["store"]),
+                    ExponentiallyWeightedMean(alpha=0.3, groupby=["store"]),
+                    # mixed with a finite-window family, so the state carries
+                    # both prefix-sum-only and accumulate-consuming transforms
+                    RollingMean(7, groupby=["store"]),
                 ]
             },
         ),
@@ -164,6 +208,13 @@ def main(backend, mode, out_dir):
         models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms_factory()
     )
     old.fit(df, static_features=statics)
+    # A mode whose transforms are not actually pooled would migrate nothing
+    # and pass trivially -- which is exactly what `"global"` did before its
+    # missing `global_=True` was fixed.
+    assert old.ts._pooled_states, (
+        f"[{backend}/{mode}] the fitted model has no pooled state, so this "
+        "case migrates nothing and cannot fail"
+    )
     expected = old.predict(horizon, X_df=x_df) if needs_x_df else old.predict(horizon)
     old.save(f"{out_dir}/old")
 

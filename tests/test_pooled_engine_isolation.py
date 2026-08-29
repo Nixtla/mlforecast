@@ -23,8 +23,9 @@ Two distinct defects were behind it, and each gets an assertion here:
    ``TimeSeries`` by value; loading such a pickle reuses the tracked class and
    applies ``_class_setstate`` to it, rebinding EVERY method on the original,
    still-referenced class object to a copy carrying frozen module globals.
-   Measured: 19 methods of the live ``TimeSeries`` (``predict``, ``update``,
-   ``save``, ``_predict_recursive``, ...) were replaced by one
+   Measured: 41 attributes of the live ``TimeSeries`` (``predict``,
+   ``update``, ``save``, ``fit_transform``, ``history_warmup``,
+   ``_predict_recursive``, ...) were replaced by one
    ``_MigrationUnpickler(...).load()`` call. No module-dict restoration can
    undo that -- the damage is inside the class object.
 

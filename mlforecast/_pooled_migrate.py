@@ -346,6 +346,32 @@ def _migrate_one_state(
         # `should_densify` size guard `ensure_densified` needs.
         state._compute_density_estimate()
         state.ensure_densified(leaf_tfms or [])
+    # UNCONDITIONAL, unlike the densification above: `global_`/`groupby`
+    # states need their accumulate columns just as much as `partition_by`
+    # ones do. This settles the same three-step invariant `feature_frame`
+    # (fit) and `core.py:_initialize_lag_transform_states` (`history_warmup` /
+    # `predict(new_df=...)`) settle -- `ensure_time_aggs`, then
+    # `ensure_densified`, then `ensure_accumulates`. A migrated state is the
+    # THIRD entry point that reaches the predict path without ever going
+    # through `feature_frame`: `_make_seeds` reads the seed row's running
+    # accumulate value out of the `A<col>` columns before `feature_frame`
+    # would have had a chance to build them. Without this, migrating an
+    # `ExpandingMin`, `ExpandingMax` or `ExponentiallyWeightedMean` model and
+    # predicting raised `RuntimeError: _make_seeds: ... missing accumulate
+    # column(s) [...]` -- and before that seed guard existed, silently
+    # produced a wrong number instead.
+    #
+    # `ensure_time_aggs` is needed for the same reason and must come FIRST:
+    # `_rebuild_agg_from_legacy` reconstructs only the bare ``{None}`` family
+    # (``state._time_aggs = {None}`` above), so a ``time_agg``-carrying
+    # transform's suffixed columns -- which its accumulate is derived FROM --
+    # do not exist on a freshly migrated table at all. That is not an exotic
+    # case: ``ExponentiallyWeightedMean``'s ``time_agg`` defaults to
+    # ``"mean"``, so EVERY pooled EWM needs ``ewm__mean``. With
+    # ``ensure_accumulates`` alone, those models fail with
+    # ``ColumnNotFoundError: ewm__mean`` instead.
+    state.ensure_time_aggs({getattr(t, "time_agg", None) for t in (leaf_tfms or [])})
+    state.ensure_accumulates(leaf_tfms or [])
 
     return state
 
