@@ -5,9 +5,7 @@ The pooled suite proves the narwhals engine is correct in absolute terms; this
 file proves the two engines agree, so any divergence names itself.
 """
 
-import importlib
 import operator
-import os
 
 import numpy as np
 import polars as pl
@@ -37,6 +35,8 @@ from mlforecast.lag_transforms import (
     SeasonalRollingStd,
 )
 
+from ._pooled_engine_env import pooled_engine
+
 BACKENDS = ["polars", "pandas"]
 
 
@@ -60,29 +60,15 @@ def _panel(backend, n_series=40, n_times=60, n_groups=5, seed=0):
 
 
 def _preprocess_with_engine(engine, df, tfms, statics):
-    """Reimport the engine module with the env var set, then preprocess."""
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
-    try:
-        import mlforecast.pooled
+    """Select ``engine`` for the duration of one preprocess call.
 
-        importlib.reload(mlforecast.pooled)
-        import mlforecast.core
-
-        importlib.reload(mlforecast.core)
+    ``pooled_engine`` restores every reloaded module object by snapshot, so
+    this leaves no residue for later tests -- see
+    ``tests/_pooled_engine_env.py``.
+    """
+    with pooled_engine(engine):
         fcst = MLForecast(models=[LinearRegression()], freq="1d", lag_transforms=tfms)
         return fcst.preprocess(df, static_features=statics, dropna=False)
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        import mlforecast.core
-
-        importlib.reload(mlforecast.core)
 
 
 def assert_engines_agree(df, tfms, statics, atol=1e-10):
@@ -1228,17 +1214,7 @@ def test_lookup_lag_and_ewm_same_partition_state_raises():
     and dense (for EWM) -- refused loudly rather than computed silently
     wrong."""
     df = _partition_df("polars", n_series=20, n_times=40, seed=13, n_promo_values=3)
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import importlib
-
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        import mlforecast.core
-
-        importlib.reload(mlforecast.core)
+    with pooled_engine("narwhals"):
         fcst = MLForecast(
             models=[LinearRegression()],
             freq="1d",
@@ -1258,46 +1234,18 @@ def test_lookup_lag_and_ewm_same_partition_state_raises():
         )
         with pytest.raises(NotImplementedError, match="LookupLag"):
             fcst.preprocess(df, static_features=[], dropna=False)
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import importlib
-
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        import mlforecast.core
-
-        importlib.reload(mlforecast.core)
 
 
 # ---- Task 9: predict -- tail evaluation + per-bucket seed rows ----
 
 
 def _predict_with_engine(engine, df, tfms, statics, h):
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine(engine):
         fcst = MLForecast(
             models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
         )
         fcst.fit(df, static_features=statics)
         return fcst.predict(h)
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 PREDICT_CASES = [
@@ -1347,12 +1295,7 @@ def test_two_models_do_not_leak_state(backend):
 
     df = _panel(backend, n_series=20, n_times=60)
     tfms = {1: [ExpandingMean(groupby=["store"])]}
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine("narwhals"):
         together = MLForecast(
             models=[LinearRegression(), DecisionTreeRegressor(random_state=0)],
             freq="1d",
@@ -1376,12 +1319,6 @@ def test_two_models_do_not_leak_state(backend):
             s.sort("unique_id", "ds")["DecisionTreeRegressor"].to_numpy(),
             atol=0.0,
         )
-    finally:
-        os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 # ---- Extra Task 9 coverage beyond the brief's PREDICT_CASES ----
@@ -1438,13 +1375,7 @@ def test_predict_rolling_min_max_horizon_exceeds_window_engines_agree(backend):
 
 
 def _update_then_predict(engine, df, new_df, tfms, statics, h, lags=None):
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine(engine):
         fcst = MLForecast(
             models=[LinearRegression()],
             freq="1d",
@@ -1454,15 +1385,6 @@ def _update_then_predict(engine, df, new_df, tfms, statics, h, lags=None):
         fcst.fit(df, static_features=statics)
         fcst.update(new_df)
         return fcst.predict(h)
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -1474,7 +1396,19 @@ def test_update_then_predict_engines_agree(backend):
         (pl.col("ds") + pl.duration(days=1)).alias("ds")
     )
     new_df = nxt if isinstance(df, pl.DataFrame) else nxt.to_pandas()
-    tfms = {1: [RollingMean(7, groupby=["store"]), ExpandingMean(groupby=["store"])]}
+    # ExpandingMin/ExpandingMax/EWM are here deliberately. Until this fix
+    # wave this test used only RollingMean + ExpandingMean -- the two families
+    # that never read an `A`-prefixed accumulate column -- so it could not
+    # fail against `append_observations` dropping those columns on `update()`.
+    tfms = {
+        1: [
+            RollingMean(7, groupby=["store"]),
+            ExpandingMean(groupby=["store"]),
+            ExpandingMin(groupby=["store"]),
+            ExpandingMax(groupby=["store"]),
+            ExponentiallyWeightedMean(alpha=0.3, groupby=["store"]),
+        ]
+    }
     a = _update_then_predict("numpy", df, new_df, tfms, ["store"], 7)
     b = _update_then_predict("narwhals", df, new_df, tfms, ["store"], 7)
     a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
@@ -1500,7 +1434,15 @@ def test_update_then_predict_lag_gt_1_engines_agree(backend):
         (pl.col("ds") + pl.duration(days=1)).alias("ds")
     )
     new_df = nxt if isinstance(df, pl.DataFrame) else nxt.to_pandas()
-    tfms = {3: [RollingMean(5, groupby=["store"]), ExpandingMean(groupby=["store"])]}
+    tfms = {
+        3: [
+            RollingMean(5, groupby=["store"]),
+            ExpandingMean(groupby=["store"]),
+            ExpandingMin(groupby=["store"]),
+            ExpandingMax(groupby=["store"]),
+            ExponentiallyWeightedMean(alpha=0.3, groupby=["store"]),
+        ]
+    }
     a = _update_then_predict("numpy", df, new_df, tfms, ["store"], 5, lags=[3])
     b = _update_then_predict("narwhals", df, new_df, tfms, ["store"], 5, lags=[3])
     a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
@@ -1516,13 +1458,7 @@ def test_update_then_predict_lag_gt_1_engines_agree(backend):
 def test_keep_last_n_trims_expanding_state(backend):
     """The seed row makes prefix-dependent states trimmable -- the limitation
     _trim_pooled_states documents today."""
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine("narwhals"):
         df = _panel(backend, n_series=20, n_times=120)
         fcst = MLForecast(
             models=[LinearRegression()],
@@ -1541,15 +1477,6 @@ def test_keep_last_n_trims_expanding_state(backend):
             f"expanding state kept {t.height} aggregate rows; the seed row "
             "should have allowed a trim"
         )
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -1605,28 +1532,13 @@ def test_keep_last_n_trim_predict_engines_agree(backend):
 
 
 def _predict_with_engine_keep_last_n(engine, df, tfms, statics, h, keep_last_n):
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine(engine):
         fcst = MLForecast(
             models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
         )
         fcst.fit(df, static_features=statics, keep_last_n=keep_last_n)
         state = next(iter(fcst.ts._pooled_states.values()))
         return fcst.predict(h), state
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 # ---- Task 10 fix round 3: dynamic partition_by reassignment at h>=3 ----
@@ -1685,27 +1597,12 @@ def _dynamic_reassignment_x_df(backend, df, h):
 
 
 def _predict_with_engine_x_df(engine, df, tfms, statics, x_df, h):
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
-    try:
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine(engine):
         fcst = MLForecast(
             models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
         )
         fcst.fit(df, static_features=statics)
         return fcst.predict(h, X_df=x_df)
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.pooled, mlforecast.core
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 PARTITION_REASSIGN_CASES = [
@@ -1804,3 +1701,337 @@ def test_dynamic_partition_reassignment_engines_agree_h_gt_2(
             atol=1e-9,
             err_msg=f"{label}: engines diverge at h={h_idx}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Fix wave: the accumulate baseline across ALL THREE state-entry paths.
+#
+# `ExpandingMin`, `ExpandingMax` and `ExponentiallyWeightedMean` are the only
+# pooled families whose predict seed reads an `A`-prefixed accumulate column
+# (`_accumulate_specs`). Two paths built a state without ever materializing
+# those columns, and the seed substitution was guarded by
+# `if the column is present`, so the result was a WRONG NUMBER with no error:
+#
+#   * `core.py:_initialize_lag_transform_states` (`history_warmup` and
+#     `predict(new_df=...)`) ran `ensure_time_aggs` + `ensure_densified` but
+#     not `ensure_accumulates`;
+#   * `NarwhalsPooledState.append_observations` (`update()`) took its column
+#     list from a FRESH `build_agg_table`, which never emits `A*`, and so
+#     dropped an existing one.
+#
+# Measured against the legacy engine before the fix, on pandas at atol=1e-8:
+#   ExpandingMin  new_df 6.771 vs 1.516 | update 10.078 vs 1.516
+#   ExpandingMax  new_df 14.515 vs 19.969
+#   EWM           new_df 10.301 vs 10.272 | update 12.801 vs 11.031
+# ---------------------------------------------------------------------------
+
+ACCUMULATE_TFM_CASES = [
+    ("expanding_min", lambda: ExpandingMin(groupby=["store"])),
+    ("expanding_max", lambda: ExpandingMax(groupby=["store"])),
+    ("ewm", lambda: ExponentiallyWeightedMean(alpha=0.3, groupby=["store"])),
+    # global_ mode takes the un-partitioned `apply_accumulate` branch
+    ("expanding_min_global", lambda: ExpandingMin(global_=True)),
+    ("expanding_max_global", lambda: ExpandingMax(global_=True)),
+    ("ewm_global", lambda: ExponentiallyWeightedMean(alpha=0.3, global_=True)),
+    # controls: families that never touch an accumulate column. They matched
+    # on every path even against the broken code, which is exactly why a
+    # suite built only from them could not fail.
+    ("rolling_mean_control", lambda: RollingMean(7, groupby=["store"])),
+    ("expanding_mean_control", lambda: ExpandingMean(groupby=["store"])),
+]
+
+
+def _accumulate_panel(backend):
+    return _panel(backend, n_series=12, n_times=40)
+
+
+def _next_timestamp_rows(df):
+    d = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    last = d["ds"].max()
+    nxt = d.filter(pl.col("ds") == last).with_columns(
+        (pl.col("ds") + pl.duration(days=1)).alias("ds")
+    )
+    return nxt if isinstance(df, pl.DataFrame) else nxt.to_pandas()
+
+
+def _predict_via_path(engine, path, df, new_rows, tfms, statics, h):
+    """Reach the pooled state through one of the three entry paths.
+
+    ``plain``   -- fit_transform materializes the features (the path that was
+                   always correct, since `feature_frame` settles accumulates).
+    ``new_df``  -- `TimeSeries` rebuilt from history with no feature pass, so
+                   `_initialize_lag_transform_states` is what must settle them.
+    ``update``  -- `append_observations` rebuilds the aggregate table.
+    """
+    with pooled_engine(engine):
+        fcst = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        fcst.fit(df, static_features=statics)
+        if path == "plain":
+            return fcst.predict(h)
+        if path == "new_df":
+            full = (
+                pl.concat([df, new_rows])
+                if isinstance(df, pl.DataFrame)
+                else __import__("pandas").concat([df, new_rows], ignore_index=True)
+            )
+            return fcst.predict(h, new_df=full)
+        if path == "update":
+            fcst.update(new_rows)
+            return fcst.predict(h)
+        raise AssertionError(path)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("path", ["plain", "new_df", "update"])
+@pytest.mark.parametrize(
+    "label,make_tfm", ACCUMULATE_TFM_CASES, ids=[c[0] for c in ACCUMULATE_TFM_CASES]
+)
+def test_accumulate_families_agree_on_every_state_entry_path(
+    backend, path, label, make_tfm
+):
+    """Can fail: reverting either half of the fix (dropping
+    `state.ensure_accumulates(leaves)` from
+    `core.py:_initialize_lag_transform_states`, or letting
+    `append_observations` take its `base_cols` from the fresh
+    `build_agg_table` again) makes the three accumulate families diverge on
+    `new_df`/`update` while the two controls keep passing."""
+    df = _accumulate_panel(backend)
+    new_rows = _next_timestamp_rows(df)
+    tfm = make_tfm()
+    statics = ["store"]
+    tfms = {1: [tfm]}
+    a = _predict_via_path("numpy", path, df, new_rows, tfms, statics, 5)
+    b = _predict_via_path("narwhals", path, df, new_rows, tfms, statics, 5)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    np.testing.assert_allclose(
+        a.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        b.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        atol=1e-8,
+        err_msg=f"{label} diverges on the {path!r} path",
+    )
+
+
+@pytest.mark.parametrize("path", ["new_df", "update"])
+def test_missing_accumulate_column_raises_rather_than_seeding_wrong(path):
+    """The general fix, not just its two instances.
+
+    `_make_seeds` and `trim_to_last` used to substitute the seed row's running
+    accumulate value only *if* the `A` column happened to be there. That turns
+    a missing prerequisite into a silently wrong number. They now raise. This
+    reproduces the missing prerequisite directly -- delete the `A` columns off
+    a settled state -- and requires a loud failure.
+    """
+    with pooled_engine("narwhals"):
+        import narwhals as nw
+
+        df = _accumulate_panel("polars")
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            lags=[1],
+            lag_transforms={1: [ExpandingMin(groupby=["store"])]},
+        )
+        fcst.fit(df, static_features=["store"])
+        key, pooled_tfms = next(iter(fcst.ts._get_pooled_tfms().items()))
+        state = fcst.ts._pooled_states[key]
+        assert state._accumulates, (
+            "precondition: the fixture must actually require an accumulate "
+            "column, or this test proves nothing"
+        )
+        agg = nw.from_native(state.agg, eager_only=True)
+        accum_cols = [c for c in agg.columns if c in set(state._accumulates.values())]
+        assert accum_cols, f"precondition: no A* column on {agg.columns}"
+        n_ord_before = int(agg.get_column("ord").max()) + 1
+        state.agg = agg.drop(accum_cols).to_native()
+        state._seeds = None
+        state._pending = []
+        with pytest.raises(RuntimeError, match="missing accumulate column"):
+            if path == "update":
+                # strictly fewer ordinals than the state holds, or
+                # `trim_to_last` short-circuits before reaching the seed step
+                assert n_ord_before > 1, n_ord_before
+                state.trim_to_last(n_ord_before - 1)
+            else:
+                state._make_seeds(pooled_tfms)
+
+
+# ---------------------------------------------------------------------------
+# Fix wave: composites over quantiles.
+# ---------------------------------------------------------------------------
+
+QUANTILE_COMPOSITE_CASES = [
+    (
+        "offset_rolling_quantile",
+        Offset(RollingQuantile(0.5, 7, groupby=["store"]), 2),
+    ),
+    (
+        "offset_expanding_quantile",
+        Offset(ExpandingQuantile(0.5, groupby=["store"]), 2),
+    ),
+    (
+        "offset_seasonal_rolling_quantile",
+        Offset(SeasonalRollingQuantile(0.5, 7, 3, groupby=["store"]), 2),
+    ),
+    (
+        "combine_quantile_quantile",
+        Combine(
+            RollingQuantile(0.5, 7, groupby=["store"]),
+            RollingQuantile(0.9, 7, groupby=["store"]),
+            operator.truediv,
+        ),
+    ),
+    (
+        "combine_quantile_rolling_mean",
+        Combine(
+            RollingQuantile(0.5, 7, groupby=["store"]),
+            RollingMean(7, groupby=["store"]),
+            operator.truediv,
+        ),
+    ),
+    (
+        "combine_rolling_mean_quantile",
+        Combine(
+            RollingMean(7, groupby=["store"]),
+            RollingQuantile(0.5, 7, groupby=["store"]),
+            operator.truediv,
+        ),
+    ),
+    (
+        "combine_offset_quantile_rolling_mean",
+        Combine(
+            Offset(RollingQuantile(0.5, 7, groupby=["store"]), 2),
+            RollingMean(7, groupby=["store"]),
+            operator.truediv,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,tfm",
+    QUANTILE_COMPOSITE_CASES,
+    ids=[c[0] for c in QUANTILE_COMPOSITE_CASES],
+)
+def test_quantile_composites_engines_agree(backend, label, tfm):  # noqa: ARG001
+    """Before the fix every one of these raised
+    ``AttributeError: 'NoneType' object has no attribute 'alias'`` under
+    narwhals while the numpy engine computed them -- composites forwarded
+    ``_pooled_expr`` but not the quantile marker, so the expression branch got
+    the base class's ``None``."""
+    assert_engines_agree(_panel(backend), {1: [tfm]}, ["store"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_quantile_composite_predict_engines_agree(backend):
+    """`latest_features` evaluates the same `feature_frame`, so the predict
+    path must agree too -- and it exercises the seed/tail rebuild, where the
+    materialized quantile column is recomputed over the tail rather than the
+    full table."""
+    tfms = {
+        1: [
+            Offset(RollingQuantile(0.5, 5, groupby=["store"]), 2),
+            Combine(
+                RollingQuantile(0.5, 5, groupby=["store"]),
+                RollingMean(5, groupby=["store"]),
+                operator.truediv,
+            ),
+        ]
+    }
+    a = _predict_with_engine("numpy", _panel(backend), tfms, ["store"], 5)
+    b = _predict_with_engine("narwhals", _panel(backend), tfms, ["store"], 5)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    np.testing.assert_allclose(
+        a.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        b.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        atol=1e-9,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix wave: ordinary `partition_by` cardinalities must densify, not refuse.
+#
+# `should_densify`'s `k=4` refused any partition whose values are mutually
+# exclusive over the calendar with cardinality >= 5 -- day-of-week (7)
+# included, which is documented usage. Recalibrated to k=64 (plus an absolute
+# 20M dense-row cap); see `_pooled_engine.should_densify`.
+# ---------------------------------------------------------------------------
+
+
+def _calendar_partition_panel(backend, n_series=20, n_times=90, n_groups=4):
+    d = _panel(backend, n_series=n_series, n_times=n_times, n_groups=n_groups)
+    d = d if isinstance(d, pl.DataFrame) else pl.from_pandas(d)
+    d = d.with_columns(
+        pl.col("ds").dt.weekday().cast(pl.Int64).alias("dow"),
+        pl.col("ds").dt.month().cast(pl.Int64).alias("month"),
+    )
+    return d if backend == "polars" else d.to_pandas()
+
+
+CALENDAR_PARTITION_CASES = [
+    # cardinality 7: dense/sparse ratio is exactly 7, which k=4 refused
+    ("dow_global", [RollingMean(7, min_samples=1, global_=True, partition_by=["dow"])]),
+    (
+        "dow_groupby",
+        [RollingMean(7, min_samples=1, groupby=["store"], partition_by=["dow"])],
+    ),
+    ("dow_local", [RollingMean(7, min_samples=1, partition_by=["dow"])]),
+    (
+        "dow_expanding_minmax",
+        [
+            ExpandingMin(global_=True, partition_by=["dow"]),
+            ExpandingMax(global_=True, partition_by=["dow"]),
+        ],
+    ),
+    # cardinality 3 (the fixture spans 3 months): under the old k=4 too
+    (
+        "month_global",
+        [RollingMean(3, min_samples=1, global_=True, partition_by=["month"])],
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,tfm_list",
+    CALENDAR_PARTITION_CASES,
+    ids=[c[0] for c in CALENDAR_PARTITION_CASES],
+)
+def test_calendar_cardinality_partition_by_computes(backend, label, tfm_list):  # noqa: ARG001
+    """Reverting `should_densify`'s `k` to 4 makes every `dow_*` case here
+    raise ``NotImplementedError: ... exceeds the should_densify size guard``
+    under narwhals while the numpy engine computes them."""
+    df = _calendar_partition_panel(backend)
+    assert_engines_agree(df, {1: tfm_list}, ["store"], atol=1e-9)
+
+
+def test_should_densify_accepts_calendar_cardinalities_and_refuses_pathological():
+    """The guard's own arithmetic, stated as the property it must have.
+
+    For a partition whose values are mutually exclusive over the calendar,
+    dense/sparse == cardinality exactly, so the bound is a bound on the
+    partition's cardinality.
+    """
+    from mlforecast._pooled_engine import _MAX_DENSE_ROWS, should_densify
+
+    n_calendar = 730
+    for cardinality in (2, 7, 12, 24, 31, 53, 64):
+        n_sparse = n_calendar  # every timestamp observed by exactly one bucket
+        assert should_densify(cardinality, n_calendar, n_sparse), (
+            f"cardinality {cardinality} (dense/sparse == {cardinality}) must "
+            "densify -- it is ordinary calendar partitioning"
+        )
+    for cardinality in (65, 365, 10_000):
+        assert not should_densify(cardinality, n_calendar, n_calendar), (
+            f"cardinality {cardinality} exceeds the ratio bound and must be "
+            "refused rather than materialized"
+        )
+    # the absolute memory cap bites even when the ratio is comfortable
+    assert not should_densify(_MAX_DENSE_ROWS, 2, _MAX_DENSE_ROWS), (
+        "a dense grid past the absolute row cap must be refused however "
+        "proportionate it is to the sparse data"
+    )

@@ -459,34 +459,66 @@ def quantile_values_collapsed(agg_native, time_agg):
     return v[valid], row_offsets
 
 
-def should_densify(n_buckets, n_calendar, n_sparse_rows, k=4):
+# Memory bound for the dense (bucket x parent-calendar) grid.
+#
+# MEASURED (`tmp/measure_densify.py`, this fix wave): a densified aggregate
+# table costs 96.4 bytes/row on polars and 104.0 bytes/row on pandas for the
+# 12-column base schema (1 int64 bucket id + 1 datetime + 10 float64), i.e.
+# ~100 B/row; each additional `time_agg` family adds 3 float64 columns
+# (+24 B/row). 20M dense rows is therefore ~1.9 GiB on the base schema --
+# the point past which materializing the grid is a memory problem in its own
+# right regardless of how fast it runs.
+_MAX_DENSE_ROWS = 20_000_000
+
+
+def should_densify(
+    n_buckets, n_calendar, n_sparse_rows, k=64, max_dense_rows=_MAX_DENSE_ROWS
+):
     """Whether a dense (bucket x parent-calendar) grid is worth materializing.
 
     Densifying turns a RANGE window into a row window, but costs
-    ``n_buckets * n_calendar`` rows. Heuristic: densify while that is within
-    ``k``x the sparse row count.
+    ``n_buckets * n_calendar`` rows. Two bounds, both about MEMORY:
 
-    ``k=4`` measured (Task 8, scratch benchmark, not committed): a 2000
-    series x 200 day panel (400k rows), `RollingMean(28, global_=True,
-    partition_by=["promo"])`, with `promo` cardinality swept from 400 to
-    32000 to push the bucket-count : sparse-row ratio from ~1x to ~16.5x
-    (`should_densify`'s own guard forced to always return True, to measure
-    densifying's cost independent of where the size guard would normally
-    decline). Densifying end-to-end (grid build + evaluation) beat the
-    legacy engine at EVERY ratio tried, by a WIDENING margin, not a
-    narrowing one: 6x faster at ratio 1x (0.054s vs 0.324s), 9x at ratio
-    1.6x, 17x at ratio 2.5x, 19x at ratio 4.5x, 20x at ratio 8.5x, 21x at
-    ratio 16.5x. No crossover was found in this range -- the legacy engine's
-    own per-bucket Python loop scales WORSE with bucket count than the
-    vectorized dense-grid join does, so higher cardinality favors
-    densifying, not the reverse. ``k=4`` is therefore not a
-    performance-derived breakeven (none was found) but a conservative MEMORY
-    bound: it caps how large a dense grid this will materialize relative to
-    the actual data, independent of how fast that materialization runs.
+    * ``dense <= k * n_sparse_rows`` -- the grid must stay proportionate to
+      the data it is derived from;
+    * ``dense <= max_dense_rows`` -- and proportionate is not enough on its
+      own, since a ratio bound is unbounded in absolute terms.
+
+    ``k = 64``, RECALIBRATED in this fix wave. It was 4, which refused
+    ordinary documented usage: when the ``partition_by`` values are mutually
+    exclusive over the calendar (every calendar-derived partition is), each
+    bucket observes ``n_calendar / cardinality`` timestamps, so
+    ``dense / sparse == cardinality`` EXACTLY. ``k = 4`` therefore refused
+    every partition of cardinality >= 5 -- day-of-week included. Verified
+    before the change: ``RollingMean(7, global_=True, partition_by=["dow"])``
+    raised ``NotImplementedError`` (dense grid 7x90 against 90 sparse rows,
+    ratio 7) while the legacy engine computed it, and
+    ``groupby=["store"], partition_by=["dow"]`` raised the same way (2520
+    against 360, ratio 7). ``k = 64`` clears every ordinary calendar
+    cardinality with headroom -- day-of-week 7, month 12, hour-of-day 24,
+    day-of-month 31, week-of-year 53 -- and still refuses a partition whose
+    grid is more than 64x its own data (day-of-year, 365, is the first
+    calendar field past the bound: each bucket then holds roughly one
+    observation per year, which is the pathological shape this guard exists
+    for).
+
+    ``k`` is NOT a performance breakeven: none exists in the measured range.
+    Task 8's scratch benchmark (a 2000 series x 200 day panel, 400k rows,
+    ``RollingMean(28, global_=True, partition_by=["promo"])``, ``promo``
+    cardinality swept 400 -> 32000 to push the ratio from ~1x to ~16.5x, with
+    the guard forced True) found densifying beat the legacy engine at EVERY
+    ratio tried, by a WIDENING margin: 6x faster at ratio 1x (0.054s vs
+    0.324s), 9x at 1.6x, 17x at 2.5x, 19x at 4.5x, 20x at 8.5x, 21x at 16.5x.
+    The legacy engine's per-bucket Python loop scales worse with bucket count
+    than the vectorized dense-grid join does, so higher cardinality favours
+    densifying. Both bounds here are memory bounds and nothing else.
     """
+    dense = n_buckets * n_calendar
+    if dense > max_dense_rows:
+        return False
     if n_sparse_rows == 0:
         return True
-    return n_buckets * n_calendar <= k * n_sparse_rows
+    return dense <= k * n_sparse_rows
 
 
 def densify_to_parent(agg_native, keys, time_col, parent_keys_native):

@@ -486,10 +486,23 @@ class TimeSeries:
         `ensure_densified`), reproduces the normal fit-time invariant that
         the rest of Task 9's predict-path code already assumes, regardless
         of whether the state was built via `fit_transform` or
-        `history_warmup`. `ensure_accumulates` (the third and last step
-        `feature_frame` runs) is NOT needed here: unlike shape/structure,
-        its ``A``-prefixed columns are re-derived fresh by `_rebuild_tail`
-        over the small seed+tail range on demand, never assumed present.
+        `history_warmup`. ``ensure_accumulates`` (the third and last step
+        ``feature_frame`` runs) is settled here too. An earlier version of
+        this method skipped it, on the theory that ``_rebuild_tail``
+        re-derives the ``A``-prefixed columns on demand. It does -- but only
+        over the seed+tail range, and only AFTER ``_make_seeds`` has already
+        read the seed row's running accumulate value out of those same
+        columns on the FULL table. With them absent, ``_make_seeds`` silently
+        skipped that substitution and the seed carried one timestamp's raw
+        ``mn``/``mx``/ewm value instead of the whole dropped prefix's running
+        one: measured on pandas, ``ExpandingMin``/``ExpandingMax``/
+        ``ExponentiallyWeightedMean`` predictions diverged from the legacy
+        engine by up to 7.7e-01 through ``history_warmup`` and
+        ``predict(new_df=...)``, with no error. ``_make_seeds`` now raises
+        instead of skipping (see
+        ``NarwhalsPooledState._assert_accumulates_present``), so this call is
+        what keeps the warm-up path matching the invariant ``feature_frame``
+        guarantees at fit.
         """
         core_tfms = self._get_core_lag_tfms()
         if core_tfms:
@@ -501,6 +514,7 @@ class TimeSeries:
             leaves = [leaf for tfm in tfms.values() for leaf in _iter_leaf_tfms(tfm)]
             state.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
             state.ensure_densified(leaves)
+            state.ensure_accumulates(leaves)
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""

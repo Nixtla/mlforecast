@@ -2,7 +2,6 @@
 """A model saved by the numpy engine must be migratable without shipping any
 legacy classes in the library."""
 
-import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +13,8 @@ from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
+
+from ._pooled_engine_env import pooled_engine
 
 
 def _panel(n_series=20, n_times=60, n_groups=4, seed=0, backend="polars"):
@@ -35,34 +36,40 @@ def _panel(n_series=20, n_times=60, n_groups=4, seed=0, backend="polars"):
     return df if backend == "polars" else df.to_pandas()
 
 
-def test_migrated_model_predicts_identically(tmp_path, monkeypatch):
-    import mlforecast.core
-    import mlforecast.pooled
+def test_migrated_model_predicts_identically(tmp_path):
+    """Save under the numpy engine, migrate, load and predict under narwhals.
 
+    Both engine switches go through ``pooled_engine``, which restores every
+    reloaded module object on exit. The earlier form set the env var with
+    ``monkeypatch.setenv`` and reloaded, but never reloaded BACK -- the env
+    var was restored while the modules stayed on the narwhals engine for the
+    remainder of the pytest session. That is what turned the full-suite run
+    red at ``ce7dbab``
+    (``test_pooled_narwhals.py::test_history_warmup_partition_by_densifies_before_first_predict``
+    and ``test_pooled_state_cleanup.py::test_g1_pooled_predictions_byte_identical``
+    both failed in the suite and passed in isolation).
+    """
     df = _panel()
     tfms = {1: [RollingMean(7, groupby=["store"]), ExpandingMean(groupby=["store"])]}
 
-    monkeypatch.setenv("MLFORECAST_POOLED_ENGINE", "numpy")
-    importlib.reload(mlforecast.pooled)
-    importlib.reload(mlforecast.core)
-    old = MLForecast(
-        models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
-    )
-    old.fit(df, static_features=["store"])
-    expected = old.predict(7)
-    old.save(str(tmp_path / "old"))
+    with pooled_engine("numpy"):
+        old = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        old.fit(df, static_features=["store"])
+        expected = old.predict(7)
+        old.save(str(tmp_path / "old"))
 
-    from mlforecast._pooled_migrate import migrate_saved_model
+        from mlforecast._pooled_migrate import migrate_saved_model
 
-    migrate_saved_model(tmp_path / "old", tmp_path / "new")
+        migrate_saved_model(tmp_path / "old", tmp_path / "new")
 
-    monkeypatch.setenv("MLFORECAST_POOLED_ENGINE", "narwhals")
-    importlib.reload(mlforecast.pooled)
-    importlib.reload(mlforecast.core)
-    from mlforecast import MLForecast as MF
+    with pooled_engine("narwhals"):
+        from mlforecast import MLForecast as MF
 
-    migrated = MF.load(str(tmp_path / "new"))
-    got = migrated.predict(7)
+        migrated = MF.load(str(tmp_path / "new"))
+        got = migrated.predict(7)
+
     np.testing.assert_allclose(
         expected.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
         got.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
@@ -70,28 +77,26 @@ def test_migrated_model_predicts_identically(tmp_path, monkeypatch):
     )
 
 
-def test_legacy_load_raises_actionable_error(tmp_path, monkeypatch):
-    import mlforecast.core
-    import mlforecast.pooled
-
+def test_legacy_load_raises_actionable_error(tmp_path):
     df = _panel()
-    monkeypatch.setenv("MLFORECAST_POOLED_ENGINE", "numpy")
-    importlib.reload(mlforecast.pooled)
-    importlib.reload(mlforecast.core)
-    f = MLForecast(
-        models=[LinearRegression()],
-        freq="1d",
-        lags=[1],
-        lag_transforms={1: [RollingMean(7, groupby=["store"])]},
-    )
-    f.fit(df, static_features=["store"])
-    f.save(str(tmp_path / "m"))
+    with pooled_engine("numpy"):
+        f = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            lags=[1],
+            lag_transforms={1: [RollingMean(7, groupby=["store"])]},
+        )
+        f.fit(df, static_features=["store"])
+        f.save(str(tmp_path / "m"))
 
-    from mlforecast._pooled_migrate import LegacyPickleError, _simulate_missing_legacy
+        from mlforecast._pooled_migrate import (
+            LegacyPickleError,
+            _simulate_missing_legacy,
+        )
 
-    with _simulate_missing_legacy():
-        with pytest.raises(LegacyPickleError, match="migrate_saved_model"):
-            MLForecast.load(str(tmp_path / "m"))
+        with _simulate_missing_legacy():
+            with pytest.raises(LegacyPickleError, match="migrate_saved_model"):
+                MLForecast.load(str(tmp_path / "m"))
 
 
 # ---------------------------------------------------------------------------
@@ -136,19 +141,18 @@ def test_migration_predicts_identically_across_backends_and_modes(
     )
 
 
-def test_rebuild_agg_from_legacy_empty_ts_aggs_fallback(monkeypatch):
+def test_rebuild_agg_from_legacy_empty_ts_aggs_fallback():
     """The slow-path fallback (``_ts_aggs`` cleared) must reconstruct the
     SAME aggregate table as the fast path that reads it directly -- this is
     the regression test for the "Empty _ts_aggs" case flagged in the brief.
     """
     import copy
 
-    import mlforecast.core
-    import mlforecast.pooled
+    with pooled_engine("numpy"):
+        _rebuild_agg_from_legacy_empty_ts_aggs_body(copy)
 
-    monkeypatch.setenv("MLFORECAST_POOLED_ENGINE", "numpy")
-    importlib.reload(mlforecast.pooled)
-    importlib.reload(mlforecast.core)
+
+def _rebuild_agg_from_legacy_empty_ts_aggs_body(copy):
     from mlforecast.pooled import PooledState
 
     df = _panel()

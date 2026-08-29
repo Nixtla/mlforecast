@@ -2,9 +2,11 @@
 
 ``MLFORECAST_POOLED_ENGINE`` selects the implementation:
 
-- ``narwhals`` (default): the aggregate-table engine in this module.
-- ``numpy``: the original engine in ``_pooled_legacy``, retained for the
-  differential tests and the A/B benchmark.
+- ``numpy`` (default): the original engine in ``_pooled_legacy``.
+- ``narwhals``: the aggregate-table engine in this module, opt-in via
+  ``MLFORECAST_POOLED_ENGINE=narwhals`` while iteration one is under review
+  (ruling F14 kept ``numpy`` as the shipped default; see
+  ``tests/test_pooled_acceptance_narwhals.py``).
 
 Both the environment variable and the numpy engine are removed in iteration two.
 """
@@ -232,6 +234,20 @@ class NarwhalsPooledState:
         self._hist_suffix = None
         self._hist_suffix_df = None
         self._accum_specs: Dict[Any, str] = {}
+        # Registry of the ``A<col>`` accumulate columns `ensure_accumulates`
+        # has materialized on `self.agg`, keyed exactly like
+        # `_accumulate_specs`'s output (`(col, op, sorted kwargs items) ->
+        # out name`). Unlike `_accum_specs` above -- a predict-path cache
+        # `_invalidate_predict_cache` clears -- this one is part of the
+        # table's own shape contract: `append_observations`, `trim_to_last`
+        # and `_apply_densification` all rebuild or validate the `A` columns
+        # WITHOUT being handed the transform set, so they need a durable
+        # record of which ones this table is required to carry. Keeping the
+        # requirement recorded (rather than inferring it from whichever
+        # columns happen to be present) is what turns a missing `A` column
+        # into a loud failure instead of a silently-skipped substitution --
+        # see `trim_to_last`/`_make_seeds`.
+        self._accumulates: Dict[Any, str] = {}
         # partition_by / densification bookkeeping (Task 8). Harmless no-ops
         # for `global_`/`groupby` states (`mode` is always in
         # `_KNOWN_DENSE_MODES` for those, so `ensure_densified` returns
@@ -660,7 +676,22 @@ class NarwhalsPooledState:
 
         skeleton = self._dense_skeleton()
         a = nw.from_native(self.agg, eager_only=True)
-        base_cols = [c for c in a.columns if c != "ord" and not c.startswith("E")]
+        # `A`-prefixed accumulate columns are dropped alongside `ord`/`E`, and
+        # for the same reason: they were accumulated over the SPARSE row
+        # order, so a densified hole makes them stale. They are NOT
+        # reconstructible by the left-join below (`densify_to_parent` only
+        # zero-fills the base aggregates), so they must be recomputed from
+        # the dense base -- `_rebuild_accumulates` below does that for every
+        # column `ensure_accumulates` has registered. (Before this they were
+        # carried through the join unchanged and `ensure_accumulates` then
+        # skipped them as "already present", leaving sparse-order accumulate
+        # values on a dense table.)
+        accum_out = set(self._accumulates.values())
+        base_cols = [
+            c
+            for c in a.columns
+            if c != "ord" and not c.startswith("E") and c not in accum_out
+        ]
         dense = densify_to_parent(
             a.select(base_cols).to_native(), self.keys, self.time_col, skeleton
         )
@@ -679,6 +710,7 @@ class NarwhalsPooledState:
         self.agg = grouped_accumulate(
             t.to_native(), self.keys, prefix_cols, "cum_sum", prefix_outs
         )
+        self._rebuild_accumulates()
         # F4/F5: densification changes the aggregate table's row count, and
         # `quantile_values` emits one offset per row -- stale offsets would
         # silently misalign every partition_by quantile.
@@ -737,15 +769,36 @@ class NarwhalsPooledState:
             {type(t).__name__ for t in leaf_tfms if not isinstance(t, LookupLag)}
         )
         if has_lookup and others:
+            part = ", ".join(repr(c) for c in (self.partition_cols or []))
             raise NotImplementedError(
-                "partition_by state mixes LookupLag (requires the sparse, "
-                f"occurrence-indexed table) with {others} (require the "
-                "dense parent-calendar grid for correct RANGE-window "
-                "semantics) -- the two can't share one aggregate table. "
-                "Give LookupLag its own partition_by grouping (a separate "
-                "lag_transforms entry with no other transform sharing its "
-                "exact mode/groupby/partition_by combination), or run this "
-                "key with MLFORECAST_POOLED_ENGINE=numpy."
+                "partition_by state mixes LookupLag with "
+                f"{others}, which need incompatible representations of the "
+                "same aggregate table.\n"
+                "  * LookupLag's lag counts OCCURRENCES: it reads the row "
+                "`lag` positions back in the SPARSE table (one row per "
+                "observed (bucket, timestamp)). Filling the calendar holes "
+                "would silently turn that occurrence lag into a calendar "
+                "lag.\n"
+                f"  * {others} read a calendar RANGE window, which a "
+                "row-position shift only equals once the holes ARE filled: "
+                "on a sparse table consecutive rows are not consecutive "
+                "calendar ordinals.\n"
+                "One table cannot be sparse and dense at once, so this "
+                "refuses rather than returning a wrong number for one of "
+                "the two families. Three ways forward:\n"
+                "  1. Put LookupLag on a DUPLICATE of the same partition "
+                f"column(s) ({part}) -- e.g. "
+                "`df['holiday_lookup'] = df['holiday']` and "
+                "`LookupLag(partition_by=['holiday_lookup'])`. The buckets "
+                "are identical, so the semantics are unchanged; only the "
+                "pooled state key (mode, groupby, partition_by) differs, "
+                "which is what puts the two families on separate tables. "
+                "Verified numerically equal to the legacy engine's mixed "
+                "state (max abs diff 2.8e-14). Note the generated feature "
+                "name follows the new column name.\n"
+                "  2. Drop either LookupLag or the other transform(s) from "
+                "this partition_by grouping.\n"
+                "  3. Run this key with MLFORECAST_POOLED_ENGINE=numpy."
             )
         if has_lookup:
             self._densify_declined = True
@@ -863,6 +916,11 @@ class NarwhalsPooledState:
         transform(s) do.
         """
         need = _accumulate_specs(leaf_tfms)
+        # Record the requirement BEFORE building, so every later reshape of
+        # `self.agg` (`append_observations`, `trim_to_last`,
+        # `_apply_densification`) knows which `A` columns the table owes even
+        # though none of them is handed a transform set.
+        self._accumulates.update(need)
         present = set(nw.from_native(self.agg, eager_only=True).columns)
         for (col, op, kw_items), out in need.items():
             if out in present:
@@ -873,6 +931,59 @@ class NarwhalsPooledState:
             # same forward-fill-through-gaps invariant (see its docstring and
             # `grouped_accumulate`'s).
             self.agg = apply_accumulate(self.agg, self.keys, col, op, out, **kw)
+
+    def _rebuild_accumulates(self):
+        """Recompute every registered ``A<col>`` column over the current ``self.agg``.
+
+        Used by the paths that rebuild the aggregate table's row set without
+        a transform set in hand (``append_observations``, and any caller of
+        ``_apply_densification``). A fresh accumulate over the whole table
+        reproduces the same absolute values it had before, for exactly the
+        reason ``_add_prefix_sums`` may be rerun wholesale: a ``trim_to_last``
+        seed row's RAW ``mn``/``mx``/``ewm`` column already carries the
+        running value of everything that was dropped, so
+        ``cum_min``/``cum_max``/``ewm_mean`` over ``[seed, retained, new]``
+        lands on the true absolute state -- the same argument that makes
+        rerunning ``cum_sum`` over the seed's raw ``s``/``c``/``q`` correct.
+        """
+        for (col, op, kw_items), out in self._accumulates.items():
+            self.agg = apply_accumulate(
+                self.agg, self.keys, col, op, out, **dict(kw_items)
+            )
+
+    def _assert_accumulates_present(self, required, where):
+        """Fail loudly when an ``A`` column a transform needs is missing.
+
+        The three consumers of an accumulate column (``_make_seeds``,
+        ``trim_to_last``, ``_rebuild_tail``) all substitute the running
+        ``A<col>`` value into the seed row's raw ``<col>``. Guarding that
+        substitution with "only if the column happens to be there" turns a
+        missing prerequisite into a WRONG NUMBER with no error -- which is
+        exactly how `_initialize_lag_transform_states` (no
+        ``ensure_accumulates`` on the ``history_warmup`` /
+        ``predict(new_df=...)`` path) and ``append_observations`` (dropped
+        the ``A`` columns on ``update()``) shipped silently wrong
+        ``ExpandingMin``/``ExpandingMax``/``ExponentiallyWeightedMean``
+        results. There is no correct fallback here: the table cannot be
+        seeded without the accumulate baseline, so a missing column is a
+        programming error in the caller that failed to settle
+        ``ensure_accumulates`` first.
+        """
+        cols = set(nw.from_native(self.agg, eager_only=True).columns)
+        missing = sorted(
+            f"{out} (running value of {col!r})"
+            for (col, _op, _kw), out in required.items()
+            if out not in cols or col not in cols
+        )
+        if missing:
+            raise RuntimeError(
+                f"{where}: the aggregate table is missing accumulate "
+                f"column(s) {missing} that the transforms in play require. "
+                "`ensure_accumulates` must settle them before the table is "
+                "seeded, trimmed or extended; substituting the seed row's "
+                "running value is not optional -- skipping it silently "
+                "produces a wrong Expanding*/EWM value rather than an error."
+            )
 
     # Modes for which `NarwhalsPooledState`'s per-bucket `ord` column is
     # STRUCTURALLY dense (0..n-1 with no calendar gaps): legacy renumbers
@@ -1026,23 +1137,25 @@ class NarwhalsPooledState:
         self.ensure_densified(leaves)
         self.ensure_accumulates(leaves)
         self._guard_ewm_positional_shift(leaves)
-        # Quantiles have no narwhals expression (no sufficient statistic --
-        # see `_quantile_columns`); split them out and compute separately.
-        quantile_tfms = {
-            n: tfm
-            for n, tfm in transforms.items()
-            if getattr(tfm, "_pooled_quantile", False)
-        }
-        expr_tfms = {n: tfm for n, tfm in transforms.items() if n not in quantile_tfms}
         t = nw.from_native(self.agg, eager_only=True)
-        exprs = []
-        for name, tfm in expr_tfms.items():
-            expr = tfm._pooled_expr(_resolve_ctx(tfm, self.keys))
-            exprs.append(expr.alias(name))
-        if exprs:
-            t = t.with_columns(exprs)
-        if quantile_tfms:
-            qcols = self._quantile_columns(quantile_tfms)
+        # Quantiles have no sufficient statistic, so no expression over the
+        # aggregate columns can produce them (see `_quantile_columns`). They
+        # are still evaluated through the one `_pooled_expr` hook: each
+        # quantile LEAF is materialized into a column here first, and its
+        # `_pooled_expr` is a reference to that column. Splitting on the
+        # OUTER transform instead (the previous shape) sent composites down
+        # the expression branch, where the quantile leaf's absent expression
+        # surfaced as `None.alias(...)`: `Offset(RollingQuantile(...))` and
+        # `Combine(RollingQuantile(...), ...)` both crashed. Keying by leaf
+        # also dedupes -- one column per distinct quantile configuration,
+        # however many transforms reference it.
+        qleaves: Dict[str, Any] = {}
+        for leaf in leaves:
+            if getattr(leaf, "_pooled_quantile", False):
+                qname = leaf._pooled_quantile_name(_resolve_ctx(leaf, self.keys))
+                qleaves.setdefault(qname, leaf)
+        if qleaves:
+            qcols = self._quantile_columns(qleaves)
             backend = nw.get_native_namespace(t)
             t = t.with_columns(
                 *[
@@ -1050,6 +1163,28 @@ class NarwhalsPooledState:
                     for name, vals in qcols.items()
                 ]
             )
+        exprs = []
+        for name, tfm in transforms.items():
+            expr = tfm._pooled_expr(_resolve_ctx(tfm, self.keys))
+            if expr is None:
+                raise NotImplementedError(
+                    f"{type(tfm).__name__} has no pooled narwhals expression "
+                    f"(feature {name!r}). Every pooled-capable transform must "
+                    "define `_pooled_expr` -- quantile families do so by "
+                    "referencing the column `feature_frame` materializes for "
+                    "them (see `_BaseLagTransform._pooled_expr`). Run this "
+                    "key with MLFORECAST_POOLED_ENGINE=numpy."
+                )
+            exprs.append(expr.alias(name))
+        if exprs:
+            t = t.with_columns(exprs)
+        # The materialized quantile columns are scratch: they exist only so
+        # `_pooled_expr` stays uniform. Drop them again (unless a feature is
+        # literally named after one) so the returned frame keeps exactly the
+        # aggregate table's schema plus the requested features.
+        scratch = [c for c in qleaves if c not in transforms]
+        if scratch:
+            t = t.drop(scratch)
         return t.to_native()
 
     def join_to_panel(self, df_sorted, transforms, _id_col, time_col):
@@ -1272,9 +1407,16 @@ class NarwhalsPooledState:
                 col = f"{base}{suffix}"
                 if col in boundary_rows.columns:
                     subs.append(nw.col(f"E{col}").alias(col))
+        # Every accumulate column the transforms need MUST be here: the seed
+        # row's raw `mn`/`mx`/`ewm` value is replaced by its running `A`
+        # value so a fresh accumulate over [seed, tail, pending] reproduces
+        # the ABSOLUTE state. Skipping a substitution because the column
+        # happens to be absent leaves the seed carrying one timestamp's raw
+        # value instead of the whole dropped prefix's running one -- a wrong
+        # number, silently. See `_assert_accumulates_present`.
+        self._assert_accumulates_present(self._accum_specs, "_make_seeds")
         for (col, _op, _kw), out in self._accum_specs.items():
-            if col in boundary_rows.columns and out in boundary_rows.columns:
-                subs.append(nw.col(out).alias(col))
+            subs.append(nw.col(out).alias(col))
         if subs:
             boundary_rows = boundary_rows.with_columns(subs)
 
@@ -1760,9 +1902,17 @@ class NarwhalsPooledState:
             eager_only=True,
         )
         # bare base columns only (no `ord`, no `E`-prefixed prefix sums --
-        # both are wrong here, computed over just the new rows -- and never
-        # any `A`-prefixed accumulate column, since `build_agg_table` never
-        # produces one; see `_apply_densification`'s identical filter).
+        # both are wrong here, computed over just the new rows -- and no
+        # `A`-prefixed accumulate column, which `build_agg_table` never
+        # produces anyway; see `_apply_densification`'s identical filter).
+        #
+        # Taking `base_cols` from the FRESH `build_agg_table` is what used to
+        # silently DROP an existing `A` column off `self.agg` (`update()`
+        # then produced wrong ExpandingMin/ExpandingMax/EWM numbers with no
+        # error). The `A` columns are instead rebuilt from scratch at the end
+        # of this method, over the combined table -- see
+        # `_rebuild_accumulates` for why a fresh accumulate reproduces the
+        # same absolute values, including across a `trim_to_last` seed row.
         base_cols = [
             c for c in new_agg_full.columns if c != "ord" and not c.startswith("E")
         ]
@@ -1786,7 +1936,10 @@ class NarwhalsPooledState:
         # cached dense skeleton doesn't know about yet.
         self._skeleton = None
         if self._densified:
+            # rebuilds the accumulate columns itself, over the dense grid
             self._apply_densification()
+        else:
+            self._rebuild_accumulates()
         self._invalidate_predict_cache()
 
     def trim_to_last(self, n_ordinals: int) -> None:
@@ -1867,9 +2020,16 @@ class NarwhalsPooledState:
                 col = f"{base}{suffix}"
                 if col in boundary_rows.columns:
                     subs.append(nw.col(f"E{col}").alias(col))
-        accum_cols = [c for c in full_cols if c.startswith("A") and c[1:] in full_cols]
-        for out_col in accum_cols:
-            subs.append(nw.col(out_col).alias(out_col[1:]))
+        # Same contract as `_make_seeds`: the boundary row becomes a seed and
+        # its raw accumulate-consumed column must be overwritten by the
+        # running `A` value. Driven by the RECORDED requirement
+        # (`self._accumulates`, set by `ensure_accumulates`) rather than by
+        # whichever `A*` columns happen to be present, so a table that never
+        # settled its accumulates fails here instead of trimming away the
+        # Expanding*/EWM baseline and returning wrong numbers afterwards.
+        self._assert_accumulates_present(self._accumulates, "trim_to_last")
+        for (col, _op, _kw), out_col in self._accumulates.items():
+            subs.append(nw.col(out_col).alias(col))
         if subs:
             boundary_rows = boundary_rows.with_columns(subs)
         seed_rows = boundary_rows.select(full_cols)

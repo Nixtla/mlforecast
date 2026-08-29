@@ -196,8 +196,43 @@ class _BaseLagTransform(BaseEstimator):
         iteration-one numpy fallback once this coverage was proven). Iteration
         two removes the four ``_impl`` hooks above, which only the legacy
         engine still reads.
+
+        Quantile transforms have no sufficient statistic, so their value
+        cannot be written as an expression over the aggregate columns. They
+        are nonetheless part of THIS contract rather than a parallel one:
+        ``NarwhalsPooledState.feature_frame`` materializes each quantile
+        LEAF as a column on the aggregate table first, and the quantile
+        transform's own ``_pooled_expr`` is then a plain reference to that
+        column (see ``_pooled_quantile_name``). That is what lets
+        ``Offset``/``Combine`` keep delegating through a SINGLE hook, the way
+        they did to the legacy engine's uniform ``_compute_bucket_feature``:
+        before this, composites forwarded ``_pooled_expr`` but not the
+        ``_pooled_quantile`` marker, so ``Offset(RollingQuantile(...))`` and
+        ``Combine(RollingQuantile(...), ...)`` reached ``feature_frame``'s
+        expression branch and crashed on ``None.alias(...)``.
         """
         return None
+
+    def _pooled_quantile_name(self, ctx) -> str:
+        """Name of the column ``feature_frame`` materializes this quantile into.
+
+        Derived only from the transform's own resolved configuration, so it
+        is deterministic across runs and two identical quantile leaves (e.g.
+        the same ``RollingQuantile`` reached through two different
+        composites) share one materialized column instead of being computed
+        twice. Leading underscore keeps it out of the user-visible feature
+        namespace; no aggregate column of ``self.agg`` starts with ``_pq__``.
+        """
+        parts = (
+            type(self).__name__,
+            ctx.lag,
+            ctx.min_samples,
+            getattr(self, "time_agg", None),
+            getattr(self, "p", None),
+            getattr(self, "window_size", None),
+            getattr(self, "season_length", None),
+        )
+        return "_pq__" + "__".join(str(x) for x in parts)
 
     def _bucket_feature_rows_impl(
         self, _bid_arr, _ord_arr, _y_arr
@@ -1062,10 +1097,16 @@ class RollingQuantile(_RollingBase):
 
     # Quantiles have no sufficient statistic -- unlike every other family in
     # this module, they need the raw values, which no aggregate (sum/count/
-    # min/max) can reconstruct. No `_pooled_expr`; `NarwhalsPooledState`
-    # routes transforms carrying this marker through the flat values+offsets
-    # store instead (`_pooled_engine.quantile_values`/`quantile_feature`).
+    # min/max) can reconstruct. `NarwhalsPooledState.feature_frame` routes
+    # transforms carrying this marker through the flat values+offsets store
+    # (`_pooled_engine.quantile_values`/`quantile_feature`), materializes the
+    # result as a column, and `_pooled_expr` below is then just a reference
+    # to it -- so `Offset`/`Combine` delegate through the SAME single hook as
+    # every other family (see `_BaseLagTransform._pooled_expr`'s docstring).
     _pooled_quantile = True
+
+    def _pooled_expr(self, ctx):
+        return nw.col(self._pooled_quantile_name(ctx))
 
     def _pooled_quantile_offsets(self, ctx, _n_ordinals):
         """Ordinal offsets whose union is this row's window: ``lag..lag+w-1``,
@@ -1324,8 +1365,12 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         return float(np.quantile(vals, self.p))
 
     # See RollingQuantile's identical marker comment: no sufficient statistic,
-    # so no `_pooled_expr` -- routed through the flat values+offsets store.
+    # so the value comes from the flat values+offsets store and `_pooled_expr`
+    # only references the column `feature_frame` materializes it into.
     _pooled_quantile = True
+
+    def _pooled_expr(self, ctx):
+        return nw.col(self._pooled_quantile_name(ctx))
 
     def _pooled_quantile_offsets(self, ctx, _n_ordinals):
         """Seasonal strides, matching ``_pooled_offsets``/``_seasonal_stat``'s
@@ -1679,8 +1724,12 @@ class ExpandingQuantile(_ExpandingBase):
         return float(np.quantile(vals, self.p))
 
     # See RollingQuantile's identical marker comment: no sufficient statistic,
-    # so no `_pooled_expr` -- routed through the flat values+offsets store.
+    # so the value comes from the flat values+offsets store and `_pooled_expr`
+    # only references the column `feature_frame` materializes it into.
     _pooled_quantile = True
+
+    def _pooled_expr(self, ctx):
+        return nw.col(self._pooled_quantile_name(ctx))
 
     def _pooled_quantile_offsets(self, ctx, n_ordinals):
         """All ordinals from ``lag`` up to the table's end; the caller's own

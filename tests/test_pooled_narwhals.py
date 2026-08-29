@@ -16,6 +16,8 @@ def test_shared_key_helpers_importable_from_both_engines():
     assert _NULL_SENTINEL == "\x00__MLF_NULL__"
 
 
+from ._pooled_engine_env import pooled_engine  # noqa: E402
+
 import narwhals as nw
 import numpy as np
 import polars as pl
@@ -472,17 +474,7 @@ def _run_predict_and_check_contiguity(backend, n_buckets=3, n_steps=6):
     `build_query_arrays` call (the query-extended tail `latest_features`
     reads from) at every step.
     """
-    import importlib
-    import os
-
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import mlforecast.core
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
+    with pooled_engine("narwhals"):
         from mlforecast.core import TimeSeries
         from mlforecast.lag_transforms import RollingQuantile
 
@@ -525,16 +517,6 @@ def _run_predict_and_check_contiguity(backend, n_buckets=3, n_steps=6):
                 state.keys,
                 f"step {step}: persisted tail after append_predictions",
             )
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.core
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -568,7 +550,7 @@ def test_rebuild_tail_and_query_arrays_keep_buckets_contiguous(backend):
 # smaller changes the predicted value, so there is no slack to "clean up".
 
 
-def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
+def test_rolling_mean_retention_formula_margin_is_pinned():
     """Pins BOTH the formula's actual margin and the true floor for
     RollingMean(window_size=W, lag=L): retention `lag + window_size` (the
     formula) and `lag + window_size - 1` (one row less -- the true minimum,
@@ -578,19 +560,9 @@ def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
     value and the effect of shrinking retention directly checkable without
     depending on the legacy engine.
     """
-    import importlib
-    import os
-
     import pandas as pd
 
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import mlforecast.core
-        import mlforecast.pooled as mp2
-
-        importlib.reload(mp2)
-        importlib.reload(mlforecast.core)
+    with pooled_engine("narwhals"):
         from mlforecast.core import TimeSeries
         from mlforecast.lag_transforms import RollingMean
 
@@ -618,13 +590,18 @@ def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
             )
             ts._predict_setup()
             if retention_delta:
-                original = mp2._pooled_retention
+                # Plain assignment, not `monkeypatch.setattr`: `pooled_engine`
+                # restores `mlforecast.pooled.__dict__` wholesale on exit, and
+                # monkeypatch's own teardown runs AFTER that -- it would put a
+                # reloaded-generation function back into the restored module,
+                # re-introducing exactly the residue this file stopped leaving.
+                original = mp._pooled_retention
 
-                def patched(tfm):
-                    r = original(tfm)
-                    return None if r is None else max(r - retention_delta, 0)
+                def patched(tfm, _original=original, _d=retention_delta):
+                    r = _original(tfm)
+                    return None if r is None else max(r - _d, 0)
 
-                monkeypatch.setattr(mp2, "_pooled_retention", patched)
+                mp._pooled_retention = patched
             feats = ts._update_features()
             return float(np.asarray(feats[col], dtype=float)[0])
 
@@ -662,16 +639,6 @@ def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
             "this fixture no longer exercises the boundary, or the formula "
             "has MORE untested slack than documented"
         )
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.core
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 # ---- Task 10 fix round 1: `history_warmup` must densify before predict ----
@@ -705,24 +672,13 @@ def test_history_warmup_partition_by_densifies_before_first_predict():
     (which may not be modified) but stands on its own here so this file's
     own regression suite pins the fix directly.
     """
-    import importlib
-    import os
-
     import pandas as pd
     from sklearn.linear_model import LinearRegression
 
     from mlforecast import MLForecast
     from mlforecast.lag_transforms import RollingMean
 
-    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
-    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
-    try:
-        import mlforecast.core
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
-
+    with pooled_engine("narwhals"):
         n_times = 20
         df = pd.DataFrame(
             {
@@ -759,16 +715,6 @@ def test_history_warmup_partition_by_densifies_before_first_predict():
             expected["LinearRegression"].to_numpy(),
             actual["LinearRegression"].to_numpy(),
         )
-    finally:
-        if prev is None:
-            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
-        else:
-            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
-        import mlforecast.core
-        import mlforecast.pooled
-
-        importlib.reload(mlforecast.pooled)
-        importlib.reload(mlforecast.core)
 
 
 # ---- Task 10 fix round 2: pin `_dense_skeleton`'s `self.agg`-not-`self._df` ----
