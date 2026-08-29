@@ -1627,3 +1627,180 @@ def _predict_with_engine_keep_last_n(engine, df, tfms, statics, h, keep_last_n):
 
         importlib.reload(mlforecast.pooled)
         importlib.reload(mlforecast.core)
+
+
+# ---- Task 10 fix round 3: dynamic partition_by reassignment at h>=3 ----
+#
+# `h=1`/`h=2` are USELESS for this regression: the broken code (dense
+# `append_predictions` bucket range bounded by `bids.max() + 1`, not the
+# state's full registered bucket count) only under-advances a bucket's
+# shared-parent calendar on a step where NO series is currently pointing at
+# it -- and the resulting misalignment only bites once some LATER step reads
+# a window against that now-behind bucket. Both engines agree trivially at
+# h<=2 even against the broken code (see the revert-proof in the task-10
+# report's third fix round), so this test requires h>=3.
+
+
+def _panel_with_cycling_promo(backend, n_series=20, n_times=60, n_groups=4):
+    """`_panel` plus a `promo` column that cycles 0,1,2 by TIME (identical
+    pattern for every series, exactly like the isolating reproduction in
+    ``tmp/repro_h_gt_1_partition_divergence.py``): every series shares the
+    SAME promo value at a given timestamp, so a `groupby=["store"]` state's
+    per-store buckets are reassigned in lockstep as promo cycles, and a
+    `local` (no groupby) state's per-series buckets are reassigned
+    identically for every series too.
+    """
+    d = _panel(backend, n_series=n_series, n_times=n_times, n_groups=n_groups)
+    d = d if isinstance(d, pl.DataFrame) else pl.from_pandas(d)
+    d = d.with_columns(
+        ((pl.col("ds").rank("dense") - 1) % 3).cast(pl.Int64).alias("promo")
+    )
+    return d if backend == "polars" else d.to_pandas()
+
+
+def _dynamic_reassignment_x_df(backend, df, h):
+    """Future `X_df` continuing the fit-time promo cycle -- reassigns EVERY
+    series between existing (store, promo) / (id, promo) buckets each step,
+    never introducing a brand-new partition value (every promo value 0/1/2
+    was already observed by every series during fit)."""
+    d = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    uids = d.get_column("unique_id").unique(maintain_order=True).to_list()
+    last = d.get_column("ds").max()
+    n_times = d.filter(pl.col("unique_id") == uids[0]).height
+    dates = pl.datetime_range(
+        last + pl.duration(days=1),
+        last + pl.duration(days=h),
+        interval="1d",
+        eager=True,
+    )
+    promo = [(n_times + step) % 3 for step in range(h)]
+    x_df = pl.DataFrame(
+        {
+            "unique_id": np.repeat(uids, h),
+            "ds": np.tile(dates.to_numpy(), len(uids)),
+            "promo": np.tile(np.asarray(promo, dtype=np.int64), len(uids)),
+        }
+    )
+    return x_df if backend == "polars" else x_df.to_pandas()
+
+
+def _predict_with_engine_x_df(engine, df, tfms, statics, x_df, h):
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        fcst = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        fcst.fit(df, static_features=statics)
+        return fcst.predict(h, X_df=x_df)
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+PARTITION_REASSIGN_CASES = [
+    (
+        "groupby_partition_by",
+        {
+            1: [
+                RollingMean(7, groupby=["store"], partition_by=["promo"]),
+                ExpandingMean(groupby=["store"], partition_by=["promo"]),
+            ]
+        },
+        ["store"],
+    ),
+    (
+        "local_partition_by",
+        {
+            1: [
+                RollingMean(7, partition_by=["promo"]),
+                ExpandingMean(partition_by=["promo"]),
+            ]
+        },
+        ["store"],
+    ),
+]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    "label,tfms,statics",
+    PARTITION_REASSIGN_CASES,
+    ids=[c[0] for c in PARTITION_REASSIGN_CASES],
+)
+def test_dynamic_partition_reassignment_engines_agree_h_gt_2(
+    backend, label, tfms, statics
+):
+    """Regression for a Critical found downstream of Task 10: a series
+    dynamically REASSIGNED between already-existing `partition_by` buckets
+    across a recursive predict walk diverged between engines starting at
+    h=3 (measured: max|diff| up to ~0.05 on `groupby+partition_by`, ~0.02 on
+    `local+partition_by`), while freezing the assignment (same series, same
+    buckets, never moved) agreed exactly at every horizon -- isolating the
+    mechanism to the per-step bucket-reassignment path, not the
+    densification/predict-tail machinery (which still runs identically
+    either way).
+
+    Mechanism: `NarwhalsPooledState._aggregate_predictions_by_bucket`'s
+    dense branch (every non-`LookupLag` `partition_by`/densified state)
+    bounded its synthetic per-step bucket range by
+    `self.series_bucket_id.max() + 1` -- but `series_bucket_id` has one
+    entry per CURRENT series, not per registered bucket. A bucket sharing a
+    parent (shared) calendar with the CURRENTLY active ones, but with no
+    series pointing at it THIS step, was silently excluded whenever its own
+    id happened to be numerically higher than every currently-active
+    bucket's id -- which happens routinely once promo/partition values
+    cycle series between LOW-id and HIGH-id buckets over time. That
+    bucket's shared-parent ordinal then permanently falls one step behind
+    on every predict step it was excluded from, with no error raised; a
+    LATER step reading a window against it (once some series moves back)
+    silently computes off a stale ordinal. h=1/h=2 don't yet reach a window
+    boundary far enough back to expose the drift (see the module comment
+    above) -- hence h>=3 is required to catch this.
+
+    Fixed by bounding the dense branch's bucket range by
+    `len(self.groups)` (the state's full registered bucket count) instead.
+    """
+    n_series, n_times, n_groups, h = 20, 60, 4, 7
+    df = _panel_with_cycling_promo(
+        backend, n_series=n_series, n_times=n_times, n_groups=n_groups
+    )
+    x_df = _dynamic_reassignment_x_df(backend, df, h)
+
+    # Precondition: the reassignment this test exists to exercise must
+    # actually happen, or this test would quietly stop testing anything --
+    # every series' own promo value must differ across at least two steps
+    # of the horizon (each series shares the SAME promo pattern, so
+    # checking one series suffices).
+    x_nw = x_df if isinstance(x_df, pl.DataFrame) else pl.from_pandas(x_df)
+    one_series = x_nw.filter(pl.col("unique_id") == x_nw["unique_id"][0])
+    assert one_series["promo"].n_unique() > 1, (
+        "precondition failed: the future X_df never reassigns a series to a "
+        "different partition_by bucket across the horizon -- this test "
+        "would pass even against the broken code"
+    )
+
+    a = _predict_with_engine_x_df("numpy", df, tfms, statics, x_df, h)
+    b = _predict_with_engine_x_df("narwhals", df, tfms, statics, x_df, h)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    a, b = a.sort("unique_id", "ds"), b.sort("unique_id", "ds")
+    for h_idx in (3, 7):
+        a_h = a.filter(pl.col("ds") == a["ds"].unique().sort()[h_idx - 1])
+        b_h = b.filter(pl.col("ds") == b["ds"].unique().sort()[h_idx - 1])
+        np.testing.assert_allclose(
+            a_h["LinearRegression"].to_numpy(),
+            b_h["LinearRegression"].to_numpy(),
+            atol=1e-9,
+            err_msg=f"{label}: engines diverge at h={h_idx}",
+        )

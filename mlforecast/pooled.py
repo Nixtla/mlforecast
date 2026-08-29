@@ -1494,6 +1494,27 @@ class NarwhalsPooledState:
         alternating between two `partition_by` buckets across recursive
         predict steps got a spurious empty row committed into the
         currently-INACTIVE bucket at every step, corrupting its next lookup.
+
+        For the dense branch, ``n_b`` must cover EVERY bucket this state has
+        ever registered (``len(self.groups)`` -- bucket ids are the dense
+        ``0..len(groups)-1`` range ``add_bucket_id``/``_extend_groups``
+        assign), NOT ``bids.max() + 1``. ``bids`` (``self.series_bucket_id``)
+        has one entry per CURRENT series, not per bucket: under a dynamic
+        `partition_by` reassignment, a bucket can simply have no series
+        pointing at it this step even though it shares a parent calendar
+        with buckets that DO. Bounding ``n_b`` by ``bids.max() + 1`` then
+        silently drops every bucket whose id happens to be numerically
+        higher than whichever bucket is currently active AND happens to
+        have the largest id -- that bucket's shared-parent calendar falls
+        behind by one ordinal every step it is skipped, with no error, and a
+        LATER step's window read against it (once some series moves back
+        into it) is silently computed against a stale ordinal. Measured:
+        recursive `partition_by` predict with a partition column that
+        reassigns series between existing buckets every step diverges from
+        the legacy engine starting at h=3 (h=1/h=2 read only rows that
+        happen not to have fallen behind yet) -- freezing the assignment
+        (never reassigning) made both engines agree exactly at every
+        horizon tested, isolating this exact mechanism.
         """
         if self._densify_declined:
             bucket_ids, inv = np.unique(bids, return_inverse=True)
@@ -1501,7 +1522,10 @@ class NarwhalsPooledState:
         else:
             bucket_ids = None
             inv = bids
-            n_b = int(bids.max()) + 1 if len(bids) else 1
+            if self.groups is not None:
+                n_b = len(nw.from_native(self.groups, eager_only=True))
+            else:
+                n_b = int(bids.max()) + 1 if len(bids) else 1
         s = np.bincount(inv, weights=np.nan_to_num(y), minlength=n_b)
         valid = ~np.isnan(y)
         c = np.bincount(inv, weights=valid.astype(float), minlength=n_b)
