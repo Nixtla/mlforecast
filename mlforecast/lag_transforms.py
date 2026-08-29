@@ -185,9 +185,17 @@ class _BaseLagTransform(BaseEstimator):
     def _pooled_expr(self, _ctx) -> Optional["nw.Expr"]:
         """The pooled statistic as one narwhals expression over the aggregate table.
 
-        Returning ``None`` means this transform has no narwhals expression yet;
-        the engine falls back to the numpy path for it. Iteration two removes
-        both the fallback and the four ``_impl`` hooks this replaces.
+        Every pooled-capable transform in ``lag_transforms.__all__`` overrides
+        this (see ``tests/test_pooled_expr_coverage.py``, which enumerates and
+        checks all of them); the base class's ``None`` return is only reached
+        by a transform that isn't pooled-capable at all (e.g. ``Lag``, which
+        defines no pooled attributes and is never selected by
+        ``_get_pooled_tfms``). The narwhals engine has no fallback for a
+        ``None`` here: `NarwhalsPooledState.feature_frame` calls
+        ``_pooled_expr(...).alias(name)`` directly (Task 14 removed the
+        iteration-one numpy fallback once this coverage was proven). Iteration
+        two removes the four ``_impl`` hooks above, which only the legacy
+        engine still reads.
         """
         return None
 

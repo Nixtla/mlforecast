@@ -57,7 +57,6 @@ from .pooled import (
     _pooled_retention,
     compute_pooled_features,
 )
-from .pooled import _resolve_ctx as _resolve_ctx_for
 from .utils import (
     _DUMMY_FEATURE_VALUES,
     _ShortSeriesException,
@@ -942,30 +941,14 @@ class TimeSeries:
             for key, tfms in pooled_tfms.items():
                 state = self._pooled_states[key]
                 if isinstance(state, NarwhalsPooledState):
-                    # Quantile transforms have no sufficient statistic, so
-                    # they never define `_pooled_expr` (it stays the base
-                    # class's `None`); `_pooled_quantile` marks them for
-                    # `join_to_panel`/`feature_frame`'s separate
-                    # `_quantile_columns` path instead of the raise below.
-                    expr_tfms = {
-                        n: t
-                        for n, t in tfms.items()
-                        if getattr(t, "_pooled_quantile", False)
-                        or t._pooled_expr(_resolve_ctx_for(t, state.keys)) is not None
-                    }
-                    legacy_tfms = {n: t for n, t in tfms.items() if n not in expr_tfms}
-                    if expr_tfms:
-                        features.update(
-                            state.join_to_panel(
-                                df_sorted, expr_tfms, self.id_col, self.time_col
-                            )
-                        )
-                    if legacy_tfms:
-                        raise NotImplementedError(
-                            "no narwhals expression for "
-                            f"{sorted(type(t).__name__ for t in legacy_tfms.values())}; "
-                            "run with MLFORECAST_POOLED_ENGINE=numpy until it lands"
-                        )
+                    # Every pooled-capable transform in `lag_transforms.__all__`
+                    # has either a `_pooled_expr` or the `_pooled_quantile`
+                    # marker (see `tests/test_pooled_expr_coverage.py`), so no
+                    # probing/fallback split is needed here: `feature_frame`
+                    # dispatches quantile vs. expression transforms itself.
+                    features.update(
+                        state.join_to_panel(df_sorted, tfms, self.id_col, self.time_col)
+                    )
                     continue
                 # ---- existing numpy path unchanged below ----
                 fast_features: Dict[str, Any] = {}

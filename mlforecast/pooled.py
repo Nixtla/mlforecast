@@ -1933,31 +1933,15 @@ class NarwhalsPooledState:
 
 
 def compute_pooled_features(state, transforms, query_arrays=None):
-    """Dispatch each transform to the engine that can compute it.
+    """Compute pooled features via the legacy (numpy) engine.
 
-    A transform whose ``_pooled_expr`` returns ``None`` has no narwhals
-    expression yet and is delegated to the numpy engine. This fallback is
-    iteration-one scaffolding; Task 14 asserts it is unused.
+    This is the numpy-engine entry point only. A `NarwhalsPooledState` never
+    reaches this function: `core.py`'s `_transform`/`_compute_features_df`
+    call `state.join_to_panel`/`state.latest_features` directly for it (see
+    `core.py`'s `isinstance(state, NarwhalsPooledState)` branches), and every
+    reachable call to `compute_pooled_features` therefore passes a legacy
+    `PooledState` (`_LegacyPooledState`). A narwhals `fast`/`slow` dispatch
+    branch used to live here (Task 14 removed it as dead code once this was
+    confirmed: `core.py` never calls this with a `NarwhalsPooledState`).
     """
-    if POOLED_ENGINE == "numpy" or isinstance(state, _LegacyPooledState):
-        return _legacy_compute(state, transforms, query_arrays=query_arrays)
-    fast, slow = {}, {}
-    for name, tfm in transforms.items():
-        if getattr(tfm, "_pooled_quantile", False):
-            # No `_pooled_expr` at all (no sufficient statistic) -- routed
-            # through `NarwhalsPooledState._quantile_columns` instead, inside
-            # `feature_frame`/`join_to_panel`.
-            fast[name] = tfm
-            continue
-        probe = tfm._pooled_expr(_resolve_ctx(tfm, getattr(state, "keys", [])))
-        (fast if probe is not None else slow)[name] = tfm
-    if slow:
-        raise NotImplementedError(
-            "narwhals engine reached a transform with no _pooled_expr: "
-            f"{sorted(type(t).__name__ for t in slow.values())}. "
-            "Fallback is wired at the core.py seam, not here."
-        )
-    out: Dict[str, np.ndarray] = state.join_to_panel(
-        state._df, fast, state.join_cols[0], state.time_col
-    )
-    return out
+    return _legacy_compute(state, transforms, query_arrays=query_arrays)
