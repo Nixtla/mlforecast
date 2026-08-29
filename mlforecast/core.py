@@ -2108,7 +2108,18 @@ class TimeSeries:
     @staticmethod
     def load(path: Union[str, Path], protocol: Optional[str] = None) -> "TimeSeries":
         with fsspec.open(path, "rb", protocol=protocol) as f:
-            ts = cloudpickle.load(f)
+            try:
+                ts = cloudpickle.load(f)
+            except AttributeError as e:
+                if "PooledState" in str(e) or "_TimestampAggregates" in str(e):
+                    from ._pooled_migrate import LegacyPickleError
+
+                    raise LegacyPickleError(
+                        "This model was saved before the narwhals pooled engine. "
+                        "Convert it with "
+                        "mlforecast._pooled_migrate.migrate_saved_model(src, dst)."
+                    ) from e
+                raise
         return ts
 
     def _validate_new_df(self, df: DataFrame) -> None:
