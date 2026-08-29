@@ -460,12 +460,48 @@ class TimeSeries:
         or ``predict(new_df=...)``). Local (coreforecast) transforms need a full
         ``transform`` pass so stateful transforms like ``ExpandingMean`` can
         initialize their internal buffers before the first ``update(...)`` call.
-        Pooled transforms keep their state in ``_ts_aggs`` (built at
-        construction), so they need no warm-up pass.
+
+        Legacy pooled transforms keep their state in ``_ts_aggs`` (built
+        eagerly at construction, including the ``partition_by`` parent-grid
+        bookkeeping -- see ``PooledState.from_partition``), so they need no
+        warm-up pass. A ``NarwhalsPooledState`` is different: whether a
+        ``partition_by`` state densifies is decided LAZILY (Task 8's
+        ``ensure_densified``, deliberately deferred because the decision
+        needs the actual transform set, which isn't available at the
+        ``from_partition`` construction call site) -- normally the first
+        ``feature_frame`` call during ``fit_transform``'s own feature
+        computation, which ``history_warmup`` skips by design. Left
+        unsettled, that decision -- and the ``ensure_time_aggs`` rebuild
+        that must run before it -- would instead first fire the moment
+        ``latest_features`` runs at the FIRST predict step, mid-way through
+        Task 9's seed/tail machinery (which assumes a stable, already-
+        finalized ``self.agg`` shape): `_make_seeds` would compute retention
+        cutoffs against the still-SPARSE table's occurrence-count ordinals
+        instead of the eventual dense calendar ones, and the mid-flight
+        `_apply_densification` rebuild would then discard the tail's own
+        bookkeeping columns (e.g. `_is_query`) built on the stale shape --
+        confirmed by `test_history_warmup_partition_by`, which crashed with
+        a narwhals `ValueError` on exactly that column before this fix.
+        Settling both eagerly here, in the SAME relative order
+        `feature_frame` itself uses (`ensure_time_aggs` before
+        `ensure_densified`), reproduces the normal fit-time invariant that
+        the rest of Task 9's predict-path code already assumes, regardless
+        of whether the state was built via `fit_transform` or
+        `history_warmup`. `ensure_accumulates` (the third and last step
+        `feature_frame` runs) is NOT needed here: unlike shape/structure,
+        its ``A``-prefixed columns are re-derived fresh by `_rebuild_tail`
+        over the small seed+tail range on demand, never assumed present.
         """
         core_tfms = self._get_core_lag_tfms()
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
+        for key, tfms in self._get_pooled_tfms().items():
+            state = self._pooled_states.get(key)
+            if not isinstance(state, NarwhalsPooledState):
+                continue
+            leaves = [leaf for tfm in tfms.values() for leaf in _iter_leaf_tfms(tfm)]
+            state.ensure_time_aggs({getattr(t, "time_agg", None) for t in leaves})
+            state.ensure_densified(leaves)
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""

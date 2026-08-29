@@ -580,20 +580,54 @@ class NarwhalsPooledState:
         Built lazily (only when a state actually needs densifying) and
         cached: computed once per state, reused if `ensure_time_aggs`
         rebuilds `self.agg` from scratch later and must re-densify.
+
+        Derived from `self.agg` (joined with `self.groups` for the scoped
+        branch) -- NEVER from `self._df`. `self.agg` is the ordinal-grid
+        authority from the moment a state is constructed (`build_agg_table`
+        already gives it one row per (bucket, OBSERVED timestamp);
+        `quantile_values`'s own docstring makes the identical point for the
+        quantile store's grid). `self._df`, by contrast, is NOT a stable
+        source for this: `latest_features` temporarily swaps it to a
+        reduced (`keys + [time_col, target_col]`) schema for the duration
+        of one tail evaluation, and a state built via `history_warmup`
+        (which never runs `feature_frame` -- see its docstring: "skips
+        materializing the features dataframe") can reach this method for
+        the FIRST time from inside that very swap, at the first predict
+        step. A `local`-mode state (`_parent_scope_cols = [id_col]`) used
+        to crash here with a `ColumnNotFoundError` on `id_col`, since the
+        swapped `self._df` never has it
+        (`test_history_warmup_partition_by`). Reading `self.agg` instead
+        sidesteps the swap entirely -- it is never touched by it.
+
+        Also makes the previous defensive "union in self.agg's own pairs"
+        step (for a `trim_to_last` seed row's synthetic (bucket, time)
+        cell, absent from `self._df` by construction) unnecessary: `self.agg`
+        IS the base here now, so a seed row can never fall outside its own
+        skeleton.
         """
         if self._skeleton is not None:
             return self._skeleton
-        d = nw.from_native(self._df, eager_only=True)
+        agg_pairs = nw.from_native(self.agg, eager_only=True).select(
+            ["_bucket_id", self.time_col]
+        )
         groups_nw = nw.from_native(self.groups, eager_only=True)
         if self._parent_scope_cols is None:
-            cal = d.select([self.time_col]).unique()
+            cal = agg_pairs.select([self.time_col]).unique()
             buckets = groups_nw.select(["_bucket_id"]).unique()
             skeleton = buckets.join(cal, how="cross")
         else:
             scope_cols = self._parent_scope_cols
             enc_cols = [f"__enc_{c}" for c in scope_cols]
-            cal = d.select(scope_cols + [self.time_col]).unique()
             bucket_scope = groups_nw.select(["_bucket_id"] + scope_cols)
+            # (scope, time) pairs via a plain `_bucket_id` join against
+            # `self.agg`'s own pairs -- `_bucket_id` is a non-null integer
+            # key, so (unlike the cross-scope join below) this one needs no
+            # null-safety handling.
+            cal = (
+                agg_pairs.join(bucket_scope, on="_bucket_id", how="left")
+                .select(scope_cols + [self.time_col])
+                .unique()
+            )
             # Null-safe join -- see `_compute_density_estimate`'s comment: a
             # scope column can be null (e.g. a null `groupby` key), and two
             # null scope values must match each other, not fail to match at
@@ -602,23 +636,6 @@ class NarwhalsPooledState:
             skeleton = left_enc.join(
                 right_enc.select(enc_cols + [self.time_col]), on=enc_cols, how="inner"
             ).select(["_bucket_id", self.time_col])
-        # Union in `self.agg`'s OWN (bucket, time) pairs. Normally a strict
-        # subset of `_df`'s grid (every aggregate row comes from an observed
-        # raw row), so this is a no-op at first densification -- but
-        # `trim_to_last` can leave a permanent SEED row in `self.agg` at a
-        # timestamp deliberately excluded from `self._df` (the seed carries a
-        # synthetic baseline, not a real observation -- see its docstring),
-        # and a later `append_observations` re-densifying the table must not
-        # let that seed's (bucket, time) cell silently fall outside the
-        # skeleton and get dropped by `densify_to_parent`'s join.
-        if self.agg is not None:
-            agg_pairs = nw.from_native(self.agg, eager_only=True).select(
-                ["_bucket_id", self.time_col]
-            )
-            skeleton = nw.concat(
-                [skeleton.select(["_bucket_id", self.time_col]), agg_pairs],
-                how="vertical",
-            ).unique()
         self._skeleton = skeleton.to_native()
         return self._skeleton
 

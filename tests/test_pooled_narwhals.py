@@ -672,3 +672,100 @@ def test_rolling_mean_retention_formula_margin_is_pinned(monkeypatch):
 
         importlib.reload(mlforecast.pooled)
         importlib.reload(mlforecast.core)
+
+
+# ---- Task 10 fix round 1: `history_warmup` must densify before predict ----
+
+
+def test_history_warmup_partition_by_densifies_before_first_predict():
+    """`history_warmup` skips computing training features entirely (its own
+    docstring: "skips materializing the features dataframe"), so a
+    `partition_by` state's first densification decision (`ensure_densified`,
+    deliberately deferred by Task 8 until the actual transform set is known)
+    used to fire for the first time from INSIDE `latest_features`, mid-predict,
+    after `self._df` had already been swapped to `_tail_df`'s reduced schema.
+
+    This crashed outright on a missing scope column (a `local`-mode state
+    reads `id_col` via `_parent_scope_cols`) before this fix. Fixing only
+    `_dense_skeleton` to read `self.agg` instead of `self._df` (a real, but
+    BY ITSELF insufficient, improvement) stopped that crash but exposed a
+    deeper ordering bug one layer in: `_make_seeds` would still compute its
+    retention cutoffs against the still-SPARSE table's occurrence-count
+    ordinals (not yet the eventual dense-calendar ones), and the
+    `_apply_densification` rebuild `ensure_densified` triggers mid-
+    `feature_frame` would then discard tail bookkeeping columns (e.g.
+    `_is_query`) built against that stale shape -- a narwhals `ValueError`
+    on exactly that column. `_initialize_lag_transform_states` (called by
+    `history_warmup`) now settles both `ensure_time_aggs` and
+    `ensure_densified` eagerly, in the same relative order `feature_frame`
+    itself uses, reproducing the ordering invariant a normal `fit_transform`
+    already guarantees before any predict-time code runs.
+
+    Mirrors `tests/test_history_warmup.py::test_history_warmup_partition_by`
+    (which may not be modified) but stands on its own here so this file's
+    own regression suite pins the fix directly.
+    """
+    import importlib
+    import os
+
+    import pandas as pd
+    from sklearn.linear_model import LinearRegression
+
+    from mlforecast import MLForecast
+    from mlforecast.lag_transforms import RollingMean
+
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import mlforecast.core
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+        n_times = 20
+        df = pd.DataFrame(
+            {
+                "unique_id": ["a"] * n_times,
+                "ds": pd.date_range("2020-01-01", periods=n_times, freq="D"),
+                "y": np.arange(1.0, n_times + 1.0),
+            }
+        )
+        df["promo"] = df["ds"].dt.dayofweek % 2
+
+        def new_fcst():
+            return MLForecast(
+                models=[LinearRegression()],
+                freq="D",
+                lags=[1],
+                lag_transforms={1: [RollingMean(3, partition_by=["promo"])]},
+            )
+
+        fitted = new_fcst()
+        fitted.fit(df.copy(), static_features=[])
+        h = 4
+        last = df["ds"].max()
+        x_df = df[df["ds"] > last - pd.Timedelta(days=h)][["unique_id", "ds"]].copy()
+        x_df["ds"] = x_df["ds"] + pd.Timedelta(days=h)
+        x_df["promo"] = x_df["ds"].dt.dayofweek % 2
+        expected = fitted.predict(h, X_df=x_df)
+
+        warmed = new_fcst()
+        warmed.models_ = fitted.models_
+        warmed.history_warmup(df.copy(), static_features=[])
+        actual = warmed.predict(h, X_df=x_df)
+
+        np.testing.assert_allclose(
+            expected["LinearRegression"].to_numpy(),
+            actual["LinearRegression"].to_numpy(),
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.core
+        import mlforecast.pooled
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
