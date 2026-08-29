@@ -769,3 +769,98 @@ def test_history_warmup_partition_by_densifies_before_first_predict():
 
         importlib.reload(mlforecast.pooled)
         importlib.reload(mlforecast.core)
+
+
+# ---- Task 10 fix round 2: pin `_dense_skeleton`'s `self.agg`-not-`self._df` ----
+# invariant INDEPENDENTLY of `_initialize_lag_transform_states`'s eager-settle
+# ordering fix (fix round 1's "option 1"). Re-review measured that with option
+# 1 in place, `_dense_skeleton` never actually runs against a swapped/reduced
+# `self._df` through any real call path today (`ensure_densified` freezes its
+# decision on first call, and option 1 forces that first call before
+# `self._df` is ever swapped in `latest_features`) -- so reverting the
+# `self.agg`-vs-`self._df` read alone ("option 2") produces ZERO diff across
+# the whole suite, including the 510-case SQL oracle. This is the same "each
+# fix independently masks the other's absence" trap as the two `.sort()` call
+# sites pinned earlier in this plan. This test calls `_dense_skeleton`
+# directly against a state whose `self._df` has been manually reduced to
+# `_tail_df`'s exact schema, bypassing `_initialize_lag_transform_states`/
+# `ensure_densified` entirely -- so it fails if the `self.agg`-vs-`self._df`
+# fix is reverted, REGARDLESS of whether the ordering fix is in place.
+
+
+def test_dense_skeleton_correct_when_df_reduced_to_tail_schema():
+    """`_dense_skeleton` must derive its (bucket, time) grid from `self.agg`
+    (joined with `self.groups` for the scoped branch), never from
+    `self._df` -- the exact channel `latest_features` temporarily reduces
+    to `_tail_df`'s schema (`keys + [time_col, target_col]`) for the
+    duration of one tail evaluation, dropping e.g. a `local`-mode state's
+    own scope column (`id_col`) entirely.
+
+    Manually reduces `self._df` to that exact schema BEFORE calling
+    `_dense_skeleton` -- bypassing `_initialize_lag_transform_states`'s
+    eager-settle fix (fix round 1's "option 1") entirely, so this pins the
+    `self.agg`-vs-`self._df` read (fix round 1's "option 2")
+    independently of it. See the module comment above for why that
+    independence is not exercised by any other test in this suite.
+    """
+    from mlforecast.pooled import NarwhalsPooledState
+
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a", "a", "a", "b", "b"],
+            "ds": [1, 2, 3, 1, 2],
+            "y": [10.0, 20.0, 30.0, 100.0, 200.0],
+            "promo": [0, 1, 0, 0, 1],
+        }
+    )
+    state = NarwhalsPooledState.from_partition(
+        df,
+        mode="local",
+        group_cols_list=None,
+        partition_cols_list=["promo"],
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        ga_data_dtype=np.float64,
+        static_features=pl.DataFrame({"unique_id": ["a", "b"]}),
+        n_series=2,
+    )
+    assert state._parent_scope_cols == ["unique_id"]
+    assert not state._densified and not state._densify_declined  # not yet settled
+
+    # Ground truth, computed from the ORIGINAL (unreduced) input: each
+    # `local`-mode scope is one series' own calendar.
+    expected_calendar_by_scope = {"a": {1, 2, 3}, "b": {1, 2}}
+    groups = nw.from_native(state.groups, eager_only=True)
+    scope_by_bucket = dict(
+        zip(
+            groups.get_column("_bucket_id").to_numpy(),
+            groups.get_column("unique_id").to_numpy(),
+        )
+    )
+
+    # Simulate `latest_features`'s swap: reduce `self._df` to `_tail_df`'s
+    # EXACT schema (`keys + [time_col, target_col]`) -- dropping `unique_id`
+    # (the scope column this state's `_dense_skeleton` needs) entirely.
+    reduced = (
+        nw.from_native(state._df, eager_only=True)
+        .select(state.keys + [state.time_col, state._target_col])
+        .to_native()
+    )
+    assert "unique_id" not in nw.from_native(reduced, eager_only=True).columns
+    state._df = reduced
+
+    skeleton = nw.from_native(state._dense_skeleton(), eager_only=True)
+    bids = skeleton.get_column("_bucket_id").to_numpy()
+    times = skeleton.get_column("ds").to_numpy()
+    actual_by_bucket: dict = {}
+    for b, t in zip(bids, times):
+        actual_by_bucket.setdefault(int(b), set()).add(int(t))
+
+    assert set(actual_by_bucket) == set(scope_by_bucket)
+    for bid, times_seen in actual_by_bucket.items():
+        scope = scope_by_bucket[bid]
+        assert times_seen == expected_calendar_by_scope[scope], (
+            f"bucket {bid} (scope {scope!r}): got {times_seen}, "
+            f"expected {expected_calendar_by_scope[scope]}"
+        )
