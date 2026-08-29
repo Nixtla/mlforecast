@@ -2035,3 +2035,91 @@ def test_should_densify_accepts_calendar_cardinalities_and_refuses_pathological(
         "a dense grid past the absolute row cap must be refused however "
         "proportionate it is to the sparse data"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix wave, finding 4: the LookupLag-mixed-with-other-families refusal STAYS
+# (one aggregate table cannot be sparse for LookupLag and dense for everything
+# else at the same time, and a dual-representation state would have to double
+# the whole Task 9 predict path). What changed is the message: it now names a
+# workaround that PRESERVES the buckets, instead of telling the user to change
+# `partition_by` -- which changes what is being computed.
+# ---------------------------------------------------------------------------
+
+
+def _holiday_panel(backend, n_series=8, n_times=60):
+    d = _panel(backend, n_series=n_series, n_times=n_times)
+    d = d if isinstance(d, pl.DataFrame) else pl.from_pandas(d)
+    d = d.with_columns((pl.col("ds").dt.day() % 5 == 0).cast(pl.Int64).alias("holiday"))
+    # a byte-identical duplicate: same buckets, different pooled state key
+    d = d.with_columns(pl.col("holiday").alias("holiday_lookup"))
+    return d if backend == "polars" else d.to_pandas()
+
+
+def test_lookup_lag_mixed_with_other_families_refusal_names_a_real_workaround():
+    """The refusal must be actionable. Pins that it offers the duplicate
+    partition column, not "use a different partition_by" (which would change
+    the buckets and therefore the answer)."""
+    df = _holiday_panel("polars")
+    with pooled_engine("narwhals"):
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            lags=[1],
+            lag_transforms={
+                1: [
+                    LookupLag(partition_by=["holiday"]),
+                    RollingMean(3, min_samples=1, partition_by=["holiday"]),
+                ]
+            },
+        )
+        with pytest.raises(NotImplementedError) as excinfo:
+            fcst.preprocess(df, static_features=[], dropna=False)
+    msg = str(excinfo.value)
+    assert "DUPLICATE" in msg, msg
+    assert "'holiday'" in msg, msg
+    assert "MLFORECAST_POOLED_ENGINE=numpy" in msg, msg
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_lookup_lag_duplicate_column_workaround_matches_legacy_mixed_state(backend):
+    """The workaround the refusal recommends must actually reproduce what the
+    legacy engine computes for the refused configuration -- otherwise the
+    message is sending users somewhere that changes their numbers.
+
+    Legacy computes the MIXED state (both transforms on ``holiday``);
+    narwhals computes the SPLIT one (LookupLag on the duplicate column). The
+    two must agree on values. Feature NAMES differ (they follow the column),
+    so this compares the arrays directly rather than through
+    ``assert_engines_agree``.
+    """
+    df = _holiday_panel(backend)
+    mixed = {
+        1: [
+            LookupLag(partition_by=["holiday"]),
+            RollingMean(3, min_samples=1, partition_by=["holiday"]),
+        ]
+    }
+    split = {
+        1: [
+            LookupLag(partition_by=["holiday_lookup"]),
+            RollingMean(3, min_samples=1, partition_by=["holiday"]),
+        ]
+    }
+    a = _preprocess_with_engine("numpy", df, mixed, [])
+    b = _preprocess_with_engine("narwhals", df, split, [])
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    a, b = a.sort("unique_id", "ds"), b.sort("unique_id", "ds")
+    skip = ("unique_id", "ds", "y", "store", "holiday", "holiday_lookup", "lag1")
+    a_cols = sorted(c for c in a.columns if c not in skip)
+    b_cols = sorted(c for c in b.columns if c not in skip)
+    assert len(a_cols) == len(b_cols) == 2, (a_cols, b_cols)
+    for ca, cb in zip(a_cols, b_cols):
+        np.testing.assert_allclose(
+            a[ca].cast(pl.Float64).to_numpy(),
+            b[cb].cast(pl.Float64).to_numpy(),
+            atol=1e-10,
+            equal_nan=True,
+            err_msg=f"{ca} (legacy, mixed state) vs {cb} (narwhals, split state)",
+        )
