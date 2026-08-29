@@ -1301,11 +1301,23 @@ def _predict_with_engine(engine, df, tfms, statics, h):
 
 
 PREDICT_CASES = [
-    ("p_rolling", [RollingMean(7, groupby=["store"]), RollingMean(14, groupby=["store"])]),
-    ("p_expanding", [ExpandingMean(groupby=["store"]), ExpandingStd(groupby=["store"])]),
-    ("p_expanding_minmax", [ExpandingMin(groupby=["store"]), ExpandingMax(groupby=["store"])]),
+    (
+        "p_rolling",
+        [RollingMean(7, groupby=["store"]), RollingMean(14, groupby=["store"])],
+    ),
+    (
+        "p_expanding",
+        [ExpandingMean(groupby=["store"]), ExpandingStd(groupby=["store"])],
+    ),
+    (
+        "p_expanding_minmax",
+        [ExpandingMin(groupby=["store"]), ExpandingMax(groupby=["store"])],
+    ),
     ("p_ewm", [ExponentiallyWeightedMean(alpha=0.3, groupby=["store"])]),
-    ("p_seasonal", [SeasonalRollingMean(season_length=7, window_size=4, groupby=["store"])]),
+    (
+        "p_seasonal",
+        [SeasonalRollingMean(season_length=7, window_size=4, groupby=["store"])],
+    ),
     ("p_quantile", [RollingQuantile(p=0.5, window_size=14, groupby=["store"])]),
 ]
 
@@ -1343,13 +1355,17 @@ def test_two_models_do_not_leak_state(backend):
         importlib.reload(mlforecast.core)
         together = MLForecast(
             models=[LinearRegression(), DecisionTreeRegressor(random_state=0)],
-            freq="1d", lags=[1], lag_transforms=tfms,
+            freq="1d",
+            lags=[1],
+            lag_transforms=tfms,
         )
         together.fit(df, static_features=["store"])
         both = together.predict(10)
         alone = MLForecast(
             models=[DecisionTreeRegressor(random_state=0)],
-            freq="1d", lags=[1], lag_transforms=tfms,
+            freq="1d",
+            lags=[1],
+            lag_transforms=tfms,
         )
         alone.fit(df, static_features=["store"])
         solo = alone.predict(10)
@@ -1363,6 +1379,7 @@ def test_two_models_do_not_leak_state(backend):
     finally:
         os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
         import mlforecast.pooled, mlforecast.core
+
         importlib.reload(mlforecast.pooled)
         importlib.reload(mlforecast.core)
 
@@ -1415,3 +1432,198 @@ def test_predict_rolling_min_max_horizon_exceeds_window_engines_agree(backend):
         b["LinearRegression"].to_numpy(),
         atol=1e-9,
     )
+
+
+# ---- Task 10: update()/append_observations and keep_last_n trimming ----
+
+
+def _update_then_predict(engine, df, new_df, tfms, statics, h, lags=None):
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            lags=lags or [1],
+            lag_transforms=tfms,
+        )
+        fcst.fit(df, static_features=statics)
+        fcst.update(new_df)
+        return fcst.predict(h)
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_update_then_predict_engines_agree(backend):
+    df = _panel(backend, n_series=20, n_times=60)
+    d = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    last = d["ds"].max()
+    nxt = d.filter(pl.col("ds") == last).with_columns(
+        (pl.col("ds") + pl.duration(days=1)).alias("ds")
+    )
+    new_df = nxt if isinstance(df, pl.DataFrame) else nxt.to_pandas()
+    tfms = {1: [RollingMean(7, groupby=["store"]), ExpandingMean(groupby=["store"])]}
+    a = _update_then_predict("numpy", df, new_df, tfms, ["store"], 7)
+    b = _update_then_predict("narwhals", df, new_df, tfms, ["store"], 7)
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    np.testing.assert_allclose(
+        a.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        b.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        atol=1e-9,
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_update_then_predict_lag_gt_1_engines_agree(backend):
+    """Lesson from earlier tasks: a suite using only ``lag=1`` hid a
+    wrong-number bug. Vary the transform's own lag (not the plain ``lags=``
+    regressor feature) so ``append_observations``'s ordinal recompute is
+    exercised with a lag that reaches back past the single newly appended
+    timestamp."""
+    df = _panel(backend, n_series=16, n_times=40)
+    d = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+    last = d["ds"].max()
+    nxt = d.filter(pl.col("ds") == last).with_columns(
+        (pl.col("ds") + pl.duration(days=1)).alias("ds")
+    )
+    new_df = nxt if isinstance(df, pl.DataFrame) else nxt.to_pandas()
+    tfms = {3: [RollingMean(5, groupby=["store"]), ExpandingMean(groupby=["store"])]}
+    a = _update_then_predict("numpy", df, new_df, tfms, ["store"], 5, lags=[3])
+    b = _update_then_predict("narwhals", df, new_df, tfms, ["store"], 5, lags=[3])
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    np.testing.assert_allclose(
+        a.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        b.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        atol=1e-9,
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_keep_last_n_trims_expanding_state(backend):
+    """The seed row makes prefix-dependent states trimmable -- the limitation
+    _trim_pooled_states documents today."""
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        df = _panel(backend, n_series=20, n_times=120)
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="1d",
+            lags=[1],
+            lag_transforms={1: [ExpandingMean(groupby=["store"])]},
+        )
+        fcst.fit(df, static_features=["store"], keep_last_n=30)
+        state = next(iter(fcst.ts._pooled_states.values()))
+        t = (
+            state.agg
+            if isinstance(state.agg, pl.DataFrame)
+            else pl.from_pandas(state.agg)
+        )
+        assert t.height < 5 * 120, (
+            f"expanding state kept {t.height} aggregate rows; the seed row "
+            "should have allowed a trim"
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_keep_last_n_trim_predict_engines_agree(backend):
+    """Structural-invariant test alone (the previous test) can't catch a trim
+    that shrinks the table WRONG -- e.g. drops the seed row too, or mis-seeds
+    it -- only that it shrinks at all. This closes that gap: fit with a small
+    explicit ``keep_last_n`` (small enough to force a real trim on a fixture
+    this size) on BOTH engines, then predict, and require identical output --
+    legacy never trims an Expanding state at all (`_is_finite_window` is
+    False for it), so this is really "trimmed narwhals vs. untrimmed legacy,
+    same numbers", which can only hold if the seed row is exactly correct.
+
+    A prior version of this test compared predictions ONLY: with the trim
+    skipped entirely (Task 3's temporary guard, reverted-source check), the
+    narwhals state stays untrimmed too, and untrimmed-vs-untrimmed agrees
+    trivially -- a test that cannot fail. The explicit row-count assertion
+    below closes that gap by pinning that a trim actually happened.
+    """
+    # groupby="store" (5 groups by _panel's default n_groups) pools every
+    # series sharing a store into ONE aggregate row per (store, timestamp) --
+    # the untrimmed height is n_groups * n_times = 5*80=400, NOT
+    # n_series*n_times (a first version of this bound used the latter, which
+    # is so much larger than 400 that it could never catch a no-op trim --
+    # see the module docstring's "tests that cannot fail" lesson). Retention
+    # is max(keep_last_n=20, RollingMean(5)'s own lag+window=6) = 20, plus
+    # one seed row per store -> 5*21=105 expected after a real trim.
+    n_groups, n_times = 5, 80
+    df = _panel(backend, n_series=16, n_times=n_times, n_groups=n_groups)
+    tfms = {1: [ExpandingMean(groupby=["store"]), RollingMean(5, groupby=["store"])]}
+    a, _ = _predict_with_engine_keep_last_n("numpy", df, tfms, ["store"], 6, 20)
+    b, b_state = _predict_with_engine_keep_last_n(
+        "narwhals", df, tfms, ["store"], 6, 20
+    )
+    b_agg = (
+        b_state.agg
+        if isinstance(b_state.agg, pl.DataFrame)
+        else pl.from_pandas(b_state.agg)
+    )
+    untrimmed_height = n_groups * n_times
+    assert b_agg.height < untrimmed_height // 2, (
+        f"narwhals state kept {b_agg.height} aggregate rows out of "
+        f"{untrimmed_height} untrimmed; keep_last_n=20 on an 80-step "
+        "fixture should have forced a real trim (expected ~105)"
+    )
+    a = a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)
+    b = b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)
+    np.testing.assert_allclose(
+        a.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        b.sort("unique_id", "ds")["LinearRegression"].to_numpy(),
+        atol=1e-9,
+    )
+
+
+def _predict_with_engine_keep_last_n(engine, df, tfms, statics, h, keep_last_n):
+    prev = os.environ.get("MLFORECAST_POOLED_ENGINE")
+    os.environ["MLFORECAST_POOLED_ENGINE"] = engine
+    try:
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)
+        fcst = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        fcst.fit(df, static_features=statics, keep_last_n=keep_last_n)
+        state = next(iter(fcst.ts._pooled_states.values()))
+        return fcst.predict(h), state
+    finally:
+        if prev is None:
+            os.environ.pop("MLFORECAST_POOLED_ENGINE", None)
+        else:
+            os.environ["MLFORECAST_POOLED_ENGINE"] = prev
+        import mlforecast.pooled, mlforecast.core
+
+        importlib.reload(mlforecast.pooled)
+        importlib.reload(mlforecast.core)

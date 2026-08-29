@@ -465,7 +465,7 @@ def _assert_bucket_contiguous_ord_monotonic(native, keys, msg=""):
         prev_bucket, prev_ord = b, o
 
 
-def _run_predict_and_check_contiguity(n_buckets=3, n_steps=6):
+def _run_predict_and_check_contiguity(backend, n_buckets=3, n_steps=6):
     """Drive a real recursive predict loop against a `RollingQuantile`
     pooled state and check the bucket-contiguous/ord-monotonic invariant
     after every `_rebuild_tail` call (the persisted tail) and every
@@ -488,7 +488,7 @@ def _run_predict_and_check_contiguity(n_buckets=3, n_steps=6):
 
         n_series_per_bucket, n_times = 2, 20
         df = _panel(
-            "pandas",
+            backend,
             n_buckets=n_buckets,
             n_times=n_times,
             n_series_per_bucket=n_series_per_bucket,
@@ -537,7 +537,8 @@ def _run_predict_and_check_contiguity(n_buckets=3, n_steps=6):
         importlib.reload(mlforecast.core)
 
 
-def test_rebuild_tail_and_query_arrays_keep_buckets_contiguous():
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_rebuild_tail_and_query_arrays_keep_buckets_contiguous(backend):
     """`_rebuild_tail` and `build_query_arrays` (mlforecast/pooled.py) must
     each leave `self.agg` bucket-contiguous and ord-monotonic -- the
     invariant `_quantile_columns`'s positional slicing depends on. Proved
@@ -547,8 +548,13 @@ def test_rebuild_tail_and_query_arrays_keep_buckets_contiguous():
     alone (and that the committed differential/oracle suite does NOT, which
     is exactly why a structural check -- not output equality -- is required
     here).
+
+    Parametrized over both data backends like its siblings in this file
+    (a prior version hardcoded ``"pandas"``, leaving polars uncovered for
+    this invariant -- a reviewer confirmed separately that it holds under
+    polars too, so this closes a coverage gap rather than chasing a bug).
     """
-    _run_predict_and_check_contiguity(n_buckets=3, n_steps=6)
+    _run_predict_and_check_contiguity(backend, n_buckets=3, n_steps=6)
 
 
 # ---- Task 9 fix round 1: pin the retention margin's true minimum ----

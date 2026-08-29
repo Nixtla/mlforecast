@@ -28,6 +28,7 @@ from ._pooled_keys import (  # noqa: F401
     _attach_bucket_id,
     _dedupe_preserve_order,
     _encode_join_keys,
+    _encode_keys,
     _extend_groups,
     _order_preserving_left_join,
     add_bucket_id,
@@ -245,6 +246,149 @@ class NarwhalsPooledState:
         self._n_calendar_est: Optional[int] = None
         self._n_sparse_rows: Optional[int] = None
 
+    # ---- Legacy-shaped compatibility surface ----
+    #
+    # `tests/test_pooled.py` is engine-agnostic by construction (parametrized
+    # only over the pandas/polars DATA backend, never over
+    # `MLFORECAST_POOLED_ENGINE`) and inspects `PooledState`'s flat-array
+    # fields directly to verify `update()`/`trim_to_last()`/
+    # `update_series_bucket_id()` behaviour. These properties compute the
+    # SAME values on demand from `self._df`/`self.agg`/`self.groups` --
+    # nothing in the narwhals engine's own code path (`feature_frame`,
+    # `latest_features`, ...) ever reads them. `_ts_aggs` (legacy's
+    # per-bucket fast-path cache) has no narwhals analogue and is
+    # deliberately NOT emulated -- the `test_fast_vs_slow_*` tests that
+    # white-box it can never pass under this engine (see the design spec).
+    @property
+    def bucket_df(self):
+        """The raw (sorted) observation table -- legacy's ``bucket_df``."""
+        return self._df
+
+    @property
+    def bucket_id(self) -> np.ndarray:
+        """Per-row bucket id, positionally aligned with ``bucket_df``."""
+        d = nw.from_native(self._df, eager_only=True)
+        if not self.keys:
+            return np.zeros(len(d), dtype=np.int64)
+        return d.get_column(self.keys[0]).to_numpy().astype(np.int64)
+
+    @property
+    def y(self) -> np.ndarray:
+        """Per-row target value, positionally aligned with ``bucket_df``."""
+        d = nw.from_native(self._df, eager_only=True)
+        return d.get_column(self._target_col).to_numpy().astype(float)
+
+    @property
+    def time(self) -> np.ndarray:
+        """Per-row timestamp, positionally aligned with ``bucket_df``."""
+        d = nw.from_native(self._df, eager_only=True)
+        return d.get_column(self.time_col).to_numpy()
+
+    @property
+    def time_index(self) -> np.ndarray:
+        """Per-row ordinal, looked up from ``self.agg``'s (bucket, time) ->
+        ``ord`` grid and positionally aligned with ``bucket_df``."""
+        d = nw.from_native(self._df, eager_only=True)
+        on_cols = (self.keys + [self.time_col]) if self.keys else [self.time_col]
+        grid = (
+            nw.from_native(self.agg, eager_only=True)
+            .select(on_cols + ["ord"])
+            .unique(subset=on_cols, keep="first")
+        )
+        joined = _order_preserving_left_join(d.select(on_cols), grid, on=on_cols)
+        return nw.to_native(joined.get_column("ord")).to_numpy().astype(np.int64)
+
+    def _next_ord_by_bucket(self) -> Dict[int, int]:
+        """``{bucket_id: 1 + max(ord)}`` over ``self.agg``'s current rows."""
+        a = nw.from_native(self.agg, eager_only=True)
+        if len(a) == 0:
+            return {}
+        ords = a.get_column("ord").to_numpy()
+        bucket_arr = (
+            a.get_column(self.keys[0]).to_numpy()
+            if self.keys
+            else np.zeros(len(a), dtype=np.int64)
+        )
+        order = np.argsort(bucket_arr, kind="stable")
+        sb, so = bucket_arr[order], ords[order]
+        uniq_b, start_idx = np.unique(sb, return_index=True)
+        end_idx = np.append(start_idx[1:], len(sb))
+        return {int(b): int(so[e - 1]) + 1 for b, e in zip(uniq_b, end_idx)}
+
+    def _scope_groups(self):
+        """``(bucket -> canonical scope id, scope id -> sorted distinct times)``.
+
+        A narwhals `partition_by` state has no explicit "parent id": scopes
+        are derived on demand from ``self.groups``/``self._df`` wherever
+        needed (`_dense_skeleton`, `_compute_density_estimate`). This
+        recomputes the same grouping to back the legacy-shaped
+        ``_bucket_to_parent_id``/``_parent_time_grids`` properties and
+        ``next_time_index_by_bucket``'s new-bucket fallback -- a bucket
+        introduced by ``update_series_bucket_id`` with no rows in
+        ``self.agg`` yet still needs its (shared) parent calendar length.
+        Only ever called from those (small, test/introspection-only)
+        surfaces -- never from the fit/predict hot path.
+        """
+        groups_nw = nw.from_native(self.groups, eager_only=True)
+        bids = groups_nw.get_column("_bucket_id").to_numpy()
+        d = nw.from_native(self._df, eager_only=True)
+        if self._parent_scope_cols is None:
+            times = np.unique(d.get_column(self.time_col).to_numpy())
+            return {int(b): 0 for b in bids}, {0: times}
+        scope_cols = self._parent_scope_cols
+        enc_cols = [f"__enc_{c}" for c in scope_cols]
+        enc_groups = _encode_keys(groups_nw, scope_cols)
+        scope_keys = enc_groups.select(enc_cols).rows()
+        canon: Dict[tuple, int] = {}
+        b2p: Dict[int, int] = {}
+        for b, k in zip(bids, scope_keys):
+            pid = canon.setdefault(k, len(canon))
+            b2p[int(b)] = pid
+        enc_df = _encode_keys(d.select(scope_cols + [self.time_col]), scope_cols)
+        df_keys = enc_df.select(enc_cols).rows()
+        df_times = enc_df.get_column(self.time_col).to_numpy()
+        grids: Dict[int, list] = {pid: [] for pid in canon.values()}
+        for k, t in zip(df_keys, df_times):
+            pid = canon.get(k)
+            if pid is not None:
+                grids[pid].append(t)
+        parent_grids = {pid: np.unique(np.asarray(vals)) for pid, vals in grids.items()}
+        return b2p, parent_grids
+
+    @property
+    def next_time_index_by_bucket(self) -> Dict[int, int]:
+        """Per-bucket calendar length -- legacy's maintained dict, recomputed
+        here on demand from ``self.agg``. A bucket with no rows yet (a
+        dynamically-assigned `partition_by` bucket just created by
+        ``update_series_bucket_id``) falls back to its scope's shared
+        calendar length, matching legacy's ``_resolve_parent_for_bucket``
+        inheritance rule.
+        """
+        computed = self._next_ord_by_bucket()
+        if self.key_cols is None:
+            return computed
+        b2p, parent_grids = self._scope_groups()
+        for bid, pid in b2p.items():
+            if bid not in computed:
+                computed[bid] = len(parent_grids.get(pid, []))
+        return computed
+
+    @property
+    def _bucket_to_parent_id(self) -> Optional[Dict[int, int]]:
+        """Bucket -> canonical scope id -- see ``_scope_groups``."""
+        if self.key_cols is None:
+            return None
+        b2p, _ = self._scope_groups()
+        return b2p
+
+    @property
+    def _parent_time_grids(self) -> Optional[Dict[int, np.ndarray]]:
+        """Scope id -> sorted distinct scope timestamps -- see ``_scope_groups``."""
+        if self.key_cols is None:
+            return None
+        _, grids = self._scope_groups()
+        return grids
+
     @classmethod
     def from_global(
         cls, sorted_df, id_col, time_col, target_col, ga_data_dtype, n_series
@@ -458,6 +602,23 @@ class NarwhalsPooledState:
             skeleton = left_enc.join(
                 right_enc.select(enc_cols + [self.time_col]), on=enc_cols, how="inner"
             ).select(["_bucket_id", self.time_col])
+        # Union in `self.agg`'s OWN (bucket, time) pairs. Normally a strict
+        # subset of `_df`'s grid (every aggregate row comes from an observed
+        # raw row), so this is a no-op at first densification -- but
+        # `trim_to_last` can leave a permanent SEED row in `self.agg` at a
+        # timestamp deliberately excluded from `self._df` (the seed carries a
+        # synthetic baseline, not a real observation -- see its docstring),
+        # and a later `append_observations` re-densifying the table must not
+        # let that seed's (bucket, time) cell silently fall outside the
+        # skeleton and get dropped by `densify_to_parent`'s join.
+        if self.agg is not None:
+            agg_pairs = nw.from_native(self.agg, eager_only=True).select(
+                ["_bucket_id", self.time_col]
+            )
+            skeleton = nw.concat(
+                [skeleton.select(["_bucket_id", self.time_col]), agg_pairs],
+                how="vertical",
+            ).unique()
         self._skeleton = skeleton.to_native()
         return self._skeleton
 
@@ -615,6 +776,26 @@ class NarwhalsPooledState:
         # (rather than a narwhals dtype cast) mirrors the legacy engine
         # exactly and works for any ``ga_data_dtype``, not just float32/64.
         d = nw.from_native(df, eager_only=True)
+        # Sort `_df` by (key_cols/group_cols) + [time_col, id_col], matching
+        # legacy `PooledState.bucket_df`'s own sort order exactly. Not needed
+        # by any narwhals expression (`build_agg_table`'s own group_by+sort
+        # is order-independent, and the quantile store's per-cell values feed
+        # an order-invariant `np.quantile`) -- this exists purely so the
+        # legacy-shaped compatibility properties below (`bucket_id`/`y`/
+        # `time`/`time_index`) are positionally aligned the same way legacy's
+        # flat arrays are, for the test surface shared with
+        # `tests/test_pooled.py` (e.g. `test_partition_ordinals_have_parent_gaps`).
+        id_col = self.join_cols[0]
+        sort_keys = _dedupe_preserve_order(
+            (self.key_cols or self.group_cols or []) + [time_col, id_col]
+        )
+        # Some unit tests build a state directly against a minimal `df` that
+        # omits `id_col` entirely (e.g.
+        # `test_ewm_positional_shift_guard_fires_for_gapped_partition_lag_gt_1`,
+        # which only ever needs `time_col`/`target_col`) -- fall back to
+        # dropping a sort key absent from `df` rather than raising.
+        sort_keys = [c for c in sort_keys if c in d.columns]
+        d = d.sort(sort_keys)
         y = d.get_column(target_col).to_numpy().astype(ga_data_dtype).astype(float)
         d = d.with_columns(
             nw.new_series(
@@ -919,7 +1100,21 @@ class NarwhalsPooledState:
     # only ever swaps which (seed+tail vs. full-history) aggregate table
     # `feature_frame` runs over, never reimplements a transform's statistic.
 
-    _APPEND_FIELDS = ("agg", "_pending", "_pending_raw", "_next_ord")
+    # `groups`/`series_bucket_id` are included because `update_series_bucket_id`
+    # (Task 10) can create brand-new buckets DURING prediction (a dynamic
+    # `partition_by` value never seen at fit time) -- mirroring legacy's own
+    # `_MUTABLE_REF_FIELDS`, which backs up `groups`/`series_bucket_id` for
+    # exactly this reason (see `test_partition_backup_restore_with_dynamic_buckets`).
+    # Both are always replaced wholesale (never mutated in place), so a
+    # reference copy is a faithful backup, same as the other fields here.
+    _APPEND_FIELDS = (
+        "agg",
+        "_pending",
+        "_pending_raw",
+        "_next_ord",
+        "groups",
+        "series_bucket_id",
+    )
 
     def snapshot(self):
         """Reference copy of the mutated fields.
@@ -1100,12 +1295,24 @@ class NarwhalsPooledState:
         ``q``/``mn``/``mx`` plus their ``time_agg`` derivations) --
         ``_rebuild_tail`` pads it with placeholder ``E``/``A``-prefixed
         columns and recomputes those fresh over the whole tail.
+
+        ``entry``'s optional 7th element is an explicit bucket-id array
+        (``None`` -> the dense ``0..len(s)-1`` range, matching every base
+        column array's own indexing): see
+        ``_aggregate_predictions_by_bucket``'s docstring for why a
+        declined-densify (LookupLag) state must NOT get a dense row per
+        bucket here.
         """
-        ts, s, c, q, mn, mx = entry
+        ts, s, c, q, mn, mx, *rest = entry
+        bucket_ids = rest[0] if rest else None
         n_b = len(s)
         data: Dict[str, Any] = {}
         if self.keys:
-            data[self.keys[0]] = np.arange(n_b, dtype=np.int64)
+            data[self.keys[0]] = (
+                np.asarray(bucket_ids, dtype=np.int64)
+                if bucket_ids is not None
+                else np.arange(n_b, dtype=np.int64)
+            )
         data[self.time_col] = np.full(n_b, ts)
         data["s"] = np.asarray(s, dtype=np.float64)
         data["c"] = np.asarray(c, dtype=np.float64)
@@ -1215,23 +1422,79 @@ class NarwhalsPooledState:
         ``_n_series`` is accepted for call-site symmetry with the legacy
         engine (``PooledState.append_predictions``'s same signature): the
         bucket count is derived from ``series_bucket_id`` instead.
+
+        Normally reached only after ``latest_features`` has already run
+        ``_ensure_predict_init`` for this predict step (the real predict loop
+        always computes features before appending the resulting prediction),
+        but a caller that appends without ever having queried a feature first
+        (``core.py``'s ``_update_y``, called directly in
+        ``test_partition_by_backup_restore``) would otherwise crash in
+        ``_rebuild_tail`` on ``self._seed_rows is None``. Falls back to an
+        empty-transforms seed (retention 0: the seed row IS the last observed
+        state, no additional retained history) -- correct, just the tightest
+        possible retention, since no transform's actual requirement is known
+        here.
         """
+        if self._seeds is None:
+            self._make_seeds({})
+            self._seeds = True
         new_ts = np.asarray(curr_dates)[:1]
         y = np.asarray(predictions, dtype=float)
         bids = self.series_bucket_id
-        n_b = int(bids.max()) + 1 if len(bids) else 1
-        s = np.bincount(bids, weights=np.nan_to_num(y), minlength=n_b)
+        bucket_ids, s, c, q, mn, mx = self._aggregate_predictions_by_bucket(bids, y)
+        self._pending = self._pending + [(new_ts[0], s, c, q, mn, mx, bucket_ids)]
+        self._pending_raw = self._pending_raw + [(bids.copy(), y.copy(), new_ts[0])]
+        self._rebuild_tail()
+
+    def _aggregate_predictions_by_bucket(self, bids, y):
+        """Per-bucket sum/count/sumsq/min/max of one predicted value per series.
+
+        Returns ``(bucket_ids, s, c, q, mn, mx)``. ``bucket_ids`` is ``None``
+        for the dense ``0..n_b-1`` case (every bucket 0..max(bids) gets an
+        entry, including a zero/null placeholder for one not predicted this
+        step) or an explicit array pairing each aggregate with its bucket id
+        otherwise.
+
+        A DENSIFIED (or `global_`/`groupby`-without-`partition_by`) state
+        needs the dense form: its ordinal is a shared-calendar RANGE
+        position, so a sibling bucket not predicted this step still needs
+        its calendar to advance in lockstep (legacy's explicit
+        `_advance_parent_calendars` does the same for every bucket under a
+        shared parent) -- an empty placeholder row IS the correct "no
+        observation, but the clock ticked" cell, matching a densified hole's
+        own zero-count semantics.
+
+        A state that DECLINED densification (``self._densify_declined`` --
+        by construction, per ``ensure_densified``, only ever a pure
+        `LookupLag` state) must NOT get one: its ordinal there is an
+        OCCURRENCE count on the sparse table (`ctx.shift` reads a row-
+        position lag), so an empty placeholder for a bucket with no real
+        prediction this step would consume an occurrence slot no
+        observation ever filled -- shifting every later lag read for that
+        bucket back by one and returning null instead of the true previous
+        occurrence. Measured on
+        ``test_lookup_lag_predict_multistep_transformed``: a single series
+        alternating between two `partition_by` buckets across recursive
+        predict steps got a spurious empty row committed into the
+        currently-INACTIVE bucket at every step, corrupting its next lookup.
+        """
+        if self._densify_declined:
+            bucket_ids, inv = np.unique(bids, return_inverse=True)
+            n_b = len(bucket_ids)
+        else:
+            bucket_ids = None
+            inv = bids
+            n_b = int(bids.max()) + 1 if len(bids) else 1
+        s = np.bincount(inv, weights=np.nan_to_num(y), minlength=n_b)
         valid = ~np.isnan(y)
-        c = np.bincount(bids, weights=valid.astype(float), minlength=n_b)
-        q = np.bincount(bids, weights=np.nan_to_num(y) ** 2, minlength=n_b)
+        c = np.bincount(inv, weights=valid.astype(float), minlength=n_b)
+        q = np.bincount(inv, weights=np.nan_to_num(y) ** 2, minlength=n_b)
         mn = np.full(n_b, np.nan)
         mx = np.full(n_b, np.nan)
         if valid.any():
-            np.fmin.at(mn, bids[valid], y[valid])
-            np.fmax.at(mx, bids[valid], y[valid])
-        self._pending = self._pending + [(new_ts[0], s, c, q, mn, mx)]
-        self._pending_raw = self._pending_raw + [(bids.copy(), y.copy(), new_ts[0])]
-        self._rebuild_tail()
+            np.fmin.at(mn, inv[valid], y[valid])
+            np.fmax.at(mx, inv[valid], y[valid])
+        return bucket_ids, s, c, q, mn, mx
 
     def build_query_arrays(self, curr_dates, _n_series):
         """The persisted tail extended by one query row per bucket at the
@@ -1352,6 +1615,280 @@ class NarwhalsPooledState:
             lookup[bids] = vals
             out[name] = lookup[self.series_bucket_id]
         return out
+
+    # ---- Task 10: update()/history_warmup and keep_last_n trimming ----
+
+    def _invalidate_predict_cache(self):
+        """Task 9's retention/seed/tail cache is a pure function of
+        ``self.agg``'s fit-time baseline (see ``_ensure_predict_init``'s
+        docstring): valid across many ``predict()`` calls only because
+        ``core.py``'s ``_backup()`` restores ``self.agg`` back to that exact
+        baseline after each one. ``append_observations``/``trim_to_last``
+        change the baseline itself, so any cache computed against the OLD
+        one must be dropped -- the next ``latest_features`` call recomputes
+        it fresh via ``_ensure_predict_init``.
+        """
+        self._seeds = None
+        self._pending = []
+        self._pending_raw = []
+        self._next_ord = None
+        self._seed_rows = None
+        self._hist_suffix = None
+        self._hist_suffix_df = None
+        self._accum_specs = {}
+        self._retention = None
+
+    def append_observations(
+        self,
+        df,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        ga_data_dtype,
+        static_features=None,
+    ):
+        """Append new observations to the fit-time history (the ``update()`` path).
+
+        ``core.py``'s ``update()`` already requires every new timestamp to
+        include ALL series (raises otherwise -- see ``core.py:update``), so
+        this never has to reconcile a partial timestamp.
+
+        Aggregates ONLY the new rows to (bucket, timestamp) grain and
+        concatenates them onto ``self.agg``'s EXISTING rows (raw ``ord``/
+        ``E``/``A``-prefixed columns stripped first, then recomputed fresh
+        over the whole combined table) -- exactly the same "extend by one
+        (or more) synthetic aggregate row(s), then rerun the ordinal/prefix-
+        sum machinery once" pattern ``_rebuild_tail`` uses for a pending
+        prediction (Task 9), just committed permanently to ``self.agg``
+        instead of held in ``_pending``. This is deliberately NOT a full
+        ``build_agg_table(self._df, ...)`` rebuild: `trim_to_last` can leave
+        a permanent SEED row in ``self.agg`` whose raw columns encode a
+        cumulative baseline that has no corresponding raw observation in
+        ``self._df`` (see its docstring) -- rebuilding from ``self._df``
+        alone would silently discard that baseline.
+        """
+        if self.groups is None:
+            keep = _dedupe_preserve_order([id_col, time_col, target_col])
+            new_rows = ufp.drop_index_if_pandas(df[keep])
+        else:
+            group_cols_list = self.key_cols or self.group_cols
+            assert group_cols_list is not None
+            keep = _dedupe_preserve_order(
+                [id_col] + group_cols_list + [time_col, target_col]
+            )
+            raw_new = ufp.drop_index_if_pandas(df[keep])
+            attached = _attach_bucket_id(raw_new, self.groups, group_cols_list)
+            attached, self.groups = _extend_groups(
+                attached, self.groups, group_cols_list
+            )
+            new_rows = attached
+            if static_features is not None:
+                lookup_cols = self.key_cols or group_cols_list
+                sf_cols = set(static_features.columns)
+                if all(c in sf_cols for c in lookup_cols):
+                    self.series_bucket_id = lookup_bucket_ids(
+                        static_features, self.groups, lookup_cols
+                    ).astype(np.int64, copy=False)
+
+        # cast through the model's working dtype before float, matching
+        # `_build` so numerics stay bit-identical across an update.
+        new_rows_nw = nw.from_native(new_rows, eager_only=True)
+        y_new = (
+            new_rows_nw.get_column(target_col).to_numpy().astype(ga_data_dtype)
+        ).astype(float)
+        new_rows_nw = new_rows_nw.with_columns(
+            nw.new_series(
+                target_col,
+                y_new,
+                dtype=nw.Float64,
+                backend=nw.get_native_namespace(new_rows_nw),
+            )
+        )
+        df_cols = list(nw.from_native(self._df, eager_only=True).columns)
+        id_col_ = self.join_cols[0]
+        sort_keys = _dedupe_preserve_order(
+            (self.key_cols or self.group_cols or []) + [time_col, id_col_]
+        )
+        new_rows_native = new_rows_nw.select(df_cols).sort(sort_keys).to_native()
+        self._df = ufp.vertical_concat([self._df, new_rows_native])
+
+        new_agg_full = nw.from_native(
+            build_agg_table(
+                new_rows_native, self.keys, time_col, target_col, self._time_aggs
+            ),
+            eager_only=True,
+        )
+        # bare base columns only (no `ord`, no `E`-prefixed prefix sums --
+        # both are wrong here, computed over just the new rows -- and never
+        # any `A`-prefixed accumulate column, since `build_agg_table` never
+        # produces one; see `_apply_densification`'s identical filter).
+        base_cols = [
+            c for c in new_agg_full.columns if c != "ord" and not c.startswith("E")
+        ]
+        new_base = new_agg_full.select(base_cols)
+        existing = nw.from_native(self.agg, eager_only=True)
+        existing_base = existing.select([c for c in base_cols if c in existing.columns])
+        combined = nw.from_native(  # type: ignore[type-var]
+            ufp.vertical_concat([existing_base.to_native(), new_base.to_native()]),
+            eager_only=True,
+        )
+        sort_cols = (self.keys + [time_col]) if self.keys else [time_col]
+        combined = combined.sort(sort_cols)  # type: ignore[misc, arg-type]
+        combined = _add_ordinals(combined, self.keys, time_col)
+        combined_native = _add_prefix_sums(
+            combined.to_native(), self.keys, self._time_aggs
+        )
+        self.agg = combined_native
+        # F4/F5: row count changed -> invalidate the quantile offset store.
+        self._qvalues = None
+        # New rows can introduce new (scope, time) grid cells that the
+        # cached dense skeleton doesn't know about yet.
+        self._skeleton = None
+        if self._densified:
+            self._apply_densification()
+        self._invalidate_predict_cache()
+
+    def trim_to_last(self, n_ordinals: int) -> None:
+        """Drop history so each bucket's aggregate table keeps only its last
+        ``n_ordinals`` ordinals -- the ``keep_last_n`` memory optimization.
+
+        Unlike the legacy engine (no carried accumulator -- see
+        ``core.py:_trim_pooled_states``'s docstring), a narwhals state can
+        drop the prefix of ANY transform family, including Expanding*/EWM,
+        as long as the caller passes an ``n_ordinals`` covering that
+        family's own retention (``_pooled_retention``): the row at the
+        cutoff boundary becomes a SEED row -- its raw ``s``/``c``/``q``
+        (+``time_agg`` suffixes) columns overwritten by their own
+        already-computed ``E``-prefixed cumulative value, and any
+        accumulate-consumed raw column (``mn``/``mx``/``ewm``) overwritten
+        by its own ``A``-prefixed running value -- so a fresh recompute of
+        the ordinal/prefix-sum/accumulate columns over
+        ``[seed, retained suffix]`` reproduces the exact same absolute state
+        the dropped prefix would have produced. This is Task 9's "carried
+        accumulator" mechanism (`_make_seeds`), applied permanently here
+        instead of transiently per predict step.
+
+        The caller (`core.py:_trim_pooled_states`) must never call this for
+        a state holding a transform with unbounded retention
+        (``_pooled_retention`` returns ``None`` -- ``ExpandingQuantile``, no
+        sufficient statistic): no seed can compress arbitrarily old raw
+        history for that family, so its state must keep everything.
+
+        ``self._df`` (the raw table, read by the quantile store) is trimmed
+        in lockstep to the SAME retained (bucket, time) pairs -- excluding
+        the seed's own timestamp, which carries a synthetic baseline with no
+        real observation behind it, exactly like `_make_seeds`'s
+        `_hist_suffix_df` excludes the boundary row.
+        """
+        if n_ordinals <= 0:
+            return
+        a = nw.from_native(self.agg, eager_only=True)
+        if len(a) == 0:
+            return
+        keys = self.keys
+        backend = nw.get_native_namespace(a)
+        full_cols = list(a.columns)
+        ords = a.get_column("ord").to_numpy()
+        bucket_arr = (
+            a.get_column(keys[0]).to_numpy()
+            if keys
+            else np.zeros(len(a), dtype=np.int64)
+        )
+        next_ord = self._next_ord_by_bucket()
+        cutoff_by_bucket = {b: max(v - n_ordinals, 0) for b, v in next_ord.items()}
+        cutoff_arr = np.array([cutoff_by_bucket[int(b)] for b in bucket_arr])
+        if (cutoff_arr <= 0).all():
+            # every bucket's calendar already fits within n_ordinals
+            return
+
+        keep_mask = ords >= cutoff_arr
+        boundary_mask = ords == (cutoff_arr - 1)
+        a_tagged = a.with_columns(
+            nw.new_series("_keep", keep_mask, dtype=nw.Boolean, backend=backend),
+            nw.new_series(
+                "_boundary", boundary_mask, dtype=nw.Boolean, backend=backend
+            ),
+        )
+        retained = (
+            a_tagged.filter(nw.col("_keep"))
+            .drop(["_keep", "_boundary"])
+            .select(full_cols)
+        )
+        boundary_rows = a_tagged.filter(nw.col("_boundary")).drop(
+            ["_keep", "_boundary"]
+        )
+
+        subs = []
+        for base in ("s", "c", "q"):
+            for suffix in [""] + [
+                f"__{ta}" for ta in sorted(x for x in self._time_aggs if x is not None)
+            ]:
+                col = f"{base}{suffix}"
+                if col in boundary_rows.columns:
+                    subs.append(nw.col(f"E{col}").alias(col))
+        accum_cols = [c for c in full_cols if c.startswith("A") and c[1:] in full_cols]
+        for out_col in accum_cols:
+            subs.append(nw.col(out_col).alias(out_col[1:]))
+        if subs:
+            boundary_rows = boundary_rows.with_columns(subs)
+        seed_rows = boundary_rows.select(full_cols)
+
+        combined = nw.from_native(  # type: ignore[type-var]
+            ufp.vertical_concat([seed_rows.to_native(), retained.to_native()]),
+            eager_only=True,
+        )
+        sort_cols = (keys + [self.time_col]) if keys else [self.time_col]
+        combined = combined.sort(sort_cols)  # type: ignore[misc, arg-type]
+        combined = _add_ordinals(combined, keys, self.time_col)
+        combined_native = _add_prefix_sums(combined.to_native(), keys, self._time_aggs)
+        self.agg = combined_native
+        self._qvalues = None
+        self._skeleton = None
+
+        # Trim `self._df` to the SAME retained (bucket, time) pairs (the
+        # seed's own boundary timestamp is excluded from `retained`, so it's
+        # excluded here too).
+        on_cols = (keys + [self.time_col]) if keys else [self.time_col]
+        grid = retained.select(on_cols).unique()
+        df_nw = nw.from_native(self._df, eager_only=True)
+        self._df = df_nw.join(grid, on=on_cols, how="inner").to_native()
+
+        self._invalidate_predict_cache()
+
+    def update_series_bucket_id(self, context_df, _id_col: str):
+        """Recompute ``series_bucket_id`` from a context dataframe (dynamic
+        ``partition_by`` reassignment during predict).
+
+        A no-op for non-`partition_by` states (``self.key_cols is None``),
+        matching legacy exactly.
+
+        Unlike the legacy engine, no explicit per-bucket bookkeeping
+        (``next_time_index_by_bucket``/`_ts_aggs`) needs extending for a
+        brand-new bucket here: every narwhals reader (`_make_seeds`,
+        `build_query_arrays`, the `next_time_index_by_bucket`/
+        `_bucket_to_parent_id` compatibility properties) derives a bucket's
+        state on demand from ``self.agg``/``self.groups``/``self._df``, so a
+        bucket simply absent from ``self.agg`` (no history yet) is already
+        handled -- see ``_make_seeds``'s "bucket with no boundary row" case
+        and ``next_time_index_by_bucket``'s scope-based fallback.
+
+        ``_id_col`` is accepted for call-site symmetry with the legacy
+        engine's identical signature; unused here (the join key is
+        ``self.key_cols``, not the series id).
+        """
+        if self.key_cols is None:
+            return
+        key_cols = self.key_cols
+        context_with_bid = _attach_bucket_id(context_df, self.groups, key_cols)
+        context_with_bid, self.groups = _extend_groups(
+            context_with_bid, self.groups, key_cols
+        )
+        self.series_bucket_id = (
+            nw.from_native(context_with_bid, eager_only=True)
+            .get_column("_bucket_id")
+            .to_numpy()
+            .astype(np.int64)
+        )
 
 
 def compute_pooled_features(state, transforms, query_arrays=None):

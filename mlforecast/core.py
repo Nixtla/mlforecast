@@ -52,7 +52,9 @@ from .pooled import (
     POOLED_ENGINE,
     NarwhalsPooledState,
     PooledState,
+    _iter_leaf_tfms,
     _order_preserving_left_join,
+    _pooled_retention,
     compute_pooled_features,
 )
 from .pooled import _resolve_ctx as _resolve_ctx_for
@@ -404,15 +406,27 @@ class TimeSeries:
             state = self._pooled_states.get(key)
             if state is None:
                 continue
-            if isinstance(state, NarwhalsPooledState):
-                # narwhals states don't carry a trim path yet (later task);
-                # trimming is a memory optimization only -- skipping it never
-                # changes computed feature values, since it keeps full history.
-                continue
             tfm_list = list(tfms.values())
-            if not all(tfm._is_finite_window for tfm in tfm_list):
+            if isinstance(state, PooledState):
+                if not all(tfm._is_finite_window for tfm in tfm_list):
+                    continue
+                w_state = max(tfm.update_samples for tfm in tfm_list)
+                state.trim_to_last(max(self.keep_last_n, w_state))
                 continue
-            w_state = max(tfm.update_samples for tfm in tfm_list)
+            # narwhals: Task 9's seed row is a carried accumulator the
+            # legacy engine lacks, so Expanding*/EWM/LookupLag states --
+            # finite via `_pooled_retention` -- CAN trim too (a deliberate
+            # divergence from the legacy `_is_finite_window` gate above; see
+            # `NarwhalsPooledState.trim_to_last`'s docstring). A transform
+            # with genuinely UNBOUNDED reach (`_pooled_retention` returns
+            # ``None`` -- `ExpandingQuantile`, no sufficient statistic) still
+            # forces "keep everything", same as legacy's gate does for that
+            # family.
+            leaves = [leaf for tfm in tfm_list for leaf in _iter_leaf_tfms(tfm)]
+            retentions = [_pooled_retention(t) for t in leaves]
+            if any(r is None for r in retentions):
+                continue
+            w_state = max(retentions) if retentions else 0
             state.trim_to_last(max(self.keep_last_n, w_state))
 
     def _apply_keep_last_n(self) -> None:
