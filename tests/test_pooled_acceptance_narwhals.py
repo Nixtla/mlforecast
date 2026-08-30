@@ -72,6 +72,13 @@ EXPECTED_PASSED = 748
 EXPECTED_FAILED = 149
 
 _FAILED_LINE = re.compile(r"^FAILED (\S+)")
+# pytest colourizes its short summary when the child process sees a colour
+# hint (`FORCE_COLOR`, which a dev shell may export and `subprocess` then
+# inherits). The SGR escape precedes the word, so `^FAILED` matches NOTHING
+# and the parsed set silently reads as empty -- a gate that reddens for the
+# wrong reason. `PY_COLORS=0` below turns colour off at the source; this
+# strips it anyway, so the parser never depends on that alone.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _PARAM_SUFFIX = re.compile(r"\[[^\]]*\]$")
 
 
@@ -89,6 +96,11 @@ def _run_pytest(paths, timeout=180):
     """
     env = dict(os.environ)
     env["MLFORECAST_POOLED_ENGINE"] = "narwhals"
+    # Keep the child's output PLAIN: `_failed_test_functions` anchors on
+    # `^FAILED`, which an inherited `FORCE_COLOR` breaks (see `_ANSI`).
+    env["PY_COLORS"] = "0"
+    env["NO_COLOR"] = "1"
+    env.pop("FORCE_COLOR", None)
     proc = subprocess.run(
         [
             sys.executable,
@@ -113,9 +125,12 @@ def _failed_test_functions(stdout):
     """Extracts the set of failing ``path::function`` ids from a ``-q`` run's
     short summary, with parametrize suffixes (``[...]``) stripped so multiple
     failing cases of one parametrized test collapse to one function name --
-    matching how the 12-name manifest above is expressed."""
+    matching how the 12-name manifest above is expressed.
+
+    ANSI escapes are stripped first: `^FAILED` cannot match a colourized
+    line, and the failure mode is a silently EMPTY set."""
     ids = set()
-    for line in stdout.splitlines():
+    for line in _ANSI.sub("", stdout).splitlines():
         m = _FAILED_LINE.match(line)
         if m:
             ids.add(_PARAM_SUFFIX.sub("", m.group(1)))
