@@ -16,6 +16,7 @@ from mlforecast.lag_transforms import (
     ExpandingMax,
     ExpandingMean,
     ExpandingMin,
+    ExpandingStd,
     ExponentiallyWeightedMean,
     RollingMean,
 )
@@ -206,12 +207,12 @@ def _rebuild_agg_from_legacy_empty_ts_aggs_body(copy):
 
     from mlforecast._pooled_migrate import _rebuild_agg_from_legacy
 
-    fast = _rebuild_agg_from_legacy(legacy_state, f.ts.time_col)
+    fast, fast_kref = _rebuild_agg_from_legacy(legacy_state, f.ts.time_col)
 
     cleared_state = copy.copy(legacy_state)
     cleared_state._ts_aggs = {}
     assert not cleared_state._ts_aggs, "precondition: fallback path must actually run"
-    slow = _rebuild_agg_from_legacy(cleared_state, f.ts.time_col)
+    slow, slow_kref = _rebuild_agg_from_legacy(cleared_state, f.ts.time_col)
 
     import narwhals as nw
 
@@ -219,7 +220,130 @@ def _rebuild_agg_from_legacy_empty_ts_aggs_body(copy):
     slow_nw = nw.from_native(slow, eager_only=True).sort(["_bucket_id", f.ts.time_col])
     assert fast_nw.columns == slow_nw.columns
     assert len(fast_nw) == len(slow_nw)
-    for col in ("s", "c", "q", "mn", "mx", "ord", "Es", "Ec", "Eq", "ewm"):
+    for col in (
+        "s",
+        "c",
+        "sK",
+        "qK",
+        "mn",
+        "mx",
+        "ord",
+        "Es",
+        "Ec",
+        "EsK",
+        "EqK",
+        "ewm",
+    ):
         a = fast_nw.get_column(col).to_numpy()
         b = slow_nw.get_column(col).to_numpy()
         np.testing.assert_allclose(a, b, atol=0, equal_nan=True)
+
+    # The frozen centring reference travels with the table (it is what makes
+    # every `qK` above summable), and both paths must recover the same one:
+    # it is recomputed from the raw `y` either way, never from `_ts_aggs`'
+    # zero-centred `sum_sq`, which cannot be re-centred after the fact.
+    fast_k = nw.from_native(fast_kref, eager_only=True).sort("_bucket_id")
+    slow_k = nw.from_native(slow_kref, eager_only=True).sort("_bucket_id")
+    assert fast_k.columns == slow_k.columns
+    for col in fast_k.columns:
+        np.testing.assert_allclose(
+            fast_k.get_column(col).to_numpy().astype(float),
+            slow_k.get_column(col).to_numpy().astype(float),
+            atol=0,
+        )
+    assert (fast_k.get_column("K").to_numpy() != 0).all(), (
+        "the migrated reference must be the bucket's real mean, not a zero placeholder"
+    )
+
+
+def _large_magnitude_panel(n_series=6, n_times=30, mag=1e11, seed=0):
+    """Near-constant values around ``mag``: the regime where the variance is
+    lost entirely unless the moments are centred on a per-bucket reference.
+
+    Same construction as
+    ``tests/test_pooled_differential.py::_large_magnitude_panel``; duplicated
+    rather than imported so this file keeps its own fixture surface.
+    """
+    rng = np.random.default_rng(seed)
+    dates = pl.datetime_range(
+        pl.datetime(2020, 1, 1),
+        pl.datetime(2020, 1, 1) + pl.duration(days=n_times - 1),
+        interval="1d",
+        eager=True,
+    )
+    return pl.DataFrame(
+        {
+            "unique_id": np.repeat([f"id_{s}" for s in range(n_series)], n_times),
+            "ds": np.tile(dates.to_numpy(), n_series),
+            "y": mag * (1.0 + rng.normal(0, 1e-15, n_series * n_times)),
+            "store": np.zeros(n_series * n_times, dtype=np.int64),
+        }
+    ).sort("unique_id", "ds")
+
+
+def test_migrated_state_carries_the_centring_reference(tmp_path):
+    """A migrated model must own a frozen centring reference, like a fresh fit.
+
+    Legacy stores ``sum_sq`` -- the zero-centred second moment -- which cannot
+    be re-centred after the fact, so ``_rebuild_agg_from_legacy`` recomputes
+    ``sK``/``qK`` from the raw ``y`` the legacy state also carries, and must
+    hand the reference it used back to the state. Without that, the state has
+    no reference at all: ``update()`` then derives a fresh one from the new
+    rows while every migrated ``qK`` stays centred on the old one, and the
+    expanding variance becomes a sum of terms taken about two different
+    centres.
+
+    ``ExpandingStd`` specifically: its window reaches ordinal 0 through the
+    cumulative columns, so it is the family that actually reads the migrated
+    moments end to end.
+    """
+    from decimal import Decimal, localcontext
+    from fractions import Fraction
+
+    df = _large_magnitude_panel(n_times=30)
+    split = sorted(set(df["ds"].to_list()))[-4]
+    head, tail = df.filter(pl.col("ds") <= split), df.filter(pl.col("ds") > split)
+    assert len(tail) > 0
+    tfms = {1: [ExpandingStd(groupby=["store"])]}
+
+    with pooled_engine("numpy"):
+        old = MLForecast(
+            models=[LinearRegression()], freq="1d", lags=[1], lag_transforms=tfms
+        )
+        old.fit(head, static_features=["store"])
+        old.save(str(tmp_path / "old"))
+
+        from mlforecast._pooled_migrate import migrate_saved_model
+
+        migrate_saved_model(tmp_path / "old", tmp_path / "new")
+
+    with pooled_engine("narwhals"):
+        import narwhals as nw
+
+        from mlforecast import MLForecast as MF
+
+        migrated = MF.load(str(tmp_path / "new"))
+        key = next(iter(migrated.ts._pooled_states))
+        state = migrated.ts._pooled_states[key]
+        assert state._kref is not None, "the migrated state carries no reference"
+        k = nw.from_native(state._kref, eager_only=True).get_column("K").to_numpy()
+        assert (np.abs(k) > 1e10).all(), (
+            f"the migrated reference is not the bucket's own mean: {k}"
+        )
+        migrated.update(tail)
+        ts = migrated.ts
+        feats = state.latest_features(ts._get_pooled_tfms()[key], len(ts.uids))
+        got = float(np.asarray(next(iter(feats.values())), dtype=float)[0])
+
+    # exact expanding std over the whole (head + tail) history
+    vals = [Fraction(v) for v in df["y"].to_list()]
+    mean = sum(vals) / len(vals)
+    var = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+    with localcontext() as ctx:
+        ctx.prec = 60
+        want = (Decimal(var.numerator) / Decimal(var.denominator)).sqrt()
+        err = float(abs(Decimal(got) - want) / want)
+    assert err < 5e-15, (
+        f"expanding std after migrate + update is {err:g} off the exact value "
+        f"{float(want)!r} (got {got!r})"
+    )

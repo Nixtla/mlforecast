@@ -7,6 +7,7 @@ file proves the two engines agree, so any divergence names itself.
 
 import operator
 
+import narwhals as nw
 import numpy as np
 import polars as pl
 import pytest
@@ -295,66 +296,72 @@ def _large_magnitude_panel(n_series=6, n_times=30, mag=1e11, seed=0):
     ).sort("unique_id", "ds")
 
 
-def _negative_residue_dates(df_pl, window_size, min_samples):
-    """The set of `ds` values where the raw (unclamped) variance is negative,
-    computed ONCE via a fixed (polars) build of the aggregate table -- this
-    is the precondition guard (requirement 2: fail loudly, not vacuously, if
-    `_large_magnitude_panel` ever stops reproducing this) AND the reference
-    row set used by the tests below.
+def _values_by_ordinal(df_pl):
+    """``(ordered dates, [[raw y at that date], ...])`` for a one-bucket panel.
 
-    IMPORTANT, discovered while building this test (see the fix-round-3
-    section of the report for the full evidence): the raw variance's SIGN at
-    these near-cancellation magnitudes is not just a property of the input
-    data -- it also depends on the summation ORDER used to build `sq`/`num`,
-    which genuinely differs between polars' and pandas' native `.sum()`
-    (measured: up to an 8388608-ULP difference in the per-timestamp `q`
-    aggregate at mag=1e11, i.e. exactly a rounding-unit-scale disagreement,
-    NOT a bug in either backend). Because the TRUE mathematical variance
-    here is >= 0, the only source of negativity is this same rounding noise,
-    so it is mathematically impossible to construct a "deeply negative"
-    residue immune to this effect: any residue large enough to be robust to
-    the backend's own noise floor is large enough to BE the true, positive
-    variance instead (verified empirically over jitter 1e-15..1e-5 -- see
-    tmp/scan_jitter2.py in the fix-round-3 investigation). A full-column,
-    per-row atol=0.0 comparison between arbitrary summation paths therefore
-    does not hold everywhere in this construction. What DOES hold, checked
-    directly: at the SPECIFIC dates this function identifies (via one FIXED
-    reference computation, reused for both backend parametrizations), both
-    the legacy and narwhals engines emit EXACTLY 0.0 on BOTH backends -- see
-    the two tests below, which assert exactly that."""
-    import narwhals as nw
-
-    from mlforecast._pooled_engine import PooledCtx, build_agg_table
-
-    tbl = build_agg_table(df_pl, ["store"], "ds", "y", {None})
-    ctx = PooledCtx(keys=["store"], lag=1, min_samples=min_samples, time_agg=None)
-    cnt = ctx.window("c", window_size)
-    num = ctx.window("s", window_size)
-    sq = ctx.window("q", window_size)
-    raw_var = (sq - num * num / cnt) / (cnt - 1)
-    o = (
-        nw.from_native(tbl, eager_only=True)
-        .with_columns(raw_var.alias("raw_var"), cnt.alias("cnt"))
-        .to_native()
-    )
-    o = o if isinstance(o, pl.DataFrame) else pl.from_pandas(o)
-    o = o.filter(pl.col("cnt") >= min_samples)
-    raw = o["raw_var"].cast(pl.Float64).to_numpy()
-    assert len(raw) > 0 and (raw < 0).any(), (
-        "precondition failed: _large_magnitude_panel no longer produces a "
-        "negative raw variance for this window_size/min_samples -- the "
-        "tests below would pass vacuously without this guard. "
-        f"min raw_var seen: {raw.min() if len(raw) else 'n/a'}"
-    )
-    neg = o.filter(pl.col("raw_var") < 0)
-    return set(neg["ds"].to_list())
+    ``_large_magnitude_panel`` puts every series in ``store=0``, so a pooled
+    window over ``w`` ordinals is a window over every series' raw value at
+    those ``w`` dates -- exactly the value set the exact oracle below needs.
+    """
+    d = df_pl.sort("ds")
+    dates = sorted(set(d["ds"].to_list()))
+    return dates, [d.filter(pl.col("ds") == ts)["y"].to_list() for ts in dates]
 
 
-def _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend):
-    """At the rows identified by `_negative_residue_dates`, both the legacy
-    numpy engine and the narwhals engine must emit EXACTLY 0.0 -- the
-    defining property of Finding 3's fix (`np.maximum(var, 0.0)` /
-    `.clip(lower_bound=0.0)`, not `.abs()`)."""
+def _exact_std_by_date(df_pl, ordinals_for):
+    """``{ds: exact sample std}`` -- the TRUE value, to 60 significant digits.
+
+    Legacy is deliberately NOT the reference here. Its ``RollingStd``/
+    ``ExpandingStd`` aggregate fast paths (``_rolling_std_from_agg`` /
+    ``_expanding_std_from_agg``) compute the variance as
+    ``sum(y**2) - sum(y)**2/n``, which at this magnitude is pure rounding
+    noise -- these tests used to assert that the narwhals engine reproduced
+    that noise (clipped to 0.0). It no longer does, on purpose: the shifted
+    moments (``sK``/``qK``, see ``_pooled_engine.compute_kref``) recover the
+    true std, so the only reference that can settle the result is an exact
+    one. float64 values are exact rationals, so ``Fraction`` gives the true
+    variance with no rounding at all.
+    """
+    from .test_pooled_narwhals import _exact_sample_std
+
+    dates, per_ord = _values_by_ordinal(df_pl)
+    out = {}
+    for t in range(len(dates)):
+        vals = [v for i in ordinals_for(t, len(dates)) for v in per_ord[i]]
+        if len(vals) > 1:
+            out[dates[t]] = _exact_sample_std(vals)
+    return out
+
+
+def _rolling_ordinals(window_size):
+    return lambda t, n: list(range(max(t - window_size, 0), t))  # noqa: ARG005
+
+
+def _expanding_ordinals():
+    return lambda t, n: list(range(0, t))  # noqa: ARG005
+
+
+def _seasonal_ordinals(season_length, window_size, lag=1):
+    offs = [lag + k * season_length for k in range(window_size)]
+    return lambda t, n: [t - o for o in offs if 0 <= t - o < n]
+
+
+# MEASURED over both backends and all three families on
+# `_large_magnitude_panel` (see the fix report): worst relative error against
+# the exact std is 1.1e-15. ~5x headroom for a backend's own summation order.
+_EXACT_STD_TOL = 5e-15
+
+
+def _assert_matches_exact_std(df_pl, tfms, backend, ordinals_for):
+    """The narwhals engine's std column vs the EXACT std, end to end.
+
+    Returns legacy's own worst relative error on the same rows, so each
+    caller can state -- and assert -- what legacy does here rather than
+    assuming it.
+    """
+    from .test_pooled_narwhals import _rel_err
+
+    want = _exact_std_by_date(df_pl, ordinals_for)
     df = df_pl if backend == "polars" else df_pl.to_pandas()
     a = _preprocess_with_engine("numpy", df, tfms, ["store"])
     b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
@@ -364,48 +371,120 @@ def _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend):
     b = (b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)).sort(
         "unique_id", "ds"
     )
-    feat_cols = [c for c in a.columns if c not in ("unique_id", "ds", "store", "y")]
+    feat_cols = [c for c in b.columns if c not in ("unique_id", "ds", "store", "y")]
     assert feat_cols, "no feature columns produced"
+    worst_nw, worst_nw_at, worst_legacy, checked = 0.0, None, 0.0, 0
     for c in feat_cols:
-        a_at = (
-            a.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
-        )
-        b_at = (
-            b.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
-        )
-        assert len(a_at) > 0, "no rows matched the negative-residue dates"
-        np.testing.assert_allclose(a_at, 0.0, atol=0.0, err_msg=f"legacy, {c}")
-        np.testing.assert_allclose(b_at, 0.0, atol=0.0, err_msg=f"narwhals, {c}")
+        rows = b.select(["ds", c]).rows()
+        legacy_rows = a.select(["ds", c]).rows()
+        for (ds, got), (_, got_legacy) in zip(rows, legacy_rows):
+            if got is None or ds not in want:
+                continue
+            checked += 1
+            err = _rel_err(float(got), want[ds])
+            if err > worst_nw:
+                worst_nw, worst_nw_at = err, (c, ds)
+            if got_legacy is not None:
+                worst_legacy = max(worst_legacy, _rel_err(float(got_legacy), want[ds]))
+    assert checked > 0, "no rows compared against the oracle"
+    assert worst_nw < _EXACT_STD_TOL, (
+        f"narwhals vs exact std: worst relative error {worst_nw:g} at "
+        f"{worst_nw_at} over {checked} rows (limit {_EXACT_STD_TOL:g})"
+    )
+    return worst_legacy, checked
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_rolling_std_large_magnitude_cancellation_clips_to_zero(backend):
-    """Finding 3 regression, re-classified CRITICAL: near-identical
-    LARGE-magnitude values make `sq` and `num**2/cnt` both huge, so their
-    difference is pure floating-point cancellation noise that rounds
-    negative. legacy clamps with `np.maximum(var, 0.0)`; the pre-fix
-    narwhals code used `.abs()`, which turned a large-magnitude negative
-    residue into a standard deviation of thousands where the true value is
-    exactly 0.0 -- a magnitude error of O(1e3), reachable through the
-    ordinary public API with no NaN and no exotic config. See
-    `_negative_residue_dates`'s docstring for why the assertion is scoped to
-    the identified rows rather than the whole column."""
+def test_rolling_std_large_magnitude_matches_the_exact_std(backend):
+    """Finding 3's fixture, re-pointed at the EXACT std.
+
+    This test used to assert that the narwhals engine clipped to 0.0 here,
+    matching legacy's aggregate path. That pinned the defect: the true std of
+    these windows is small but nonzero, and both engines were losing it
+    entirely to the cancellation in ``sum(y**2) - sum(y)**2/n``. With the
+    shifted moments the narwhals engine now returns the true value, so the
+    assertion is against arbitrary-precision truth -- and the legacy engine,
+    which still uses the raw two-moment formula, is asserted to be
+    catastrophically WRONG on the very same rows. That second assertion is
+    what proves the fixture still reaches the ill-conditioned regime: if it
+    ever stops doing so, this test starts passing vacuously against the
+    pre-fix code, and the guard fails instead.
+    """
     df_pl = _large_magnitude_panel()
-    neg_dates = _negative_residue_dates(df_pl, window_size=5, min_samples=2)
     tfms = {1: [RollingStd(5, min_samples=2, groupby=["store"])]}
-    _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend)
+    worst_legacy, _ = _assert_matches_exact_std(
+        df_pl, tfms, backend, _rolling_ordinals(5)
+    )
+    assert worst_legacy > 0.5, (
+        "precondition failed: legacy's raw two-moment formula is still "
+        f"accurate on this panel (worst relative error {worst_legacy:g}) -- "
+        "the fixture no longer reaches the regime this fix exists for"
+    )
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_expanding_std_large_magnitude_cancellation_clips_to_zero(backend):
-    """Same construction as the RollingStd case above. Verified separately
-    reachable for ExpandingStd: `cnt >= 2` does not prevent the residue from
-    going negative -- 7 of 29 eligible rows go negative on this panel (min
-    raw variance -3.36e6)."""
+def test_expanding_std_large_magnitude_matches_the_exact_std(backend):
+    """Same construction and same two-sided assertion as the RollingStd case."""
     df_pl = _large_magnitude_panel()
-    neg_dates = _negative_residue_dates(df_pl, window_size=None, min_samples=2)
     tfms = {1: [ExpandingStd(groupby=["store"])]}
-    _assert_both_engines_clip_to_zero_at(df_pl, tfms, neg_dates, backend)
+    worst_legacy, _ = _assert_matches_exact_std(
+        df_pl, tfms, backend, _expanding_ordinals()
+    )
+    assert worst_legacy > 0.5, (
+        "precondition failed: legacy's raw two-moment formula is still "
+        f"accurate on this panel (worst relative error {worst_legacy:g}) -- "
+        "the fixture no longer reaches the regime this fix exists for"
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_std_of_constant_data_is_exactly_zero(backend):
+    """A constant bucket at 1e11: the narwhals engine returns EXACTLY 0.0.
+
+    With the shifted moments this holds by construction -- ``y - K`` is
+    identically 0, so ``sK`` and ``qK`` are exact zeros and no cancellation
+    is possible -- and it pins the observable half of the variance clamp
+    (``.clip(lower_bound=0.0)``, never ``.abs()``): no NaN out of a negative
+    sqrt, no tiny positive dust.
+
+    The legacy engine is checked too, in the opposite direction: its raw
+    two-moment formula returns values in the THOUSANDS here (measured 2634.8
+    against a true std of exactly 0.0), which is both the reason this file no
+    longer treats legacy as the reference for ill-conditioned data and the
+    guard that this fixture really is in the regime the fix addresses.
+    """
+    df_pl = _large_magnitude_panel().with_columns(pl.lit(1e11).alias("y"))
+    df = df_pl if backend == "polars" else df_pl.to_pandas()
+    tfms = {
+        1: [
+            RollingStd(5, min_samples=2, groupby=["store"]),
+            ExpandingStd(groupby=["store"]),
+            SeasonalRollingStd(
+                season_length=1, window_size=5, min_samples=2, groupby=["store"]
+            ),
+        ]
+    }
+    worst_legacy = 0.0
+    for engine in ("numpy", "narwhals"):
+        out = _preprocess_with_engine(engine, df, tfms, ["store"])
+        out = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+        feat_cols = [
+            c for c in out.columns if c not in ("unique_id", "ds", "store", "y")
+        ]
+        assert feat_cols, "no feature columns produced"
+        for c in feat_cols:
+            v = out[c].cast(pl.Float64).to_numpy()
+            v = v[~np.isnan(v)]
+            assert len(v) > 0, f"{engine}/{c}: every row was null"
+            if engine == "numpy":
+                worst_legacy = max(worst_legacy, float(np.abs(v).max()))
+                continue
+            np.testing.assert_array_equal(v, np.zeros_like(v), err_msg=f"{engine}, {c}")
+    assert worst_legacy > 100.0, (
+        "precondition failed: the legacy two-moment formula no longer blows "
+        f"up on constant 1e11 data (worst |value| {worst_legacy:g}) -- this "
+        "fixture would no longer distinguish the fix from the defect"
+    )
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -493,120 +572,68 @@ def test_seasonal_rolling_std_window1_min_samples1_no_inf(backend):
     assert_engines_agree(df, tfms, ["store"])
 
 
-def _seasonal_negative_residue_dates(df_pl, tfm, min_samples):
-    """Same precondition-and-reference role as ``_negative_residue_dates``,
-    but built from the seasonal family's own ``sum_horizontal``-based
-    ``cnt``/``num``/``sq`` (offsets ``lag + k*season_length``), which is a
-    different summation path than ``RollingStd``'s prefix-sum window
-    subtraction and so must be checked independently rather than assumed to
-    share ``_negative_residue_dates``'s result set."""
-    import narwhals as nw
-
-    from mlforecast._pooled_engine import PooledCtx, build_agg_table
-
-    tbl = build_agg_table(df_pl, ["store"], "ds", "y", {None})
-    ctx = PooledCtx(keys=["store"], lag=1, min_samples=min_samples, time_agg=None)
-    offs = tfm._pooled_offsets(ctx)
-    cnt = tfm._pooled_count(ctx)
-    num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
-    sq = nw.sum_horizontal(*[ctx.shift("q", o).alias(f"_sq{o}") for o in offs])
-    raw_var = (sq - num * num / cnt) / (cnt - 1)
-    o = (
-        nw.from_native(tbl, eager_only=True)
-        .with_columns(raw_var.alias("raw_var"), cnt.alias("cnt"))
-        .to_native()
-    )
-    o = o if isinstance(o, pl.DataFrame) else pl.from_pandas(o)
-    o = o.filter(pl.col("cnt") >= min_samples)
-    raw = o["raw_var"].cast(pl.Float64).to_numpy()
-    assert len(raw) > 0 and (raw < 0).any(), (
-        "precondition failed: this construction no longer produces a "
-        "negative raw variance for SeasonalRollingStd -- the test below "
-        "would pass vacuously without this guard. "
-        f"min raw_var seen: {raw.min() if len(raw) else 'n/a'}"
-    )
-    neg = o.filter(pl.col("raw_var") < 0)
-    return set(neg["ds"].to_list())
-
-
-def _assert_narwhals_clips_to_zero_at(df_pl, tfms, neg_dates, backend):
-    """At the rows identified by ``_seasonal_negative_residue_dates``, the
-    narwhals engine must emit EXACTLY 0.0 -- the defining property of
-    Finding 3's fix (``.clip(lower_bound=0.0)``, not ``.abs()``).
-
-    This deliberately checks ONLY the narwhals side, unlike
-    ``_assert_both_engines_clip_to_zero_at`` (used by RollingStd/
-    ExpandingStd's analogous test) which checks both. That is not a
-    weakened test -- it is the correct one, for a reason specific to this
-    family: RollingStd/ExpandingStd's LEGACY path shares the exact same
-    sum-of-squares aggregate formula as narwhals (see
-    ``_rolling_std_from_agg``), so legacy ALSO clips to 0 at these dates and
-    the two-sided check is meaningful. SeasonalRollingStd's legacy path has
-    NO aggregate fast path at all (see the class docstring) -- it computes
-    ``np.std(vals, ddof=1)`` directly on raw values, a numerically STABLE
-    two-pass computation. At this magnitude (near-constant data around
-    1e11), legacy therefore reports the TRUE small nonzero std (order 1e-4),
-    not 0. Verified by measurement (see the task-5 report): every valid row
-    in this panel diverges between engines by more than 1e-6, up to 1863 in
-    absolute terms, because the sum/sum_sq aggregates lose the entire true
-    signal (~1e-8 in the sum-of-squared-deviations term) to floating-point
-    noise (~1e7 at this magnitude) long before either engine's `.clip`
-    guard runs. No choice of clip/abs recovers that signal -- this is
-    catastrophic cancellation, not a bug -- so asserting full engine
-    agreement here would be false, not just strict. What IS true and
-    revert-proof is that the fix in this file behaves as designed: even
-    though the narwhals computation itself is numerically ruined at this
-    magnitude, it still clips its (meaningless) negative residue to exactly
-    0.0 rather than reporting some wildly-wrong large value via `.abs()`."""
-    df = df_pl if backend == "polars" else df_pl.to_pandas()
-    b = _preprocess_with_engine("narwhals", df, tfms, ["store"])
-    b = (b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)).sort(
-        "unique_id", "ds"
-    )
-    feat_cols = [c for c in b.columns if c not in ("unique_id", "ds", "store", "y")]
-    assert feat_cols, "no feature columns produced"
-    for c in feat_cols:
-        b_at = (
-            b.filter(pl.col("ds").is_in(list(neg_dates)))[c].cast(pl.Float64).to_numpy()
-        )
-        assert len(b_at) > 0, "no rows matched the negative-residue dates"
-        np.testing.assert_allclose(b_at, 0.0, atol=0.0, err_msg=f"narwhals, {c}")
-
-
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_seasonal_rolling_std_large_magnitude_cancellation_clips_to_zero(backend):
-    """Finding 3's defect (RollingStd/ExpandingStd large-magnitude
-    cancellation), reproduced for SeasonalRollingStd: ``season_length=1``
-    makes the seasonal offsets ``lag, lag+1, ..., lag+window_size-1`` -- the
-    same window ``RollingStd(5, ...)`` would use -- so the identical
-    near-constant, large-magnitude construction (``mag=1e11``, 6 series in
-    one bucket, see ``_large_magnitude_panel``) reaches a negative raw
-    variance residue through the seasonal family's own
-    ``sum_horizontal``-based ``cnt``/``num``/``sq``, independently confirmed
-    by ``_seasonal_negative_residue_dates`` rather than assumed from the
-    rolling case.
+def test_seasonal_rolling_std_large_magnitude_matches_the_exact_std(backend):
+    """The 1863x seasonal divergence from legacy is GONE, not documented.
 
-    NOTE (disclosed finding, see the task-5 report for the full writeup):
-    this test does NOT assert full engine agreement, because at this
-    magnitude engine agreement genuinely does not hold for
-    SeasonalRollingStd -- unlike RollingStd/ExpandingStd, whose legacy path
-    shares the same unstable aggregate formula, SeasonalRollingStd's legacy
-    path is numerically stable (direct ``np.std`` on raw values) and reports
-    the true small nonzero std, while the narwhals aggregate formula loses
-    that signal entirely to floating-point noise. This is an inherent
-    limitation of computing variance from ``sum``/``sum_sq`` aggregates at
-    extreme magnitude / near-constant data, not fixable by any clip/abs
-    choice. What this test DOES verify, and what IS revert-proof: the
-    ``.clip(lower_bound=0.0)`` fix still behaves correctly here, so the
-    already-unreliable narwhals computation degrades to exactly 0.0 rather
-    than to some wildly-wrong large value via ``.abs()``."""
+    This test used to assert only that the narwhals engine clipped its
+    (meaningless) residue to 0.0 here, with a long note explaining that full
+    engine agreement was impossible: ``SeasonalRollingStd`` has no legacy
+    aggregate fast path, so legacy computes ``np.std(vals, ddof=1)`` directly
+    on the raw values -- numerically stable, and reporting the true small
+    nonzero std -- while the narwhals aggregate formula lost that signal
+    entirely to cancellation (measured: every valid row diverged, up to 1863
+    in absolute terms).
+
+    With the shifted moments there is no such limitation, so this asserts the
+    two things that used to be impossible:
+
+    * the narwhals engine matches the EXACT std (arbitrary precision), and
+    * legacy -- which is the accurate one for THIS family -- also matches it,
+      i.e. the two engines now agree, which is the direct inverse of the old
+      behaviour this test was written to document.
+    """
+    from .test_pooled_narwhals import _rel_err
+
     df_pl = _large_magnitude_panel()
     tfm = SeasonalRollingStd(
         season_length=1, window_size=5, min_samples=2, groupby=["store"]
     )
-    neg_dates = _seasonal_negative_residue_dates(df_pl, tfm, min_samples=2)
     tfms = {1: [tfm]}
-    _assert_narwhals_clips_to_zero_at(df_pl, tfms, neg_dates, backend)
+    worst_legacy, checked = _assert_matches_exact_std(
+        df_pl, tfms, backend, _seasonal_ordinals(1, 5)
+    )
+    assert checked > 0
+    # 1e-1, not 1e-15: legacy is the ACCURATE engine for this family, but
+    # only to the precision of `np.std`'s own mean subtraction, and this
+    # panel's spread is ~4 ULP of its magnitude -- measured, legacy lands
+    # 4.2e-2 relative off the exact value where the shifted moments land
+    # 1e-15 off. The bound that matters is the comparison with what this
+    # test used to document: an engine divergence of 1863 ABSOLUTE on a true
+    # std of ~1e-4, i.e. 1.8e7 relative.
+    assert worst_legacy < 0.1, (
+        "legacy's stable np.std path should now be within its own precision "
+        f"of the exact std for this family; got relative error {worst_legacy:g}"
+    )
+
+    # And the same panel through the RollingStd family, whose LEGACY path
+    # does use the unstable aggregate formula, must still be wrecked -- the
+    # precondition that this magnitude is genuinely ill-conditioned, checked
+    # here so the assertion above cannot pass vacuously on well-behaved data.
+    dates, per_ord = _values_by_ordinal(df_pl)
+    from .test_pooled_narwhals import _exact_sample_std, _naive_sample_std
+
+    worst_naive = 0.0
+    for t in range(len(dates)):
+        vals = [v for i in _seasonal_ordinals(1, 5)(t, len(dates)) for v in per_ord[i]]
+        if len(vals) > 1:
+            worst_naive = max(
+                worst_naive, _rel_err(_naive_sample_std(vals), _exact_sample_std(vals))
+            )
+    assert worst_naive > 0.5, (
+        "precondition failed: the naive two-moment formula is still accurate "
+        f"on this panel (worst relative error {worst_naive:g})"
+    )
 
 
 MISC = [
@@ -2123,3 +2150,170 @@ def test_lookup_lag_duplicate_column_workaround_matches_legacy_mixed_state(backe
             equal_nan=True,
             err_msg=f"{ca} (legacy, mixed state) vs {cb} (narwhals, split state)",
         )
+
+
+# ---------------------------------------------------------------------------
+# The frozen centring reference (`NarwhalsPooledState._kref`) across the two
+# in-process paths that REWRITE the aggregate table. Both use `ExpandingStd`
+# on purpose: its window reaches back to ordinal 0 through the `E`-prefixed
+# cumulative columns, so it is the only std family that actually reads a
+# `trim_to_last` seed row's carried moments and the only one whose result
+# depends on every appended row having been centred on the SAME reference.
+# `RollingStd(5)` never reaches either and cannot fail these.
+# ---------------------------------------------------------------------------
+
+
+def _exact_std_of_all(df_pl):
+    from .test_pooled_narwhals import _exact_sample_std
+
+    _, per_ord = _values_by_ordinal(df_pl)
+    return _exact_sample_std([v for row in per_ord for v in row])
+
+
+def _fit_narwhals(df, tfms, **fit_kw):
+    fcst = MLForecast(models=[LinearRegression()], freq="1d", lag_transforms=tfms)
+    fcst.fit(df, static_features=["store"], **fit_kw)
+    return fcst
+
+
+def _latest_pooled_feature(fcst):
+    """``(feature value at the next ordinal, aggregate rows before the call)``.
+
+    One bucket in these fixtures, so every series carries the same value.
+    ``latest_features`` reduces ``state.agg`` to the predict tail, hence the
+    row count is read first.
+    """
+    ts = fcst.ts
+    key = next(iter(ts._pooled_states))
+    state = ts._pooled_states[key]
+    n_rows = len(nw.from_native(state.agg, eager_only=True))
+    feats = state.latest_features(ts._get_pooled_tfms()[key], len(ts.uids))
+    assert len(feats) == 1, f"expected one pooled feature, got {sorted(feats)}"
+    arr = np.asarray(next(iter(feats.values())), dtype=float)
+    assert (arr == arr[0]).all(), "one bucket: every series must share the value"
+    return float(arr[0]), n_rows
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_trim_to_last_keeps_the_expanding_std_exact(backend):
+    """`keep_last_n` drops a prefix; the frozen reference must survive it.
+
+    Two things are pinned. (1) The reference is NEVER re-derived: it is a
+    per-bucket mean, so recomputing it over the retained suffix would move it
+    and leave every surviving `qK` centred on a value that no longer matches
+    the new ones. (2) `trim_to_last` must substitute the seed row's `sK`/`qK`
+    with their own `EsK`/`EqK` cumulative values, exactly as it already did
+    for `s`/`c` -- that substitution loop is driven by `_PREFIX_AGGS`, and
+    with the old hard-coded `("s", "c", "q")` list the two shifted moments
+    are silently skipped (the loop only substitutes columns it finds), so the
+    trimmed state reports the std of the RETAINED WINDOW instead of the whole
+    history.
+    """
+    df_pl = _large_magnitude_panel(n_times=40)
+    df = df_pl if backend == "polars" else df_pl.to_pandas()
+    tfms = {1: [ExpandingStd(groupby=["store"])]}
+    want = _exact_std_of_all(df_pl)
+
+    with pooled_engine("narwhals"):
+        from .test_pooled_narwhals import _rel_err
+
+        got_auto, rows_auto = _latest_pooled_feature(_fit_narwhals(df, tfms))
+        got_trim, rows_trim = _latest_pooled_feature(
+            _fit_narwhals(df, tfms, keep_last_n=8)
+        )
+        # `fit` infers a `keep_last_n` of its own, so BOTH of these are
+        # trimmed -- at two different depths, from a 40-ordinal history.
+        # Whichever depth, the expanding std must still be the one over the
+        # WHOLE history, which is the property the seed row carries.
+        assert rows_auto < 40 and rows_trim < 40 and rows_auto != rows_trim, (
+            "precondition failed: no prefix was dropped, or both fits kept "
+            f"the same rows ({rows_auto} / {rows_trim} of 40 ordinals)"
+        )
+        for label, got in (("auto keep_last_n", got_auto), ("keep_last_n=8", got_trim)):
+            err = _rel_err(got, want)
+            assert err < _EXACT_STD_TOL, (
+                f"{label}: expanding std {got!r} is {err:g} off the exact "
+                f"value {float(want)!r}"
+            )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_update_keeps_the_expanding_std_exact(backend):
+    """`update()` appends a suffix; the frozen reference must survive it.
+
+    `append_observations` re-aggregates only the NEW rows. It must centre
+    them on the reference the fit-time rows already used -- computing a fresh
+    one for the new rows (which is what happens if `kref` is not threaded
+    through, or if `_extend_kref` is allowed to overwrite an existing
+    bucket's entry) leaves the bucket's prefix sums adding `sum((y-K)**2)`
+    terms taken about two different centres, which is not any variance at
+    all.
+    """
+    df_pl = _large_magnitude_panel(n_times=40)
+    dates = sorted(set(df_pl["ds"].to_list()))
+    head_pl = df_pl.filter(pl.col("ds") <= dates[-6])
+    tail_pl = df_pl.filter(pl.col("ds") > dates[-6])
+    assert len(tail_pl) > 0 and len(head_pl) > 0
+    head = head_pl if backend == "polars" else head_pl.to_pandas()
+    tail = tail_pl if backend == "polars" else tail_pl.to_pandas()
+    tfms = {1: [ExpandingStd(groupby=["store"])]}
+    want = _exact_std_of_all(df_pl)
+
+    with pooled_engine("narwhals"):
+        from .test_pooled_narwhals import _rel_err
+
+        fcst = _fit_narwhals(head, tfms)
+        key = next(iter(fcst.ts._pooled_states))
+        k_before = (
+            nw.from_native(fcst.ts._pooled_states[key]._kref, eager_only=True)
+            .get_column("K")
+            .to_numpy()
+            .copy()
+        )
+        assert (np.abs(k_before) > 1e10).all(), (
+            "precondition failed: the fixture is not at a magnitude where the "
+            "centring reference matters"
+        )
+        fcst.update(tail)
+        k_after = (
+            nw.from_native(fcst.ts._pooled_states[key]._kref, eager_only=True)
+            .get_column("K")
+            .to_numpy()
+        )
+        np.testing.assert_array_equal(
+            k_after, k_before, err_msg="update() moved a frozen reference"
+        )
+        got, _ = _latest_pooled_feature(fcst)
+    err = _rel_err(got, want)
+    assert err < _EXACT_STD_TOL, (
+        f"expanding std after update() is {err:g} off the exact value "
+        f"{float(want)!r} (got {got!r})"
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("time_agg", ["mean", "sum", "count", "min", "max"])
+def test_time_agg_std_predict_engines_agree(backend, time_agg):
+    """Recursive predict for a ``time_agg`` std family.
+
+    This is the path where each step's PENDING row has to derive its own
+    ``sK__<agg>``/``qK__<agg>`` from the bucket's frozen reference for that
+    family (``_pending_agg_frame`` -> ``_derive_time_agg_family``). Every
+    ``time_agg`` is swept because each has its own reference on its own
+    scale -- ``count`` in particular holds small integers, and centring it on
+    the target's magnitude would manufacture the very cancellation the
+    reference exists to remove.
+    """
+    df = _panel(backend, n_series=12, n_times=40, n_groups=2)
+    tfms = {1: [RollingStd(5, min_samples=2, groupby=["store"], time_agg=time_agg)]}
+    a = _predict_with_engine("numpy", df, tfms, ["store"], 5)
+    b = _predict_with_engine("narwhals", df, tfms, ["store"], 5)
+    a = (a if isinstance(a, pl.DataFrame) else pl.from_pandas(a)).sort(
+        "unique_id", "ds"
+    )
+    b = (b if isinstance(b, pl.DataFrame) else pl.from_pandas(b)).sort(
+        "unique_id", "ds"
+    )
+    np.testing.assert_allclose(
+        a["LinearRegression"].to_numpy(), b["LinearRegression"].to_numpy(), atol=1e-9
+    )

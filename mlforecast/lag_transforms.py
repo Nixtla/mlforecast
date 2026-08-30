@@ -814,8 +814,16 @@ def _rolling_std_from_agg(agg, lag, window_size, min_samples):
 class RollingStd(_RollingBase):
     def _pooled_expr(self, ctx):
         cnt = ctx.window("c", self.window_size)
-        num = ctx.window("s", self.window_size)
-        sq = ctx.window("q", self.window_size)
+        # SHIFTED moments (`sum(y - K)` / `sum((y - K)**2)` for the bucket's
+        # frozen reference K, see `_pooled_engine.compute_kref`), not the raw
+        # `sum(y)` / `sum(y**2)`. Same algebra, but both terms scale with the
+        # SPREAD instead of with K**2, so `sq - num*num/cnt` is no longer a
+        # difference between two near-equal huge numbers. With the raw
+        # moments, 16 values around 1e9 with a spread of ~1 gave a variance
+        # numerator of exactly -2048 -- pure rounding noise -- and this
+        # returned 0.0 against a true std of 0.852011.
+        num = ctx.window("sK", self.window_size)
+        sq = ctx.window("qK", self.window_size)
         # sample variance from the running sums, clamped at 0: a cancellation
         # residue from subtracting large prefix sums can go slightly negative
         # (legacy uses np.maximum(var, 0.0), not abs() -- abs() turns a
@@ -1278,26 +1286,27 @@ class SeasonalRollingStd(_Seasonal_RollingBase):
         return float(np.std(vals, ddof=1)) if len(vals) > 1 else np.nan
 
     def _pooled_expr(self, ctx):
-        """Known limitation: diverges from legacy at extreme magnitude.
+        """Variance from the SHIFTED moments (``sK``/``qK``), not raw ``s``/``q``.
 
-        At extreme magnitude with near-constant values, this aggregate
-        formulation (variance from raw ``sum``/``sum_sq``) disagrees with the
-        legacy engine -- measured up to 1863x, 174/174 rows in the seasonal
-        differential regression. Legacy ``SeasonalRollingStd._seasonal_stat``
-        calls ``np.std(vals, ddof=1)`` directly on the raw values (numerically
-        stable) and seasonal has no legacy aggregate fast path, whereas
-        ``RollingStd``/``ExpandingStd``'s legacy paths share this same
-        unstable ``sq - num**2/cnt`` formula and therefore agree with us. Not
-        fixable by any clip/abs choice at this site -- see
-        ``test_seasonal_rolling_std_large_magnitude_cancellation_clips_to_zero``.
-        Follow-up remedy identified but not implemented: a shifted-data
-        variance centered on a per-bucket reference value, applied per
-        offset-family, rather than the raw two-moment formula.
+        The former "known limitation" here -- at extreme magnitude with
+        near-constant values this family disagreed with legacy by up to 1863x
+        on 174/174 rows, because the raw two-moment formula lost the entire
+        signal to cancellation -- is what the shifted moments fix. Legacy
+        ``SeasonalRollingStd._seasonal_stat`` calls ``np.std(vals, ddof=1)``
+        directly on the raw values (a stable two-pass computation, no
+        aggregate fast path), and this now matches it to full precision
+        there. The remaining asymmetry runs the other way: legacy's
+        ``RollingStd``/``ExpandingStd`` DO have aggregate fast paths built on
+        the unstable formula, so on ill-conditioned data those two now differ
+        from us by being wrong. See
+        ``tests/test_pooled_narwhals.py::test_std_families_match_the_exact_oracle``
+        for the arbitrary-precision check that settles which is which.
         """
         offs = self._pooled_offsets(ctx)
         cnt = self._pooled_count(ctx)
-        num = nw.sum_horizontal(*[ctx.shift("s", o).alias(f"_ss{o}") for o in offs])
-        sq = nw.sum_horizontal(*[ctx.shift("q", o).alias(f"_sq{o}") for o in offs])
+        # shifted moments -- see `RollingStd._pooled_expr`
+        num = nw.sum_horizontal(*[ctx.shift("sK", o).alias(f"_ss{o}") for o in offs])
+        sq = nw.sum_horizontal(*[ctx.shift("qK", o).alias(f"_sq{o}") for o in offs])
         # clip, not abs() -- see RollingStd._pooled_expr: a cancellation
         # residue from subtracting large prefix sums can round slightly
         # negative even though the true variance is >= 0; np.maximum(var, 0)
@@ -1543,8 +1552,9 @@ def _expanding_std_from_agg(agg, lag):
 class ExpandingStd(_ExpandingBase):
     def _pooled_expr(self, ctx):
         cnt = ctx.window("c", None)
-        num = ctx.window("s", None)
-        sq = ctx.window("q", None)
+        # shifted moments -- see `RollingStd._pooled_expr`
+        num = ctx.window("sK", None)
+        sq = ctx.window("qK", None)
         # clip, not abs() -- see RollingStd._pooled_expr for why; cnt >= 2
         # already implies cnt > 1, so no separate guard is needed here.
         var = ((sq - num * num / cnt) / (cnt - 1)).clip(lower_bound=0.0)

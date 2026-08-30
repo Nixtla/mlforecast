@@ -125,13 +125,21 @@ def _group_slices(
 def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
     """Legacy ``_ts_aggs`` -> the new aggregate table. Verified bit-exact.
 
-    No recomputation from raw ``y`` is needed when the fast-path cache is
-    present: the legacy per-bucket ``_ts_aggs`` dict-of-arrays (``sums``,
-    ``counts``, ``sum_sq``, ``mins``, ``maxs``) IS the new table's ``s``/
-    ``c``/``q``/``mn``/``mx`` columns, transposed -- reusing those arrays
-    verbatim (rather than re-aggregating raw rows through a different
-    summation order) is what makes the reconstruction bit-exact rather than
-    merely close.
+    The legacy per-bucket ``_ts_aggs`` dict-of-arrays (``sums``, ``counts``,
+    ``mins``, ``maxs``) IS the new table's ``s``/``c``/``mn``/``mx`` columns,
+    transposed -- reusing those arrays verbatim (rather than re-aggregating
+    raw rows through a different summation order) is what makes those columns
+    bit-exact rather than merely close.
+
+    The variance moments are the exception: legacy stores ``sum_sq`` (centred
+    on zero) while this engine stores ``sK``/``qK`` centred on the bucket's
+    own reference ``K`` (see ``_pooled_engine.compute_kref`` -- the whole
+    point being that ``sum_sq`` loses the variance to cancellation at large
+    magnitude). ``sum_sq`` cannot be re-centred after the fact, so these two
+    columns -- AND the reference itself, which the migrated state must then
+    carry for the rest of its life exactly like a freshly-fit one -- are
+    recomputed from the row-aligned raw ``y`` this state also carries. Same
+    data, same bincount grouping as the fallback path below.
 
     Falls back to rebuilding from the row-aligned ``bucket_id``/
     ``time_index``/``y`` arrays -- the same bincount algorithm as legacy's
@@ -173,9 +181,13 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
     times_out: List[np.ndarray] = []
     s_out: List[np.ndarray] = []
     c_out: List[np.ndarray] = []
-    q_out: List[np.ndarray] = []
+    sk_out: List[np.ndarray] = []
+    qk_out: List[np.ndarray] = []
     mn_out: List[np.ndarray] = []
     mx_out: List[np.ndarray] = []
+    kref_bids: List[int] = []
+    kref_k: List[float] = []
+    kref_avgc: List[float] = []
 
     for bid in bucket_iter:
         s_idx, e_idx = slices[bid]
@@ -186,11 +198,24 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
         m = len(uniq_ord)
         if m == 0:
             continue
+        # The shifted moments always come from the raw rows -- `_ts_aggs`
+        # only ever cached the zero-centred `sum_sq`, which cannot be
+        # re-centred. `K` is the bucket mean, matching `compute_kref`.
+        y_raw = y_sorted[s_idx:e_idx]
+        _, inv_raw = np.unique(ord_slice, return_inverse=True)
+        valid_raw = ~np.isnan(y_raw)
+        n_valid = int(valid_raw.sum())
+        k_bucket = float(y_raw[valid_raw].mean()) if n_valid else 0.0
+        dy = np.where(valid_raw, y_raw - k_bucket, 0.0)
+        sk = np.bincount(inv_raw, weights=dy, minlength=m).astype(np.float64)
+        qk = np.bincount(inv_raw, weights=dy**2, minlength=m).astype(np.float64)
+        kref_bids.append(int(bid))
+        kref_k.append(k_bucket)
+        kref_avgc.append(n_valid / m)
         if ts_aggs:
             agg = ts_aggs[bid].__dict__
             sums = np.asarray(agg["sums"], dtype=np.float64)
             counts = np.asarray(agg["counts"], dtype=np.float64)
-            sum_sq = np.asarray(agg["sum_sq"], dtype=np.float64)
             mins = np.asarray(agg["mins"], dtype=np.float64)
             maxs = np.asarray(agg["maxs"], dtype=np.float64)
         else:
@@ -202,9 +227,6 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
             counts = np.bincount(inv, weights=valid.astype(float), minlength=m).astype(
                 np.float64
             )
-            sum_sq = np.bincount(
-                inv, weights=np.where(valid, y_slice**2, 0.0), minlength=m
-            ).astype(np.float64)
             mins = np.full(m, np.inf)
             maxs = np.full(m, -np.inf)
             if valid.any():
@@ -217,7 +239,8 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
         times_out.append(time_for_ord)
         s_out.append(sums)
         c_out.append(counts)
-        q_out.append(sum_sq)
+        sk_out.append(sk)
+        qk_out.append(qk)
         mn_out.append(mins)
         mx_out.append(maxs)
 
@@ -232,7 +255,8 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
     data[time_col] = _cat(times_out)
     data["s"] = _cat(s_out, np.float64)
     data["c"] = _cat(c_out, np.float64)
-    data["q"] = _cat(q_out, np.float64)
+    data["sK"] = _cat(sk_out, np.float64)
+    data["qK"] = _cat(qk_out, np.float64)
     data["mn"] = _cat(mn_out, np.float64)
     data["mx"] = _cat(mx_out, np.float64)
 
@@ -247,7 +271,24 @@ def _rebuild_agg_from_legacy(legacy_state: Any, time_col: str):
     # can never drift out of sync with what a fresh fit produces.
     tbl = _add_ordinals(tbl, keys, time_col)
     tbl = _derive_time_agg_family(tbl, {None})
-    return _add_prefix_sums(tbl.to_native(), keys, {None})
+    kref_data: Dict[str, Any] = {}
+    if keys:
+        kref_data["_bucket_id"] = np.asarray(kref_bids, dtype=np.int64)
+    k_arr = np.asarray(kref_k, dtype=np.float64)
+    avgc = np.asarray(kref_avgc, dtype=np.float64)
+    if not keys:
+        # a single implicit bucket: `_group_slices` still yields exactly one
+        # entry for it, so the arrays are length 1 (or 0 for an empty state).
+        k_arr = k_arr[:1] if len(k_arr) else np.zeros(1)
+        avgc = avgc[:1] if len(avgc) else np.zeros(1)
+    kref_data["K"] = k_arr
+    kref_data["K__sum"] = k_arr * avgc
+    kref_data["K__mean"] = k_arr
+    kref_data["K__count"] = avgc
+    kref_data["K__min"] = k_arr
+    kref_data["K__max"] = k_arr
+    kref = nw.from_dict(kref_data, backend=backend).to_native()
+    return _add_prefix_sums(tbl.to_native(), keys, {None}), kref
 
 
 def _migrate_one_state(
@@ -339,7 +380,11 @@ def _migrate_one_state(
     state._target_col = target_col
     state._time_aggs = {None}
     state._qvalues = None
-    state.agg = _rebuild_agg_from_legacy(legacy_state, time_col)
+    # The frozen centring reference is part of the state's shape contract
+    # from here on: `ensure_time_aggs` below rebuilds the whole table from
+    # `state._df` and MUST re-centre it on this same reference, and every
+    # later `append_observations`/`trim_to_last` depends on it never moving.
+    state.agg, state._kref = _rebuild_agg_from_legacy(legacy_state, time_col)
 
     if key_cols is not None:
         # Mirrors `NarwhalsPooledState.from_partition`'s own call: primes the

@@ -70,8 +70,26 @@ def test_build_agg_table_shape_and_aggregates(backend):
     tbl = build_agg_table(df, ["store"], "ds", "y", {None})
     o = tbl if isinstance(tbl, pl.DataFrame) else pl.from_pandas(tbl)
     assert o.height == 3 * 10, "one row per (bucket, timestamp)"
-    for c in ["store", "ds", "ord", "s", "c", "q", "mn", "mx", "Es", "Ec", "Eq"]:
+    for c in [
+        "store",
+        "ds",
+        "ord",
+        "s",
+        "c",
+        "sK",
+        "qK",
+        "mn",
+        "mx",
+        "Es",
+        "Ec",
+        "EsK",
+        "EqK",
+    ]:
         assert c in o.columns
+    # the zero-centred `sum(y**2)` is GONE, replaced by the shifted moments:
+    # nothing may reintroduce it (it is what made the std families lose the
+    # variance to cancellation at large magnitude).
+    assert "q" not in o.columns and "Eq" not in o.columns
     # every timestamp had 2 contributing series
     assert o["c"].to_list() == [2.0] * 30
     # per-bucket prefix sums restart at each bucket
@@ -810,3 +828,234 @@ def test_dense_skeleton_correct_when_df_reduced_to_tail_schema():
             f"bucket {bid} (scope {scope!r}): got {times_seen}, "
             f"expected {expected_calendar_by_scope[scope]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Exact (arbitrary-precision) variance oracle for the three std families.
+#
+# Legacy is NOT the reference here. Its own aggregate fast paths
+# (`_rolling_std_from_agg` / `_expanding_std_from_agg`) compute the variance
+# as `sum(x**2) - sum(x)**2/n`, which is algebraically right and numerically
+# catastrophic once the mean dwarfs the spread -- so "agrees with legacy"
+# would pin the defect, not the fix. float64 values ARE exact rationals, so
+# `Fraction` gives the true sample variance with no rounding at all, and
+# `Decimal.sqrt` at 60 digits turns it into a std we can measure a relative
+# error against.
+# ---------------------------------------------------------------------------
+
+import math  # noqa: E402
+from decimal import Decimal, localcontext  # noqa: E402
+from fractions import Fraction  # noqa: E402
+
+from mlforecast.lag_transforms import (  # noqa: E402
+    ExpandingStd,
+    RollingStd,
+    SeasonalRollingStd,
+)
+
+# MEASURED, then given ~3x headroom for a backend's own summation order (the
+# two backends already differ by ~1.7x below). Worst relative error observed
+# over the full sweep, per family/backend:
+#   expanding polars 2.35e-16   expanding pandas 2.04e-16
+#   rolling   polars 1.56e-15   rolling   pandas 9.32e-16
+#   seasonal  polars 2.70e-16   seasonal  pandas 2.83e-16
+# against a worst NAIVE (pre-fix formula) error of 4.9e+01 .. 6.1e+01 on the
+# very same windows -- i.e. the pre-fix engine was wrong by 5000%, not by a
+# few ULP.
+_STD_REL_TOL = 5e-15
+
+_MAGNITUDES = (1e6, 1e9, 1e11)
+_REL_SPREADS = (1e-2, 1e-4, 1e-6, 1e-9)
+
+
+def _exact_sample_std(vals):
+    """The TRUE sample std (ddof=1) of these float64 values, 60 digits.
+
+    float64 is a subset of the rationals, so `Fraction(v)` is exact and the
+    two-pass `sum((x - mean)**2)` below carries no rounding whatsoever.
+    """
+    fr = [Fraction(v) for v in vals]
+    n = len(fr)
+    mean = sum(fr) / n
+    var = sum((x - mean) ** 2 for x in fr) / (n - 1)
+    if var == 0:
+        return Decimal(0)
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return (Decimal(var.numerator) / Decimal(var.denominator)).sqrt()
+
+
+def _naive_sample_std(vals):
+    """The two-moment formula this fix replaces: `(sum(x^2) - sum(x)^2/n)/(n-1)`.
+
+    Used only to PROVE the fixture reaches the ill-conditioned regime -- a
+    sweep where the naive formula is already accurate would pass vacuously.
+    """
+    a = np.asarray(vals, dtype=np.float64)
+    n = a.size
+    var = (float((a * a).sum()) - float(a.sum()) ** 2 / n) / (n - 1)
+    return math.sqrt(max(var, 0.0))
+
+
+def _rel_err(got, exact_dec):
+    if exact_dec == 0:
+        return 0.0 if got == 0 else float("inf")
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return float(abs(Decimal(float(got)) - exact_dec) / exact_dec)
+
+
+def _std_panel(backend, mag, rel_spread, n_times=24, seed=0):
+    """Two buckets, ONE series each, at magnitudes 1000x apart.
+
+    One series per bucket makes each timestamp contribute exactly one value,
+    so a window over `w` ordinals is a window over `w` raw values and the
+    oracle below needs no re-derivation of the pooled aggregation.
+
+    The 1000x magnitude gap between the buckets is deliberate: a single
+    GLOBAL centring reference would be ~500x bucket 1's own scale and would
+    fail this test outright, so it pins the reference as PER-BUCKET.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for b, scale in ((0, mag), (1, mag / 1000.0)):
+        u = rng.uniform(-1.0, 1.0, n_times)
+        y = scale * (1.0 + rel_spread * u)
+        for t in range(n_times):
+            rows.append((f"b{b}", t, b, float(y[t])))
+    df = pl.DataFrame(rows, schema=["unique_id", "ds", "store", "y"], orient="row")
+    return df if backend == "polars" else df.to_pandas()
+
+
+def _window_ordinals(family, t, n_ordinals):
+    """The ordinals contributing to the feature at ordinal ``t`` (lag=1)."""
+    if family == "rolling":
+        lo, hi = t - 1 - 6 + 1, t - 1  # window_size=6
+    elif family == "expanding":
+        lo, hi = 0, t - 1
+    else:  # seasonal: season_length=3, window_size=4 -> offsets 1, 4, 7, 10
+        return [t - o for o in (1, 4, 7, 10) if 0 <= t - o < n_ordinals]
+    return [i for i in range(max(lo, 0), hi + 1) if 0 <= i < n_ordinals]
+
+
+_STD_TFMS = {
+    "rolling": lambda: RollingStd(6, min_samples=2, groupby=["store"]),
+    "expanding": lambda: ExpandingStd(groupby=["store"]),
+    "seasonal": lambda: SeasonalRollingStd(
+        season_length=3, window_size=4, min_samples=2, groupby=["store"]
+    ),
+}
+
+
+def _std_feature_by_bucket(df, tfm, min_samples):
+    """``{bucket: [feature at ordinal 0, 1, ...]}`` straight off the engine."""
+    tbl = build_agg_table(df, ["store"], "ds", "y", {None})
+    ctx = PooledCtx(keys=["store"], lag=1, min_samples=min_samples, time_agg=None)
+    out = (
+        nw.from_native(tbl, eager_only=True)
+        .with_columns(tfm._pooled_expr(ctx).alias("_v"))
+        .to_native()
+    )
+    o = out if isinstance(out, pl.DataFrame) else pl.from_pandas(out)
+    o = o.sort(["store", "ord"])
+    return {
+        int(b): o.filter(pl.col("store") == b)["_v"].cast(pl.Float64).to_list()
+        for b in (0, 1)
+    }
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("family", sorted(_STD_TFMS))
+def test_std_families_match_the_exact_oracle(backend, family):
+    """Every std family, every magnitude x spread, against the EXACT variance.
+
+    The assertion is two-sided on purpose:
+
+    * the engine's relative error must stay under `_STD_REL_TOL`, and
+    * the naive `sum(x^2) - sum(x)^2/n` formula must, somewhere in the same
+      sweep, be catastrophically wrong on the SAME windows -- otherwise the
+      sweep never reaches the regime this fix exists for and would pass
+      against the pre-fix code.
+    """
+    min_samples = 2
+    worst_engine = 0.0
+    worst_engine_case = None
+    worst_naive = 0.0
+    checked = 0
+    for mag in _MAGNITUDES:
+        for rel_spread in _REL_SPREADS:
+            df = _std_panel(backend, mag, rel_spread)
+            raw = df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+            raw = raw.sort(["store", "ds"])
+            by_bucket = {
+                int(b): raw.filter(pl.col("store") == b)["y"].to_list() for b in (0, 1)
+            }
+            got = _std_feature_by_bucket(df, _STD_TFMS[family](), min_samples)
+            for b, vals in by_bucket.items():
+                n_ord = len(vals)
+                for t in range(n_ord):
+                    idxs = _window_ordinals(family, t, n_ord)
+                    if len(idxs) < max(min_samples, 2):
+                        continue
+                    win = [vals[i] for i in idxs]
+                    exact = _exact_sample_std(win)
+                    assert got[b][t] is not None, (
+                        f"{family} {mag:g}/{rel_spread:g} bucket {b} ord {t}: "
+                        "engine returned null where the window is full"
+                    )
+                    err = _rel_err(got[b][t], exact)
+                    checked += 1
+                    if err > worst_engine:
+                        worst_engine, worst_engine_case = err, (mag, rel_spread, b, t)
+                    worst_naive = max(
+                        worst_naive, _rel_err(_naive_sample_std(win), exact)
+                    )
+    assert checked > 0, "sweep never evaluated a full window"
+    assert worst_naive > 0.5, (
+        "precondition failed: the naive two-moment formula is still accurate "
+        f"on this sweep (worst relative error {worst_naive:g}) -- the test "
+        "would pass against the pre-fix code"
+    )
+    assert worst_engine < _STD_REL_TOL, (
+        f"{family}/{backend}: worst relative error {worst_engine:g} at "
+        f"(mag, rel_spread, bucket, ord)={worst_engine_case} "
+        f"exceeds {_STD_REL_TOL:g} over {checked} windows"
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_every_time_agg_family_has_its_own_centring_reference(backend):
+    """One reference per column family, each on ITS OWN scale.
+
+    ``compute_kref`` must cover every value ``time_agg`` accepts -- a family
+    with no reference would centre on 0 (i.e. keep the defect) or, worse,
+    fail at build time -- and the references must NOT all be the target's
+    magnitude. ``count`` is the case that proves it: its column holds the
+    number of rows per timestamp (3 here), so reusing the target's reference
+    (1e11) for it would manufacture exactly the cancellation the shift
+    exists to remove.
+    """
+    from mlforecast._pooled_engine import _KREF_SUFFIXES, compute_kref
+    from mlforecast.lag_transforms import _TIME_AGGS
+
+    assert set(_KREF_SUFFIXES) == {""} | {f"__{a}" for a in _TIME_AGGS}, (
+        "a time_agg exists with no centring reference"
+    )
+
+    n_times, per_ts = 10, 3
+    rows = [
+        (f"s{j}", t, 0, 1e11 + t + j) for t in range(n_times) for j in range(per_ts)
+    ]
+    df = pl.DataFrame(rows, schema=["unique_id", "ds", "store", "y"], orient="row")
+    df = df if backend == "polars" else df.to_pandas()
+    kref = compute_kref(df, ["store"], "ds", "y")
+    assert kref.columns == ["store"] + [f"K{s}" for s in _KREF_SUFFIXES]
+    got = {c: float(kref.get_column(c).to_numpy()[0]) for c in kref.columns[1:]}
+    assert got["K__count"] == pytest.approx(per_ts), (
+        f"the count family must be centred on the row count, got {got['K__count']}"
+    )
+    assert got["K__sum"] == pytest.approx(per_ts * got["K"], rel=1e-9), (
+        "the sum family must be centred on the per-timestamp SUM's scale"
+    )
+    for fam in ("K", "K__mean", "K__min", "K__max"):
+        assert got[fam] == pytest.approx(1e11, rel=1e-6), (fam, got[fam])

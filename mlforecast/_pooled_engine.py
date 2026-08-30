@@ -13,8 +13,26 @@ import polars as pl
 
 from ._pooled_keys import _order_preserving_left_join
 
-_BASE_AGGS = ("s", "c", "q", "mn", "mx")
-_PREFIX_AGGS = ("s", "c", "q")
+# `sK`/`qK` are the SHIFTED moments -- `sum(x - K)` and `sum((x - K)**2)` for
+# a per-bucket reference `K` (see `compute_kref`) -- and they REPLACE the
+# plain `sum(x**2)` this table used to carry. The variance every std family
+# reads is `(sum_win qK - (sum_win sK)**2 / n) / (n - 1)`: algebraically the
+# same statistic as `sum(x**2) - sum(x)**2/n`, but both of its terms are
+# proportional to the SPREAD rather than to `K**2`, so the catastrophic
+# cancellation that made `RollingStd`/`ExpandingStd`/`SeasonalRollingStd`
+# silently return 0.0 (or a wildly large value) on large-magnitude,
+# small-spread data cannot happen. Measured on 16 values around 1e9 with the
+# plain formula: spread ~1 -> 0.000000 against a true std of 0.852011.
+_BASE_AGGS = ("s", "c", "sK", "qK", "mn", "mx")
+_PREFIX_AGGS = ("s", "c", "sK", "qK")
+
+# One centring reference per column family: `""` is the raw-row family, the
+# rest are the `time_agg` families `_time_agg_value_expr` derives. Each family
+# needs its OWN reference because its values live on its own scale -- a
+# `time_agg="count"` column holds small integers, and centring THAT on the
+# target's magnitude (1e9, say) would manufacture exactly the cancellation
+# this whole mechanism exists to remove.
+_KREF_SUFFIXES = ("", "__sum", "__mean", "__count", "__min", "__max")
 
 # narwhals rejects non-elementary `.over(partition_by)` on pandas-like backends
 # ("Only elementary expressions are supported"). `shift` is elementary; the
@@ -168,31 +186,10 @@ def _time_agg_value_expr(time_agg):
     raise ValueError(f"unknown time_agg {time_agg!r}")
 
 
-def build_agg_table(df, keys, time_col, target_col, time_aggs):
-    """One row per (bucket, timestamp) with aggregates and per-bucket prefix sums.
-
-    ``time_aggs`` is the set of ``time_agg`` values used by the transforms in
-    this state (``None`` for raw-row transforms). Each non-None value gets its
-    own suffixed column family, since one state may hold transforms with
-    different ``time_agg``s.
-
-    Every aggregation below is a bare sum/count/min/max. A composite expression
-    inside ``.agg()`` makes narwhals abandon pandas' native group-by for a
-    per-group apply -- measured 250x slower (1.628s -> 0.006s) -- and the
-    warning is invisible on the polars backend. Derived columns are therefore
-    materialized first.
-    """
-    keys = list(keys)
-    d = nw.from_native(df, eager_only=True)
-    # NaN IS NOT NULL. On polars, `sum()` over a group containing NaN returns
-    # NaN -- which then poisons that bucket's ENTIRE prefix sum -- and `count()`
-    # counts the NaN as present. The legacy engine treats NaN as MISSING
-    # (`_build_ts_aggs` masks with `~np.isnan(y_b)` before summing). Normalize
-    # NaN -> null ONCE, before any aggregation or derived column, so every
-    # aggregate below inherits the legacy engine's missing-value semantics.
-    # Cast first: `is_nan()` is only valid on float dtypes.
+def _normalize_target(d, target_col):
+    """NaN -> null on ``target_col``, cast to Float64. See ``build_agg_table``."""
     d = d.with_columns(nw.col(target_col).cast(nw.Float64).alias(target_col))
-    d = d.with_columns(
+    return d.with_columns(
         nw.when(nw.col(target_col).is_nan())
         .then(None)
         .otherwise(nw.col(target_col))
@@ -206,13 +203,176 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
         .cast(nw.Float64)
         .alias(target_col)
     )
-    d = d.with_columns((nw.col(target_col) ** 2).alias("_y2"))
+
+
+def compute_kref(df, keys, time_col, target_col):
+    """One row per bucket holding the frozen centring reference ``K`` per family.
+
+    The variance of a window is computed as
+    ``(sum qK - (sum sK)**2 / n) / (n - 1)`` where ``sK``/``qK`` are the first
+    and second moments of ``x - K``. ANY ``K`` is algebraically correct; the
+    numerics only care that ``K`` sits near the data, so that both terms scale
+    with the SPREAD instead of with the magnitude. This picks the bucket mean.
+
+    THE REFERENCE MUST BE FROZEN AND CARRIED, never re-derived from whatever
+    rows the table happens to hold later. ``trim_to_last`` drops a prefix and
+    ``append_observations`` adds a suffix; either would move a re-derived mean
+    and thereby silently invalidate every ``qK`` already stored against the old
+    one (they are only summable with each other because they share one ``K``).
+    That is why this returns a standalone per-bucket frame the state owns
+    (``NarwhalsPooledState._kref``) rather than a column on the aggregate
+    table, and why every later writer passes the stored frame back in.
+
+    Every family's reference comes out of ONE bare group-by over the raw
+    frame -- mean/count/n_unique, all elementary aggregations (a composite
+    expression inside ``.agg()`` costs 250x on pandas, see
+    ``build_agg_table``):
+
+    * the raw-row family and ``mean``/``min``/``max`` all take values on the
+      target's own scale, so the bucket mean ``m`` serves all four;
+    * ``sum`` collapses a timestamp to ``sum(y)`` over its rows, i.e. ``m``
+      times the mean number of rows per timestamp (``n / n_unique(time)``);
+    * ``count`` collapses it to that row count itself, which lives on a
+      completely different (small-integer) scale -- centring it on the
+      target's magnitude would CREATE catastrophic cancellation where there
+      was none.
+
+    All six references are computed unconditionally, whichever ``time_agg``
+    families the state happens to need today: they cost one group-by between
+    them, and a state that later grows a family (``ensure_time_aggs``) must
+    not have to recompute -- and thereby move -- the ones already in use.
+    """
+    return _kref_from_normalized(
+        _normalize_target(nw.from_native(df, eager_only=True), target_col),
+        keys,
+        time_col,
+        target_col,
+    )
+
+
+def _kref_from_normalized(d, keys, time_col, target_col):
+    """``compute_kref`` over an ALREADY NaN-normalized frame.
+
+    Split out purely so ``build_agg_and_kref`` can share one normalization
+    pass with the table build instead of paying for two: that pass is a
+    ``when/then/cast`` over every raw row and costs 30.6 ms per 1.46M rows on
+    the pandas backend (1.1 ms on polars), i.e. a third of the whole
+    reference computation.
+    """
+    keys = list(keys)
+    aggs = (
+        nw.col(target_col).mean().alias("_m"),
+        nw.col(target_col).count().alias("_n"),
+        nw.col(time_col).n_unique().alias("_nt"),
+    )
+    g = d.group_by(keys).agg(*aggs) if keys else d.select(*aggs)
+    g = g.with_columns(
+        nw.col("_m").fill_null(0.0).cast(nw.Float64).alias("_m"),
+        nw.col("_n").cast(nw.Float64).alias("_n"),
+        nw.col("_nt").cast(nw.Float64).alias("_nt"),
+    )
+    # rows-per-timestamp; `_nt >= 1` for any group that exists at all, so the
+    # guard below only covers a caller handing in an empty frame.
+    g = g.with_columns(
+        nw.when(nw.col("_nt") > 0)
+        .then(nw.col("_n") / nw.col("_nt"))
+        .otherwise(0.0)
+        .alias("_avgc")
+    )
+    out = [
+        nw.col("_m").alias("K"),
+        nw.col("_m").alias("K__mean"),
+        nw.col("_m").alias("K__min"),
+        nw.col("_m").alias("K__max"),
+        (nw.col("_m") * nw.col("_avgc")).alias("K__sum"),
+        nw.col("_avgc").alias("K__count"),
+    ]
+    return g.with_columns(out).select(keys + [f"K{s}" for s in _KREF_SUFFIXES])
+
+
+def build_agg_and_kref(df, keys, time_col, target_col, time_aggs, kref=None):
+    """``(aggregate table, the kref it was built against)``.
+
+    The entry point a state uses at ``_build``: it needs the frozen reference
+    back to store, and getting it this way costs one NaN-normalization pass
+    over the raw frame instead of two (see ``_kref_from_normalized``).
+    """
+    d = _normalize_target(nw.from_native(df, eager_only=True), target_col)
+    if kref is None:
+        kref = _kref_from_normalized(d, keys, time_col, target_col).to_native()
+    return _build_agg_impl(d, keys, time_col, target_col, time_aggs, kref), kref
+
+
+def attach_kref(frame, kref, keys, cols):
+    """Broadcast ``kref``'s ``cols`` onto ``frame``, one value per bucket.
+
+    A bucket absent from ``kref`` (only reachable for one that appeared after
+    the reference was frozen -- a new ``partition_by`` bucket during predict)
+    falls back to ``K = 0``, i.e. exactly the un-centred formula: no better
+    than before this fix for that bucket, but self-consistent, which is the
+    part that matters (mixing two references within one bucket would make its
+    prefix sums meaningless).
+
+    The result is NOT order-preserving -- callers that care re-sort.
+    """
+    keys = list(keys)
+    cols = list(cols)
+    kr = nw.from_native(kref, eager_only=True).select(keys + cols)
+    out = frame.join(kr, on=keys, how="left") if keys else frame.join(kr, how="cross")
+    return out.with_columns([nw.col(c).fill_null(0.0).cast(nw.Float64) for c in cols])
+
+
+def build_agg_table(df, keys, time_col, target_col, time_aggs, kref=None):
+    """One row per (bucket, timestamp) with aggregates and per-bucket prefix sums.
+
+    ``kref`` is the frozen per-bucket centring reference (``compute_kref``).
+    Callers holding a state MUST pass the one they stored -- recomputing it
+    here would silently re-centre a table whose surviving rows were centred on
+    the old value (see ``compute_kref``). ``None`` computes a fresh one from
+    ``df``, which is correct only for a self-contained one-shot build.
+
+    ``time_aggs`` is the set of ``time_agg`` values used by the transforms in
+    this state (``None`` for raw-row transforms). Each non-None value gets its
+    own suffixed column family, since one state may hold transforms with
+    different ``time_agg``s.
+
+    Every aggregation below is a bare sum/count/min/max. A composite expression
+    inside ``.agg()`` makes narwhals abandon pandas' native group-by for a
+    per-group apply -- measured 250x slower (1.628s -> 0.006s) -- and the
+    warning is invisible on the polars backend. Derived columns are therefore
+    materialized first.
+    """
+    # NaN IS NOT NULL. On polars, `sum()` over a group containing NaN returns
+    # NaN -- which then poisons that bucket's ENTIRE prefix sum -- and `count()`
+    # counts the NaN as present. The legacy engine treats NaN as MISSING
+    # (`_build_ts_aggs` masks with `~np.isnan(y_b)` before summing). Normalize
+    # NaN -> null ONCE, before any aggregation or derived column, so every
+    # aggregate below inherits the legacy engine's missing-value semantics.
+    d = _normalize_target(nw.from_native(df, eager_only=True), target_col)
+    if kref is None:
+        kref = _kref_from_normalized(d, keys, time_col, target_col).to_native()
+    return _build_agg_impl(d, keys, time_col, target_col, time_aggs, kref)
+
+
+def _build_agg_impl(d, keys, time_col, target_col, time_aggs, kref):
+    """``build_agg_table``'s body, over an already-normalized frame."""
+    keys = list(keys)
+    # `y - K` and `(y - K)**2` are materialized per RAW ROW, before the
+    # group-by, for two independent reasons. (1) The aggregation must stay a
+    # bare `sum` (see above). (2) `sK` must be summed from the shifted values,
+    # never reconstructed afterwards as `s - c*K`: that subtraction is between
+    # two quantities both of size `n*K`, i.e. it reintroduces exactly the
+    # cancellation the shift exists to remove.
+    d = attach_kref(d, kref, keys, ["K"])
+    d = d.with_columns((nw.col(target_col) - nw.col("K")).alias("_dy"))
+    d = d.with_columns((nw.col("_dy") ** 2).alias("_dy2"))
     tbl = (
         d.group_by(keys + [time_col])
         .agg(
             nw.col(target_col).sum().alias("s"),
             nw.col(target_col).count().alias("c"),
-            nw.col("_y2").sum().alias("q"),
+            nw.col("_dy").sum().alias("sK"),
+            nw.col("_dy2").sum().alias("qK"),
             nw.col(target_col).min().alias("mn"),
             nw.col(target_col).max().alias("mx"),
         )
@@ -221,36 +381,66 @@ def build_agg_table(df, keys, time_col, target_col, time_aggs):
     # integer ordinal per bucket over its own sorted calendar
     tbl = tbl.with_columns(nw.col("c").cast(nw.Float64))
     tbl = _add_ordinals(tbl, keys, time_col)
-    tbl = _derive_time_agg_family(tbl, time_aggs)
+    tbl = _derive_time_agg_family(
+        tbl, time_aggs, keys=keys, kref=kref, time_col=time_col
+    )
     native = _add_prefix_sums(tbl.to_native(), keys, time_aggs)
     return native
 
 
-def _derive_time_agg_family(tbl, time_aggs):
-    """Add the suffixed ``{s,c,q,mn,mx}__<agg>`` family plus ``ewm``/``ewm__<agg>``.
+def _derive_time_agg_family(tbl, time_aggs, keys=(), kref=None, time_col=None):
+    """Add the suffixed ``{s,c,sK,qK,mn,mx}__<agg>`` family plus ``ewm``/``ewm__<agg>``.
 
     Factored out of :func:`build_agg_table` so the pooled predict tail
     (``NarwhalsPooledState._rebuild_tail``, Task 9) can derive the identical
     per-``time_agg`` columns for a synthetic pending row (one already-
     aggregated row per bucket per new timestamp) without duplicating this
-    derivation. ``tbl`` must already carry the bare ``s``/``c``/``q``/``mn``/
-    ``mx`` columns (from a raw-row aggregation at fit, or directly assigned
-    at predict).
+    derivation. ``tbl`` must already carry the bare ``s``/``c``/``sK``/``qK``/
+    ``mn``/``mx`` columns (from a raw-row aggregation at fit, or directly
+    assigned at predict).
+
+    ``kref`` (required whenever a non-``None`` ``time_agg`` is in play) is the
+    frozen per-bucket centring reference: each family's ``sK__<agg>``/
+    ``qK__<agg>`` is centred on ITS OWN ``K__<agg>``, since a ``count`` family
+    holds small integers where a ``sum`` family holds the target's magnitude.
+    Unlike the raw-row family there is no summation here -- a timestamp
+    contributes exactly ONE value ``v_t`` -- so ``v_t - K`` is the shifted
+    first moment directly.
     """
     tas = sorted(x for x in time_aggs if x is not None)
+    keys = list(keys)
+    if tas:
+        if kref is None and any(f"K__{a}" not in tbl.columns for a in tas):
+            raise ValueError(
+                "_derive_time_agg_family needs the frozen `kref` to centre the "
+                f"{tas} family(ies); see compute_kref"
+            )
+        # `NarwhalsPooledState._pending_agg_frame` attaches its own `K__<agg>`
+        # columns positionally (numpy, one row per bucket) rather than by a
+        # join it would then have to re-sort -- only fetch what is missing.
+        k_cols = [f"K__{a}" for a in tas if f"K__{a}" not in tbl.columns]
+        if k_cols:
+            tbl = attach_kref(tbl, kref, keys, k_cols)
+            # the join is not order-preserving, and every downstream reader
+            # (`_add_ordinals`' running count, `_add_prefix_sums`' cum_sum) is
+            # row-order dependent.
+            if time_col is not None:
+                tbl = tbl.sort(keys + [time_col])
     derived = []
     for a in tas:
         v = _time_agg_value_expr(a)
         obs = v.is_null().__invert__()
+        dv = v - nw.col(f"K__{a}")
         derived += [
             nw.when(obs).then(v).otherwise(0.0).alias(f"s__{a}"),
             obs.cast(nw.Float64).alias(f"c__{a}"),
-            nw.when(obs).then(v * v).otherwise(0.0).alias(f"q__{a}"),
+            nw.when(obs).then(dv).otherwise(0.0).alias(f"sK__{a}"),
+            nw.when(obs).then(dv * dv).otherwise(0.0).alias(f"qK__{a}"),
             v.alias(f"mn__{a}"),
             v.alias(f"mx__{a}"),
         ]
     if derived:
-        tbl = tbl.with_columns(derived)
+        tbl = tbl.with_columns(derived).drop([f"K__{a}" for a in tas])
 
     # `ewm` is the per-timestamp mean of the bucket -- the value `_ewm_from_agg`
     # folds over. Not part of the prefix-sum family below (it's consumed via
@@ -272,7 +462,7 @@ def _derive_time_agg_family(tbl, time_aggs):
 
 
 def _prefix_sum_names(time_aggs):
-    """``(prefix_cols, prefix_outs)`` for ``s``/``c``/``q`` and their ``time_agg`` suffixes."""
+    """``(prefix_cols, prefix_outs)`` for `_PREFIX_AGGS` and their ``time_agg`` suffixes."""
     prefix_cols, prefix_outs = [], []
     for suffix in [""] + [
         f"__{a}" for a in sorted(x for x in time_aggs if x is not None)
@@ -288,7 +478,7 @@ def _add_prefix_sums(native, keys, time_aggs):
 
     Shared by :func:`build_agg_table` (fit) and the predict tail rebuild
     (Task 9): both need the identical ``E``-prefixed cumulative sums over
-    ``s``/``c``/``q`` and their ``time_agg`` suffixes, just over a different
+    ``s``/``c``/``sK``/``qK`` and their ``time_agg`` suffixes, just over a different
     (full-history vs. seed+tail) row set.
     """
     prefix_cols, prefix_outs = _prefix_sum_names(time_aggs)
@@ -552,7 +742,8 @@ def densify_to_parent(agg_native, keys, time_col, parent_keys_native):
     already-scoped skeleton.
 
     A second deviation: the brief's ``zero_fill`` list only matched the bare
-    ``s``/``c``/``q`` columns. A state needing more than one ``time_agg``
+    ``s``/``c``/``q`` columns (today ``s``/``c``/``sK``/``qK``). A state
+    needing more than one ``time_agg``
     family also carries suffixed derived columns (``s__mean``, ``c__mean``,
     ...) built by ``build_agg_table`` from those same three aggregates --
     left unfilled, a hole's ``c__mean`` stays null instead of 0, and the
@@ -564,7 +755,7 @@ def densify_to_parent(agg_native, keys, time_col, parent_keys_native):
     a = nw.from_native(agg_native, eager_only=True)
     cal = nw.from_native(parent_keys_native, eager_only=True).sort(keys + [time_col])
     out = cal.join(a, on=keys + [time_col], how="left")
-    zero_fill = [c for c in out.columns if c.split("__", 1)[0] in ("s", "c", "q")]
+    zero_fill = [c for c in out.columns if c.split("__", 1)[0] in _PREFIX_AGGS]
     if zero_fill:
         out = out.with_columns([nw.col(c).fill_null(0.0) for c in zero_fill])
     # A left join is not guaranteed order-preserving on every backend (see

@@ -23,8 +23,11 @@ from ._pooled_engine import (
     _add_ordinals,
     _add_prefix_sums,
     _derive_time_agg_family,
+    _PREFIX_AGGS,
     apply_accumulate,
+    build_agg_and_kref,
     build_agg_table,
+    compute_kref,
 )
 from ._pooled_keys import (  # noqa: F401
     _attach_bucket_id,
@@ -102,7 +105,7 @@ def _pooled_retention(tfm) -> Optional[int]:
       to that true minimum with NO change in the predicted value, and only
       breaks one row further. The reason is that ``_make_seeds`` always
       emits a seed row when any history precedes the retained suffix, and
-      that seed's own ``Es``/``Ec``/``Eq`` are EXACT at its own ordinal;
+      that seed's own ``Es``/``Ec``/``EqK`` are EXACT at its own ordinal;
       for a rolling window's first predict step, that ordinal happens to
       equal exactly the ``lo`` reference, so the seed satisfies it without
       needing one further retained raw row. RollingMin/RollingMax get no
@@ -113,7 +116,8 @@ def _pooled_retention(tfm) -> Optional[int]:
       that would silently break RollingMin/RollingMax while leaving
       RollingMean/RollingStd looking fine.
     * Neither (Expanding*/EWM/LookupLag): these read a CUMULATIVE prefix sum
-      or accumulate column (``Es``/``Ec``/``Eq``/``Amn``/``Amx``/``Aewm``) or,
+      or accumulate column (``Es``/``Ec``/``EsK``/``EqK``/``Amn``/``Amx``/
+      ``Aewm``) or,
       for ``LookupLag``, a raw positional shift over the (sparse) occurrence
       table -- in every case exactly ``lag`` ordinals back, made correct
       beyond that by the seed row's carried baseline rather than more
@@ -248,6 +252,16 @@ class NarwhalsPooledState:
         # into a loud failure instead of a silently-skipped substitution --
         # see `trim_to_last`/`_make_seeds`.
         self._accumulates: Dict[Any, str] = {}
+        # Frozen per-bucket centring reference for the variance moments
+        # (`_pooled_engine.compute_kref`), one row per bucket. Set at
+        # `_build` (or by `_pooled_migrate` for a migrated model) and NEVER
+        # recomputed for a bucket that already has one: every `qK` already
+        # stored is only summable with the others because they share this
+        # value, so re-deriving it after `trim_to_last` dropped a prefix (or
+        # `append_observations` added a suffix) would silently invalidate the
+        # whole column. `append_observations` may only EXTEND it, with the
+        # buckets that did not exist yet.
+        self._kref = None
         # partition_by / densification bookkeeping (Task 8). Harmless no-ops
         # for `global_`/`groupby` states (`mode` is always in
         # `_KNOWN_DENSE_MODES` for those, so `ensure_densified` returns
@@ -876,7 +890,7 @@ class NarwhalsPooledState:
         self._target_col = target_col
         self._time_aggs = {None}
         self._qvalues = None  # quantile value store, built on demand (Task 7)
-        self.agg = build_agg_table(
+        self.agg, self._kref = build_agg_and_kref(
             self._df, self.keys, time_col, target_col, self._time_aggs
         )
         return self
@@ -887,7 +901,12 @@ class NarwhalsPooledState:
         if missing:
             self._time_aggs |= set(time_aggs)
             self.agg = build_agg_table(
-                self._df, self.keys, self.time_col, self._target_col, self._time_aggs
+                self._df,
+                self.keys,
+                self.time_col,
+                self._target_col,
+                self._time_aggs,
+                kref=self._kref,
             )
             # `build_agg_table` always rebuilds from the SPARSE `self._df` --
             # re-apply densification (Task 8) if this state had already
@@ -932,6 +951,57 @@ class NarwhalsPooledState:
             # `grouped_accumulate`'s).
             self.agg = apply_accumulate(self.agg, self.keys, col, op, out, **kw)
 
+    def _extend_kref(self, new_rows_native, time_col, target_col):
+        """Add a centring reference for buckets that did not have one yet.
+
+        Called from ``append_observations``. Existing buckets are left exactly
+        as they were -- see ``_pooled_engine.compute_kref`` for why a moved
+        reference silently corrupts every ``qK`` already stored against the
+        old one. A brand-new bucket (``_extend_groups`` just assigned it an
+        id) has no stored moments to be inconsistent with, so it takes a
+        reference computed from the rows introducing it.
+        """
+        if self._kref is None:
+            self._kref = compute_kref(
+                new_rows_native, self.keys, time_col, target_col
+            ).to_native()
+            return
+        if not self.keys:
+            # a single implicit bucket, which always already has its reference
+            return
+        fresh = compute_kref(new_rows_native, self.keys, time_col, target_col)
+        known = nw.from_native(self._kref, eager_only=True)
+        missing = fresh.join(known.select(self.keys), on=self.keys, how="anti")
+        if len(missing) == 0:
+            return
+        self._kref = ufp.vertical_concat(
+            [known.select(missing.columns).to_native(), missing.to_native()]
+        )
+
+    def _k_for_buckets(self, bucket_ids, name="K"):
+        """``kref[name]`` looked up per entry of ``bucket_ids`` (0.0 if absent).
+
+        The numpy-side counterpart of ``_pooled_engine.attach_kref``, for the
+        predict path, which aggregates raw predictions with ``np.bincount``
+        rather than a group-by. Same fallback: a bucket with no frozen
+        reference is centred on 0, i.e. the un-shifted formula, which is
+        self-consistent for a bucket that has no stored moments anyway.
+        """
+        bucket_ids = np.asarray(bucket_ids, dtype=np.int64)
+        out = np.zeros(len(bucket_ids), dtype=np.float64)
+        if self._kref is None or len(bucket_ids) == 0:
+            return out
+        kr = nw.from_native(self._kref, eager_only=True)
+        vals = kr.get_column(name).to_numpy().astype(np.float64)
+        if not self.keys:
+            return np.full(len(bucket_ids), vals[0] if len(vals) else 0.0)
+        ids = kr.get_column(self.keys[0]).to_numpy().astype(np.int64)
+        if len(ids) == 0:
+            return out
+        table = np.zeros(int(max(ids.max(), bucket_ids.max())) + 1, dtype=np.float64)
+        table[ids] = vals
+        return table[bucket_ids]
+
     def _rebuild_accumulates(self):
         """Recompute every registered ``A<col>`` column over the current ``self.agg``.
 
@@ -944,7 +1014,8 @@ class NarwhalsPooledState:
         running value of everything that was dropped, so
         ``cum_min``/``cum_max``/``ewm_mean`` over ``[seed, retained, new]``
         lands on the true absolute state -- the same argument that makes
-        rerunning ``cum_sum`` over the seed's raw ``s``/``c``/``q`` correct.
+        rerunning ``cum_sum`` over the seed's raw ``s``/``c``/``sK``/``qK``
+        correct.
         """
         for (col, op, kw_items), out in self._accumulates.items():
             self.agg = apply_accumulate(
@@ -1234,7 +1305,7 @@ class NarwhalsPooledState:
     # accumulate-column value, or a raw positional shift over the sparse
     # occurrence table) with no such cancellation -- so one SEED row per
     # bucket carries the exact state as of the ordinal just before the
-    # retained suffix (`Es`/`Ec`/`Eq` and any consumed accumulate column's
+    # retained suffix (`Es`/`Ec`/`EsK`/`EqK` and any consumed accumulate column's
     # value), and a fresh cumsum/accumulate over
     # ``[seed, retained history, pending predictions]`` reconstructs the true
     # absolute value at every ordinal from there on -- this is the "carried
@@ -1317,7 +1388,7 @@ class NarwhalsPooledState:
         reproduces them identically, see the accumulate-column argument
         below). The row AT the boundary (if any -- a bucket shorter than
         ``retention`` has none) becomes the seed, with its raw ``s``/``c``/
-        ``q`` (+ ``time_agg`` suffixes) columns overwritten by their own
+        ``sK``/``qK`` (+ ``time_agg`` suffixes) columns overwritten by their own
         ``E``-prefixed cumulative value, and any accumulate-consumed column
         (``mn``/``mx``/``ewm`` (+suffixes), e.g. for ``ExpandingMin``/EWM)
         overwritten by its already-computed ``A``-prefixed running value --
@@ -1400,7 +1471,7 @@ class NarwhalsPooledState:
         )
 
         subs = []
-        for base in ("s", "c", "q"):
+        for base in _PREFIX_AGGS:
             for suffix in [""] + [
                 f"__{ta}" for ta in sorted(x for x in self._time_aggs if x is not None)
             ]:
@@ -1451,7 +1522,7 @@ class NarwhalsPooledState:
     def _pending_agg_frame(self, entry, backend, time_dtype):
         """One synthetic (already-aggregated) row per bucket for one new
         pending timestamp, in ``self.agg``'s bare-column shape (``s``/``c``/
-        ``q``/``mn``/``mx`` plus their ``time_agg`` derivations) --
+        ``sK``/``qK``/``mn``/``mx`` plus their ``time_agg`` derivations) --
         ``_rebuild_tail`` pads it with placeholder ``E``/``A``-prefixed
         columns and recomputes those fresh over the whole tail.
 
@@ -1462,28 +1533,39 @@ class NarwhalsPooledState:
         declined-densify (LookupLag) state must NOT get a dense row per
         bucket here.
         """
-        ts, s, c, q, mn, mx, *rest = entry
+        ts, s, c, sK, qK, mn, mx, *rest = entry
         bucket_ids = rest[0] if rest else None
         n_b = len(s)
+        bids = (
+            np.asarray(bucket_ids, dtype=np.int64)
+            if bucket_ids is not None
+            else np.arange(n_b, dtype=np.int64)
+        )
         data: Dict[str, Any] = {}
         if self.keys:
-            data[self.keys[0]] = (
-                np.asarray(bucket_ids, dtype=np.int64)
-                if bucket_ids is not None
-                else np.arange(n_b, dtype=np.int64)
-            )
+            data[self.keys[0]] = bids
         data[self.time_col] = np.full(n_b, ts)
         data["s"] = np.asarray(s, dtype=np.float64)
         data["c"] = np.asarray(c, dtype=np.float64)
-        data["q"] = np.asarray(q, dtype=np.float64)
+        data["sK"] = np.asarray(sK, dtype=np.float64)
+        data["qK"] = np.asarray(qK, dtype=np.float64)
         data["mn"] = np.asarray(mn, dtype=np.float64)
         data["mx"] = np.asarray(mx, dtype=np.float64)
+        # The `time_agg` families are derived from THIS row's own aggregate
+        # value, so they need the frozen reference here exactly as at fit --
+        # attached as plain columns (a join would not preserve this frame's
+        # row order, which pairs each row with its bucket id positionally).
+        tas = sorted(x for x in self._time_aggs if x is not None)
+        for a in tas:
+            data[f"K__{a}"] = self._k_for_buckets(bids, f"K__{a}")
         tbl = nw.from_dict(data, backend=backend)
         tbl = tbl.with_columns(
             nw.col(self.time_col).cast(time_dtype),
             nw.lit(0).cast(nw.Int64).alias("ord"),
         )
-        tbl = _derive_time_agg_family(tbl, self._time_aggs)
+        tbl = _derive_time_agg_family(
+            tbl, self._time_aggs, keys=self.keys, kref=self._kref
+        )
         return tbl
 
     def _pending_raw_frame(self, bids_arr, y_arr, ts, backend, time_dtype):
@@ -1600,15 +1682,21 @@ class NarwhalsPooledState:
         new_ts = np.asarray(curr_dates)[:1]
         y = np.asarray(predictions, dtype=float)
         bids = self.series_bucket_id
-        bucket_ids, s, c, q, mn, mx = self._aggregate_predictions_by_bucket(bids, y)
-        self._pending = self._pending + [(new_ts[0], s, c, q, mn, mx, bucket_ids)]
+        bucket_ids, s, c, sK, qK, mn, mx = self._aggregate_predictions_by_bucket(
+            bids, y
+        )
+        self._pending = self._pending + [(new_ts[0], s, c, sK, qK, mn, mx, bucket_ids)]
         self._pending_raw = self._pending_raw + [(bids.copy(), y.copy(), new_ts[0])]
         self._rebuild_tail()
 
     def _aggregate_predictions_by_bucket(self, bids, y):
-        """Per-bucket sum/count/sumsq/min/max of one predicted value per series.
+        """Per-bucket sum/count/shifted-moments/min/max of one predicted value
+        per series.
 
-        Returns ``(bucket_ids, s, c, q, mn, mx)``. ``bucket_ids`` is ``None``
+        Returns ``(bucket_ids, s, c, sK, qK, mn, mx)``. ``sK``/``qK`` are
+        summed from the SHIFTED predictions ``y - K`` (the bucket's frozen
+        reference, ``_k_for_buckets``), never reconstructed from ``s``/``q``
+        afterwards -- see ``_pooled_engine.build_agg_table``. ``bucket_ids`` is ``None``
         for the dense ``0..n_b-1`` case (every bucket 0..max(bids) gets an
         entry, including a zero/null placeholder for one not predicted this
         step) or an explicit array pairing each aggregate with its bucket id
@@ -1671,13 +1759,16 @@ class NarwhalsPooledState:
         s = np.bincount(inv, weights=np.nan_to_num(y), minlength=n_b)
         valid = ~np.isnan(y)
         c = np.bincount(inv, weights=valid.astype(float), minlength=n_b)
-        q = np.bincount(inv, weights=np.nan_to_num(y) ** 2, minlength=n_b)
+        k = self._k_for_buckets(bids)
+        dy = np.where(valid, y - k, 0.0)
+        sK = np.bincount(inv, weights=dy, minlength=n_b)
+        qK = np.bincount(inv, weights=dy**2, minlength=n_b)
         mn = np.full(n_b, np.nan)
         mx = np.full(n_b, np.nan)
         if valid.any():
             np.fmin.at(mn, inv[valid], y[valid])
             np.fmax.at(mx, inv[valid], y[valid])
-        return bucket_ids, s, c, q, mn, mx
+        return bucket_ids, s, c, sK, qK, mn, mx
 
     def build_query_arrays(self, curr_dates, _n_series):
         """The persisted tail extended by one query row per bucket at the
@@ -1709,8 +1800,13 @@ class NarwhalsPooledState:
         time_dtype = agg_nw.schema[self.time_col]
         ts_col = agg_nw.get_column(self.time_col).drop_nulls()
         placeholder_ts = ts_col.to_numpy()[0] if len(ts_col) else None
+        # every base contribution is zero: a query row occupies the next
+        # ordinal without observing anything, and the shifted moments of an
+        # empty set are 0 exactly like the raw ones.
         query = self._pending_agg_frame(
-            (placeholder_ts, zeros, zeros, zeros, nans, nans), backend, time_dtype
+            (placeholder_ts, zeros, zeros, zeros, zeros, nans, nans),
+            backend,
+            time_dtype,
         )
         full_cols = list(nw.from_native(self.agg, eager_only=True).columns)
         missing_cols = [c for c in full_cols if c not in query.columns]
@@ -1895,9 +1991,22 @@ class NarwhalsPooledState:
         new_rows_native = new_rows_nw.select(df_cols).sort(sort_keys).to_native()
         self._df = ufp.vertical_concat([self._df, new_rows_native])
 
+        # A bucket that already has a frozen centring reference KEEPS it --
+        # `_extend_kref` only adds the ones `_extend_groups` just created.
+        # Recomputing an existing bucket's reference here would leave its
+        # already-stored `qK` values centred on the old one and its new ones
+        # on the new: their prefix sums would then be a sum of incommensurable
+        # terms, i.e. a silently wrong variance for every window spanning the
+        # update boundary.
+        self._extend_kref(new_rows_native, time_col, target_col)
         new_agg_full = nw.from_native(
             build_agg_table(
-                new_rows_native, self.keys, time_col, target_col, self._time_aggs
+                new_rows_native,
+                self.keys,
+                time_col,
+                target_col,
+                self._time_aggs,
+                kref=self._kref,
             ),
             eager_only=True,
         )
@@ -1951,7 +2060,7 @@ class NarwhalsPooledState:
         drop the prefix of ANY transform family, including Expanding*/EWM,
         as long as the caller passes an ``n_ordinals`` covering that
         family's own retention (``_pooled_retention``): the row at the
-        cutoff boundary becomes a SEED row -- its raw ``s``/``c``/``q``
+        cutoff boundary becomes a SEED row -- its raw ``s``/``c``/``sK``/``qK``
         (+``time_agg`` suffixes) columns overwritten by their own
         already-computed ``E``-prefixed cumulative value, and any
         accumulate-consumed raw column (``mn``/``mx``/``ewm``) overwritten
@@ -2013,7 +2122,7 @@ class NarwhalsPooledState:
         )
 
         subs = []
-        for base in ("s", "c", "q"):
+        for base in _PREFIX_AGGS:
             for suffix in [""] + [
                 f"__{ta}" for ta in sorted(x for x in self._time_aggs if x is not None)
             ]:
