@@ -54,8 +54,8 @@ class _PolarsOnlyCatBoost(BaseEstimator, RegressorMixin):
         return np.zeros(len(X))
 
 
-def _causal_target_encoder():
-    # smoothing=0, prior=0 makes each encoding the plain mean of prior targets.
+def _target_encoder():
+    # smoothing=0 makes each encoding the plain full-training category mean.
     return PolarsTargetEncoder(
         ["category"], smoothing=0.0, prior=0.0, drop_original=True
     )
@@ -148,23 +148,18 @@ def test_ordinal_and_count_encoders_request_left_join_order(monkeypatch):
     assert join_orders == ["left", "left"]
 
 
-def test_polars_target_encoder_uses_only_prior_timestamps():
-    X = pl.DataFrame({"category": ["a", "a"], "lag1": [1.0, 2.0]})
-    context = {"times": np.array([1, 2])}
+def test_polars_target_encoder_uses_full_training_category_means():
+    X = pl.DataFrame({"category": ["a", "b", "a"], "lag1": [1.0, 2.0, 3.0]})
     encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
 
-    encoded = encoder.fit_transform(X, np.array([1.0, 2.0]), context=context)
-    encoded_with_changed_future = PolarsTargetEncoder(
-        ["category"], smoothing=0.0, prior=0.0
-    ).fit_transform(X, np.array([1.0, 999.0]), context=context)
+    encoded = encoder.fit_transform(X, np.array([10.0, 100.0, 30.0]))
+    future = encoder.transform(pl.DataFrame({"category": ["a", "unknown"]}))
 
-    np.testing.assert_allclose(encoded["category__mean"], [0.0, 1.0])
-    np.testing.assert_allclose(
-        encoded["category__mean"], encoded_with_changed_future["category__mean"]
-    )
+    np.testing.assert_allclose(encoded["category__mean"], [20.0, 100.0, 20.0])
+    np.testing.assert_allclose(future["category__mean"], [20.0, 140 / 3])
 
 
-def test_polars_target_encoder_uses_only_labels_observed_before_feature_time():
+def test_polars_target_encoder_ignores_optional_timestamp_context():
     encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
     X = pl.DataFrame({"category": ["a"] * 5})
 
@@ -177,11 +172,10 @@ def test_polars_target_encoder_uses_only_labels_observed_before_feature_time():
         },
     )
 
-    np.testing.assert_allclose(encoded["category__mean"], [0.0, 0.0, 10.0, 15.0, 20.0])
+    np.testing.assert_allclose(encoded["category__mean"], [30.0] * 5)
 
 
-def test_polars_target_encoder_computes_global_priors_once_per_fit(monkeypatch):
-    """Shifted label availability shares one global as-of lookup across columns."""
+def test_polars_target_encoder_never_uses_asof_joins(monkeypatch):
     X = pl.DataFrame(
         {
             "category": ["a", "a", "b", "b"],
@@ -208,41 +202,28 @@ def test_polars_target_encoder_computes_global_priors_once_per_fit(monkeypatch):
         },
     )
 
-    assert calls == 3
-    np.testing.assert_allclose(encoded["category__mean"], [0.0, 0.0, 0.0, 0.0])
-    np.testing.assert_allclose(encoded["division__mean"], [0.0, 0.0, 10.0, 15.0])
+    assert calls == 0
+    np.testing.assert_allclose(encoded["category__mean"], [15.0, 15.0, 35.0, 35.0])
+    np.testing.assert_allclose(encoded["division__mean"], [25.0] * 4)
 
 
-def test_polars_target_encoder_avoids_asof_when_labels_are_immediately_available(
-    monkeypatch,
-):
-    """Recursive fitting uses grouped prefix statistics instead of as-of joins."""
+def test_polars_target_encoder_smooths_towards_global_training_mean():
     X = pl.DataFrame(
         {
             "category": ["a", "a", "b", "b"],
             "division": ["x", "x", "x", "x"],
         }
     )
-    join_asof = pl.DataFrame.join_asof
-    calls = 0
-
-    def counted_join_asof(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return join_asof(*args, **kwargs)
-
-    monkeypatch.setattr(pl.DataFrame, "join_asof", counted_join_asof)
     encoded = PolarsTargetEncoder(
-        ["category", "division"], smoothing=0.0, prior=0.0
+        ["category", "division"], smoothing=2.0, prior=0.0
     ).fit_transform(
         X,
         np.array([10.0, 20.0, 30.0, 40.0]),
         context={"times": np.array([0, 1, 2, 3])},
     )
 
-    assert calls == 0
-    np.testing.assert_allclose(encoded["category__mean"], [0.0, 10.0, 0.0, 30.0])
-    np.testing.assert_allclose(encoded["division__mean"], [0.0, 10.0, 15.0, 20.0])
+    np.testing.assert_allclose(encoded["category__mean"], [20.0, 20.0, 30.0, 30.0])
+    np.testing.assert_allclose(encoded["division__mean"], [25.0] * 4)
 
 
 def test_direct_models_pass_target_observation_times_to_target_encoder():
@@ -307,7 +288,7 @@ def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
     )
 
     assert encoded["category__mean"].null_count() == 0
-    np.testing.assert_allclose(encoded["category__mean"], [0.0, 1.0, 0.0])
+    np.testing.assert_allclose(encoded["category__mean"], [1.5, 1.5, 3.0])
 
 
 def test_target_encoder_null_category_is_encoded_at_fit_time():
@@ -497,7 +478,7 @@ def test_save_load_refit_keeps_encoders(tmp_path):
         models=DummyRegressor(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
     fcst.fit(df, static_features=["category"])
 
@@ -532,9 +513,7 @@ def test_fitted_values_reuse_target_encoder_training_features():
     fcst.fit(df, fitted=True, static_features=["category"])
     fitted = fcst.forecast_fitted_values()
 
-    np.testing.assert_allclose(
-        fitted["_EncodedColumnRegressor"], [0.0, 1.0, 1.5, 2.0, 2.5]
-    )
+    np.testing.assert_allclose(fitted["_EncodedColumnRegressor"], [3.0] * 5)
 
 
 def test_fitted_values_follow_input_row_order():
@@ -551,7 +530,7 @@ def test_fitted_values_follow_input_row_order():
         models=_EchoEncodedColumn(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
     sorted_fcst.fit(_two_series("sorted"), **kwargs)
     expected = sorted_fcst.forecast_fitted_values().sort(["unique_id", "ds"])
@@ -560,7 +539,7 @@ def test_fitted_values_follow_input_row_order():
         models=_EchoEncodedColumn(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
     shuffled_fcst.fit(_two_series("interleaved"), **kwargs)
     actual = shuffled_fcst.forecast_fitted_values().sort(["unique_id", "ds"])
@@ -583,7 +562,7 @@ def test_direct_fitted_values_follow_input_row_order():
         models=_EchoEncodedColumn(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
     sorted_fcst.fit(_two_series("sorted"), **kwargs)
     expected = sorted_fcst.forecast_fitted_values().sort(["unique_id", "ds", "h"])
@@ -592,7 +571,7 @@ def test_direct_fitted_values_follow_input_row_order():
         models=_EchoEncodedColumn(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
     shuffled_fcst.fit(_two_series("interleaved"), **kwargs)
     actual = shuffled_fcst.forecast_fitted_values().sort(["unique_id", "ds", "h"])
@@ -680,7 +659,7 @@ def test_polars_encoder_works_with_cross_validation_and_automl():
     assert auto.predict(1).shape == (2, 3)
 
 
-def test_target_encoder_cross_validation_is_leakage_free():
+def test_target_encoder_uses_each_cross_validation_fold_training_mean():
     class AuditedTargetEncoder(PolarsTargetEncoder):
         batches = []
 
@@ -717,11 +696,11 @@ def test_target_encoder_cross_validation_is_leakage_free():
         df, n_windows=2, h=1, step_size=1, static_features=["category"]
     )
 
-    # Hand calculation: at each timestamp the encoding is the mean of the
-    # preceding targets only; the first feature row has no prior target.
+    # Each fold uses only its own training partition. Its training rows use the
+    # conventional in-sample category mapping fit on that complete partition.
     expected = [
-        np.array([0.0, 1.0, 1.5, 2.0, 2.5]),
-        np.array([0.0, 1.0, 1.5, 2.0, 2.5, 3.0]),
+        np.full(5, 3.0),
+        np.full(6, 3.5),
     ]
     for (_, encoded), expected_encoded in zip(AuditedTargetEncoder.batches, expected):
         np.testing.assert_allclose(encoded, expected_encoded)
@@ -735,15 +714,8 @@ def test_target_encoder_cross_validation_is_leakage_free():
     np.testing.assert_allclose(mappings, [3.0, 3.5])
 
 
-def test_cross_validation_fitted_values_are_causal_in_every_fold():
-    """Every CV fold's fitted values must be causal, not just the first.
-
-    `fitted_X_` is deleted after its first use, so from the second window on the
-    `else: model.predict(X)` fallback re-encodes with full-training statistics.
-    Those in-sample values have seen their own target. Both folds encode a given
-    timestamp from strictly prior targets only, so on the timestamps the two
-    folds share the encodings must agree.
-    """
+def test_cross_validation_fitted_values_reuse_initial_mapping_when_refit_is_false():
+    """`refit=False` must reuse the model and its encoder from the first fold."""
     df = pl.DataFrame(
         {
             "unique_id": ["a"] * 8,
@@ -756,7 +728,7 @@ def test_cross_validation_fitted_values_are_causal_in_every_fold():
         models=_EchoEncodedColumn(),
         freq=1,
         lags=[1],
-        feature_encoders=[_causal_target_encoder()],
+        feature_encoders=[_target_encoder()],
     )
 
     fcst.cross_validation(
@@ -770,14 +742,9 @@ def test_cross_validation_fitted_values_are_causal_in_every_fold():
     )
     fitted = fcst.cross_validation_fitted_values()
 
-    first, second = (
-        fitted.filter(pl.col("fold") == fold).sort("ds") for fold in (0, 1)
-    )
-    shared = first["ds"]
-    np.testing.assert_allclose(
-        second.filter(pl.col("ds").is_in(shared))["_EchoEncodedColumn"],
-        first["_EchoEncodedColumn"],
-    )
+    first, second = (fitted.filter(pl.col("fold") == fold) for fold in (0, 1))
+    np.testing.assert_allclose(first["_EchoEncodedColumn"], 3.0)
+    np.testing.assert_allclose(second["_EchoEncodedColumn"], 3.0)
 
 
 def test_transform_per_horizon_skips_context_without_feature_encoders():

@@ -205,11 +205,10 @@ class PolarsOneHotEncoder(_PolarsEncoder):
 
 
 class PolarsTargetEncoder:
-    """Causal, smoothed target encoding for Polars dataframes.
+    """Smoothed target encoding for Polars dataframes.
 
-    Training rows at timestamp ``t`` are encoded only with observations from
-    timestamps strictly before ``t``. Future rows use statistics accumulated on
-    the complete training data. The encoder adds ``{column}__mean`` columns and
+    Training and future rows are encoded with category statistics fit on the
+    complete training data. The encoder adds ``{column}__mean`` columns and
     leaves source columns unchanged by default.
     """
 
@@ -319,15 +318,37 @@ class PolarsTargetEncoder:
         return out.drop(self.columns) if self.drop_original else out
 
     def fit_transform(
-        self, X: pl_DataFrame, y: np.ndarray, *, context: Any
+        self, X: pl_DataFrame, y: np.ndarray, *, context: Optional[Any] = None
     ) -> pl_DataFrame:
         if pl is None or not isinstance(X, pl_DataFrame):
             raise TypeError("PolarsTargetEncoder requires a polars DataFrame.")
-        if context is None or "times" not in context:
-            raise ValueError("PolarsTargetEncoder requires timestamp context.")
-        if len(X) != len(y) or len(X) != len(context["times"]):
-            raise ValueError("X, y and timestamp context must have the same length.")
+        if len(X) != len(y):
+            raise ValueError("X and y must have the same length.")
 
+        self.global_mean_ = float(np.mean(y))
+        frame = X.with_columns(pl.Series("__encoder_target", y))
+        self.mappings_ = {}
+        for column in self.columns:
+            self.mappings_[column] = (
+                frame.group_by(column)
+                .agg(
+                    pl.col("__encoder_target").sum().alias("__sum"),
+                    pl.len().alias("__count"),
+                )
+                .with_columns(
+                    (
+                        (pl.col("__sum") + self.smoothing * self.global_mean_)
+                        / (pl.col("__count") + self.smoothing)
+                    )
+                    .cast(pl.Float32)
+                    .alias(f"{column}__mean")
+                )
+                .select(column, f"{column}__mean")
+            )
+        return self.transform(X)
+
+        # Retained below temporarily while the old ordered implementation is
+        # removed in the same change.
         target_times = context.get("target_times", context["times"])
         if len(target_times) != len(X):
             raise ValueError(
