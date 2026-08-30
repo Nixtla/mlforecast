@@ -991,9 +991,7 @@ class MLForecast:
                         ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
                     )
                     if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
-                        fitted_order = (
-                            None if sort_idxs is None else sort_idxs[valid]
-                        )
+                        fitted_order = None if sort_idxs is None else sort_idxs[valid]
                         preds_valid = model.predict_fitted(fitted_order)
                     else:
                         preds_valid = model.predict(X_pred)
