@@ -241,6 +241,25 @@ def compute_kref(df, keys, time_col, target_col):
     families the state happens to need today: they cost one group-by between
     them, and a state that later grows a family (``ensure_time_aggs``) must
     not have to recompute -- and thereby move -- the ones already in use.
+
+    LIMITATION -- the improvement is large but not unconditional. ``K`` is the
+    bucket MEAN, so a strongly TRENDING series leaves a given window offset by
+    some ``delta`` from it, and the conditioning becomes ``delta**2 / sigma**2``
+    rather than the ``mean**2 / sigma**2`` you would get centring on zero.
+    Measured on a trending panel at magnitude 1e11 (slopes 1e4..1e6, windows up
+    to n=1000): worst relative error 1.6e-11 to 6.4e-10, against 3.2e-6 to
+    1.4e-2 for the pre-fix zero-centred formula on the same windows -- between
+    7e4x and 5.6e8x better, but not exact. A per-window reference would remove
+    even that, at the cost of a reference that cannot be frozen at fit.
+
+    A bucket first CREATED during predict has no frozen reference and falls
+    back to ``K = 0`` for its pending rows. That is self-consistent rather than
+    a silent mix: such a bucket has no stored moments to disagree with, and
+    both fallback paths (``attach_kref``'s fill_null and ``_k_for_buckets``'
+    zero table) return 0 for the same absent bucket. It simply does not get the
+    conditioning benefit. Reach appears narrow -- a new partition value in
+    ``X_df`` was not observed to materialise such a bucket -- and it is
+    untested.
     """
     return _kref_from_normalized(
         _normalize_target(nw.from_native(df, eager_only=True), target_col),
