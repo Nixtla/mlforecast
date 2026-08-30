@@ -855,8 +855,19 @@ class MLForecast:
             for name, model in self.models_.items():
                 assert not isinstance(model, dict)  # mypy
                 if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
-                    preds = model.predict_fitted()
-                    del model.fitted_X_
+                    n_fitted = len(model.fitted_X_)
+                    if sort_idxs is None:
+                        fitted_mask = np.arange(len(X)) < n_fitted
+                        fitted_order = None
+                    else:
+                        fitted_mask = sort_idxs < n_fitted
+                        fitted_order = sort_idxs[fitted_mask]
+                    preds = np.empty(len(X))
+                    preds[fitted_mask] = model.predict_fitted(fitted_order)
+                    if not fitted_mask.all():
+                        preds[~fitted_mask] = model.predict(
+                            ufp.filter_with_mask(X, ~fitted_mask)
+                        )
                 else:
                     preds = model.predict(X)
                 fitted_values = ufp.assign_columns(fitted_values, name, preds)
@@ -980,8 +991,10 @@ class MLForecast:
                         ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
                     )
                     if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
-                        preds_valid = model.predict_fitted()
-                        del model.fitted_X_
+                        fitted_order = (
+                            None if sort_idxs is None else sort_idxs[valid]
+                        )
+                        preds_valid = model.predict_fitted(fitted_order)
                     else:
                         preds_valid = model.predict(X_pred)
                     preds = np.full(len(X_h), np.nan)
@@ -2168,7 +2181,15 @@ class MLForecast:
                 intervals = cloudpickle.load(f)
         except FileNotFoundError:
             intervals = None
-        fcst = MLForecast(models=models, freq=ts.freq)
+        first_model = next(iter(models.values()))
+        if isinstance(first_model, dict):
+            first_model = next(iter(first_model.values()))
+        feature_encoders = (
+            first_model.encoders if isinstance(first_model, _EncodedModel) else None
+        )
+        fcst = MLForecast(
+            models=models, freq=ts.freq, feature_encoders=feature_encoders
+        )
         fcst.ts = ts
         fcst.models_ = models
         if intervals is not None:

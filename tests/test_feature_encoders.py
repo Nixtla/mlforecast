@@ -93,6 +93,71 @@ def test_polars_target_encoder_uses_only_labels_observed_before_feature_time():
     )
 
 
+def test_polars_target_encoder_computes_global_priors_once_per_fit(monkeypatch):
+    """Shifted label availability shares one global as-of lookup across columns."""
+    X = pl.DataFrame(
+        {
+            "category": ["a", "a", "b", "b"],
+            "division": ["x", "x", "x", "x"],
+        }
+    )
+    join_asof = pl.DataFrame.join_asof
+    calls = 0
+
+    def counted_join_asof(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return join_asof(*args, **kwargs)
+
+    monkeypatch.setattr(pl.DataFrame, "join_asof", counted_join_asof)
+    encoded = PolarsTargetEncoder(
+        ["category", "division"], smoothing=0.0, prior=0.0
+    ).fit_transform(
+        X,
+        np.array([10.0, 20.0, 30.0, 40.0]),
+        context={
+            "times": np.array([0, 1, 2, 3]),
+            "target_times": np.array([1, 2, 3, 4]),
+        },
+    )
+
+    assert calls == 3
+    np.testing.assert_allclose(encoded["category__mean"], [0.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(encoded["division__mean"], [0.0, 0.0, 10.0, 15.0])
+
+
+def test_polars_target_encoder_avoids_asof_when_labels_are_immediately_available(
+    monkeypatch,
+):
+    """Recursive fitting uses grouped prefix statistics instead of as-of joins."""
+    X = pl.DataFrame(
+        {
+            "category": ["a", "a", "b", "b"],
+            "division": ["x", "x", "x", "x"],
+        }
+    )
+    join_asof = pl.DataFrame.join_asof
+    calls = 0
+
+    def counted_join_asof(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return join_asof(*args, **kwargs)
+
+    monkeypatch.setattr(pl.DataFrame, "join_asof", counted_join_asof)
+    encoded = PolarsTargetEncoder(
+        ["category", "division"], smoothing=0.0, prior=0.0
+    ).fit_transform(
+        X,
+        np.array([10.0, 20.0, 30.0, 40.0]),
+        context={"times": np.array([0, 1, 2, 3])},
+    )
+
+    assert calls == 0
+    np.testing.assert_allclose(encoded["category__mean"], [0.0, 10.0, 0.0, 30.0])
+    np.testing.assert_allclose(encoded["division__mean"], [0.0, 10.0, 15.0, 20.0])
+
+
 def test_direct_models_pass_target_observation_times_to_target_encoder():
     class AuditedTargetEncoder(PolarsTargetEncoder):
         contexts = []
