@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -34,6 +36,22 @@ class _EchoEncodedColumn(BaseEstimator, RegressorMixin):
 
     def predict(self, X):
         return np.asarray(X["category__mean"])
+
+
+class _PolarsOnlyCatBoost(BaseEstimator, RegressorMixin):
+    """Stand-in that proves conversion happens after Polars encoding."""
+
+    inputs: list[type[Any]] = []
+
+    def fit(self, X, _y):
+        type(self).inputs.append(type(X))
+        assert isinstance(X, pd.DataFrame)
+        return self
+
+    def predict(self, X):
+        type(self).inputs.append(type(X))
+        assert isinstance(X, pd.DataFrame)
+        return np.zeros(len(X))
 
 
 def _causal_target_encoder():
@@ -112,6 +130,22 @@ def test_polars_count_frequency_and_one_hot_encoders():
     assert unknown_count["category__count"].to_list() == [0]
     assert unknown_frequency["category__frequency"].to_list() == [0.0]
     assert unknown_one_hot.row(0) == (0, 0)
+
+
+def test_ordinal_and_count_encoders_request_left_join_order(monkeypatch):
+    join = pl.DataFrame.join
+    join_orders = []
+
+    def audited_join(*args, **kwargs):
+        join_orders.append(kwargs.get("maintain_order"))
+        return join(*args, **kwargs)
+
+    monkeypatch.setattr(pl.DataFrame, "join", audited_join)
+    X = pl.DataFrame({"category": ["a", "b", "a"]})
+    PolarsOrdinalEncoder(["category"]).fit_transform(X, np.zeros(len(X)))
+    PolarsCountEncoder(["category"]).fit_transform(X, np.zeros(len(X)))
+
+    assert join_orders == ["left", "left"]
 
 
 def test_polars_target_encoder_uses_only_prior_timestamps():
@@ -375,6 +409,36 @@ def test_stock_sklearn_transformer_is_accepted():
     assert fcst.predict(1).shape == (2, 3)
 
 
+@pytest.mark.parametrize(("max_horizon", "h"), [(None, 1), (2, 2)])
+def test_polars_encoder_converts_for_catboost_at_the_model_boundary(
+    monkeypatch, max_horizon, h
+):
+    import mlforecast.feature_encoders as feature_encoders
+
+    monkeypatch.setattr(feature_encoders, "CatBoostRegressor", _PolarsOnlyCatBoost)
+    _PolarsOnlyCatBoost.inputs = []
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 8,
+            "ds": range(8),
+            "y": np.arange(8, dtype=float),
+            "category": ["x"] * 8,
+        }
+    )
+    fcst = MLForecast(
+        models=_PolarsOnlyCatBoost(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[PolarsOrdinalEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, max_horizon=max_horizon, static_features=["category"])
+    fcst.predict(h)
+
+    expected_inputs = 2 if max_horizon is None else 4
+    assert _PolarsOnlyCatBoost.inputs == [pd.DataFrame] * expected_inputs
+
+
 def test_mlforecast_polars_target_encoder_fits_and_predicts():
     df = pl.DataFrame(
         {
@@ -538,6 +602,29 @@ def test_direct_fitted_values_follow_input_row_order():
     )
 
 
+def test_fitted_values_cache_predictions_not_encoded_feature_frames():
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 8,
+            "ds": range(8),
+            "y": np.arange(8, dtype=float),
+            "category": ["x"] * 8,
+        }
+    )
+    fcst = MLForecast(
+        models=DummyRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[PolarsOrdinalEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, max_horizon=2, fitted=True, static_features=["category"])
+
+    for model in fcst.models_["DummyRegressor"].values():
+        assert hasattr(model, "fitted_predictions_")
+        assert not hasattr(model, "fitted_X_")
+
+
 def test_polars_encoder_works_with_cross_validation_and_automl():
     df = pl.DataFrame(
         {
@@ -669,3 +756,46 @@ def test_cross_validation_fitted_values_are_causal_in_every_fold():
         second.filter(pl.col("ds").is_in(shared))["_EchoEncodedColumn"],
         first["_EchoEncodedColumn"],
     )
+
+
+def test_transform_per_horizon_skips_context_without_feature_encoders():
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 8,
+            "ds": range(8),
+            "y": np.arange(8, dtype=float),
+        }
+    )
+    fcst = MLForecast(models=DummyRegressor(), freq=1, lags=[1])
+    prep = fcst.preprocess(df, max_horizon=2, return_X_y=False)
+
+    batches = list(
+        fcst.ts._transform_per_horizon(
+            prep,
+            df,
+            horizons=[0, 1],
+            target_col="y",
+            with_encoder_context=False,
+        )
+    )
+
+    assert all(len(batch) == 3 for batch in batches)
+
+
+def test_fit_models_accepts_legacy_three_value_generator_factory():
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 6,
+            "ds": range(6),
+            "y": np.arange(6, dtype=float),
+        }
+    )
+    fcst = MLForecast(models=DummyRegressor(), freq=1, lags=[1])
+    X, y = fcst.preprocess(df, return_X_y=True)
+
+    def generator_factory():
+        yield 0, X, y
+
+    fcst.fit_models(generator_factory=generator_factory)
+
+    assert 0 in fcst.models_["DummyRegressor"]

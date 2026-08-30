@@ -7,7 +7,6 @@ import inspect
 from typing import Any, Iterable, Optional
 
 import numpy as np
-import utilsforecast.processing as ufp
 from sklearn.base import clone
 from utilsforecast.compat import pl, pl_DataFrame
 
@@ -53,14 +52,14 @@ class _EncodedModel:
         y: np.ndarray,
         *,
         encoder_context: Optional[Any] = None,
-        store_fitted_X: bool = False,
+        store_fitted_predictions: bool = False,
         **fit_kwargs: Any,
     ) -> "_EncodedModel":
         for encoder in self.encoders:
             X = _fit_transform(encoder, X, y, encoder_context)
-        if store_fitted_X:
-            self.fitted_X_ = X
         self.model.fit(self._prepare_for_model(X), y, **fit_kwargs)
+        if store_fitted_predictions:
+            self.fitted_predictions_ = self.model.predict(self._prepare_for_model(X))
         return self
 
     def predict(self, X: Any, **predict_kwargs: Any) -> np.ndarray:
@@ -69,8 +68,9 @@ class _EncodedModel:
         return self.model.predict(self._prepare_for_model(X), **predict_kwargs)
 
     def predict_fitted(self, order: Optional[np.ndarray] = None) -> np.ndarray:
-        X = self.fitted_X_ if order is None else ufp.take_rows(self.fitted_X_, order)
-        return self.model.predict(self._prepare_for_model(X))
+        if order is None:
+            return self.fitted_predictions_
+        return self.fitted_predictions_[order]
 
     def _prepare_for_model(self, X: Any) -> Any:
         if isinstance(self.model, CatBoostRegressor) and isinstance(X, pl_DataFrame):
@@ -127,9 +127,9 @@ class PolarsOrdinalEncoder(_PolarsEncoder):
         out = X
         for column, mapping in self.mappings_.items():
             encoded_name = mapping.columns[-1]
-            out = out.join(mapping, on=column, how="left").with_columns(
-                pl.col(encoded_name).fill_null(-1).cast(pl.Int32)
-            )
+            out = out.join(
+                mapping, on=column, how="left", maintain_order="left"
+            ).with_columns(pl.col(encoded_name).fill_null(-1).cast(pl.Int32))
         return self._drop_sources(out)
 
 
@@ -168,9 +168,9 @@ class PolarsCountEncoder(_PolarsEncoder):
         for column, mapping in self.mappings_.items():
             encoded_name = mapping.columns[-1]
             dtype = pl.Float32 if self.normalize else pl.UInt32
-            out = out.join(mapping, on=column, how="left").with_columns(
-                pl.col(encoded_name).fill_null(0).cast(dtype)
-            )
+            out = out.join(
+                mapping, on=column, how="left", maintain_order="left"
+            ).with_columns(pl.col(encoded_name).fill_null(0).cast(dtype))
         return self._drop_sources(out)
 
 

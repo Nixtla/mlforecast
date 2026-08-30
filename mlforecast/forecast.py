@@ -616,7 +616,7 @@ class MLForecast:
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         generator_factory: Optional[Callable[[], Iterator]] = None,
         encoder_context: Optional[Any] = None,
-        store_fitted_X: bool = False,
+        store_fitted_predictions: bool = False,
         model_as_numpy: bool = False,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
@@ -625,7 +625,15 @@ class MLForecast:
             X (pandas or polars DataFrame or numpy array, optional): Features (for recursive forecasting).
             y (numpy array, optional): Target (for recursive forecasting).
             models_fit_kwargs (dict, optional): Keyword arguments for each model's fit method.
-            generator_factory (callable, optional): Factory function that returns an iterator yielding (h, X_h, y_h) tuples per horizon.
+            generator_factory (callable, optional): Factory function that returns an
+                iterator yielding ``(h, X_h, y_h)`` tuples per horizon. A fourth
+                timestamp-context value is also accepted for feature encoders.
+            encoder_context (optional): Timestamp context passed to recursive
+                feature encoders during fitting.
+            store_fitted_predictions (bool): Cache fitted predictions for later
+                fitted-value reporting instead of retaining encoded feature frames.
+            model_as_numpy (bool): Convert encoded feature frames to numpy at the
+                estimator boundary.
 
         Returns:
             MLForecast: Forecast object with trained models.
@@ -673,7 +681,7 @@ class MLForecast:
                 X,
                 y,
                 encoder_context=encoder_context_,
-                store_fitted_X=store_fitted_X,
+                store_fitted_predictions=store_fitted_predictions,
                 **fit_kwargs,
             )
 
@@ -687,7 +695,17 @@ class MLForecast:
                 self.models_[name] = {}
                 # Create fresh generator for each model (generators are single-use)
                 horizon_gen = generator_factory()
-                for h, X_h, y_h, context_h in horizon_gen:
+                for batch in horizon_gen:
+                    if len(batch) == 3:
+                        h, X_h, y_h = batch
+                        context_h = None
+                    elif len(batch) == 4:
+                        h, X_h, y_h, context_h = batch
+                    else:
+                        raise ValueError(
+                            "Horizon generators must yield (h, X_h, y_h) or "
+                            "(h, X_h, y_h, encoder_context) tuples."
+                        )
                     fitted = fit_model(
                         model, X_h, y_h, self.ts.weight_col, model_fit_kwargs, context_h
                     )
@@ -854,8 +872,10 @@ class MLForecast:
             fitted_values = ufp.assign_columns(base, target_col, y)
             for name, model in self.models_.items():
                 assert not isinstance(model, dict)  # mypy
-                if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
-                    n_fitted = len(model.fitted_X_)
+                if isinstance(model, _EncodedModel) and hasattr(
+                    model, "fitted_predictions_"
+                ):
+                    n_fitted = len(model.fitted_predictions_)
                     if sort_idxs is None:
                         fitted_mask = np.arange(len(X)) < n_fitted
                         fitted_order = None
@@ -990,7 +1010,9 @@ class MLForecast:
                     X_pred = (
                         ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
                     )
-                    if isinstance(model, _EncodedModel) and hasattr(model, "fitted_X_"):
+                    if isinstance(model, _EncodedModel) and hasattr(
+                        model, "fitted_predictions_"
+                    ):
                         fitted_order = None if sort_idxs is None else sort_idxs[valid]
                         preds_valid = model.predict_fitted(fitted_order)
                     else:
@@ -1287,13 +1309,14 @@ class MLForecast:
                     internal_horizons,
                     target_col,
                     as_numpy and not self.feature_encoders,
+                    with_encoder_context=bool(self.feature_encoders),
                 )
 
             # Train models using generator factory
             self.fit_models(
                 generator_factory=generator_factory,
                 models_fit_kwargs=models_fit_kwargs,
-                store_fitted_X=fitted,
+                store_fitted_predictions=fitted,
                 model_as_numpy=as_numpy,
             )
 
@@ -1357,7 +1380,7 @@ class MLForecast:
                 y,
                 models_fit_kwargs,
                 encoder_context=encoder_context,
-                store_fitted_X=fitted,
+                store_fitted_predictions=fitted,
                 model_as_numpy=as_numpy,
             )
             if fitted:
