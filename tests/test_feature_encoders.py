@@ -75,6 +75,89 @@ def test_polars_target_encoder_uses_only_prior_timestamps():
     )
 
 
+def test_polars_target_encoder_uses_only_labels_observed_before_feature_time():
+    encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
+    X = pl.DataFrame({"category": ["a"] * 5})
+
+    encoded = encoder.fit_transform(
+        X,
+        np.array([10.0, 20.0, 30.0, 40.0, 50.0]),
+        context={
+            "times": np.array([0, 1, 2, 3, 4]),
+            "target_times": np.array([1, 2, 3, 4, 5]),
+        },
+    )
+
+    np.testing.assert_allclose(
+        encoded["category__mean"], [0.0, 0.0, 10.0, 15.0, 20.0]
+    )
+
+
+def test_direct_models_pass_target_observation_times_to_target_encoder():
+    class AuditedTargetEncoder(PolarsTargetEncoder):
+        contexts = []
+
+        def fit_transform(self, X, y, *, context):
+            type(self).contexts.append(
+                (np.asarray(context["times"]), np.asarray(context["target_times"]))
+            )
+            return super().fit_transform(X, y, context=context)
+
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 8,
+            "ds": range(8),
+            "y": np.arange(8, dtype=float),
+            "category": ["x"] * 8,
+        }
+    )
+    AuditedTargetEncoder.contexts = []
+    fcst = MLForecast(
+        models=DummyRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[AuditedTargetEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, max_horizon=2, static_features=["category"])
+
+    origin_times, target_times = AuditedTargetEncoder.contexts[1]
+    np.testing.assert_array_equal(target_times, origin_times + 1)
+
+
+def test_polars_target_encoder_supports_as_numpy():
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 6,
+            "ds": range(6),
+            "y": np.arange(6, dtype=float),
+            "category": ["x"] * 6,
+        }
+    )
+    fcst = MLForecast(
+        models=DummyRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[PolarsTargetEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, static_features=["category"], as_numpy=True)
+
+    assert fcst.predict(1).shape == (1, 3)
+
+
+def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
+    encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
+    encoded = encoder.fit_transform(
+        pl.DataFrame({"category": [None, None, "a"]}),
+        np.array([1.0, 2.0, 3.0]),
+        context={"times": np.array([1, 2, 3])},
+    )
+
+    assert encoded["category__mean"].null_count() == 0
+    np.testing.assert_allclose(encoded["category__mean"], [0.0, 1.0, 0.0])
+
+
 def test_mlforecast_feature_encoder_hook_fits_and_transforms():
     class RecordingEncoder:
         def fit_transform(self, X, _y):

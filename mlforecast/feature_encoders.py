@@ -45,9 +45,10 @@ def _fit_transform(encoder: Any, X: Any, y: np.ndarray, context: Optional[Any]) 
 class _EncodedModel:
     """Fitted model plus the fitted encoders required at prediction time."""
 
-    def __init__(self, model: Any, encoders: Iterable[Any]):
+    def __init__(self, model: Any, encoders: Iterable[Any], as_numpy: bool = False):
         self.model = model
         self.encoders = list(encoders)
+        self.as_numpy = as_numpy
 
     def fit(
         self,
@@ -75,7 +76,9 @@ class _EncodedModel:
 
     def _prepare_for_model(self, X: Any) -> Any:
         if isinstance(self.model, CatBoostRegressor) and isinstance(X, pl_DataFrame):
-            return X.to_pandas()
+            X = X.to_pandas()
+        if self.as_numpy and hasattr(X, "to_numpy"):
+            X = X.to_numpy()
         return X
 
     def __getattr__(self, name: str) -> Any:
@@ -234,71 +237,99 @@ class PolarsTargetEncoder:
         if len(X) != len(y) or len(X) != len(context["times"]):
             raise ValueError("X, y and timestamp context must have the same length.")
 
+        target_times = context.get("target_times", context["times"])
+        if len(target_times) != len(X):
+            raise ValueError("X, y and target timestamp context must have the same length.")
         frame = X.with_row_index("__encoder_row").with_columns(
             pl.Series("__encoder_time", context["times"]),
+            pl.Series("__encoder_target_time", target_times),
             pl.Series("__encoder_target", y),
         )
-        global_by_time = (
-            frame.group_by("__encoder_time")
+        global_by_target_time = (
+            frame.group_by("__encoder_target_time")
             .agg(
                 pl.col("__encoder_target").sum().alias("__sum"),
                 pl.len().alias("__count"),
             )
-            .sort("__encoder_time")
+            .sort("__encoder_target_time")
             .with_columns(
-                pl.col("__sum").cum_sum().shift(1).alias("__prior_sum"),
-                pl.col("__count").cum_sum().shift(1).alias("__prior_count"),
+                pl.col("__sum").cum_sum().alias("__prior_sum"),
+                pl.col("__count").cum_sum().alias("__prior_count"),
             )
-            .select("__encoder_time", "__prior_sum", "__prior_count")
+            .select("__encoder_target_time", "__prior_sum", "__prior_count")
         )
         self.global_mean_ = float(np.mean(y))
         self.mappings_ = {}
         encoded = frame
-        for column in self.columns:
-            stats = (
-                frame.group_by([column, "__encoder_time"])
+        for column_index, column in enumerate(self.columns):
+            category_key = f"__encoder_category_{column_index}"
+            column_frame = frame.with_columns(
+                pl.when(pl.col(column).is_null())
+                .then(pl.lit("1:"))
+                .otherwise(pl.lit("0:") + pl.col(column).cast(pl.String))
+                .alias(category_key)
+            )
+            label_stats = (
+                column_frame.group_by([category_key, "__encoder_target_time"])
                 .agg(
                     pl.col("__encoder_target").sum().alias("__sum"),
                     pl.len().alias("__count"),
                 )
-                .sort([column, "__encoder_time"])
+                .sort([category_key, "__encoder_target_time"])
                 .with_columns(
                     pl.col("__sum")
                     .cum_sum()
-                    .shift(1)
-                    .over(column)
+                    .over(category_key)
                     .alias("__prior_sum"),
                     pl.col("__count")
                     .cum_sum()
-                    .shift(1)
-                    .over(column)
+                    .over(category_key)
                     .alias("__prior_count"),
                 )
-                .join(
-                    global_by_time, on="__encoder_time", how="left", suffix="__global"
-                )
-                .with_columns(
-                    (
-                        (
-                            pl.col("__prior_sum").fill_null(0.0)
-                            + self.smoothing
-                            * (
-                                pl.col("__prior_sum__global")
-                                / pl.col("__prior_count__global")
-                            )
-                            .fill_nan(None)
-                            .fill_null(self.prior)
-                        )
-                        / (pl.col("__prior_count").fill_null(0) + self.smoothing)
-                    )
-                    .fill_nan(None)
-                    .fill_null(self.prior)
-                    .cast(pl.Float32)
-                    .alias(f"{column}__mean")
-                )
-                .select(column, "__encoder_time", f"{column}__mean")
             )
-            encoded = encoded.join(stats, on=[column, "__encoder_time"], how="left")
+            category_priors = column_frame.select(
+                "__encoder_row", category_key, "__encoder_time"
+            ).sort([category_key, "__encoder_time"]).join_asof(
+                label_stats,
+                left_on="__encoder_time",
+                right_on="__encoder_target_time",
+                by=category_key,
+                strategy="backward",
+                allow_exact_matches=False,
+                check_sortedness=False,
+            )
+            global_priors = frame.select("__encoder_row", "__encoder_time").sort(
+                "__encoder_time"
+            ).join_asof(
+                global_by_target_time,
+                left_on="__encoder_time",
+                right_on="__encoder_target_time",
+                strategy="backward",
+                allow_exact_matches=False,
+            )
+            stats = category_priors.join(
+                global_priors, on="__encoder_row", how="left", suffix="__global"
+            )
+            stats = stats.with_columns(
+                (
+                    (
+                        pl.col("__prior_sum").fill_null(0.0)
+                        + self.smoothing
+                        * (
+                            pl.col("__prior_sum__global")
+                            / pl.col("__prior_count__global")
+                        )
+                        .fill_nan(None)
+                        .fill_null(self.prior)
+                    )
+                    / (pl.col("__prior_count").fill_null(0) + self.smoothing)
+                )
+                .fill_nan(None)
+                .fill_null(self.prior)
+                .cast(pl.Float32)
+                .alias(f"{column}__mean")
+            ).select("__encoder_row", f"{column}__mean")
+            encoded = encoded.join(stats, on="__encoder_row", how="left")
             mapping = (
                 frame.group_by(column)
                 .agg(
@@ -317,7 +348,7 @@ class PolarsTargetEncoder:
             )
             self.mappings_[column] = mapping
         out = encoded.sort("__encoder_row").drop(
-            "__encoder_row", "__encoder_time", "__encoder_target"
+            "__encoder_row", "__encoder_time", "__encoder_target_time", "__encoder_target"
         )
         if self.drop_original:
             out = out.drop(self.columns)
@@ -328,7 +359,7 @@ class PolarsTargetEncoder:
             raise TypeError("PolarsTargetEncoder requires a polars DataFrame.")
         out = X.with_row_index("__encoder_row")
         for column, mapping in self.mappings_.items():
-            out = out.join(mapping, on=column, how="left")
+            out = out.join(mapping, on=column, how="left", nulls_equal=True)
             out = out.with_columns(
                 pl.col(f"{column}__mean").fill_null(self.global_mean_)
             )

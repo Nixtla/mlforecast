@@ -617,6 +617,7 @@ class MLForecast:
         generator_factory: Optional[Callable[[], Iterator]] = None,
         encoder_context: Optional[Any] = None,
         store_fitted_X: bool = False,
+        model_as_numpy: bool = False,
     ) -> "MLForecast":
         """Manually train models. Use this if you called `MLForecast.preprocess` beforehand.
 
@@ -666,7 +667,9 @@ class MLForecast:
             fitted_encoders = [
                 _clone_encoder(encoder) for encoder in self.feature_encoders
             ]
-            return _EncodedModel(fitted_model, fitted_encoders).fit(
+            return _EncodedModel(
+                fitted_model, fitted_encoders, as_numpy=model_as_numpy
+            ).fit(
                 X,
                 y,
                 encoder_context=encoder_context_,
@@ -1256,7 +1259,7 @@ class MLForecast:
                 validate_data=validate_data,
             )
             # Restore the as_numpy setting for prediction
-            self.ts.as_numpy = as_numpy
+            self.ts.as_numpy = as_numpy and not self.feature_encoders
 
             # Get the effective max horizon and internal horizons from preprocessing
             effective_max_horizon = self.ts.max_horizon
@@ -1268,7 +1271,11 @@ class MLForecast:
             # Factory function - creates fresh generator for each model
             def generator_factory():
                 return self.ts._transform_per_horizon(
-                    prep, original_df, internal_horizons, target_col, as_numpy
+                    prep,
+                    original_df,
+                    internal_horizons,
+                    target_col,
+                    as_numpy and not self.feature_encoders,
                 )
 
             # Train models using generator factory
@@ -1276,6 +1283,7 @@ class MLForecast:
                 generator_factory=generator_factory,
                 models_fit_kwargs=models_fit_kwargs,
                 store_fitted_X=fitted,
+                model_as_numpy=as_numpy,
             )
 
             if fitted:
@@ -1328,7 +1336,9 @@ class MLForecast:
                 X, y = self._extract_X_y(prep, target_col, weight_col)
                 if self.feature_encoders:
                     encoder_context = {"times": base[time_col].to_numpy()}
-                if as_numpy:
+                if self.feature_encoders:
+                    self.ts.as_numpy = False
+                if as_numpy and not self.feature_encoders:
                     X = ufp.to_numpy(X)
                 del prep
             self.fit_models(
@@ -1337,6 +1347,7 @@ class MLForecast:
                 models_fit_kwargs,
                 encoder_context=encoder_context,
                 store_fitted_X=fitted,
+                model_as_numpy=as_numpy,
             )
             if fitted:
                 fitted_values = self._compute_fitted_values(

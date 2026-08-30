@@ -1179,8 +1179,10 @@ class TimeSeries:
 
             X_h = ufp.filter_with_mask(X_h, valid)
             y_h = y_h[valid]
+            target_times = ufp.offset_times(prep[self.time_col], self.freq, h)
             context = {
-                "times": ufp.filter_with_mask(prep[self.time_col], valid).to_numpy()
+                "times": ufp.filter_with_mask(prep[self.time_col], valid).to_numpy(),
+                "target_times": ufp.filter_with_mask(target_times, valid).to_numpy(),
             }
 
             if as_numpy:
