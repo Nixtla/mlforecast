@@ -159,54 +159,6 @@ def test_polars_target_encoder_uses_full_training_category_means():
     np.testing.assert_allclose(future["category__mean"], [20.0, 140 / 3])
 
 
-def test_polars_target_encoder_ignores_optional_timestamp_context():
-    encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
-    X = pl.DataFrame({"category": ["a"] * 5})
-
-    encoded = encoder.fit_transform(
-        X,
-        np.array([10.0, 20.0, 30.0, 40.0, 50.0]),
-        context={
-            "times": np.array([0, 1, 2, 3, 4]),
-            "target_times": np.array([1, 2, 3, 4, 5]),
-        },
-    )
-
-    np.testing.assert_allclose(encoded["category__mean"], [30.0] * 5)
-
-
-def test_polars_target_encoder_never_uses_asof_joins(monkeypatch):
-    X = pl.DataFrame(
-        {
-            "category": ["a", "a", "b", "b"],
-            "division": ["x", "x", "x", "x"],
-        }
-    )
-    join_asof = pl.DataFrame.join_asof
-    calls = 0
-
-    def counted_join_asof(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return join_asof(*args, **kwargs)
-
-    monkeypatch.setattr(pl.DataFrame, "join_asof", counted_join_asof)
-    encoded = PolarsTargetEncoder(
-        ["category", "division"], smoothing=0.0, prior=0.0
-    ).fit_transform(
-        X,
-        np.array([10.0, 20.0, 30.0, 40.0]),
-        context={
-            "times": np.array([0, 1, 2, 3]),
-            "target_times": np.array([1, 2, 3, 4]),
-        },
-    )
-
-    assert calls == 0
-    np.testing.assert_allclose(encoded["category__mean"], [15.0, 15.0, 35.0, 35.0])
-    np.testing.assert_allclose(encoded["division__mean"], [25.0] * 4)
-
-
 def test_polars_target_encoder_smooths_towards_global_training_mean():
     X = pl.DataFrame(
         {
@@ -219,22 +171,24 @@ def test_polars_target_encoder_smooths_towards_global_training_mean():
     ).fit_transform(
         X,
         np.array([10.0, 20.0, 30.0, 40.0]),
-        context={"times": np.array([0, 1, 2, 3])},
     )
 
     np.testing.assert_allclose(encoded["category__mean"], [20.0, 20.0, 30.0, 30.0])
     np.testing.assert_allclose(encoded["division__mean"], [25.0] * 4)
 
 
-def test_direct_models_pass_target_observation_times_to_target_encoder():
-    class AuditedTargetEncoder(PolarsTargetEncoder):
+def test_direct_models_pass_context_to_context_aware_encoder():
+    class ContextRecordingEncoder:
         contexts = []
 
-        def fit_transform(self, X, y, *, context):
+        def fit_transform(self, X, _y, *, context):
             type(self).contexts.append(
                 (np.asarray(context["times"]), np.asarray(context["target_times"]))
             )
-            return super().fit_transform(X, y, context=context)
+            return X
+
+        def transform(self, X):
+            return X
 
     df = pl.DataFrame(
         {
@@ -244,17 +198,17 @@ def test_direct_models_pass_target_observation_times_to_target_encoder():
             "category": ["x"] * 8,
         }
     )
-    AuditedTargetEncoder.contexts = []
+    ContextRecordingEncoder.contexts = []
     fcst = MLForecast(
         models=DummyRegressor(),
         freq=1,
         lags=[1],
-        feature_encoders=[AuditedTargetEncoder(["category"], drop_original=True)],
+        feature_encoders=[ContextRecordingEncoder()],
     )
 
     fcst.fit(df, max_horizon=2, static_features=["category"])
 
-    origin_times, target_times = AuditedTargetEncoder.contexts[1]
+    origin_times, target_times = ContextRecordingEncoder.contexts[1]
     np.testing.assert_array_equal(target_times, origin_times + 1)
 
 
@@ -284,7 +238,6 @@ def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
     encoded = encoder.fit_transform(
         pl.DataFrame({"category": [None, None, "a"]}),
         np.array([1.0, 2.0, 3.0]),
-        context={"times": np.array([1, 2, 3])},
     )
 
     assert encoded["category__mean"].null_count() == 0
@@ -292,19 +245,12 @@ def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
 
 
 def test_target_encoder_null_category_is_encoded_at_fit_time():
-    """Null categories must get a real encoding during `fit_transform`.
-
-    The fit-time join is `how="left"` with polars' default `nulls_equal=False`
-    and, unlike `transform`, has no `fill_null` afterwards, so null categories
-    come out null. Models that reject NaN then fail during `fit`, while tree
-    models train on NaN and meet a finite `global_mean_` at predict time.
-    """
+    """Null categories are regular categories in the fitted mapping."""
     X = pl.DataFrame({"category": ["a", None, "a", None]})
     y = np.array([1.0, 2.0, 3.0, 4.0])
-    context = {"times": np.array([1, 2, 3, 4])}
     encoder = PolarsTargetEncoder(["category"])
 
-    encoded = encoder.fit_transform(X, y, context=context)["category__mean"]
+    encoded = encoder.fit_transform(X, y)["category__mean"]
 
     assert encoded.is_null().sum() == 0
     assert np.isfinite(encoded.to_numpy()).all()
@@ -663,11 +609,9 @@ def test_target_encoder_uses_each_cross_validation_fold_training_mean():
     class AuditedTargetEncoder(PolarsTargetEncoder):
         batches = []
 
-        def fit_transform(self, X, y, *, context):
-            out = super().fit_transform(X, y, context=context)
-            type(self).batches.append(
-                (np.asarray(context["times"]), out["category__mean"].to_numpy())
-            )
+        def fit_transform(self, X, y):
+            out = super().fit_transform(X, y)
+            type(self).batches.append(out["category__mean"].to_numpy())
             return out
 
     # The last target is intentionally enormous. Neither CV fold may use it
@@ -702,7 +646,7 @@ def test_target_encoder_uses_each_cross_validation_fold_training_mean():
         np.full(5, 3.0),
         np.full(6, 3.5),
     ]
-    for (_, encoded), expected_encoded in zip(AuditedTargetEncoder.batches, expected):
+    for encoded, expected_encoded in zip(AuditedTargetEncoder.batches, expected):
         np.testing.assert_allclose(encoded, expected_encoded)
 
     # `cv_models_` retains one model per fold. Their final category mappings
