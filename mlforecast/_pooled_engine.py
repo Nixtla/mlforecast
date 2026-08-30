@@ -134,9 +134,11 @@ def grouped_accumulate(frame_native, keys, cols, op, out_names, **kw):
         alpha, adjust, ignore_na = kw["alpha"], kw["adjust"], kw["ignore_nulls"]
         for c, o in zip(cols, out_names):
             out[o] = gb[c].transform(
-                lambda s: s.ewm(alpha=alpha, adjust=adjust, ignore_na=ignore_na)
-                .mean()
-                .ffill()
+                lambda s: (
+                    s.ewm(alpha=alpha, adjust=adjust, ignore_na=ignore_na)
+                    .mean()
+                    .ffill()
+                )
             )
     else:
         method = _PANDAS_OPS[op]
