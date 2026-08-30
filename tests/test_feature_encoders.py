@@ -625,6 +625,28 @@ def test_fitted_values_cache_predictions_not_encoded_feature_frames():
         assert not hasattr(model, "fitted_X_")
 
 
+def test_direct_fitted_values_handle_lexically_sorted_series_ids():
+    n_series, n_days = 12, 8
+    df = pl.DataFrame(
+        {
+            "unique_id": np.repeat(np.arange(n_series).astype(str), n_days),
+            "ds": np.tile(np.arange(n_days), n_series),
+            "y": np.arange(n_series * n_days, dtype=float),
+            "category": np.repeat(["x", "y"], n_series * n_days // 2),
+        }
+    )
+    fcst = MLForecast(
+        models=DummyRegressor(),
+        freq=1,
+        lags=[1],
+        feature_encoders=[PolarsOrdinalEncoder(["category"], drop_original=True)],
+    )
+
+    fcst.fit(df, max_horizon=2, fitted=True, static_features=["category"])
+
+    assert fcst.forecast_fitted_values().shape[0] > 0
+
+
 def test_polars_encoder_works_with_cross_validation_and_automl():
     df = pl.DataFrame(
         {

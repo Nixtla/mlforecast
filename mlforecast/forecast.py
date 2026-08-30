@@ -918,7 +918,16 @@ class MLForecast:
                 list(X.columns) if hasattr(X, "columns") else None
             )
             feature_idx = {c: i for i, c in enumerate(self.ts.features_order_)}
-            horizon_cache = {}  # h -> (X_h, valid_mask)
+            horizon_cache = {}  # h -> (X_h, valid_mask, fitted_prediction_order)
+
+            def fitted_prediction_order(valid: np.ndarray) -> Optional[np.ndarray]:
+                if sort_idxs is None:
+                    return None
+                original_valid = np.empty(len(valid), dtype=bool)
+                original_valid[sort_idxs] = valid
+                original_positions = np.flatnonzero(original_valid)
+                return np.searchsorted(original_positions, sort_idxs[valid])
+
             for h in trained_horizons:
                 y_h = y[:, h] if y.ndim == 2 else y
                 valid_target = ~np.isnan(y_h)
@@ -942,7 +951,11 @@ class MLForecast:
                         X_h = X[:, col_idx]
                     else:
                         X_h = X
-                    horizon_cache[h] = (X_h, valid_target)
+                    horizon_cache[h] = (
+                        X_h,
+                        valid_target,
+                        fitted_prediction_order(valid_target),
+                    )
                     continue
 
                 if h == 0 or not exog_cols_h or original_df is None:
@@ -950,7 +963,11 @@ class MLForecast:
                         X_h = X[x_cols_h]
                     else:
                         X_h = X
-                    horizon_cache[h] = (X_h, valid_target)
+                    horizon_cache[h] = (
+                        X_h,
+                        valid_target,
+                        fitted_prediction_order(valid_target),
+                    )
                 else:
                     non_exog_cols = (
                         [c for c in x_cols_h if c not in exog_cols]
@@ -1001,11 +1018,15 @@ class MLForecast:
                     valid = valid_target.copy()
                     for col in exog_cols_h:
                         valid &= ~ufp.is_nan_or_none(X_h[col]).to_numpy()
-                    horizon_cache[h] = (X_h, valid)
+                    horizon_cache[h] = (
+                        X_h,
+                        valid,
+                        fitted_prediction_order(valid),
+                    )
 
             for name, horizon_models in self.models_.items():
                 for h, model in horizon_models.items():
-                    X_h, valid = horizon_cache[h]
+                    X_h, valid, fitted_order = horizon_cache[h]
                     X_valid = ufp.filter_with_mask(X_h, valid)
                     X_pred = (
                         ufp.to_numpy(X_valid) if models_trained_with_numpy else X_valid
@@ -1013,7 +1034,6 @@ class MLForecast:
                     if isinstance(model, _EncodedModel) and hasattr(
                         model, "fitted_predictions_"
                     ):
-                        fitted_order = None if sort_idxs is None else sort_idxs[valid]
                         preds_valid = model.predict_fitted(fitted_order)
                     else:
                         preds_valid = model.predict(X_pred)
@@ -1024,7 +1044,7 @@ class MLForecast:
                     )
 
             for h, horizon_df in horizon_fitted_values.items():
-                _, keep_mask = horizon_cache[h]
+                _, keep_mask, _ = horizon_cache[h]
                 horizon_df = ufp.filter_with_mask(horizon_df, keep_mask)
                 horizon_df = ufp.copy_if_pandas(horizon_df, deep=True)
                 horizon_df = self._invert_transforms_fitted(horizon_df)
