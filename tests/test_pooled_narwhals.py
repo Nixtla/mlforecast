@@ -1059,3 +1059,73 @@ def test_every_time_agg_family_has_its_own_centring_reference(backend):
     )
     for fam in ("K", "K__mean", "K__min", "K__max"):
         assert got[fam] == pytest.approx(1e11, rel=1e-6), (fam, got[fam])
+
+
+def test_predict_does_not_rematerialize_earlier_pending_frames():
+    """`_rebuild_tail` must materialize each pending step's synthetic rows once.
+
+    Every predict step reconstructs the tail as ``[seed rows, retained
+    history, *pending]``. The pending entries are immutable tuples that only
+    ever grow by one per step, but the frame built from each was rebuilt on
+    every subsequent step -- so an H-step predict paid H*(H+1)/2 frame
+    constructions where H suffice, and the per-step cost climbed with the
+    horizon instead of staying flat.
+
+    Counts materializations at two horizons rather than asserting an absolute
+    number, so the contract pinned here is the GROWTH (linear in the horizon),
+    independent of how many the query-row path (`build_query_arrays`, the
+    other `_pending_agg_frame` call site) contributes per step.
+    """
+    import pandas as pd
+    from sklearn.linear_model import LinearRegression
+
+    from mlforecast import MLForecast
+    from mlforecast.lag_transforms import RollingMean
+
+    with pooled_engine("narwhals"):
+        import mlforecast.pooled as pooled
+
+        n_times = 30
+        df = pd.DataFrame(
+            {
+                "unique_id": np.repeat(["a", "b", "c", "d"], n_times),
+                "ds": np.tile(
+                    pd.date_range("2020-01-01", periods=n_times, freq="D"), 4
+                ),
+                "y": np.arange(4.0 * n_times),
+                "store": np.repeat([0, 0, 1, 1], n_times),
+            }
+        )
+
+        def materializations(horizon):
+            fcst = MLForecast(
+                models=[LinearRegression()],
+                freq="D",
+                lags=[1],
+                lag_transforms={1: [RollingMean(3, groupby=["store"])]},
+            )
+            fcst.fit(df.copy(), static_features=["store"])
+            calls = []
+            original = pooled.NarwhalsPooledState._pending_agg_frame
+
+            def counting(self, entry, backend, time_dtype):
+                calls.append(entry)
+                return original(self, entry, backend, time_dtype)
+
+            pooled.NarwhalsPooledState._pending_agg_frame = counting
+            try:
+                fcst.predict(horizon)
+            finally:
+                pooled.NarwhalsPooledState._pending_agg_frame = original
+            return len(calls)
+
+        short, long = materializations(4), materializations(12)
+
+    # 3x the steps should cost ~3x the materializations. Rebuilding every
+    # earlier step's rows on every step is quadratic: 12 steps would do
+    # (12*13/2) / (4*5/2) = 7.8x the work of 4, not 3x.
+    assert long <= 4 * short, (
+        f"{short} materializations at horizon 4 but {long} at horizon 12 "
+        f"({long / short:.1f}x the work for 3x the steps) -- earlier steps' "
+        "pending frames are being rebuilt on every step"
+    )

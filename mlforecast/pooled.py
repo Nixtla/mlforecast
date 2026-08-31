@@ -222,6 +222,15 @@ class NarwhalsPooledState:
         # snapshot()/restore() never touch a missing attribute
         self._pending: list = []
         self._pending_raw: list = []
+        # `_rebuild_tail` builds one frame per pending entry. The entries are
+        # immutable and only ever appended to, so each frame is built once and
+        # reused across the remaining steps. Keyed by `id`, holding the entry
+        # itself alongside so a recycled id can never alias a different entry;
+        # both maps are rebuilt from the live `_pending`/`_pending_raw` on
+        # every rebuild, so they never outlive the entries they describe.
+        self._pending_frames: dict = {}
+        self._pending_raw_frames: dict = {}
+        self._pending_frames_schema: tuple = ()
         self._next_ord = None
         self._seeds = None
         # Predict-time tail machinery (Task 9), computed once lazily on the
@@ -1596,13 +1605,31 @@ class NarwhalsPooledState:
         time_dtype = seed_nw.schema[self.time_col]
         full_cols = list(seed_nw.columns)
 
+        # A cached frame was built against THIS `full_cols`/dtype pair; anything
+        # that reshapes the tail mid-predict (a densification rebuild, a newly
+        # required `time_agg` family) must rebuild rather than reuse.
+        schema = (tuple(full_cols), str(time_dtype))
+        if schema != self._pending_frames_schema:
+            self._pending_frames = {}
+            self._pending_raw_frames = {}
+            self._pending_frames_schema = schema
+
         parts = [self._seed_rows, self._hist_suffix]
+        cached, self._pending_frames = self._pending_frames, {}
         for entry in self._pending:
-            pend = self._pending_agg_frame(entry, backend, time_dtype)
-            missing_cols = [c for c in full_cols if c not in pend.columns]
-            if missing_cols:
-                pend = pend.with_columns([nw.lit(0.0).alias(c) for c in missing_cols])
-            parts.append(pend.select(full_cols).to_native())
+            hit = cached.get(id(entry))
+            if hit is not None and hit[0] is entry:
+                native = hit[1]
+            else:
+                pend = self._pending_agg_frame(entry, backend, time_dtype)
+                missing_cols = [c for c in full_cols if c not in pend.columns]
+                if missing_cols:
+                    pend = pend.with_columns(
+                        [nw.lit(0.0).alias(c) for c in missing_cols]
+                    )
+                native = pend.select(full_cols).to_native()
+            self._pending_frames[id(entry)] = (entry, native)
+            parts.append(native)
 
         combined = nw.from_native(ufp.vertical_concat(parts), eager_only=True)
         combined = _add_ordinals(combined, self.keys, self.time_col)
@@ -1629,10 +1656,18 @@ class NarwhalsPooledState:
         self._qvalues = None
 
         raw_parts = [self._hist_suffix_df]
-        for bids_arr, y_arr, ts in self._pending_raw:
-            raw_parts.append(
-                self._pending_raw_frame(bids_arr, y_arr, ts, backend, time_dtype)
-            )
+        rcached, self._pending_raw_frames = self._pending_raw_frames, {}
+        for rentry in self._pending_raw:
+            hit = rcached.get(id(rentry))
+            if hit is not None and hit[0] is rentry:
+                native = hit[1]
+            else:
+                bids_arr, y_arr, ts = rentry
+                native = self._pending_raw_frame(
+                    bids_arr, y_arr, ts, backend, time_dtype
+                )
+            self._pending_raw_frames[id(rentry)] = (rentry, native)
+            raw_parts.append(native)
         self._tail_df = (
             ufp.vertical_concat(raw_parts) if len(raw_parts) > 1 else raw_parts[0]
         )
