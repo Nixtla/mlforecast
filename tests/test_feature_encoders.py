@@ -7,7 +7,7 @@ import pytest
 from sklearn.dummy import DummyRegressor
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 from mlforecast import MLForecast
 from mlforecast.feature_encoders import (
@@ -22,6 +22,7 @@ from mlforecast.auto import AutoMLForecast, AutoModel
 
 class _EncodedColumnRegressor(BaseEstimator, RegressorMixin):
     def fit(self, _X, _y):
+        self.fitted_ = True
         return self
 
     def predict(self, X):
@@ -369,6 +370,36 @@ def test_existing_sklearn_category_encoder_pipeline_is_compatible():
     forecast = fcst.predict(1)
 
     assert forecast.shape == (2, 3)
+
+
+def test_polars_target_encoder_is_correct_inside_a_sklearn_pipeline():
+    """A sklearn pipeline receives the numeric Polars target-encoded feature."""
+    df = pl.DataFrame(
+        {
+            "unique_id": ["a"] * 6,
+            "ds": range(6),
+            "y": np.arange(6, dtype=float),
+            "category": ["x"] * 6,
+        }
+    ).with_columns(pl.col("category").cast(pl.Categorical))
+    model = make_pipeline(
+        FunctionTransformer(validate=False), _EncodedColumnRegressor()
+    )
+    fcst = MLForecast(
+        models=model,
+        freq=1,
+        lags=[1],
+        feature_encoders=[
+            PolarsTargetEncoder(["category"], smoothing=0.0, drop_original=True)
+        ],
+    )
+
+    fcst.fit(df, fitted=True, static_features=["category"])
+    fitted = fcst.forecast_fitted_values()
+
+    # Training targets are 1..5 after the lag is created, whose category mean is 3.
+    np.testing.assert_allclose(fitted["_EncodedColumnRegressor"], 3.0)
+    np.testing.assert_allclose(fcst.predict(1)["_EncodedColumnRegressor"], 3.0)
 
 
 def test_stock_sklearn_transformer_is_accepted():
