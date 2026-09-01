@@ -1026,29 +1026,20 @@ def test_group_update_new_group_order(engine):
         keep_last_n=10_000,  # full-history check: disable pooled trim
     )
     ts.update(update_df)
+    from mlforecast.pooled import lookup
+
     state = ts._pooled_states[("groupby", ("brand",), ())]
-    groups = state.groups
     full_df = ufp.vertical_concat([df, update_df])
-    if engine == "polars":
-        full_df = full_df.join(groups, on=["brand"], how="left")
-        full_df = ufp.sort(full_df, by=["_bucket_id", "ds", "unique_id"])
-    else:
-        full_df = full_df.merge(groups, on=["brand"], how="left")
-        full_df = full_df.sort_values(["_bucket_id", "ds", "unique_id"])
-    # The dead `ga` mirror was removed; the surviving flat arrays
-    # (bucket_id, y) carry the grouped observations. Tail-appended rather than
-    # interleaved per-bucket, so compare the per-bucket y multiset (sort by
-    # (bucket_id, y)) against the expected grouping.
-    expected_pairs = sorted(
-        zip(full_df["_bucket_id"].to_numpy().tolist(), full_df["y"].to_numpy().tolist())
-    )
-    got_pairs = sorted(zip(state.bucket_id.tolist(), state.y.tolist()))
-    np.testing.assert_allclose(
-        [p[1] for p in got_pairs], [p[1] for p in expected_pairs]
-    )
-    np.testing.assert_array_equal(
-        [p[0] for p in got_pairs], [p[0] for p in expected_pairs]
-    )
+    # every observation must land in its brand's bucket: aggregate the expected
+    # rows the same way the state does and compare the per-bucket totals
+    brands = np.asarray(full_df["brand"].to_numpy())
+    ys = np.asarray(full_df["y"].to_numpy(), dtype=float)
+    bids = lookup([brands], state.bucket_uniques)
+    assert (bids >= 0).all()
+    exp_sum = np.bincount(bids, weights=ys, minlength=state.n_buckets)
+    exp_count = np.bincount(bids, minlength=state.n_buckets).astype(float)
+    np.testing.assert_allclose(state.base["sum"].sum(axis=1), exp_sum)
+    np.testing.assert_allclose(state.base["count"].sum(axis=1), exp_count)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -1193,10 +1184,12 @@ def test_global_update_y_appends_observations():
     ts._predict_setup()
     ts._update_features()
     global_state = ts._pooled_states[("global", (), ())]
-    orig_len = len(global_state.time)
+    orig_ordinals = global_state.n_ordinals
     n_series = len(ts.uids)
     ts._update_y(np.zeros(n_series))
-    assert len(global_state.time) == orig_len + n_series
+    # one appended timestamp holding every series' prediction
+    assert global_state.n_ordinals == orig_ordinals + 1
+    assert global_state.base["count"][:, -1].sum() == n_series
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])

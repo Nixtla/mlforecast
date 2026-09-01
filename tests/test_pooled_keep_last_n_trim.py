@@ -107,42 +107,39 @@ _AGG_FIELDS = ("unique_times", "sums", "counts", "sum_sq", "mins", "maxs")
 
 
 def _assert_state_byte_identical(got, ref, ctx=""):
-    """Field-for-field equality of two PooledStates' mutable state."""
-    for f in ("series_bucket_id", "bucket_id", "time", "time_index", "y"):
-        np.testing.assert_array_equal(
-            getattr(got, f), getattr(ref, f), err_msg=f"{ctx}:{f}"
-        )
-    assert got.next_time_index_by_bucket == ref.next_time_index_by_bucket, f"{ctx}:next"
-    if ref._parent_time_grids is None:
-        assert got._parent_time_grids is None, f"{ctx}:grids-none"
-    else:
-        assert got._parent_time_grids.keys() == ref._parent_time_grids.keys()
-        for pid in ref._parent_time_grids:
-            np.testing.assert_array_equal(
-                got._parent_time_grids[pid],
-                ref._parent_time_grids[pid],
-                err_msg=f"{ctx}:grid{pid}",
-            )
-    assert got._bucket_to_parent_id == ref._bucket_to_parent_id, f"{ctx}:b2p"
-    assert got._parent_to_buckets == ref._parent_to_buckets, f"{ctx}:p2b"
-    assert got._scope_key_to_parent_id == ref._scope_key_to_parent_id, f"{ctx}:scope"
-    assert got._ts_aggs.keys() == ref._ts_aggs.keys(), f"{ctx}:agg-keys"
-    for bid in ref._ts_aggs:
-        for name in _AGG_FIELDS:
-            np.testing.assert_array_equal(
-                getattr(got._ts_aggs[bid], name),
-                getattr(ref._ts_aggs[bid], name),
-                err_msg=f"{ctx}:agg[{bid}].{name}",
-            )
-    assert len(got.bucket_df) == len(ref.bucket_df), f"{ctx}:bucket_df-len"
-    if ref._idsorted_to_bucket_pos is None:
-        assert got._idsorted_to_bucket_pos is None, f"{ctx}:idsorted-none"
+    """Field-for-field equality of two PooledStates' mutable state.
+
+    The mutable state is what `snapshot`/`restore` round-trips: the aggregate
+    channels, the shared calendar length, the bucket vocabulary and the current
+    series assignment.
+    """
+    assert got.n_buckets == ref.n_buckets, f"{ctx}:n_buckets"
+    # `n_ordinals` is the absolute calendar position and keeps counting through a
+    # trim, so a trimmed state and a fresh fit on the tail differ there by design;
+    # what must match is the stored extent and its contents.
+    assert got.width == ref.width, f"{ctx}:width"
+    np.testing.assert_array_equal(
+        got.series_bucket_id, ref.series_bucket_id, err_msg=f"{ctx}:series_bucket_id"
+    )
+    if ref.bucket_uniques is None:
+        assert got.bucket_uniques is None, f"{ctx}:uniques-none"
     else:
         np.testing.assert_array_equal(
-            got._idsorted_to_bucket_pos,
-            ref._idsorted_to_bucket_pos,
-            err_msg=f"{ctx}:idsorted",
+            got.bucket_uniques, ref.bucket_uniques, err_msg=f"{ctx}:uniques"
         )
+    assert got.base.keys() == ref.base.keys(), f"{ctx}:channels"
+    for name in ref.base:
+        np.testing.assert_array_equal(
+            got.base[name], ref.base[name], err_msg=f"{ctx}:base[{name}]"
+        )
+    if ref.rows_ord is None:
+        assert got.rows_ord is None, f"{ctx}:rows-none"
+    else:
+        for b, (go, ro) in enumerate(zip(got.rows_ord, ref.rows_ord)):
+            np.testing.assert_array_equal(go, ro, err_msg=f"{ctx}:rows_ord[{b}]")
+            np.testing.assert_array_equal(
+                got.rows_y[b], ref.rows_y[b], err_msg=f"{ctx}:rows_y[{b}]"
+            )
 
 
 def _preprocess_states(df, keep_last_n, lag_transforms, lags=(1,)):
@@ -306,25 +303,23 @@ def test_g2_3_suffix_invariant_global():
     trimmed = _preprocess_states(df, _R, lag_transforms)
 
     key = ("global", (), ())
-    u_agg = untrimmed[key]._ts_aggs[0]
-    t_agg = trimmed[key]._ts_aggs[0]
+    u_base = untrimmed[key].base
+    t_base = trimmed[key].base
 
-    full_len = untrimmed[key].next_time_index_by_bucket[0]
+    full_len = untrimmed[key].width
     assert full_len == T  # global calendar is the 20 distinct timestamps
     # W_state (= lag+window) <= _R, so retention == keep_last_n == _R
-    assert trimmed[key].next_time_index_by_bucket[0] == _R
+    assert trimmed[key].width == _R
     cutoff = full_len - _R
 
-    np.testing.assert_array_equal(
-        t_agg.unique_times, u_agg.unique_times[cutoff:] - cutoff
-    )
-    for name in ("sums", "counts", "sum_sq", "mins", "maxs"):
+    for name in u_base:
         np.testing.assert_array_equal(
-            getattr(t_agg, name), getattr(u_agg, name)[cutoff:], err_msg=name
+            t_base[name], u_base[name][:, cutoff:], err_msg=name
         )
-    # flat arrays keep exactly the suffix of distinct timestamps
-    assert np.unique(trimmed[key].time).size == _R
-    assert trimmed[key].time.min() == T - _R + 1
+    # the stored block is exactly the suffix of the calendar, while the absolute
+    # ordinal counter keeps running so future windows still line up
+    assert trimmed[key].width == _R
+    assert trimmed[key].n_ordinals == T
 
 
 # --------------------------------------------------------------------------- #
@@ -342,14 +337,15 @@ def test_g2_4_expanding_and_ewm_states_keep_full_history():
     states = _preprocess_states(df, 3, lag_transforms)  # tiny keep_last_n
 
     exp_state = states[("global", (), ())]
-    assert exp_state.next_time_index_by_bucket[0] == T  # untouched
-    assert len(exp_state._ts_aggs[0].sums) == T
+    assert exp_state.width == T  # untouched
+    assert exp_state.base["sum"].shape[1] == T
 
     ewm_state = states[("groupby", ("brand",), ())]
     # every brand bucket keeps its full per-group calendar
-    for bid, nxt in ewm_state.next_time_index_by_bucket.items():
+    for bid in range(ewm_state.n_buckets):
+        nxt = ewm_state.width
         assert nxt == T
-        assert len(ewm_state._ts_aggs[bid].sums) == T
+        assert ewm_state.base["sum"].shape[1] == T
 
 
 def test_g2_4_mixed_finite_and_unbounded_state_not_trimmed():
@@ -366,8 +362,8 @@ def test_g2_4_mixed_finite_and_unbounded_state_not_trimmed():
     }
     states = _preprocess_states(df, 3, lag_transforms)
     state = states[("global", (), ())]  # both transforms share this key
-    assert state.next_time_index_by_bucket[0] == T
-    assert len(state._ts_aggs[0].sums) == T
+    assert state.width == T
+    assert state.base["sum"].shape[1] == T
 
 
 def test_g2_4_offset_and_combine_respect_inner_transform():
@@ -378,7 +374,7 @@ def test_g2_4_offset_and_combine_respect_inner_transform():
 
     finite = {1: [Offset(RollingMean(3, global_=True), 1)]}
     state = _preprocess_states(df, _R, finite)[("global", (), ())]
-    assert state.next_time_index_by_bucket[0] == _R  # trimmed
+    assert state.width == _R  # trimmed
 
     unbounded = {
         1: [
@@ -390,4 +386,4 @@ def test_g2_4_offset_and_combine_respect_inner_transform():
         ]
     }
     state = _preprocess_states(df, 3, unbounded)[("global", (), ())]
-    assert state.next_time_index_by_bucket[0] == T  # not trimmed
+    assert state.width == T  # not trimmed
