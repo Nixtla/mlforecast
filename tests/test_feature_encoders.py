@@ -159,6 +159,70 @@ def test_polars_target_encoder_uses_full_training_category_means():
     np.testing.assert_allclose(future["category__mean"], [20.0, 140 / 3])
 
 
+def test_polars_target_encoder_defaults_to_dropping_source_columns():
+    encoded = PolarsTargetEncoder(["category"], smoothing=0.0).fit_transform(
+        pl.DataFrame({"category": ["a", "a"]}), np.array([1.0, 3.0])
+    )
+
+    assert encoded.columns == ["category__mean"]
+
+
+def test_polars_target_encoder_uses_category_encoders_sigmoid_regularization():
+    X = pl.DataFrame({"category": ["rare", "common", "common", "common"]})
+    y = np.array([0.0, 8.0, 10.0, 12.0])
+    encoder = PolarsTargetEncoder(
+        ["category"], min_samples_leaf=2, smoothing=1.0, drop_original=False
+    )
+
+    encoded = encoder.fit_transform(X, y)["category__mean"]
+    global_mean = y.mean()
+    rare_weight = 1 / (1 + np.exp(1))
+    common_weight = 1 / (1 + np.exp(-1))
+    expected = [
+        global_mean * (1 - rare_weight),
+        global_mean * (1 - common_weight) + 10 * common_weight,
+    ]
+
+    np.testing.assert_allclose(
+        encoded, [expected[0], expected[1]] * 1 + [expected[1]] * 2
+    )
+
+
+@pytest.mark.parametrize(
+    ("handle_missing", "handle_unknown", "expected"),
+    [
+        ("value", "value", [2.0, 2.0]),
+        ("return_nan", "return_nan", [np.nan, np.nan]),
+    ],
+)
+def test_polars_target_encoder_controls_missing_and_unknown_values(
+    handle_missing, handle_unknown, expected
+):
+    encoder = PolarsTargetEncoder(
+        ["category"],
+        smoothing=0.0,
+        handle_missing=handle_missing,
+        handle_unknown=handle_unknown,
+        drop_original=False,
+    )
+    encoder.fit_transform(pl.DataFrame({"category": ["a", "a"]}), np.array([1.0, 3.0]))
+
+    encoded = encoder.transform(pl.DataFrame({"category": [None, "new"]}))
+
+    np.testing.assert_allclose(encoded["category__mean"], expected, equal_nan=True)
+
+
+def test_polars_target_encoder_errors_for_missing_and_unknown_values():
+    missing = PolarsTargetEncoder(["category"], handle_missing="error")
+    with pytest.raises(ValueError, match="Missing values"):
+        missing.fit_transform(pl.DataFrame({"category": [None]}), np.array([1.0]))
+
+    unknown = PolarsTargetEncoder(["category"], handle_unknown="error")
+    unknown.fit_transform(pl.DataFrame({"category": ["a"]}), np.array([1.0]))
+    with pytest.raises(ValueError, match="Unknown categories"):
+        unknown.transform(pl.DataFrame({"category": ["new"]}))
+
+
 def test_polars_target_encoder_smooths_towards_global_training_mean():
     X = pl.DataFrame(
         {
@@ -167,7 +231,7 @@ def test_polars_target_encoder_smooths_towards_global_training_mean():
         }
     )
     encoded = PolarsTargetEncoder(
-        ["category", "division"], smoothing=2.0, prior=0.0
+        ["category", "division"], min_samples_leaf=2, smoothing=2.0, prior=0.0
     ).fit_transform(
         X,
         np.array([10.0, 20.0, 30.0, 40.0]),
@@ -233,7 +297,7 @@ def test_polars_target_encoder_supports_as_numpy():
     assert fcst.predict(1).shape == (1, 3)
 
 
-def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
+def test_polars_target_encoder_fills_missing_categories_with_global_mean():
     encoder = PolarsTargetEncoder(["category"], smoothing=0.0, prior=0.0)
     encoded = encoder.fit_transform(
         pl.DataFrame({"category": [None, None, "a"]}),
@@ -241,7 +305,7 @@ def test_polars_target_encoder_encodes_null_categories_as_a_seen_category():
     )
 
     assert encoded["category__mean"].null_count() == 0
-    np.testing.assert_allclose(encoded["category__mean"], [1.5, 1.5, 3.0])
+    np.testing.assert_allclose(encoded["category__mean"], [2.0, 2.0, 3.0])
 
 
 def test_target_encoder_null_category_is_encoded_at_fit_time():

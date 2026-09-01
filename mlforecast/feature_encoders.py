@@ -205,22 +205,23 @@ class PolarsOneHotEncoder(_PolarsEncoder):
 
 
 class PolarsTargetEncoder:
-    """Smoothed target encoding for Polars dataframes.
-
-    Training and future rows are encoded with category statistics fit on the
-    complete training data. The encoder adds ``{column}__mean`` columns and
-    leaves source columns unchanged by default.
-    """
+    """Category-encoders-style smoothed target encoding for Polars dataframes."""
 
     def __init__(
         self,
         columns: Iterable[str],
         smoothing: float = 20.0,
-        drop_original: bool = False,
+        min_samples_leaf: int = 20,
+        handle_missing: str = "value",
+        handle_unknown: str = "value",
+        drop_original: bool = True,
         prior: float = 0.0,
     ):
         self.columns = list(columns)
         self.smoothing = smoothing
+        self.min_samples_leaf = min_samples_leaf
+        self.handle_missing = handle_missing
+        self.handle_unknown = handle_unknown
         self.drop_original = drop_original
         self.prior = prior
 
@@ -324,27 +325,46 @@ class PolarsTargetEncoder:
             raise TypeError("PolarsTargetEncoder requires a polars DataFrame.")
         if len(X) != len(y):
             raise ValueError("X and y must have the same length.")
+        valid_handling = {"value", "return_nan", "error"}
+        if self.handle_missing not in valid_handling:
+            raise ValueError("handle_missing must be 'value', 'return_nan' or 'error'.")
+        if self.handle_unknown not in valid_handling:
+            raise ValueError("handle_unknown must be 'value', 'return_nan' or 'error'.")
+        if self.smoothing < 0:
+            raise ValueError("smoothing must be non-negative.")
+        if self.handle_missing == "error" and any(
+            X.get_column(column).null_count() for column in self.columns
+        ):
+            raise ValueError("Missing values found in encoded columns.")
 
         self.global_mean_ = float(np.mean(y))
         frame = X.with_columns(pl.Series("__encoder_target", y))
         self.mappings_ = {}
         for column in self.columns:
-            self.mappings_[column] = (
-                frame.group_by(column)
+            stats = (
+                frame.filter(pl.col(column).is_not_null())
+                .group_by(column)
                 .agg(
-                    pl.col("__encoder_target").sum().alias("__sum"),
+                    pl.col("__encoder_target").mean().alias("__mean"),
                     pl.len().alias("__count"),
                 )
-                .with_columns(
-                    (
-                        (pl.col("__sum") + self.smoothing * self.global_mean_)
-                        / (pl.col("__count") + self.smoothing)
-                    )
-                    .cast(pl.Float32)
-                    .alias(f"{column}__mean")
-                )
-                .select(column, f"{column}__mean")
             )
+            if self.smoothing == 0:
+                encoded_value = pl.col("__mean")
+            else:
+                weight = 1 / (
+                    1
+                    + (
+                        (self.min_samples_leaf - pl.col("__count").cast(pl.Float64))
+                        / self.smoothing
+                    ).exp()
+                )
+                encoded_value = (
+                    self.global_mean_ * (1 - weight) + pl.col("__mean") * weight
+                )
+            self.mappings_[column] = stats.with_columns(
+                encoded_value.cast(pl.Float32).alias(f"{column}__mean")
+            ).select(column, f"{column}__mean")
         return self.transform(X)
 
         # Retained below temporarily while the old ordered implementation is
@@ -495,9 +515,32 @@ class PolarsTargetEncoder:
             raise TypeError("PolarsTargetEncoder requires a polars DataFrame.")
         out = X.with_row_index("__encoder_row")
         for column, mapping in self.mappings_.items():
-            out = out.join(mapping, on=column, how="left", nulls_equal=True)
+            if self.handle_missing == "error" and out[column].null_count():
+                raise ValueError("Missing values found in encoded columns.")
+            out = out.join(mapping, on=column, how="left", maintain_order="left")
+            encoded_name = f"{column}__mean"
+            if (
+                self.handle_unknown == "error"
+                and out.filter(
+                    pl.col(column).is_not_null() & pl.col(encoded_name).is_null()
+                ).height
+            ):
+                raise ValueError("Unknown categories found in encoded columns.")
+            missing_value = (
+                pl.lit(self.global_mean_)
+                if self.handle_missing == "value"
+                else pl.lit(None, dtype=pl.Float32)
+            )
+            known_or_unknown = (
+                pl.col(encoded_name).fill_null(self.global_mean_)
+                if self.handle_unknown == "value"
+                else pl.col(encoded_name)
+            )
             out = out.with_columns(
-                pl.col(f"{column}__mean").fill_null(self.global_mean_)
+                pl.when(pl.col(column).is_null())
+                .then(missing_value)
+                .otherwise(known_or_unknown)
+                .alias(encoded_name)
             )
         out = out.sort("__encoder_row").drop("__encoder_row")
         if self.drop_original:
