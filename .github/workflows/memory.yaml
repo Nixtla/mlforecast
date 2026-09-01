@@ -1,0 +1,99 @@
+name: memory
+
+# On request only: comment `/memory` on a PR to compare its peak memory against
+# main. Two full runs of the suite is too slow to put on every PR, and most PRs
+# have no reason to care.
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pooled-memory:
+    # `issue_comment` also fires on plain issues, so the PR check is required.
+    # The association check matters more: this runs the PR's own code with a
+    # token that can write to pull requests, so only people with repo access may
+    # trigger it.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/memory') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # the run isn't linked from the PR, so acknowledge the comment
+      - name: React to the comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              ...context.repo, comment_id: context.payload.comment.id, content: 'eyes',
+            });
+
+      # issue_comment checks out the default branch, so ask for the PR explicitly
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+          # the base commit has to be reachable for the comparison below
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # 7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # peak RSS per pooled config, one spawned process each; reported, never asserted
+      - name: Measure this PR
+        run: MLF_MEM_JSON=mem_pr.json uv run pytest tests/mem_pooled.py --no-cov -s
+
+      # mlforecast is installed editable, so swapping the package source swaps the
+      # library under an unchanged harness -- which is what makes the two runs
+      # comparable, and works even when the base has no tests/mem_pooled.py
+      - name: Measure main
+        run: |
+          base=$(git merge-base origin/main HEAD)
+          echo "comparing against $base"
+          git checkout "$base" -- mlforecast/
+          # a base too old for this harness must not fail the run
+          MLF_MEM_JSON=mem_base.json uv run pytest tests/mem_pooled.py --no-cov -s || true
+          git checkout HEAD -- mlforecast/
+
+      - name: Compare
+        run: uv run python tests/mem_compare.py mem_base.json mem_pr.json > report.md
+
+      - name: Post the report
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('report.md', 'utf8');
+            const marker = '<!-- pooled-memory-report -->';
+            const {owner, repo} = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments, {owner, repo, issue_number}
+            );
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment(
+                {owner, repo, comment_id: existing.id, body}
+              );
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
