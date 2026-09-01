@@ -1,14 +1,14 @@
 name: memory
 
-# On request only: comment `/memory` on a PR to compare its peak memory against
-# main. Two full runs of the suite is too slow to put on every PR, and most PRs
-# have no reason to care.
+# On request only: add the `memory-profile` label to a PR to compare its peak memory
+# against main.
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize, reopened]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -16,32 +16,14 @@ permissions:
 
 jobs:
   pooled-memory:
-    # `issue_comment` also fires on plain issues, so the PR check is required.
-    # The association check matters more: this runs the PR's own code with a
-    # token that can write to pull requests, so only people with repo access may
-    # trigger it.
-    if: >-
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/memory') &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    if: contains(github.event.pull_request.labels.*.name, 'memory-profile')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      # the run isn't linked from the PR, so acknowledge the comment
-      - name: React to the comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              ...context.repo, comment_id: context.payload.comment.id, content: 'eyes',
-            });
-
-      # issue_comment checks out the default branch, so ask for the PR explicitly
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/merge
           # the base commit has to be reachable for the comparison below
           fetch-depth: 0
 
@@ -67,7 +49,7 @@ jobs:
       # comparable, and works even when the base has no tests/mem_pooled.py
       - name: Measure main
         run: |
-          base=$(git merge-base origin/main HEAD)
+          base=$(git merge-base ${{ github.event.pull_request.base.sha }} HEAD)
           echo "comparing against $base"
           git checkout "$base" -- mlforecast/
           # a base too old for this harness must not fail the run
@@ -77,7 +59,10 @@ jobs:
       - name: Compare
         run: uv run python tests/mem_compare.py mem_base.json mem_pr.json > report.md
 
+      # a fork PR's token is read-only, so this step is allowed to fail; the
+      # report is in the job summary either way
       - name: Post the report
+        continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
