@@ -52,9 +52,17 @@ jobs:
         run: |
           base=$(git merge-base ${{ github.event.pull_request.base.sha }} HEAD)
           echo "comparing against $base"
-          git checkout "$base" -- mlforecast/
-          # a base too old for this harness must not fail the run
-          MLF_MEM_JSON=mem_base.json uv run pytest tests/mem_pooled.py --no-cov -s || true
+          # a base too old for this harness must not fail the run, so both the
+          # checkout and the measurement are guarded; the PR tree is restored either way
+          if git checkout "$base" -- mlforecast/; then
+            # `checkout <sha> -- path` rewrites the files the base has but leaves the
+            # ones the PR adds, which would put PR code in the base measurement
+            git diff --no-renames --name-only --diff-filter=A "$base" HEAD -- mlforecast/ \
+              | xargs -r rm -f
+            MLF_MEM_JSON=mem_base.json uv run pytest tests/mem_pooled.py --no-cov -s || true
+          else
+            echo "::warning::mlforecast/ is not restorable from $base, skipping the base run"
+          fi
           git checkout HEAD -- mlforecast/
 
       - name: Compare

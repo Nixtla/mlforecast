@@ -68,8 +68,9 @@ def test_pooled_update(benchmark, series, config):
     fcst = make_forecast(config, with_model=True)
     fcst.fit(head, static_features=["brand"], dropna=False)
 
-    def run():
-        # deep-copied so each round starts from the fitted state
-        copy.deepcopy(fcst).update(tail)
+    def setup():
+        # `update` mutates the fitted state, so each round needs its own copy of it;
+        # made here, untimed, so the delta is the update and not the copy
+        return (copy.deepcopy(fcst), tail), {}
 
-    benchmark(run)
+    benchmark.pedantic(lambda f, new: f.update(new), setup=setup)
