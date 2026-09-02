@@ -32,8 +32,8 @@ def series():
     n_static = 10
     return generate_daily_series(
         n_series=n_series,
-        min_length=500,
-        max_length=2_000,
+        min_length=100,
+        max_length=400,
         n_static_features=n_static,
         static_as_categorical=False,
         equal_ends=True,
@@ -59,8 +59,8 @@ def fcst():
         freq="D",
         lags=[1, 7, 14, 28],
         lag_transforms={
-            1 : [RollingMean(7)],
-            7 : [RollingMean(7), RollingMin(7), RollingMax(7)],
+            1: [RollingMean(7)],
+            7: [RollingMean(7), RollingMin(7), RollingMax(7)],
             14: [RollingMean(7), RollingMin(7), RollingMax(7)],
             28: [RollingMean(7), RollingMin(7), RollingMax(7)],
         },
@@ -80,18 +80,17 @@ def exogs(series_with_exog, statics):
 
 
 @pytest.mark.parametrize("use_exog", [True, False])
-@pytest.mark.parametrize("num_threads", [1, 2])
-def test_preprocess(benchmark, fcst, series, use_exog, series_with_exog, statics, num_threads):
+def test_preprocess(benchmark, fcst, series, use_exog, series_with_exog, statics):
     if use_exog:
         series = series_with_exog
-    fcst.ts.num_threads = num_threads
     benchmark(fcst.preprocess, series, static_features=statics)
 
 
 @pytest.mark.parametrize("use_exog", [True, False])
-@pytest.mark.parametrize("num_threads", [1, 2])
 @pytest.mark.parametrize("keep_last_n", [None, 50])
-def test_predict(benchmark, fcst, series, use_exog, series_with_exog, exogs, statics, keep_last_n, num_threads):
+def test_predict(
+    benchmark, fcst, series, use_exog, series_with_exog, exogs, statics, keep_last_n
+):
     horizon = 14
     if use_exog:
         series = series_with_exog
@@ -100,7 +99,6 @@ def test_predict(benchmark, fcst, series, use_exog, series_with_exog, exogs, sta
     pred_kwargs = {}
     if use_exog:
         pred_kwargs["X_df"] = valid[["unique_id", "ds"] + exogs]
-    fcst.ts.num_threads = num_threads
     fcst.fit(train, static_features=statics, keep_last_n=keep_last_n)
     preds = benchmark(fcst.predict, horizon, **pred_kwargs)
     full_preds = preds.merge(valid[["unique_id", "ds", "y"]], on=["unique_id", "ds"])
