@@ -23,8 +23,8 @@ from tests._pooled_common import (
 )
 
 # Modest by default: CodSpeed simulation is slow and differences still show.
-N_SERIES = int(os.environ.get("MLF_BENCH_SERIES", 300))
-N_TIMES = int(os.environ.get("MLF_BENCH_TIMES", 300))
+N_SERIES = int(os.environ.get("MLF_BENCH_SERIES", 150))
+N_TIMES = int(os.environ.get("MLF_BENCH_TIMES", 150))
 
 # the slowest case per round, so only the cheapest few configs run it
 UPDATE_CONFIGS = [c for c in CONFIGS if not c.needs_promo][:4]
