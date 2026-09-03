@@ -302,11 +302,15 @@ class _MeanKernel(_PooledKernel):
     channels = ("sum", "count")
 
     def combine(self, res, k):
-        n = self._n_obs(res, k)
-        ok = (n >= self.min_samples()) & (res["count"] > 0)
+        # inline rather than named so the observation count, a full block, is
+        # freed at the comparison instead of living to the end of the call
+        ok = (self._n_obs(res, k) >= self.min_samples()) & (res["count"] > 0)
         out = np.full(res["sum"].shape, np.nan)
+        # `out` starts as nan and `where=ok` writes nowhere else, so it already
+        # carries the nans a trailing ``np.where`` would add -- at one block per
+        # call, which is a tenth of the fit-time transient on a wide state
         np.divide(res["sum"], res["count"], out=out, where=ok)
-        return np.where(ok, out, np.nan)
+        return out
 
 
 class _StdKernel(_PooledKernel):
@@ -314,14 +318,22 @@ class _StdKernel(_PooledKernel):
 
     def combine(self, res, k):
         n = self._n_obs(res, k)
-        s1 = k * res["sum"]
-        s2 = k * res["sumsq"]
         ok = (n >= max(self.min_samples(), 2.0)) & (n > 1)
-        safe_n = np.where(ok, n, 1.0)
-        var = (s2 - (s1 * s1) / safe_n) / np.where(ok, safe_n - 1.0, 1.0)
+        # 2.0 keeps ``safe_n - 1`` non-zero where ~ok; those cells are nan'd below
+        safe_n = np.where(ok, n, 2.0)
+        s1 = k * res["sum"]
+        var = k * res["sumsq"]
+        # accumulated in place: each temporary here is a full (bucket, cell) block
+        s1 *= s1
+        s1 /= safe_n
+        var -= s1
+        safe_n -= 1.0
+        var /= safe_n
         # tiny negatives are float cancellation, not real variance
-        var = np.where(var < 0, 0.0, var)
-        return np.where(ok, np.sqrt(var), np.nan)
+        np.clip(var, 0.0, None, out=var)
+        np.sqrt(var, out=var)
+        var[~ok] = np.nan
+        return var
 
 
 class _MinKernel(_PooledKernel):
@@ -473,7 +485,7 @@ class LagK(_PooledKernel):
         ok = (self._n_obs(res, k) >= 1.0) & (res["count"] > 0)
         out = np.full(res["sum"].shape, np.nan)
         np.divide(res["sum"], res["count"], out=out, where=ok)
-        return np.where(ok, out, np.nan)
+        return out
 
 
 class EwmK(_PooledKernel):
