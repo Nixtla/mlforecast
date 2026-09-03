@@ -92,6 +92,19 @@ CONFIGS = [
         True,
     ),
     Config(
+        "partition_expanding",
+        lambda: [ExpandingMean(partition_by=["promo"])],
+        True,
+    ),
+    Config(
+        "mixed_partition_shared",
+        lambda: [
+            RollingMean(7, partition_by=["promo"]),
+            ExpandingMean(partition_by=["promo"]),
+        ],
+        True,
+    ),
+    Config(
         "global_rolling_quantile",
         lambda: [RollingQuantile(p=0.5, window_size=7, global_=True)],
         False,

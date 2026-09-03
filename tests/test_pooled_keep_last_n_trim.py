@@ -47,8 +47,10 @@ from mlforecast.lag_transforms import (
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
     SeasonalRollingMean,
+    SeasonalRollingQuantile,
 )
 
 ID, TIME, TARGET = "unique_id", "ds", "y"
@@ -611,3 +613,53 @@ def test_g2_6_ewm_below_retention_fails_loudly():
     state.trim_to_last(1)  # lag=3 needs 3
     with pytest.raises(RuntimeError, match="trimmed below its retention"):
         state.update(leaf._pooled_kernel, leaf._pooled_inner)
+
+
+# --------------------------------------------------------------------------- #
+# G2.7 -- row-gathering kernels are trimmed on the same reach they read.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "make_tfm, reach",
+    [
+        # groupby, not global_, so `brand` is auto-dropped as auxiliary rather
+        # than reaching the model as a string feature
+        (lambda: RollingQuantile(p=0.5, window_size=4, groupby=["brand"]), 4),
+        (
+            lambda: SeasonalRollingQuantile(
+                p=0.5, season_length=3, window_size=2, groupby=["brand"]
+            ),
+            4,
+        ),
+    ],
+    ids=["rolling_quantile", "seasonal_rolling_quantile"],
+)
+def test_g2_7_bounded_row_kernels_trim_to_their_gather_reach(make_tfm, reach):
+    """These re-gather raw rows, but over a bounded window, so they do trim.
+
+    `trim_to_last` drops rows on the same absolute-ordinal cutoff as the
+    channels, so the retention has to cover exactly the oldest ordinal the
+    gather reaches -- one short and the quantile would silently be taken over
+    fewer observations.
+    """
+    T = 20
+    df = _make_panel(T)
+    h = 4
+    X_df = _future_X(h)
+
+    assert make_tfm()._set_core_tfm(1)._pooled_retention == reach
+    state = _preprocess_states(df, 1, {1: [make_tfm()]})[("groupby", ("brand",), ())]
+    assert state.width == reach  # keep_last_n=1 is below it; the floor holds
+
+    preds = {}
+    for tag, kln in [("trimmed", 1), ("full", _NO_TRIM)]:
+        fcst = _build_fcst({1: [make_tfm()]})
+        fcst.fit(
+            df,
+            id_col=ID,
+            time_col=TIME,
+            target_col=TARGET,
+            static_features=["brand"],
+            keep_last_n=kln,
+        )
+        preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
+    np.testing.assert_allclose(preds["trimmed"], preds["full"], rtol=1e-9, atol=1e-9)
