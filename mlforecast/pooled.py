@@ -157,6 +157,111 @@ def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
 
 
 # %% cell aggregates
+#: what an unoccupied cell holds per channel, so coreforecast never sees a null;
+#: cells with no data are masked out later using the observation count
+_FILL = {"min": np.inf, "max": -np.inf}
+
+
+class _CellStore:
+    """Occupied ``(bucket, ordinal)`` cells of the fit panel, bucket-major.
+
+    The dense ``(n_buckets, width)`` block has a cell at every calendar position
+    of every bucket whether rows land there or not; a partitioned panel occupies
+    ``1 / cardinality`` of it. Holding only the occupied cells keeps the fit-time
+    store ``O(n_rows)`` however wide the calendar, and any column range of the
+    dense block is scattered out of it on demand.
+
+    The per-cell aggregates come from one ``bincount`` over the cell index,
+    which accumulates in row order exactly as a bincount over the flat
+    ``bucket * width + ordinal`` index does, so a scattered block is
+    bit-identical to one built dense.
+    """
+
+    def __init__(
+        self,
+        bucket_id: np.ndarray,
+        ordinal: np.ndarray,
+        y: np.ndarray,
+        n_buckets: int,
+        width: int,
+        names: Sequence[str],
+    ):
+        self.n_buckets = n_buckets
+        self.width = width
+        flat = bucket_id.astype(np.int64) * width + ordinal
+        keys, cell = np.unique(flat, return_inverse=True)
+        self.cell_of_row = cell.ravel().astype(np.int64, copy=False)
+        self.bucket = keys // width
+        self.ordinal = keys - self.bucket * width
+        n = keys.size
+        valid = ~np.isnan(y)
+        cell_v = self.cell_of_row[valid]
+        y_v = y[valid]
+        self.chan: Dict[str, np.ndarray] = {}
+        if "count" in names:
+            self.chan["count"] = np.bincount(cell_v, minlength=n).astype(np.float64)
+        if "sum" in names:
+            self.chan["sum"] = np.bincount(cell_v, weights=y_v, minlength=n)
+        if "sumsq" in names:
+            self.chan["sumsq"] = np.bincount(cell_v, weights=y_v * y_v, minlength=n)
+        if "min" in names:
+            buf = np.full(n, np.inf)
+            np.minimum.at(buf, cell_v, y_v)
+            self.chan["min"] = buf
+        if "max" in names:
+            buf = np.full(n, -np.inf)
+            np.maximum.at(buf, cell_v, y_v)
+            self.chan["max"] = buf
+        self._by_ordinal: Optional[Tuple[np.ndarray, np.ndarray]] = None
+
+    @property
+    def size(self) -> int:
+        return self.bucket.size
+
+    @property
+    def nbytes(self) -> int:
+        arrays = [self.cell_of_row, self.bucket, self.ordinal, *self.chan.values()]
+        return sum(a.nbytes for a in arrays)
+
+    def cells_in(self, lo: int, hi: int) -> np.ndarray:
+        """Indices of the cells whose ordinal lies in ``[lo, hi)``.
+
+        The store is bucket-major, so a column range is not a slice of it; one
+        stable argsort by ordinal, cached, turns every range into one.
+        """
+        if self._by_ordinal is None:
+            perm = np.argsort(self.ordinal, kind="stable")
+            offsets = np.searchsorted(self.ordinal[perm], np.arange(self.width + 1))
+            self._by_ordinal = (perm, offsets)
+        perm, offsets = self._by_ordinal
+        return perm[offsets[lo] : offsets[hi]]
+
+    def dense(
+        self, lo: int, hi: int, names: Optional[Collection[str]] = None
+    ) -> Dict[str, np.ndarray]:
+        """Dense ``(n_buckets, hi - lo)`` block per channel over columns ``[lo, hi)``."""
+        cells = self.cells_in(lo, hi)
+        b = self.bucket[cells]
+        o = self.ordinal[cells] - lo
+        out: Dict[str, np.ndarray] = {}
+        for name in names or self.chan:
+            block = np.full((self.n_buckets, hi - lo), _FILL.get(name, 0.0))
+            block[b, o] = self.chan[name][cells]
+            out[name] = block
+        return out
+
+    def gather(
+        self, block: np.ndarray, lo: int, cells: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        """Per-cell values read off a block whose first column is ``lo``."""
+        if cells is None:
+            return block[self.bucket, self.ordinal - lo]
+        return block[self.bucket[cells], self.ordinal[cells] - lo]
+
+    def row_values(self, cell_values: np.ndarray) -> np.ndarray:
+        return cell_values[self.cell_of_row]
+
+
 def _build_cells(
     bucket_id: np.ndarray,
     ordinal: np.ndarray,
@@ -165,42 +270,8 @@ def _build_cells(
     width: int,
     names: Sequence[str],
 ) -> Dict[str, np.ndarray]:
-    """Aggregate rows into a dense ``(n_buckets, width)`` array per requested channel.
-
-    A single ``bincount`` over the flat ``bucket * width + ordinal`` index does
-    the whole panel in one O(n_rows) pass -- no sort, no group-by, no join.
-    """
-    size = n_buckets * width
-    flat = bucket_id.astype(np.int64) * width + ordinal
-    valid = ~np.isnan(y)
-    flat_v = flat[valid]
-    y_v = y[valid]
-    out: Dict[str, np.ndarray] = {}
-    if "count" in names:
-        out["count"] = (
-            np.bincount(flat_v, minlength=size)
-            .astype(np.float64)
-            .reshape(n_buckets, width)
-        )
-    if "sum" in names:
-        out["sum"] = np.bincount(flat_v, weights=y_v, minlength=size).reshape(
-            n_buckets, width
-        )
-    if "sumsq" in names:
-        out["sumsq"] = np.bincount(flat_v, weights=y_v * y_v, minlength=size).reshape(
-            n_buckets, width
-        )
-    # inf fills keep the channels NaN-free so coreforecast never sees a null;
-    # cells with no data are masked out later using the observation count.
-    if "min" in names:
-        buf = np.full(size, np.inf)
-        np.minimum.at(buf, flat_v, y_v)
-        out["min"] = buf.reshape(n_buckets, width)
-    if "max" in names:
-        buf = np.full(size, -np.inf)
-        np.maximum.at(buf, flat_v, y_v)
-        out["max"] = buf.reshape(n_buckets, width)
-    return out
+    """Aggregate rows into a dense ``(n_buckets, width)`` array per requested channel."""
+    return _CellStore(bucket_id, ordinal, y, n_buckets, width, names).dense(0, width)
 
 
 _ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
@@ -395,7 +466,10 @@ class _PooledKernel:
         ``min_samples=1`` gate and blank out a real value. ``S`` is an integer
         and the round trip is accurate to a few ULP, so rounding recovers it.
         """
-        return np.rint(k * res["count"])
+        n = k * res["count"]
+        # in place: on a wide state this is a full block, and the rounded copy
+        # would be a second one
+        return np.rint(n, out=n)
 
 
 class _MeanKernel(_PooledKernel):
@@ -899,6 +973,11 @@ class PooledState:
     Layout is a dense ``(n_buckets, width)`` block per aggregate over the shared
     calendar, which is what makes the window a true ``RANGE`` window. Buckets
     that start late carry ``count == 0`` cells and so contribute nothing.
+
+    At fit the block is not built up front: `build` keeps a `_CellStore` of the
+    occupied cells, `fit_values` scatters column ranges out of it, and the dense
+    block is only derived when something reads it whole -- or, after
+    `trim_to_last`, at the width the predict loop keeps.
     """
 
     def __init__(
@@ -908,16 +987,26 @@ class PooledState:
         partition_cols: List[str],
         n_buckets: int,
         n_ordinals: int,
-        base: Dict[str, np.ndarray],
+        base: Optional[Dict[str, np.ndarray]],
         series_bucket_id: np.ndarray,
         bucket_uniques: Optional[np.ndarray] = None,
+        store: Optional[_CellStore] = None,
     ):
         self.mode = mode
         self.group_cols = group_cols
         self.partition_cols = partition_cols
         self.n_buckets = n_buckets
         self.n_ordinals = n_ordinals
-        self.base = base
+        #: fit-time cell store; dropped by `finish_fit` once the features exist
+        self._store = store
+        self._base: Optional[Dict[str, np.ndarray]] = None
+        if base is not None:
+            self.base = base
+        elif store is not None:
+            self.channel_names = tuple(store.chan)
+            self._width = store.width
+        else:
+            raise ValueError("PooledState needs either `base` or `store`")
         self.series_bucket_id = series_bucket_id
         self.bucket_uniques = bucket_uniques
         self._views: Dict[str, Dict[str, np.ndarray]] = {}
@@ -930,12 +1019,6 @@ class PooledState:
         #: `rows()` stays O(1) when nothing is pending
         self._n_pending = 0
         self._rows_views: Dict[Optional[str], Any] = {}
-        #: row -> (bucket, ordinal) for the fit pass, and those rows grouped by
-        #: ordinal so a column range maps to a contiguous slice. Set by `build`,
-        #: dropped once the features exist.
-        self._fit_row_bid: Optional[np.ndarray] = None
-        self._fit_row_ord: Optional[np.ndarray] = None
-        self._fit_row_order: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
     # -- construction ----------------------------------------------------
     @classmethod
@@ -955,7 +1038,7 @@ class PooledState:
         bucket_uniques: Optional[np.ndarray] = None,
         needs_rows: bool = False,
     ) -> "PooledState":
-        base = _build_cells(
+        store = _CellStore(
             bucket_id_by_row, ordinal_by_row, y, n_buckets, n_ordinals, sorted(needed)
         )
         obj = cls(
@@ -964,9 +1047,10 @@ class PooledState:
             partition_cols=partition_cols,
             n_buckets=n_buckets,
             n_ordinals=n_ordinals,
-            base=base,
+            base=None,
             series_bucket_id=series_bucket_id,
             bucket_uniques=bucket_uniques,
+            store=store,
         )
         if needs_rows:
             obj._set_rows(bucket_id_by_row, ordinal_by_row, y, n_buckets)
@@ -986,8 +1070,32 @@ class PooledState:
         self._rows_views = {}
 
     @property
+    def base(self) -> Dict[str, np.ndarray]:
+        """Dense ``(n_buckets, width)`` block per channel.
+
+        Derived from the cell store on first use, so a fit that only ever reads
+        column ranges never pays for the full width.
+        """
+        if self._base is None:
+            assert self._store is not None
+            self._base = self._store.dense(0, self._width)
+        return self._base
+
+    @base.setter
+    def base(self, value: Dict[str, np.ndarray]) -> None:
+        self._base = value
+        self.channel_names = tuple(value)
+        self._width = next(iter(value.values())).shape[1]
+
+    @property
     def width(self) -> int:
-        return next(iter(self.base.values())).shape[1]
+        return self._width
+
+    def finish_fit(self) -> None:
+        """Materialise the predict-time block and drop the fit-time store."""
+        if self._base is None and self._store is not None:
+            self._base = self._store.dense(0, self._width)
+        self._store = None
 
     @property
     def ordinal_offset(self) -> int:
@@ -1101,7 +1209,12 @@ class PooledState:
         exactly that slice of the full collapsed view -- and skips building a
         full-width one at fit that ``trim_to_last`` would immediately discard.
         """
-        window = {name: block[:, lo:hi] for name, block in self.base.items()}
+        if self._base is None:
+            assert self._store is not None
+            want = base_channels(names, time_agg) if names else None
+            window = self._store.dense(lo, hi, want)
+        else:
+            window = {name: block[:, lo:hi] for name, block in self._base.items()}
         if time_agg is None:
             return window
         return _collapse(window, time_agg, set(names or _ALL_CHANNELS) | {"count"})
@@ -1132,48 +1245,37 @@ class PooledState:
         k = kernel.window_cells(np.arange(start, stop))[None, :]
         return kernel.combine(res, k)
 
-    def _fit_rows_by_ordinal(self) -> Tuple[np.ndarray, np.ndarray]:
-        """``(perm, offsets)`` grouping the fit rows by calendar ordinal.
-
-        ``_fit_row_ord`` follows the id-then-time row order, so it is not sorted
-        by ordinal. One stable argsort, shared by every leaf on the state, turns
-        each column range into a contiguous slice of ``perm``.
-        """
-        if self._fit_row_order is None:
-            ords = self._fit_row_ord
-            assert ords is not None
-            perm = np.argsort(ords, kind="stable")
-            offsets = np.searchsorted(ords[perm], np.arange(self.width + 1))
-            self._fit_row_order = (perm, offsets)
-        return self._fit_row_order
-
     def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """Per-row feature values at fit, without holding the whole block.
 
         The unchunked path materialises ``(n_buckets, width)`` per channel plus
-        several same-shaped temporaries inside ``combine``, scatters ``n_rows``
+        several same-shaped temporaries inside ``combine``, reads ``n_rows``
         values out of the result and drops the rest. Chunking the calendar bounds
         that at ``n_buckets x (lookback + chunk)`` for the kernels whose window
         reach is bounded and whose inners carry nothing between calls -- the set
-        ``lookback()`` is defined for.
+        ``lookback()`` is defined for -- and since each chunk is scattered out of
+        the cell store, nothing full-width is built for them at all.
         """
         self._require_untrimmed()
-        bid, ord_ = self._fit_row_bid, self._fit_row_ord
-        assert bid is not None and ord_ is not None
+        store = self._store
+        if store is None:
+            raise RuntimeError(
+                "PooledState.fit_values() needs the fit-time cell store, which "
+                "finish_fit() drops once the features exist."
+            )
         chunk = self.width
         if kernel.lookback() is not None and not kernel.primes_state:
             chunk = _chunk_cols(self.n_buckets, self.width, kernel.lookback())
         if chunk >= self.width:
-            return self.scatter(self.transform(kernel, inner), bid, ord_)
-        perm, offsets = self._fit_rows_by_ordinal()
-        out = np.full(ord_.shape, np.nan)
+            return store.row_values(store.gather(self.transform(kernel, inner), 0))
+        values = np.full(store.size, np.nan)
         for start in range(0, self.width, chunk):
             stop = min(start + chunk, self.width)
-            rows = perm[offsets[start] : offsets[stop]]
-            if rows.size:
+            cells = store.cells_in(start, stop)
+            if cells.size:
                 block = self._transform_range(kernel, inner, start, stop)
-                out[rows] = self.scatter(block, bid[rows], ord_[rows], start)
-        return out
+                values[cells] = store.gather(block, start, cells)
+        return store.row_values(values)
 
     def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """Full ``(n_buckets, width)`` feature block, priming the inner state."""
@@ -1202,13 +1304,6 @@ class PooledState:
         k = kernel.window_cells(np.array([self.n_ordinals]))[None, :]
         return kernel.combine(res, k)[:, 0]
 
-    def scatter(self, block, bucket_id_by_row, ordinal_by_row, start=0) -> np.ndarray:
-        """Read a block back onto rows. ``start`` is its first absolute column."""
-        n_cols = block.shape[1]
-        return block.ravel()[
-            bucket_id_by_row.astype(np.int64) * n_cols + (ordinal_by_row - start)
-        ]
-
     def broadcast(self, values: np.ndarray) -> np.ndarray:
         """Map per-bucket values onto series using the current assignment."""
         bid = self.series_bucket_id
@@ -1225,17 +1320,18 @@ class PooledState:
         b = bucket_ids.astype(np.int64)
         v = np.asarray(y, dtype=np.float64)
         col: Dict[str, np.ndarray] = {}
-        if "count" in self.base:
+        names = self.channel_names
+        if "count" in names:
             col["count"] = np.bincount(b, minlength=self.n_buckets).astype(np.float64)
-        if "sum" in self.base:
+        if "sum" in names:
             col["sum"] = np.bincount(b, weights=v, minlength=self.n_buckets)
-        if "sumsq" in self.base:
+        if "sumsq" in names:
             col["sumsq"] = np.bincount(b, weights=v * v, minlength=self.n_buckets)
-        if "min" in self.base:
+        if "min" in names:
             buf = np.full(self.n_buckets, np.inf)
             np.minimum.at(buf, b, v)
             col["min"] = buf
-        if "max" in self.base:
+        if "max" in names:
             buf = np.full(self.n_buckets, -np.inf)
             np.maximum.at(buf, b, v)
             col["max"] = buf
@@ -1254,6 +1350,7 @@ class PooledState:
             self.base[name] = np.concatenate(
                 [self.base[name], col[name][:, None]], axis=1
             )
+        self._width += 1
         self._extend_views(col)
         if self._pend_ord is not None and self._pend_y is not None:
             # row kernels re-gather from history, so predictions land here too;
@@ -1333,8 +1430,15 @@ class PooledState:
         """
         if n <= 0 or n >= self.width:
             return
-        for name in self.base:
-            self.base[name] = np.ascontiguousarray(self.base[name][:, -n:])
+        if self._base is None:
+            # straight from the cell store, so only the kept tail is ever built
+            assert self._store is not None
+            self._base = self._store.dense(self.width - n, self.width)
+        else:
+            for name in self._base:
+                self._base[name] = np.ascontiguousarray(self._base[name][:, -n:])
+        self._width = n
+        self._store = None
         self._views = {}
         if self.rows_ord is not None and self.rows_y is not None:
             self._flush_pending()

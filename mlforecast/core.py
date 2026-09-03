@@ -522,9 +522,7 @@ class TimeSeries:
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
         for state in getattr(self, "_pooled_states", {}).values():
-            # O(n_rows) fit-time scatter indices; not needed once features exist
-            state._fit_row_bid = state._fit_row_ord = None
-            state._fit_row_order = None
+            state.finish_fit()
 
     def _initialize_lag_transform_states(self) -> None:
         """Materialize lag transform state for subsequent update-based prediction.
@@ -891,8 +889,6 @@ class TimeSeries:
                 bucket_uniques=uniques,
                 needs_rows=needs_rows,
             )
-            state._fit_row_bid = row_bid
-            state._fit_row_ord = row_ord
             self._pooled_states[key] = state
 
     def _compute_transforms(

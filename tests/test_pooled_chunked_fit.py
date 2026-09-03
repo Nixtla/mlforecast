@@ -536,39 +536,44 @@ def test_g4_8_fit_transient_is_bounded_by_the_chunk(kernel_name, force_chunk):
     rng = np.random.default_rng(0)
     bid = rng.integers(0, n_buckets, n)
     ordi = rng.integers(0, width, n)
-    state = PooledState.build(
-        mode="global",
-        group_cols=[],
-        partition_cols=[],
-        bucket_id_by_row=bid,
-        ordinal_by_row=ordi,
-        y=rng.normal(10, 1, n),
-        n_buckets=n_buckets,
-        n_ordinals=width,
-        series_bucket_id=np.zeros(n_buckets, dtype=np.int64),
-        needed=base_channels(kernel.channels, tfm.time_agg),
-    )
-    state._fit_row_bid, state._fit_row_ord = bid, ordi
+    y = rng.normal(10, 1, n)
+
+    def build():
+        return PooledState.build(
+            mode="global",
+            group_cols=[],
+            partition_cols=[],
+            bucket_id_by_row=bid,
+            ordinal_by_row=ordi,
+            y=y,
+            n_buckets=n_buckets,
+            n_ordinals=width,
+            series_bucket_id=np.zeros(n_buckets, dtype=np.int64),
+            needed=base_channels(kernel.channels, tfm.time_agg),
+        )
 
     def peak_of(cap):
+        # a fresh state per run: once the unchunked path has derived the dense
+        # block the chunked one would slice it instead of the cell store
         force_chunk(cap)
+        state = build()
         tracemalloc.start()
         values = state.fit_values(kernel, kernel.make_inner())
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-        return peak, values
+        return peak, values, state
 
-    unchunked_peak, reference = peak_of(_UNCHUNKED)
+    unchunked_peak, reference, _ = peak_of(_UNCHUNKED)
     force_chunk(4096)  # `_chunk_cols` reads the cap, so set it before asking
     chunk = _chunk_cols(n_buckets, width, kernel.lookback())
     assert chunk < width, "the panel must be big enough to chunk"
-    chunked_peak, values = peak_of(4096)
+    chunked_peak, values, state = peak_of(4096)
 
     _assert_equivalent(reference, values, kernel_name)
 
-    # the O(n_rows) row index and the output vector are unavoidable either way;
+    # the O(n_rows) cell store and the output vector are unavoidable either way;
     # what must fall is the part that scales with the calendar
-    floor = reference.nbytes + state._fit_row_ord.nbytes + state._fit_row_bid.nbytes
+    floor = reference.nbytes + state._store.nbytes
     block_bytes = n_buckets * width * 8
     assert chunked_peak - floor < block_bytes, (
         f"chunked transient {(chunked_peak - floor) / 1e6:.1f}MB is not below one "
