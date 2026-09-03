@@ -4515,3 +4515,21 @@ def test_channels_without_time_agg_is_the_base_store():
     state = _view_state()
     assert state.channels(None) is state.base
     assert state._views == {}
+
+
+@pytest.mark.parametrize("time_agg", _TIME_AGGS_ALL)
+def test_appended_views_work_from_a_minimal_base(time_agg):
+    """A real `time_agg` state stores only `{count, <source>}`, not all five.
+
+    Every collapsed channel is derived from that pair, so the incremental
+    extension has to work off the same minimal base the state actually keeps.
+    """
+    from mlforecast.pooled import _TIME_AGG_SOURCE, base_channels
+
+    needed = base_channels(("sum", "count"), time_agg)
+    assert needed == {"count", _TIME_AGG_SOURCE[time_agg]}
+    state = _view_state(channels=tuple(sorted(needed)))
+    state.channels(time_agg)
+    state.append(np.array([4.0, 5.0]), bucket_ids=np.array([0, 2]))
+    _assert_views_fresh(state, ctx="minimal-base")
+    assert set(state.base) == needed
