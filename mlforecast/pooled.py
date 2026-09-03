@@ -162,13 +162,23 @@ def _build_cells(
     return out
 
 
-def _collapse(cells: Dict[str, np.ndarray], time_agg: str) -> Dict[str, np.ndarray]:
+_ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
+
+
+def _collapse(
+    cells: Dict[str, np.ndarray],
+    time_agg: str,
+    names: Optional[Sequence[str]] = None,
+) -> Dict[str, np.ndarray]:
     """Re-express cell aggregates as channels over the collapsed value ``v_t``.
 
     With ``time_agg`` each timestamp contributes a single value, so the channels
     become "one observation per observed timestamp".  Because the shape matches
     the row-weighted channels exactly, every kernel combine below works
     unchanged for both modes.
+
+    ``names`` limits the output to the channels a kernel actually reads; the
+    result is cached, so building all five would also keep them all alive.
     """
     counts = cells["count"]
     obs = counts > 0
@@ -183,13 +193,14 @@ def _collapse(cells: Dict[str, np.ndarray], time_agg: str) -> Dict[str, np.ndarr
     else:  # mean
         v = np.divide(cells["sum"], counts, out=np.zeros_like(cells["sum"]), where=obs)
     zero = np.zeros_like(v)
-    return {
-        "count": obs.astype(np.float64),
-        "sum": np.where(obs, v, zero),
-        "sumsq": np.where(obs, v * v, zero),
-        "min": np.where(obs, v, np.inf),
-        "max": np.where(obs, v, -np.inf),
+    builders = {
+        "count": lambda: obs.astype(np.float64),
+        "sum": lambda: np.where(obs, v, zero),
+        "sumsq": lambda: np.where(obs, v * v, zero),
+        "min": lambda: np.where(obs, v, np.inf),
+        "max": lambda: np.where(obs, v, -np.inf),
     }
+    return {name: builders[name]() for name in (names or _ALL_CHANNELS)}
 
 
 # %% kernels
@@ -506,7 +517,7 @@ class EwmK(_PooledKernel):
         return vals, obs
 
     def run_transform(self, state, st):
-        cells = state.channels(self.tfm.time_agg)
+        cells = state.channels(self.tfm.time_agg, self.channels)
         n_buckets, width = cells["count"].shape
         out = np.full((n_buckets, width), np.nan)
         s = np.zeros(n_buckets)
@@ -521,7 +532,7 @@ class EwmK(_PooledKernel):
         return out
 
     def run_update(self, state, st):
-        cells = state.channels(self.tfm.time_agg)
+        cells = state.channels(self.tfm.time_agg, self.channels)
         n_ordinals, width = state.n_ordinals, state.width
         s, started = st["s"], st["started"]
         target = n_ordinals - self.lag
@@ -852,13 +863,24 @@ class PooledState:
         return self.n_ordinals - self.width
 
     # -- views -----------------------------------------------------------
-    def channels(self, time_agg: Optional[str]) -> Dict[str, np.ndarray]:
-        """Aggregate block per channel, collapsed by ``time_agg`` if given."""
+    def channels(
+        self, time_agg: Optional[str], names: Optional[Sequence[str]] = None
+    ) -> Dict[str, np.ndarray]:
+        """Aggregate block per channel, collapsed by ``time_agg`` if given.
+
+        ``names`` is what the calling kernel reads; a cached view holding fewer
+        channels than that is widened in place, which can only happen while
+        priming (before any append) and at most once per channel.
+        """
+        if time_agg is None:
+            return self.base
+        want = set(names or _ALL_CHANNELS) | {"count"}
         view = self._views.get(time_agg)
         if view is None:
-            view = self.base if time_agg is None else _collapse(self.base, time_agg)
-            self._views[time_agg] = view
-        return view
+            self._views[time_agg] = _collapse(self.base, time_agg, want)
+        elif not want <= view.keys():
+            view.update(_collapse(self.base, time_agg, want - view.keys()))
+        return self._views[time_agg]
 
     def rows(self, b: int, time_agg: Optional[str] = None):
         """Materialised ``(ordinals, values)`` for one bucket, newest last."""
@@ -936,7 +958,7 @@ class PooledState:
             )
         if kernel.custom:
             return kernel.run_transform(self, inner["_state"])
-        cells = self.channels(kernel.tfm.time_agg)
+        cells = self.channels(kernel.tfm.time_agg, kernel.channels)
         res = {
             name: tfm.transform(self._channel_ga(cells, name)).reshape(
                 self.n_buckets, self.width
@@ -950,7 +972,7 @@ class PooledState:
         """One value per bucket for the next timestamp, advancing inner state."""
         if kernel.custom:
             return kernel.run_update(self, inner["_state"])
-        cells = self.channels(kernel.tfm.time_agg)
+        cells = self.channels(kernel.tfm.time_agg, kernel.channels)
         res = {
             name: tfm.update(self._channel_ga(cells, name)).reshape(self.n_buckets, 1)
             for name, tfm in inner.items()
@@ -1008,7 +1030,7 @@ class PooledState:
             self.base[name] = np.concatenate(
                 [self.base[name], col[name][:, None]], axis=1
             )
-        self._views = {}
+        self._extend_views(col)
         if self._pend_ord is not None and self._pend_y is not None:
             # row kernels re-gather from history, so predictions land here too;
             # never trimmed, which is why they cost O(n_rows) memory
@@ -1017,6 +1039,20 @@ class PooledState:
                 self._pend_y[bi].append(yi)
             self._n_pending += len(b)
         self.n_ordinals += 1
+
+    def _extend_views(self, col: Dict[str, np.ndarray]) -> None:
+        """Extend each cached collapsed view with the newly appended column.
+
+        ``_collapse`` is elementwise per cell, so collapsing the single new
+        column yields exactly the column a full recollapse would produce.
+        """
+        if not self._views:
+            return
+        cells = {name: values[:, None] for name, values in col.items()}
+        for time_agg, view in self._views.items():
+            new = _collapse(cells, time_agg, list(view))
+            for name in list(view):
+                view[name] = np.concatenate([view[name], new[name]], axis=1)
 
     def grow_buckets(self, new_uniques: np.ndarray) -> Optional[np.ndarray]:
         """Merge new bucket keys in, returning the old -> new id mapping.

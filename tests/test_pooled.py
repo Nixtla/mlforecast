@@ -4393,3 +4393,123 @@ def test_bucket_growth_survives_backup_restore(engine):
             ts._update_y(np.array([1.0, 2.0, 3.0, 4.0]))
             ts._update_features()
         assert all(n == state.n_buckets for n in _stateful_inner_rows(ts))
+
+
+# %% collapsed views are maintained incrementally, and only for what's read
+def _view_state(n_buckets=3, width=4, channels=("count", "sum", "sumsq", "min", "max")):
+    from mlforecast.pooled import PooledState
+
+    rng = np.random.default_rng(0)
+    base = {}
+    for name in channels:
+        arr = rng.normal(size=(n_buckets, width))
+        if name == "count":
+            arr = np.abs(np.floor(arr * 2)) + 1.0
+        base[name] = np.ascontiguousarray(arr)
+    return PooledState(
+        mode="global",
+        group_cols=[],
+        partition_cols=[],
+        n_buckets=n_buckets,
+        n_ordinals=width,
+        base=base,
+        series_bucket_id=np.arange(n_buckets),
+    )
+
+
+_TIME_AGGS_ALL = ["sum", "count", "mean", "min", "max"]
+
+
+def _assert_views_fresh(state, ctx=""):
+    """Every cached view must equal a collapse of the current base."""
+    from mlforecast.pooled import _collapse
+
+    for time_agg, view in state._views.items():
+        direct = _collapse(state.base, time_agg, list(view))
+        for name in view:
+            np.testing.assert_array_equal(
+                view[name], direct[name], err_msg=f"{ctx}:{time_agg}:{name}"
+            )
+
+
+@pytest.mark.parametrize("time_agg", _TIME_AGGS_ALL)
+def test_appended_views_match_a_full_recollapse(time_agg):
+    """`append` extends cached views instead of dropping them.
+
+    `_collapse` is elementwise per cell, so the extension must be bit-identical
+    to recollapsing the whole block -- asserted exactly, not approximately.
+    """
+    state = _view_state()
+    state.channels(time_agg)
+    for step in range(5):
+        state.append(np.array([1.0, 2.0, 3.0]), bucket_ids=np.arange(3))
+        _assert_views_fresh(state, ctx=f"step{step}")
+    assert state.width == 9
+
+
+@pytest.mark.parametrize("time_agg", _TIME_AGGS_ALL)
+def test_appended_views_handle_buckets_with_no_rows(time_agg):
+    """A bucket absent from a step collapses to the empty-cell fills.
+
+    Extending with the raw column instead of a collapsed one passes the mean
+    case and fails here, so this is the guard that matters.
+    """
+    state = _view_state()
+    view = state.channels(time_agg)
+    # only bucket 0 gets a row this step
+    state.append(np.array([5.0]), bucket_ids=np.array([0]))
+    _assert_views_fresh(state, ctx="sparse")
+    assert view["count"][1, -1] == 0.0
+    assert view["sum"][1, -1] == 0.0
+    assert view["sumsq"][1, -1] == 0.0
+    assert view["min"][1, -1] == np.inf
+    assert view["max"][1, -1] == -np.inf
+    # the divide is pre-zeroed, so an unobserved cell is 0.0, never NaN
+    assert not np.isnan(view["sum"]).any()
+
+
+def test_views_are_dropped_on_grow_trim_and_restore():
+    """The rare mutations still invalidate rather than maintain the views."""
+    state = _view_state(width=6)
+    state.bucket_uniques = np.array(["a", "b", "c"], dtype=object)
+
+    state.channels("sum")
+    state.grow_buckets(np.array(["a", "b", "c", "d"], dtype=object))
+    assert state._views == {}
+    _assert_views_fresh(state, ctx="grow")
+
+    state.channels("sum")
+    state.trim_to_last(3)
+    assert state._views == {}
+    _assert_views_fresh(state, ctx="trim")
+
+    state.channels("sum")
+    snap = state.snapshot()
+    state.append(np.array([1.0, 2.0, 3.0, 4.0]), bucket_ids=np.arange(4))
+    state.restore(snap)
+    assert state._views == {}
+    _assert_views_fresh(state, ctx="restore")
+
+
+def test_views_hold_only_the_channels_a_kernel_reads():
+    """Views are cached, so building all five would keep all five alive."""
+    state = _view_state()
+    view = state.channels("sum", ("sum", "count"))
+    assert set(view) == {"sum", "count"}
+
+    # a second kernel needing more widens the same view in place
+    widened = state.channels("sum", ("min", "count"))
+    assert widened is view
+    assert set(view) == {"sum", "count", "min"}
+    _assert_views_fresh(state, ctx="widened")
+
+    # and the widened channels keep tracking appends
+    state.append(np.array([1.0, 2.0, 3.0]), bucket_ids=np.arange(3))
+    _assert_views_fresh(state, ctx="widened+append")
+
+
+def test_channels_without_time_agg_is_the_base_store():
+    """No collapse to cache, so nothing to maintain or invalidate."""
+    state = _view_state()
+    assert state.channels(None) is state.base
+    assert state._views == {}
