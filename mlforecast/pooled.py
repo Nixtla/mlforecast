@@ -31,6 +31,7 @@ __all__ = ["PooledState"]
 from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 import coreforecast.lag_transforms as core_tfms
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 
@@ -87,11 +88,15 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
     return out
 
 
-def _join_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
-    parts = [_encode_column(a) for a in arrays]
+def _join_encoded(parts: Sequence[np.ndarray]) -> np.ndarray:
+    """Join already-encoded key columns into one key per row."""
     if len(parts) == 1:
         return parts[0]
     return np.array(["\x1f".join(t) for t in zip(*parts)], dtype=object)
+
+
+def _join_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
+    return _join_encoded([_encode_column(a) for a in arrays])
 
 
 def encode_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
@@ -100,10 +105,46 @@ def encode_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
 
 
 def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
-    """Map a set of key columns to dense bucket ids. Returns (ids, uniques)."""
-    keys = _join_keys(arrays)
-    uniques, ids = np.unique(keys, return_inverse=True)
-    return ids.astype(np.int64, copy=False), uniques
+    """Map a set of key columns to dense bucket ids. Returns (ids, uniques).
+
+    Builds one key string per distinct *combination* rather than one per row,
+    which is the difference between ``O(n_rows)`` and ``O(n_buckets)`` Python
+    string work on a partitioned panel. The columns are hash-factorized to
+    integer codes, combined as a mixed radix, and only the surviving
+    combinations are encoded and joined.
+
+    The vocabulary is still sorted in *joined-string* space, which is not the
+    same as tuple order: a key value may contain a byte below the ``\\x1f``
+    separator (``"a"`` sorts before ``"a\\nb"`` as a tuple, after it once
+    joined), so the survivors are joined first and sorted second.
+    """
+    codes: List[np.ndarray] = []
+    encoded: List[np.ndarray] = []
+    for arr in arrays:
+        col_codes, col_uniques = pd.factorize(np.asarray(arr))
+        enc = _encode_column(np.asarray(col_uniques))
+        if (col_codes < 0).any():
+            # pandas parks every missing value at -1; give it a slot of its own
+            # so it encodes to the sentinel like any other key
+            enc = np.append(enc, _NULL_KEY)
+            col_codes = np.where(col_codes < 0, len(col_uniques), col_codes)
+        codes.append(col_codes.astype(np.int64, copy=False))
+        encoded.append(enc)
+    combined = codes[0]
+    for col_codes, enc in zip(codes[1:], encoded[1:]):
+        # re-compressed every step so the radix product cannot overflow int64
+        combined = np.unique(combined * len(enc) + col_codes, return_inverse=True)[1]
+        combined = combined.ravel().astype(np.int64, copy=False)
+    combo_uniques, combo_ids = np.unique(combined, return_inverse=True)
+    combo_ids = combo_ids.ravel()
+    # one representative row per surviving combination, taken in reverse so the
+    # earliest row wins -- any row of the combination encodes the same
+    first = np.zeros(len(combo_uniques), dtype=np.int64)
+    first[combo_ids[::-1]] = np.arange(len(combo_ids))[::-1]
+    keys = _join_encoded([enc[c[first]] for c, enc in zip(codes, encoded)])
+    # sorts, and dedupes where two raw values encode alike (None beside NaN)
+    uniques, inv = np.unique(keys, return_inverse=True)
+    return inv.ravel()[combo_ids].astype(np.int64, copy=False), uniques
 
 
 def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
