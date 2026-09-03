@@ -470,6 +470,7 @@ class TimeSeries:
                 c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
                 for c in part_cols
             }
+        leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
             mode, gcols, pcols = key
             bids = None
@@ -483,7 +484,14 @@ class TimeSeries:
                     elif gcols:
                         arrays += [np.asarray(statics[c].to_numpy()) for c in gcols]
                     arrays += [part[c][:, j] for c in pcols]
-                    state.grow_buckets(np.unique(encode_keys(arrays)))
+                    remap = state.grow_buckets(np.unique(encode_keys(arrays)))
+                    if remap is not None:
+                        # growing renumbers buckets, so the per-kernel inner state
+                        # has to be permuted and extended to match
+                        for leaf in leaves_by_key.get(key, ()):
+                            leaf._pooled_kernel.remap_buckets(
+                                leaf._pooled_inner, remap, state.n_buckets
+                            )
                     bids = lookup(arrays, state.bucket_uniques)
                 state.append(per_step[:, j], bucket_ids=bids)
             if bids is not None:

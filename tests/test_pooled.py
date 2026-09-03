@@ -4216,3 +4216,180 @@ def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
     # the occurrence 2 back carries NaN, so the lookup is NaN
     ords, ys = np.array([0, 1, 2]), np.array([5.0, np.nan, 7.0])
     assert np.isnan(kernel.values_at(ords, ys, np.array([3]))[0])
+
+
+# %% bucket growth must remap per-kernel inner state
+def _stateful_inner_rows(ts):
+    """Row count of every accumulator-carrying inner, per pooled leaf."""
+    sizes = []
+    for leaves in ts._get_pooled_tfms().values():
+        for leaf in leaves:
+            for obj in leaf._pooled_inner.values():
+                stats = getattr(obj, "stats_", None)
+                if stats is not None:
+                    sizes.append(stats.shape[0])
+                elif isinstance(obj, dict) and obj.get("s") is not None:
+                    sizes.append(obj["s"].shape[0])
+    return sizes
+
+
+def _grow_setup(engine, tfm, lag, ys=(1.0, 10.0, 100.0), new_y=1000.0, new_brand="a0"):
+    """Fit on brands b1/b2, then update adding a series in `new_brand`.
+
+    `new_brand` sorts before the existing keys, so absorbing it renumbers the
+    existing buckets -- a genuine permutation, not just an append.
+    """
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a", "b", "b", "c", "c"],
+            "ds": [1, 2, 1, 2, 1, 2],
+            "y": [ys[0], ys[0] + 1, ys[1], ys[1] + 1, ys[2], ys[2] + 1],
+            "brand": ["b1", "b1", "b1", "b1", "b2", "b2"],
+        },
+    )
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    update = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "b", "c", "d"],
+            "ds": [3, 3, 3, 3],
+            "y": [ys[0] + 2, ys[1] + 2, ys[2] + 2, new_y],
+            "brand": ["b1", "b1", "b2", new_brand],
+        },
+    )
+    ts.update(update)
+    return ts
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", _LAGS)
+@pytest.mark.parametrize(
+    "tfm_factory",
+    [
+        lambda: ExpandingMean(groupby=["brand"]),
+        lambda: ExpandingMin(groupby=["brand"]),
+        lambda: ExpandingMax(groupby=["brand"]),
+        lambda: ExpandingStd(groupby=["brand"]),
+        lambda: ExponentiallyWeightedMean(alpha=0.5, groupby=["brand"]),
+    ],
+    ids=["exp_mean", "exp_min", "exp_max", "exp_std", "ewm"],
+)
+def test_bucket_growth_remaps_stateful_inner_state(engine, lag, tfm_factory):
+    """Growing the vocabulary must permute/extend accumulator-carrying inners.
+
+    Without the remap the inner state keeps its pre-growth row count and the
+    next `update` raises a broadcast error.
+    """
+    ts = _grow_setup(engine, tfm_factory(), lag)
+    state = ts._pooled_states[("groupby", ("brand",), ())]
+    assert state.n_buckets == 3
+    assert list(state.bucket_uniques) == ["a0", "b1", "b2"]
+    assert all(n == state.n_buckets for n in _stateful_inner_rows(ts))
+
+    ts._predict_setup()
+    ts._update_features()  # would raise pre-fix
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("lag", _LAGS)
+def test_bucket_growth_leaves_existing_buckets_unchanged(engine, lag):
+    """The permutation must not shuffle the surviving buckets' state.
+
+    A remap applied in the wrong direction still produces finite values, so this
+    compares against a control whose vocabulary never grew.
+    """
+    tfm = ExpandingMean(groupby=["brand"])
+    grown = _grow_setup(engine, tfm, lag)
+
+    control = TimeSeries(freq=1, lag_transforms={lag: [ExpandingMean(groupby=["brand"])]})
+    control.fit_transform(
+        _make_df(
+            engine,
+            {
+                "unique_id": ["a", "a", "b", "b", "c", "c"],
+                "ds": [1, 2, 1, 2, 1, 2],
+                "y": [1.0, 2.0, 10.0, 11.0, 100.0, 101.0],
+                "brand": ["b1", "b1", "b1", "b1", "b2", "b2"],
+            },
+        ),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    control.update(
+        _make_df(
+            engine,
+            {
+                "unique_id": ["a", "b", "c"],
+                "ds": [3, 3, 3],
+                "y": [3.0, 12.0, 102.0],
+                "brand": ["b1", "b1", "b2"],
+            },
+        )
+    )
+
+    col = tfm._get_name(lag)
+    grown._predict_setup()
+    control._predict_setup()
+    got = dict(zip(grown.uids, grown._update_features()[col]))
+    want = dict(zip(control.uids, control._update_features()[col]))
+    for uid in want:
+        np.testing.assert_allclose(got[uid], want[uid], rtol=1e-12)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_bucket_growth_pads_new_expanding_extremes_with_infinity(engine):
+    """A new bucket's running extreme must ignore the cells it never saw.
+
+    Padding the accumulator with 0.0 instead of +/-inf would make the extreme
+    collapse onto the pad, so the values here are chosen to expose that.
+    """
+    tfm_min = ExpandingMin(groupby=["brand"])
+    ts = _grow_setup(engine, tfm_min, 1, ys=(100.0, 200.0, 300.0), new_y=400.0)
+    ts._predict_setup()
+    vals = dict(zip(ts.uids, ts._update_features()[tfm_min._get_name(1)]))
+    assert vals["d"] == 400.0  # its only observation, not the 0.0 pad
+
+    tfm_max = ExpandingMax(groupby=["brand"])
+    ts = _grow_setup(engine, tfm_max, 1, ys=(-100.0, -200.0, -300.0), new_y=-400.0)
+    ts._predict_setup()
+    vals = dict(zip(ts.uids, ts._update_features()[tfm_max._get_name(1)]))
+    assert vals["d"] == -400.0
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_bucket_growth_keeps_accumulator_cell_count_uniform(engine):
+    """Every bucket must have consumed the same number of calendar cells.
+
+    `_expanding_fill` reads the new bucket's cell count off an existing row, so a
+    change that breaks the lockstep would silently corrupt new buckets.
+    """
+    ts = _grow_setup(engine, ExpandingMean(groupby=["brand"]), 1)
+    leaf = next(iter(ts._get_pooled_tfms().values()))[0]
+    for obj in leaf._pooled_inner.values():
+        assert np.ptp(obj.stats_[:, 0]) == 0
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_bucket_growth_survives_backup_restore(engine):
+    """`_backup` rolls the state back per model; inner rows must still match."""
+    ts = _grow_setup(engine, ExpandingMean(groupby=["brand"]), 1)
+    state = ts._pooled_states[("groupby", ("brand",), ())]
+    for _ in range(2):  # one round per model in a multi-model predict
+        with ts._backup():
+            ts._predict_setup()
+            ts._update_features()
+            ts._update_y(np.array([1.0, 2.0, 3.0, 4.0]))
+            ts._update_features()
+        assert all(n == state.n_buckets for n in _stateful_inner_rows(ts))

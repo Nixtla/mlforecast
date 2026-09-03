@@ -193,6 +193,31 @@ def _collapse(cells: Dict[str, np.ndarray], time_agg: str) -> Dict[str, np.ndarr
 
 
 # %% kernels
+def _grow_rows(arr: np.ndarray, remap: np.ndarray, n_new: int, fill) -> np.ndarray:
+    """Permute per-bucket rows into a grown vocabulary; new buckets get ``fill``."""
+    out = np.empty((n_new,) + arr.shape[1:], dtype=arr.dtype)
+    out[...] = fill
+    out[remap] = arr
+    return out
+
+
+def _expanding_fill(tfm, stats: np.ndarray):
+    """Inner state of a bucket that has only ever seen empty cells."""
+    if isinstance(tfm, core_tfms.ExpandingMean):
+        # ``[cells consumed, cumsum]``. The cell count is read off an existing
+        # bucket rather than derived from ``n_ordinals``: a multi-timestamp
+        # ``update`` appends several columns but advances the accumulator once,
+        # so the two disagree.
+        return np.array([stats[0, 0] if stats.shape[0] else 0.0, 0.0])
+    if isinstance(tfm, core_tfms.ExpandingMin):
+        return np.inf
+    if isinstance(tfm, core_tfms.ExpandingMax):
+        return -np.inf
+    raise NotImplementedError(
+        f"pooled bucket growth for inner transform {type(tfm).__name__!r}"
+    )
+
+
 class _PooledKernel:
     """Maps a user-facing transform onto channels + inner transforms + a combine.
 
@@ -238,6 +263,23 @@ class _PooledKernel:
 
     def run_update(self, state: "PooledState", st: Dict) -> np.ndarray:
         raise NotImplementedError
+
+    def remap_buckets(
+        self, inner: Dict[str, Any], remap: np.ndarray, n_new: int
+    ) -> None:
+        """Permute/extend per-bucket inner state after ``grow_buckets``.
+
+        Stateless inners (``Rolling*``/``SeasonalRolling*``/``Lag``) recompute
+        from the stored block on every ``update``, so only the accumulator-carrying
+        ones need this. A new bucket's channels were padded over the whole existing
+        calendar, so its inner state is that of a bucket which consumed exactly
+        those empty cells.
+        """
+        for tfm in inner.values():
+            stats = getattr(tfm, "stats_", None)
+            if stats is None:
+                continue
+            tfm.stats_ = _grow_rows(stats, remap, n_new, _expanding_fill(tfm, stats))
 
     @staticmethod
     def _n_obs(res: Dict[str, np.ndarray], k: np.ndarray) -> np.ndarray:
@@ -440,6 +482,14 @@ class EwmK(_PooledKernel):
 
     def make_inner(self):
         return {"_state": {"s": None, "started": None, "next_src": 0}}
+
+    def remap_buckets(self, inner, remap, n_new):
+        # next_src is a calendar cursor shared by every bucket, so it doesn't move
+        st = inner["_state"]
+        if st["s"] is None:
+            return
+        st["s"] = _grow_rows(st["s"], remap, n_new, 0.0)
+        st["started"] = _grow_rows(st["started"], remap, n_new, False)
 
     def _fold(self, s, started, vals, obs):
         a = self.tfm.alpha
@@ -942,18 +992,19 @@ class PooledState:
             self._n_pending += len(b)
         self.n_ordinals += 1
 
-    def grow_buckets(self, new_uniques: np.ndarray) -> np.ndarray:
+    def grow_buckets(self, new_uniques: np.ndarray) -> Optional[np.ndarray]:
         """Merge new bucket keys in, returning the old -> new id mapping.
 
         ``bucket_uniques`` must stay sorted for `lookup`, so absorbing new keys
         can renumber existing buckets; every per-bucket structure is permuted to
-        match.
+        match. Returns ``None`` when the vocabulary didn't move, so the caller
+        knows there is no per-kernel state to remap either.
         """
         if self.bucket_uniques is None:
-            return np.arange(self.n_buckets, dtype=np.int64)
+            return None
         merged = np.union1d(self.bucket_uniques, new_uniques)
         if merged.size == self.bucket_uniques.size:
-            return np.arange(self.n_buckets, dtype=np.int64)
+            return None
         remap = np.searchsorted(merged, self.bucket_uniques).astype(np.int64)
         n_new = merged.size
         for name, arr in self.base.items():
