@@ -509,9 +509,7 @@ def test_g2_4c_one_accumulator_leaf_no_longer_pins_the_shared_state():
     """A finite leaf sharing a key with an Expanding* leaf still gets trimmed."""
     T = 20
     df = _make_panel(T)
-    lag_transforms = {
-        1: [RollingMean(3, global_=True), ExpandingMean(global_=True)]
-    }
+    lag_transforms = {1: [RollingMean(3, global_=True), ExpandingMean(global_=True)]}
     state = _preprocess_states(df, 1, lag_transforms)[("global", (), ())]
     assert state.width == 3  # RollingMean's retention (lag-1 + window), not T
 

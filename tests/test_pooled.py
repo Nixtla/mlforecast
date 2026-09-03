@@ -4310,7 +4310,9 @@ def test_bucket_growth_leaves_existing_buckets_unchanged(engine, lag):
     tfm = ExpandingMean(groupby=["brand"])
     grown = _grow_setup(engine, tfm, lag)
 
-    control = TimeSeries(freq=1, lag_transforms={lag: [ExpandingMean(groupby=["brand"])]})
+    control = TimeSeries(
+        freq=1, lag_transforms={lag: [ExpandingMean(groupby=["brand"])]}
+    )
     control.fit_transform(
         _make_df(
             engine,
