@@ -408,16 +408,16 @@ class TimeSeries:
     def _trim_pooled_states(self) -> None:
         """Trim each pooled state's history under ``keep_last_n``.
 
-        Parity with the ``self.ga`` trim: a state whose transforms are *all*
-        finite-window drops its unused prefix, while a state holding any
-        Expanding*/EWM transform keeps full history.
+        Parity with the ``self.ga`` trim: a state drops its unused prefix when
+        every one of its transforms declares a finite ``_pooled_retention``, and
+        keeps full history when any of them is unbounded.
 
-        Retention is ``max(keep_last_n, W_state)``. The floor is required and is
+        Retention is ``max(keep_last_n, R_state)``. The floor is required and is
         where pooled diverges from the local coreforecast path: local rolling
         survives an undersized ``keep_last_n`` because coreforecast carries a
         per-transform window buffer; pooled has none -- the channels *are* the
-        buffer -- so trimming below ``W_state`` would compute windows off a
-        truncated prefix.
+        buffer -- so trimming below ``R_state`` would compute windows off a
+        truncated prefix while ``window_cells`` still claimed a full one.
         """
         if self.keep_last_n is None:
             return
@@ -425,10 +425,10 @@ class TimeSeries:
             state = self._pooled_states.get(key)
             if state is None:
                 continue
-            if not all(leaf._is_finite_window for leaf in leaves):
+            needs = [leaf._pooled_retention for leaf in leaves]
+            if any(n is None for n in needs):
                 continue
-            w_state = max(leaf.update_samples for leaf in leaves)
-            state.trim_to_last(max(self.keep_last_n, w_state))
+            state.trim_to_last(max(self.keep_last_n, max(needs)))
 
     def _update_pooled_states(self, df, sizes, values: np.ndarray) -> None:
         """Fold newly observed timestamps into the bucket aggregates.

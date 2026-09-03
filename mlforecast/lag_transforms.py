@@ -226,19 +226,23 @@ class _BaseLagTransform(BaseEstimator):
         return -1
 
     @property
-    def _is_finite_window(self) -> bool:
-        """Whether this transform reads only a bounded window of recent history.
+    def _pooled_retention(self) -> Optional[int]:
+        """Trailing calendar columns ``update`` still reads after priming.
 
         A pooled state may be trimmed under ``keep_last_n`` only if *every* one
-        of its transforms is finite-window: the dropped prefix can then never
-        enter a window, so trimming is prediction-neutral. Unbounded transforms
-        (Expanding*/EWM) recompute over the full aggregate vectors at predict —
-        pooled has no carried accumulator — so they must keep full history.
+        of its transforms declares a finite retention; ``None`` means unbounded
+        and blocks the trim. Transforms carrying an accumulator (Expanding*,
+        EWM) need only a short tail, because the prefix they dropped is already
+        folded into that accumulator; the ones that re-gather from ordinal 0
+        (``ExpandingQuantile``, ``LookupLag``) need everything.
 
-        Defaults to ``False`` so an unknown/custom transform is never silently
-        trimmed (it keeps full history; correctness over the perf win).
+        Distinct from ``update_samples``, which sizes the ``self.ga`` trim and is
+        wrong here: it reports 1 for Expanding*/EWM, which read ``lag`` columns.
+
+        Defaults to ``None`` so an unknown/custom transform is never silently
+        trimmed (correctness over the perf win).
         """
-        return False
+        return None
 
 
 class Lag(_BaseLagTransform):
@@ -260,8 +264,8 @@ class Lag(_BaseLagTransform):
         return self.lag
 
     @property
-    def _is_finite_window(self) -> bool:
-        return True
+    def _pooled_retention(self) -> Optional[int]:
+        return self.lag
 
 
 class _WindowTransform(Protocol):
@@ -325,7 +329,7 @@ class LookupLag(_BaseLagTransform):
         if self._core_tfm is None:
             return -1
         # LookupLag's pooled state is never trimmed under ``keep_last_n`` (it is
-        # not finite-window; see ``_is_finite_window``), so it keeps full bucket
+        # not finite-window; see ``_pooled_retention``), so it keeps full bucket
         # history at predict. This value only feeds the ``self.ga`` keep_last_n
         # inference and the regular-``ga`` core-``Lag`` output it governs -- which
         # the pooled result overwrites; pooled trimming ignores it. ``lag`` is the
@@ -333,10 +337,10 @@ class LookupLag(_BaseLagTransform):
         return self._core_tfm.lag
 
     @property
-    def _is_finite_window(self) -> bool:
+    def _pooled_retention(self) -> Optional[int]:
         # A matching occurrence can be arbitrarily far back, so LookupLag needs
         # unbounded history; its pooled state must never be trimmed.
-        return False
+        return None
 
 
 class _RollingBase(_BaseLagTransform):
@@ -431,8 +435,10 @@ class _RollingBase(_BaseLagTransform):
         return self._lag + self.window_size
 
     @property
-    def _is_finite_window(self) -> bool:
-        return True
+    def _pooled_retention(self) -> Optional[int]:
+        # coreforecast's rolling update reads ``lag-1 + window_size`` trailing
+        # values, which is also the floor the pooled ``k`` factor needs
+        return self._lag + self.window_size
 
 
 class RollingMean(_RollingBase): ...
@@ -588,8 +594,10 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         return self._lag + self.season_length * self.window_size
 
     @property
-    def _is_finite_window(self) -> bool:
-        return True
+    def _pooled_retention(self) -> Optional[int]:
+        # the strided update touches ``lag-1 + 1 + (window_size-1)*season_length``
+        # trailing values, i.e. exactly the ``window_size`` seasonal cells
+        return self._lag + (self.window_size - 1) * self.season_length + 1
 
 
 class SeasonalRollingMean(_Seasonal_RollingBase): ...
@@ -680,11 +688,12 @@ class _ExpandingBase(_BaseLagTransform):
         return 1
 
     @property
-    def _is_finite_window(self) -> bool:
-        # Pooled Expanding* recomputes cumsum over the FULL aggregate vectors at
-        # predict (no carried accumulator, unlike the local coreforecast path),
-        # so its window is effectively unbounded -- its state is never trimmed.
-        return False
+    def _pooled_retention(self) -> Optional[int]:
+        # The inner coreforecast transform carries the running accumulator in
+        # ``stats_`` and its update reads a single value at ``lag`` from the end,
+        # while ``window_cells`` derives ``k`` from the absolute ordinal, so the
+        # dropped prefix stays fully represented.
+        return self._lag + 1
 
 
 class ExpandingMean(_ExpandingBase): ...
@@ -731,6 +740,12 @@ class ExpandingQuantile(_ExpandingBase):
     @property
     def update_samples(self) -> int:
         return -1
+
+    @property
+    def _pooled_retention(self) -> Optional[int]:
+        # unlike its siblings this is a row kernel: it re-gathers every
+        # observation from ordinal 0, so nothing may be dropped
+        return None
 
 
 class ExponentiallyWeightedMean(_BaseLagTransform):
@@ -804,11 +819,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         return 1
 
     @property
-    def _is_finite_window(self) -> bool:
-        # Pooled EWM consumes every observed bucket-aggregate mean up to the lag
-        # at predict (no carried running state), so it depends on the full
-        # history -- its state is never trimmed.
-        return False
+    def _pooled_retention(self) -> Optional[int]:
+        # ``EwmK`` carries the running mean and the calendar cursor, folding one
+        # new cell per step; the oldest column it reads is ``lag`` from the end.
+        return self._lag + 1
 
 
 class Offset(_BaseLagTransform):
@@ -859,8 +873,10 @@ class Offset(_BaseLagTransform):
         return self.tfm.update_samples + self.n
 
     @property
-    def _is_finite_window(self) -> bool:
-        return self.tfm._is_finite_window
+    def _pooled_retention(self) -> Optional[int]:
+        # no ``+ self.n``: ``_set_core_tfm`` already baked the offset into the
+        # inner transform's lag
+        return self.tfm._pooled_retention
 
 
 class Combine(_BaseLagTransform):
@@ -924,8 +940,9 @@ class Combine(_BaseLagTransform):
         return max(self.tfm1.update_samples, self.tfm2.update_samples)
 
     @property
-    def _is_finite_window(self) -> bool:
-        return self.tfm1._is_finite_window and self.tfm2._is_finite_window
+    def _pooled_retention(self) -> Optional[int]:
+        needs = [self.tfm1._pooled_retention, self.tfm2._pooled_retention]
+        return None if any(n is None for n in needs) else max(needs)
 
     def _get_configured_lag(self) -> int:
         lag1 = self.tfm1._get_configured_lag()

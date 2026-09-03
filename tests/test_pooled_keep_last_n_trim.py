@@ -14,16 +14,20 @@ trim (it deliberately drops aggregate prefixes), so these guards assert the
   accumulates the window sum through different-magnitude partials -- genuine
   float associativity noise (~1e-13), not a regression. The byte-identical
   guarantee lives at the state level (G2.2/G2.3).
-* **G2.2 trim == fit-on-slice** -- a trimmed state is byte-identical to a fresh
-  state fit on only the retained tail of the input, including after a
-  follow-up ``update()`` (exercises the rebuilt ``_ts_aggs`` and the two
-  append conventions).
+* **G2.2 trim == fit-on-slice** -- for a state whose every leaf has a
+  *stateless* inner (Rolling*/SeasonalRolling*/Lag/row kernels), a trimmed
+  state is byte-identical to a fresh state fit on only the retained tail of
+  the input, including after a follow-up ``update()``. This does **not**
+  generalise to accumulator-carrying leaves (Expanding*/EWM): the stored block
+  still matches (G2.3), but the primed inner does not -- and that difference is
+  exactly what makes trimming them sound. See G2.2b.
 * **G2.3 suffix invariant** -- each retained aggregate vector equals the tail
   of the untrimmed vector and the retained calendar length equals
   ``max(keep_last_n, W_state)``.
-* **G2.4 non-trim assertion** -- a state containing any Expanding*/EWM
-  transform keeps full history (pooled has no carried accumulator, so it must
-  recompute over everything).
+* **G2.4 retention assertion** -- a state is trimmable iff every leaf declares
+  a finite ``_pooled_retention``. Expanding*/EWM *are* trimmable (they carry an
+  accumulator, so the dropped prefix is already folded in); ``ExpandingQuantile``
+  and ``LookupLag`` are not, because they re-gather from ordinal 0.
 """
 
 import numpy as np
@@ -34,13 +38,17 @@ from sklearn.linear_model import LinearRegression
 from mlforecast.forecast import MLForecast
 from mlforecast.lag_transforms import (
     Combine,
+    ExpandingMax,
     ExpandingMean,
+    ExpandingMin,
+    ExpandingQuantile,
     ExponentiallyWeightedMean,
     Offset,
     RollingMax,
     RollingMean,
     RollingMin,
     RollingStd,
+    SeasonalRollingMean,
 )
 
 ID, TIME, TARGET = "unique_id", "ds", "y"
@@ -156,6 +164,23 @@ def _preprocess_states(df, keep_last_n, lag_transforms, lags=(1,)):
     return fcst.ts._pooled_states
 
 
+# Accumulator-carrying transforms across every pooled mode. Trimmable only
+# because the inner keeps its running state, so the dropped prefix stays folded
+# in -- these are the ones G2.4c asserts actually shrink.
+def _accumulator_lag_transforms():
+    return {
+        1: [
+            ExpandingMean(global_=True),
+            ExpandingMean(groupby=["brand"]),
+            ExpandingMin(global_=True),
+            ExpandingMax(global_=True),
+            ExponentiallyWeightedMean(alpha=0.5, global_=True),
+            ExponentiallyWeightedMean(alpha=0.5, groupby=["brand"]),
+            SeasonalRollingMean(season_length=3, window_size=2, global_=True),
+        ]
+    }
+
+
 # A keep_last_n comfortably above every transform window (so the retention
 # floor is a no-op and R == keep_last_n), but well below T so a trim happens.
 _R = 8
@@ -166,12 +191,17 @@ _NO_TRIM = 10_000  # >= calendar length -> trim_to_last is a no-op everywhere
 # G2.1 -- prediction equality (incl. the retention floor).
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("keep_last_n", [2, 6])
-def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n):
+@pytest.mark.parametrize(
+    "transforms",
+    [_finite_lag_transforms, _accumulator_lag_transforms],
+    ids=["finite", "accumulator"],
+)
+def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n, transforms):
     df = _make_panel()
     h = 4
     X_df = _future_X(h)
 
-    fcst_trim = _build_fcst(_finite_lag_transforms())
+    fcst_trim = _build_fcst(transforms())
     fcst_trim.fit(
         df,
         id_col=ID,
@@ -182,7 +212,7 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n):
     )
     trimmed = _sorted_preds(fcst_trim.predict(h=h, X_df=X_df))
 
-    fcst_full = _build_fcst(_finite_lag_transforms())
+    fcst_full = _build_fcst(transforms())
     fcst_full.fit(
         df,
         id_col=ID,
@@ -193,14 +223,17 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n):
     )
     full = _sorted_preds(fcst_full.predict(h=h, X_df=X_df))
 
-    # keep_last_n=2 is below the widest window (4); equality here proves the
-    # max(keep_last_n, W_state) retention floor kept enough history.
+    # keep_last_n=2 is below the widest window; equality here proves the
+    # max(keep_last_n, R_state) retention floor kept enough history -- and, for
+    # the accumulator set, that trimming their prefix is prediction-neutral.
     np.testing.assert_allclose(trimmed, full, rtol=1e-9, atol=1e-9)
 
 
 # --------------------------------------------------------------------------- #
 # G2.2 -- trim == fresh fit on the retained tail, before and after update().
 # --------------------------------------------------------------------------- #
+# All RollingMean: every leaf here has a stateless inner, which is the scope
+# where "trimmed == fresh fit on the tail" holds. G2.2b covers the other case.
 _MODES = {
     "global": {1: [RollingMean(4, global_=True)]},
     "groupby": {1: [RollingMean(4, groupby=["brand"])]},
@@ -291,6 +324,67 @@ def test_g2_2_trim_then_update_matches_fresh_then_update(name):
         )
 
 
+def _leaf_and_states(df, keep_last_n, lag_transforms):
+    fcst = _build_fcst(lag_transforms)
+    fcst.preprocess(
+        df,
+        id_col=ID,
+        time_col=TIME,
+        target_col=TARGET,
+        keep_last_n=keep_last_n,
+        static_features=["brand"],
+        dropna=False,
+    )
+    leaf = next(iter(fcst.ts._get_pooled_tfms().values()))[0]
+    return leaf, fcst.ts._pooled_states
+
+
+def test_g2_2b_accumulator_state_differs_from_fit_on_slice():
+    """Trimming an Expanding* state is sound *because* the inner disagrees.
+
+    The stored block is still a pure suffix (G2.3), so the state comparator
+    passes -- but the primed accumulator carries the dropped prefix, which a
+    fresh fit on the tail has never seen. That is the mechanism, so pin it:
+    the trimmed model must predict like the full-history one, not like the
+    fit-on-slice one.
+    """
+    T = 20
+    df = _make_panel(T)
+    df_slice = df[df[TIME] > T - _R].reset_index(drop=True)
+    # groupby rather than global_ so `brand` is auto-dropped as an auxiliary
+    # column and never reaches the model as a string feature
+    lag_transforms = {1: [ExpandingMean(groupby=["brand"])]}
+    key = ("groupby", ("brand",), ())
+
+    trim_leaf, trim_states = _leaf_and_states(df, _R, lag_transforms)
+    fresh_leaf, fresh_states = _leaf_and_states(df_slice, _NO_TRIM, lag_transforms)
+
+    # (i) the stored block still matches a fresh fit on the tail
+    _assert_state_byte_identical(trim_states[key], fresh_states[key], ctx="g2.2b")
+
+    # (ii) ... but the accumulator does not: it counts the whole calendar
+    trim_cells = trim_leaf._pooled_inner["count"].stats_[:, 0]
+    fresh_cells = fresh_leaf._pooled_inner["count"].stats_[:, 0]
+    assert trim_cells[0] > fresh_cells[0]
+    assert trim_cells[0] == T - 1  # lag=1, so priming consumed T-1 cells
+
+    # (iii) and that is what makes the trim prediction-neutral
+    h = 4
+    X_df = _future_X(h)
+    args = dict(id_col=ID, time_col=TIME, target_col=TARGET, static_features=["brand"])
+    preds = {}
+    for tag, data, kln in [
+        ("trimmed", df, _R),
+        ("full", df, _NO_TRIM),
+        ("slice", df_slice, _NO_TRIM),
+    ]:
+        fcst = _build_fcst({1: [ExpandingMean(groupby=["brand"])]})
+        fcst.fit(data, keep_last_n=kln, **args)
+        preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
+    np.testing.assert_allclose(preds["trimmed"], preds["full"], rtol=1e-9, atol=1e-9)
+    assert not np.allclose(preds["trimmed"], preds["slice"], rtol=1e-9, atol=1e-9)
+
+
 # --------------------------------------------------------------------------- #
 # G2.3 -- suffix invariant: trimming only drops a prefix; length == retention.
 # --------------------------------------------------------------------------- #
@@ -320,12 +414,77 @@ def test_g2_3_suffix_invariant_global():
     # ordinal counter keeps running so future windows still line up
     assert trimmed[key].width == _R
     assert trimmed[key].n_ordinals == T
+    assert trimmed[key].ordinal_offset == full_len - _R
+    assert untrimmed[key].ordinal_offset == 0
+
+
+@pytest.mark.parametrize(
+    "make_tfm, retention",
+    [
+        (lambda: ExpandingMean(global_=True), 1),
+        (lambda: ExponentiallyWeightedMean(alpha=0.5, global_=True), 1),
+        (lambda: SeasonalRollingMean(season_length=3, window_size=2, global_=True), 4),
+        (lambda: RollingMean(4, global_=True), 4),
+    ],
+    ids=["expanding", "ewm", "seasonal", "rolling"],
+)
+def test_g2_3_retention_is_the_declared_tail(make_tfm, retention):
+    """Retained width is exactly ``max(keep_last_n, _pooled_retention)``.
+
+    Pinned per transform so a retention that silently widens (back to full
+    history) or narrows (below what ``update`` reads) fails here rather than in
+    a prediction comparison.
+    """
+    T = 20
+    df = _make_panel(T)
+    key = ("global", (), ())
+    states = _preprocess_states(df, 1, {1: [make_tfm()]})  # keep_last_n under floor
+    assert states[key].width == retention
+    assert states[key].n_ordinals == T
 
 
 # --------------------------------------------------------------------------- #
-# G2.4 -- unbounded-transform states are never trimmed.
+# G2.4 -- a state is trimmable iff every leaf declares a finite retention.
 # --------------------------------------------------------------------------- #
-def test_g2_4_expanding_and_ewm_states_keep_full_history():
+def test_g2_4a_row_gathering_states_keep_full_history():
+    """Only the leaves that re-gather from ordinal 0 block the trim.
+
+    ``ExpandingQuantile`` and ``LookupLag`` rebuild from the raw row store with
+    no accumulator to carry the prefix, so nothing may be dropped.
+    """
+    T = 20
+    df = _make_panel(T)
+    states = _preprocess_states(df, 3, {1: [ExpandingQuantile(p=0.5, global_=True)]})
+    state = states[("global", (), ())]
+    assert state.width == T
+    assert state.base["count"].shape[1] == T
+
+
+def test_g2_4b_mixed_finite_and_unbounded_state_not_trimmed():
+    """A finite and an unbounded transform sharing one mode key produce ONE
+    state; because not every leaf declares a finite retention, it is not
+    trimmed."""
+    T = 20
+    df = _make_panel(T)
+    lag_transforms = {
+        1: [
+            RollingMean(3, global_=True),  # finite
+            ExpandingQuantile(p=0.5, global_=True),  # unbounded -> blocks the trim
+        ]
+    }
+    states = _preprocess_states(df, 3, lag_transforms)
+    state = states[("global", (), ())]  # both transforms share this key
+    assert state.width == T
+    assert state.base["count"].shape[1] == T
+
+
+def test_g2_4c_accumulator_states_are_trimmed():
+    """Expanding*/EWM states shrink to their declared tail.
+
+    They used to be excluded from the trim outright, which also pinned every
+    finite leaf sharing their key at full history. ``nbytes`` is asserted so a
+    silent regression to full retention fails here.
+    """
     T = 20
     df = _make_panel(T)
     lag_transforms = {
@@ -334,40 +493,29 @@ def test_g2_4_expanding_and_ewm_states_keep_full_history():
             ExponentiallyWeightedMean(alpha=0.5, groupby=["brand"]),
         ]
     }
+    full = _preprocess_states(df, _NO_TRIM, lag_transforms)
     states = _preprocess_states(df, 3, lag_transforms)  # tiny keep_last_n
 
-    exp_state = states[("global", (), ())]
-    assert exp_state.width == T  # untouched
-    assert exp_state.base["sum"].shape[1] == T
-
-    ewm_state = states[("groupby", ("brand",), ())]
-    # every brand bucket keeps its full per-group calendar
-    for bid in range(ewm_state.n_buckets):
-        nxt = ewm_state.width
-        assert nxt == T
-        assert ewm_state.base["sum"].shape[1] == T
+    for key in [("global", (), ()), ("groupby", ("brand",), ())]:
+        assert full[key].width == T
+        assert states[key].width == 3  # max(keep_last_n=3, retention=1)
+        assert states[key].n_ordinals == T
+        assert states[key].base["sum"].nbytes < full[key].base["sum"].nbytes
 
 
-def test_g2_4_mixed_finite_and_unbounded_state_not_trimmed():
-    """A finite and an unbounded transform sharing one mode key produce ONE
-    state; because not all its transforms are finite-window, it is not
-    trimmed."""
+def test_g2_4c_one_accumulator_leaf_no_longer_pins_the_shared_state():
+    """A finite leaf sharing a key with an Expanding* leaf still gets trimmed."""
     T = 20
     df = _make_panel(T)
     lag_transforms = {
-        1: [
-            RollingMean(3, global_=True),  # finite
-            ExpandingMean(global_=True),  # unbounded -> blocks the trim
-        ]
+        1: [RollingMean(3, global_=True), ExpandingMean(global_=True)]
     }
-    states = _preprocess_states(df, 3, lag_transforms)
-    state = states[("global", (), ())]  # both transforms share this key
-    assert state.width == T
-    assert state.base["sum"].shape[1] == T
+    state = _preprocess_states(df, 1, lag_transforms)[("global", (), ())]
+    assert state.width == 3  # RollingMean's retention (lag-1 + window), not T
 
 
 def test_g2_4_offset_and_combine_respect_inner_transform():
-    """Offset/Combine delegate finiteness to their operands: a finite inner
+    """Offset/Combine delegate retention to their operands: a finite inner
     keeps the state trimmable, an unbounded inner blocks it."""
     T = 20
     df = _make_panel(T)
@@ -380,10 +528,86 @@ def test_g2_4_offset_and_combine_respect_inner_transform():
         1: [
             Combine(
                 RollingMean(3, global_=True),
-                ExpandingMean(global_=True),
+                ExpandingQuantile(p=0.5, global_=True),
                 np.add,
             )
         ]
     }
     state = _preprocess_states(df, 3, unbounded)[("global", (), ())]
     assert state.width == T  # not trimmed
+
+
+def test_g2_4_wrapper_retention_delegates_without_double_counting():
+    """``Offset`` must not add its shift on top of the inner's baked-in lag.
+
+    ``_set_core_tfm`` already primes the inner at ``lag + n``, so adding ``n``
+    again would over-retain (and disagree with ``update_samples``, which does).
+    """
+    inner = RollingMean(3, global_=True)
+    Offset(inner, 1)._set_core_tfm(1)
+    offset = Offset(RollingMean(3, global_=True), 1)._set_core_tfm(1)
+    assert offset._pooled_retention == offset.tfm._pooled_retention
+    assert offset.tfm._core_tfm.lag == 2  # 1 + n
+    assert offset._pooled_retention == 1 + 3  # (lag-1) + window_size
+
+    both_finite = Combine(
+        RollingMean(3, global_=True), ExpandingMean(global_=True), np.add
+    )._set_core_tfm(1)
+    assert both_finite._pooled_retention == 3  # max(3, 1)
+    with_unbounded = Combine(
+        RollingMean(3, global_=True), ExpandingQuantile(p=0.5, global_=True), np.add
+    )._set_core_tfm(1)
+    assert with_unbounded._pooled_retention is None
+
+
+# --------------------------------------------------------------------------- #
+# G2.5 -- prime-then-trim is enforced, not assumed.
+# --------------------------------------------------------------------------- #
+def test_g2_5_transform_on_trimmed_state_raises():
+    """`transform` reads the window factor off relative column positions.
+
+    On a trimmed block that silently mis-primes the inner transforms, so it has
+    to fail instead. Every legitimate caller runs before `_apply_keep_last_n`.
+    """
+    df = _make_panel(20)
+    leaf, states = _leaf_and_states(df, _R, {1: [RollingMean(4, global_=True)]})
+    state = states[("global", (), ())]
+    assert state.ordinal_offset > 0
+    with pytest.raises(RuntimeError, match="trimmed state"):
+        state.transform(leaf._pooled_kernel, leaf._pooled_inner)
+
+
+def test_g2_5_reinitializing_states_after_a_trim_raises():
+    """The integration flavour: re-priming a trimmed instance is caught."""
+    df = _make_panel(20)
+    fcst = _build_fcst({1: [RollingMean(4, global_=True)]})
+    fcst.preprocess(
+        df,
+        id_col=ID,
+        time_col=TIME,
+        target_col=TARGET,
+        keep_last_n=_R,
+        static_features=["brand"],
+        dropna=False,
+    )
+    with pytest.raises(RuntimeError, match="trimmed state"):
+        fcst.ts._initialize_lag_transform_states()
+
+
+# --------------------------------------------------------------------------- #
+# G2.6 -- EWM fails loudly when its column was trimmed away.
+# --------------------------------------------------------------------------- #
+def test_g2_6_ewm_below_retention_fails_loudly():
+    """Skipping the missing cell would under-decay silently, so it must raise.
+
+    `run_update` also legitimately skips source ordinals that predate the
+    calendar; only a cell that existed and was dropped is an error.
+    """
+    df = _make_panel(20)
+    leaf, states = _leaf_and_states(
+        df, _NO_TRIM, {3: [ExponentiallyWeightedMean(alpha=0.5, global_=True)]}
+    )
+    state = states[("global", (), ())]
+    state.trim_to_last(1)  # lag=3 needs 3
+    with pytest.raises(RuntimeError, match="trimmed below its retention"):
+        state.update(leaf._pooled_kernel, leaf._pooled_inner)

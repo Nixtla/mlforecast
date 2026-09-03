@@ -525,10 +525,20 @@ class EwmK(_PooledKernel):
         n_ordinals, width = state.n_ordinals, state.width
         s, started = st["s"], st["started"]
         target = n_ordinals - self.lag
+        offset = n_ordinals - width
         for src in range(st["next_src"], target + 1):
-            col = width - (n_ordinals - src)
-            if 0 <= col < width:
-                s, started = self._fold(s, started, *self._cell(cells, col))
+            if src < 0:
+                continue  # source ordinal predates the calendar; nothing to fold
+            col = src - offset
+            if col < 0:
+                # the cell existed and was trimmed away; folding on regardless
+                # would silently under-decay, so fail instead of skipping
+                raise RuntimeError(
+                    f"pooled EWM needs calendar column {src} but the state starts "
+                    f"at {offset} (lag={self.lag}); it was trimmed below its "
+                    "retention."
+                )
+            s, started = self._fold(s, started, *self._cell(cells, col))
         st["s"], st["started"] = s, started
         st["next_src"] = max(st["next_src"], target + 1)
         return np.where(started, s, np.nan)
@@ -832,6 +842,15 @@ class PooledState:
     def width(self) -> int:
         return next(iter(self.base.values())).shape[1]
 
+    @property
+    def ordinal_offset(self) -> int:
+        """Calendar cells dropped by ``trim_to_last``; 0 while untrimmed.
+
+        ``append`` advances ``n_ordinals`` and ``width`` together, so this is
+        fixed by the trim and then constant.
+        """
+        return self.n_ordinals - self.width
+
     # -- views -----------------------------------------------------------
     def channels(self, time_agg: Optional[str]) -> Dict[str, np.ndarray]:
         """Aggregate block per channel, collapsed by ``time_agg`` if given."""
@@ -908,6 +927,13 @@ class PooledState:
 
     def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """Full ``(n_buckets, width)`` feature block, priming the inner state."""
+        if self.ordinal_offset:
+            raise RuntimeError(
+                "PooledState.transform() can't run on a trimmed state: it reads "
+                "the window factor off relative column positions and would re-prime "
+                "the inner transforms from a truncated prefix. Priming must precede "
+                "the keep_last_n trim."
+            )
         if kernel.custom:
             return kernel.run_transform(self, inner["_state"])
         cells = self.channels(kernel.tfm.time_agg)
