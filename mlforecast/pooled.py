@@ -387,8 +387,15 @@ class _PooledKernel:
 
     @staticmethod
     def _n_obs(res: Dict[str, np.ndarray], k: np.ndarray) -> np.ndarray:
-        """Total observations inside the window: ``k * mean(count)``."""
-        return k * res["count"]
+        """Total observations inside the window: ``k * mean(count)``.
+
+        Rounded because the count only ever comes back as a *mean* over ``k``
+        cells, and ``k * (S / k)`` is not exactly ``S`` in float64 -- ``49 *
+        (1 / 49)`` is ``0.9999999999999999``, which would fail a
+        ``min_samples=1`` gate and blank out a real value. ``S`` is an integer
+        and the round trip is accurate to a few ULP, so rounding recovers it.
+        """
+        return np.rint(k * res["count"])
 
 
 class _MeanKernel(_PooledKernel):

@@ -4533,3 +4533,97 @@ def test_appended_views_work_from_a_minimal_base(time_agg):
     state.append(np.array([4.0, 5.0]), bucket_ids=np.array([0, 2]))
     _assert_views_fresh(state, ctx="minimal-base")
     assert set(state.base) == needed
+
+
+# ---------------------------------------------------------------------------
+# G5: the sample gate on long sparse windows.
+#
+# The gate counts observations recovered from a channel *mean*: `k * (S / k)`,
+# which is not S in float64 (`49 * (1 / 49)` is 0.9999999999999999). A bucket
+# whose window spans many more cells than it holds rows would then fail
+# `n_obs >= min_samples` and blank out a real value.
+# ---------------------------------------------------------------------------
+
+#: smallest cell count whose round trip loses a ULP at one observation
+_GATE_CELLS = 49
+
+
+def _gate_df(engine, n_times, promo_ordinals):
+    """One series over ``n_times`` steps, in partition ``1`` only where asked."""
+    return _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * n_times,
+            "ds": list(range(n_times)),
+            "y": [float(t + 1) for t in range(n_times)],
+            "promo": [1 if t in promo_ordinals else 0 for t in range(n_times)],
+        },
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "tfm_factory,promo_ordinals,expected",
+    [
+        (lambda: ExpandingMean(partition_by=["promo"]), (0, _GATE_CELLS), 1.0),
+        (lambda: ExpandingMin(partition_by=["promo"]), (0, _GATE_CELLS), 1.0),
+        (lambda: ExpandingMax(partition_by=["promo"]), (0, _GATE_CELLS), 1.0),
+        (
+            lambda: RollingMean(_GATE_CELLS, partition_by=["promo"]),
+            (0, _GATE_CELLS),
+            1.0,
+        ),
+        # std needs two observations to clear its own `n > 1` gate
+        (lambda: ExpandingStd(partition_by=["promo"]), (0, 1, _GATE_CELLS), 2**-0.5),
+    ],
+    ids=[
+        "ExpandingMean",
+        "ExpandingMin",
+        "ExpandingMax",
+        "RollingMean",
+        "ExpandingStd",
+    ],
+)
+def test_g5_1_sparse_window_gate_at_fit(engine, tfm_factory, promo_ordinals, expected):
+    """A window of 49 cells holding 1-2 rows still clears `min_samples`."""
+    df = _gate_df(engine, _GATE_CELLS + 1, promo_ordinals)
+    tfm = tfm_factory()
+    col = tfm._get_name(1)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    out = ts.fit_transform(df, "unique_id", "ds", "y", dropna=False, static_features=[])
+    values = np.asarray(out[col].to_numpy(), dtype=np.float64)
+    np.testing.assert_allclose(values[_GATE_CELLS], expected)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "tfm_factory,expected",
+    [
+        (lambda: ExpandingMean(partition_by=["promo"]), 1.0),
+        (lambda: ExpandingMin(partition_by=["promo"]), 1.0),
+        (lambda: RollingMean(_GATE_CELLS, partition_by=["promo"]), 1.0),
+    ],
+    ids=["ExpandingMean", "ExpandingMin", "RollingMean"],
+)
+def test_g5_2_sparse_window_gate_at_predict(engine, tfm_factory, expected):
+    """`update` recovers the same count from the same round trip."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.dummy import DummyRegressor
+
+    # the first predicted step lands at ordinal 49, so its window spans 49 cells
+    df = _gate_df(engine, _GATE_CELLS, promo_ordinals=(0,))
+    tfm = tfm_factory()
+    col = tfm._get_name(1)
+    captured = []
+
+    def save_features(x):
+        captured.append(np.asarray(x[col].to_numpy(), dtype=np.float64))
+        return x
+
+    fcst = MLForecast(
+        models=[DummyRegressor()], freq=1, lags=[1], lag_transforms={1: [tfm]}
+    )
+    fcst.fit(df, id_col="unique_id", time_col="ds", target_col="y", static_features=[])
+    future = _make_df(engine, {"unique_id": ["a"], "ds": [_GATE_CELLS], "promo": [1]})
+    fcst.predict(h=1, X_df=future, before_predict_callback=save_features)
+    np.testing.assert_allclose(captured[0][0], expected)
