@@ -1,10 +1,12 @@
 """G2 guards for trimming pooled states under ``keep_last_n`` (PR 2).
 
-Once ``keep_last_n`` is resolved, a pooled state whose transforms are all
-finite-window drops its unused history prefix, in parity with the
-``TimeSeries.ga`` trim. A single byte-identical state hash cannot survive a
-trim (it deliberately drops aggregate prefixes), so these guards assert the
-*contract* instead:
+Once ``keep_last_n`` is resolved, a pooled state drops its unused history
+prefix, in parity with the ``TimeSeries.ga`` trim, keeping the last
+``max(keep_last_n, R_state)`` ordinals -- where ``R_state`` is the largest
+``_pooled_retention`` among its leaves, the trailing columns their ``update``
+still reads once priming has run. A single byte-identical state hash cannot
+survive a trim (it deliberately drops aggregate prefixes), so these guards
+assert the *contract* instead:
 
 * **G2.1 prediction-equality** -- predictions from a trimmed model match an
   untrimmed model (the dropped prefix never enters a finite window, so it
@@ -23,11 +25,23 @@ trim (it deliberately drops aggregate prefixes), so these guards assert the
   exactly what makes trimming them sound. See G2.2b.
 * **G2.3 suffix invariant** -- each retained aggregate vector equals the tail
   of the untrimmed vector and the retained calendar length equals
-  ``max(keep_last_n, W_state)``.
+  ``max(keep_last_n, R_state)``, pinned per transform.
 * **G2.4 retention assertion** -- a state is trimmable iff every leaf declares
   a finite ``_pooled_retention``. Expanding*/EWM *are* trimmable (they carry an
   accumulator, so the dropped prefix is already folded in); ``ExpandingQuantile``
   and ``LookupLag`` are not, because they re-gather from ordinal 0.
+* **G2.5 prime-then-trim** -- ``PooledState.transform`` refuses to run on a
+  trimmed state. It reads the window factor off relative column positions, so
+  re-priming from a truncated prefix would be silently wrong; every legitimate
+  caller runs before ``_apply_keep_last_n``.
+* **G2.6 EWM fails loudly** -- ``EwmK.run_update`` raises when a cell it needs
+  existed and was trimmed away, rather than skipping it and under-decaying.
+  Source ordinals that predate the calendar are still skipped, which is the
+  legitimate case the two used to share.
+* **G2.7 row-gather reach** -- the bounded row kernels (``RollingQuantile``,
+  ``SeasonalRollingQuantile``) trim to exactly the oldest ordinal their gather
+  reaches; the raw row store is dropped on the same absolute-ordinal cutoff as
+  the channels, so one column short would silently narrow the quantile.
 """
 
 import numpy as np
