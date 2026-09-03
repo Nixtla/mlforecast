@@ -2,13 +2,16 @@
 
 At fit the engine used to materialise a ``(n_buckets, width)`` block per
 channel and several same-shaped temporaries inside ``combine``, then read
-``n_rows`` values out of the result. The kernels whose window is bounded --
-``Rolling*``, ``SeasonalRolling*``, ``Lag`` -- now compute on the ``_CellStore``
-of occupied cells instead: two ``searchsorted`` calls locate every window at
-once, and a window of ``window_size`` calendar positions holds at most
-``window_size`` cells, which are gathered and reduced in bounded blocks. Nothing
-scales with the calendar width or the bucket count beyond the store itself,
-which is ``O(n_rows)``.
+``n_rows`` values out of the result. The channel kernels now compute on the
+``_CellStore`` of occupied cells instead. A bounded window (``Rolling*``,
+``SeasonalRolling*``, ``Lag``) is located by two ``searchsorted`` calls over
+every cell at once and holds at most ``window_size`` cells, which are gathered
+and reduced in bounded blocks; an accumulator kernel (``Expanding*``, ``EWM``)
+runs its inner transforms over each bucket's occupied cells, which are exactly
+the ragged series its recurrence walks, and primes its predict-time state off
+the same pass. Nothing scales with the calendar width or the bucket count
+beyond the store itself, which is ``O(n_rows)``. Only the row kernels still
+take the dense block.
 
 That path is not bit-identical to the dense one for the averaging kernels:
 coreforecast's rolling mean carries a running accumulator, while the store sums
@@ -24,17 +27,21 @@ anything downstream depends on:
   ``np.isnan``, so an exact mask means the store path cannot change which rows
   survive ``dropna``, which series get dropped, or what the model trains on.
   This is the guarantee that makes the value drift acceptable.
-* **G4.3 primes_state is honest** -- ``transform`` leaves inner state behind
-  iff the kernel says it does. ``_initialize_lag_transform_states`` skips the
-  ones that say no, so a coreforecast release that started caching inside a
-  rolling ``transform`` has to fail here rather than silently unprime.
-* **G4.4 who takes the store path** -- the bounded-window kernels do; the
-  accumulator kernels, whose dense pass is also what primes them, and the row
+* **G4.3 primes_state is honest** -- the dense ``transform`` leaves inner state
+  behind iff the kernel says it does, and priming from the store leaves the
+  same state. ``_initialize_lag_transform_states`` trusts the flag, so a
+  coreforecast release that started caching inside a rolling ``transform`` has
+  to fail here rather than silently unprime.
+* **G4.4 who takes the store path** -- every channel kernel does; the row
   kernels return ``None`` and take the dense block, on a shared key too.
 * **G4.5 boundaries** -- a window longer than the calendar, a lag past its end,
   buckets with one row and with none, and seasonal strides on every phase.
 * **G4.6 the transient is bounded** -- asserted against the block size, not
   merely reported, so a regression to the full-width path fails here.
+* **G4.7 predict continues from a store-primed state** -- the features of every
+  horizon step match those after a dense-primed fit, so trimming to the
+  retention and updating from there is unaffected by where the state came
+  from.
 """
 
 import operator
@@ -46,17 +53,35 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
 
 import mlforecast.lag_transforms as L
 import mlforecast.pooled as pooled_mod
 from mlforecast import MLForecast
+from mlforecast.callbacks import SaveFeatures
 from mlforecast.pooled import PooledState, base_channels, get_kernel
 
 ID, TIME, TARGET = "unique_id", "ds", "y"
 _D = pd.Timestamp("2020-01-01")
 #: the kernel classes that compute on the store
-_STORE_KERNELS = (pooled_mod._RollingMixin, pooled_mod._SeasonalMixin, pooled_mod.LagK)
+_STORE_KERNELS = (
+    pooled_mod._RollingMixin,
+    pooled_mod._SeasonalMixin,
+    pooled_mod.LagK,
+    pooled_mod._ExpandingMixin,
+    pooled_mod.EwmK,
+)
+
+
+class _Constant(BaseEstimator):
+    """A model that ignores its features, so predict exercises the engine only."""
+
+    def fit(self, X, y=None):  # noqa: ARG002
+        return self
+
+    def predict(self, X):
+        return np.zeros(len(X))
 
 
 @contextmanager
@@ -117,7 +142,7 @@ def _feature(df, transforms, dense=False, dropna=False, lag=1):
     return out, cols if len(cols) > 1 else cols[0]
 
 
-def _bounded():
+def _channel_kernels():
     """The store-path kernels, as ``(id, factory)`` taking the pooling mode."""
     return [
         ("rolling_mean", lambda **kw: L.RollingMean(window_size=5, **kw)),
@@ -136,10 +161,18 @@ def _bounded():
             "seasonal_rolling_min",
             lambda **kw: L.SeasonalRollingMin(season_length=7, window_size=3, **kw),
         ),
+        ("expanding_mean", lambda **kw: L.ExpandingMean(**kw)),
+        ("expanding_std", lambda **kw: L.ExpandingStd(**kw)),
+        ("expanding_min", lambda **kw: L.ExpandingMin(**kw)),
+        ("expanding_max", lambda **kw: L.ExpandingMax(**kw)),
+        ("ewm", lambda **kw: L.ExponentiallyWeightedMean(alpha=0.3, **kw)),
     ]
 
 
-_BOUNDED_IDS = [n for n, _ in _bounded()]
+_KERNEL_IDS = [n for n, _ in _channel_kernels()]
+_ACCUMULATORS = [
+    (n, m) for n, m in _channel_kernels() if n.startswith(("expanding", "ewm"))
+]
 #: kernels reading order-independent channels, so the store path cannot move them
 _EXACT_VALUE_KERNELS = ("min", "max", "lag")
 
@@ -183,7 +216,7 @@ _MODE_IDS = [
 # G4.1 -- mask exact always, values exact for min/max, ~1e-14 for mean/std.
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("mode", _MODES, ids=_MODE_IDS)
-@pytest.mark.parametrize("name,make", _bounded(), ids=_BOUNDED_IDS)
+@pytest.mark.parametrize("name,make", _channel_kernels(), ids=_KERNEL_IDS)
 def test_g4_1_store_matches_dense(name, make, mode):
     """Asserted in tiers, strongest first, so a regression says which broke."""
     df = _panel()
@@ -236,7 +269,7 @@ def test_g4_1_wrappers_follow_their_leaves():
 # --------------------------------------------------------------------------- #
 # G4.2 -- an exact mask means dropna keeps exactly the same rows.
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("name,make", _bounded(), ids=_BOUNDED_IDS)
+@pytest.mark.parametrize("name,make", _channel_kernels(), ids=_KERNEL_IDS)
 def test_g4_2_dropna_keeps_identical_rows(name, make):
     """The concrete downstream consequence of the mask being exact.
 
@@ -333,10 +366,93 @@ def test_g4_3_primes_state_matches_reality(name, tfm):
     assert changed == kernel.primes_state, name
 
 
+def _inner_state(kernel, inner):
+    """What `update` reads back, as arrays: coreforecast's `stats_` or EWM's own."""
+    if isinstance(kernel, pooled_mod.EwmK):
+        st = inner["_state"]
+        return {"s": st["s"], "started": st["started"], "next_src": st["next_src"]}
+    return {name: np.asarray(tfm.stats_) for name, tfm in inner.items()}
+
+
+def _accumulator_specs():
+    """The specs whose kernel primes state, with their inner lag set."""
+    out = []
+    for name, tfm in _all_kernel_specs():
+        tfm = tfm._set_core_tfm(2) if hasattr(tfm, "_set_core_tfm") else tfm
+        if get_kernel(tfm).primes_state:
+            out.append((name, tfm))
+    return out
+
+
+def _state_with_late_bucket(kernel, tfm, width=8):
+    """Bucket 0 observed throughout; bucket 1 only at the last ordinal.
+
+    So with any lag bucket 1 has no cell before the fit's cutoff -- the case
+    where an empty coreforecast group would borrow its neighbour's state.
+    """
+    bid = np.array([0] * width + [1])
+    ordi = np.array(list(range(width)) + [width - 1])
+    return PooledState.build(
+        mode="global",
+        group_cols=[],
+        partition_cols=[],
+        bucket_id_by_row=bid,
+        ordinal_by_row=ordi,
+        y=np.arange(1.0, bid.size + 1),
+        n_buckets=2,
+        n_ordinals=width,
+        series_bucket_id=np.zeros(2, dtype=np.int64),
+        needed=base_channels(kernel.channels, tfm.time_agg),
+    )
+
+
+@pytest.mark.parametrize("shape", ["random", "late_bucket", "lag_past_calendar"])
+@pytest.mark.parametrize(
+    "name,tfm", _accumulator_specs(), ids=[n for n, _ in _accumulator_specs()]
+)
+def test_g4_3_store_priming_matches_dense_priming(name, tfm, shape):
+    """`prime` must leave the inner as the dense `transform` would.
+
+    The accumulator holds the same values minus the zeros of the empty cells,
+    so it agrees to within an ulp; running extremes, the EWM flags and the
+    cursor are exact, and the cell count is the calendar cells the dense pass
+    consumed, not the occupied ones. A bucket with nothing before the cutoff,
+    and a lag past the whole calendar, must prime to the empty-bucket fill
+    rather than to a neighbour's state or an error.
+    """
+    kernel = get_kernel(tfm)
+    dense_inner, store_inner = kernel.make_inner(), kernel.make_inner()
+    if shape == "random":
+        state = _state_for(kernel, tfm)
+    elif shape == "late_bucket":
+        state = _state_with_late_bucket(kernel, tfm)
+    else:
+        state = _state_with_late_bucket(kernel, tfm, width=kernel.lag - 1)
+    state.prime(kernel, store_inner)
+    state.transform(kernel, dense_inner)
+    dense, store = _inner_state(kernel, dense_inner), _inner_state(kernel, store_inner)
+    if shape == "lag_past_calendar" and not isinstance(kernel, pooled_mod.EwmK):
+        # coreforecast's dense pass leaves `stats_` uninitialised when the lag
+        # outruns the block, so the reference is the empty-bucket fill itself
+        dense = {
+            name: np.zeros((state.n_buckets, 2))
+            if isinstance(inner, pooled_mod.core_tfms.ExpandingMean)
+            else np.full(state.n_buckets, pooled_mod._expanding_fill(inner, None))
+            for name, inner in dense_inner.items()
+        }
+    assert dense.keys() == store.keys()
+    for key in dense:
+        a, b = np.asarray(dense[key]), np.asarray(store[key])
+        if a.dtype.kind == "f":
+            np.testing.assert_allclose(a, b, rtol=1e-14, err_msg=f"{name}:{key}")
+        else:
+            np.testing.assert_array_equal(a, b, err_msg=f"{name}:{key}")
+
+
 @pytest.mark.parametrize("name,tfm", _all_kernel_specs(), ids=_SPEC_IDS)
 def test_g4_4_store_path_membership(name, tfm):
-    """Exactly the bounded-window kernels compute on the store, and where they
-    do, cell for cell they agree with the dense block."""
+    """Exactly the channel kernels compute on the store, and cell for cell
+    they agree with the dense block."""
     tfm = tfm._set_core_tfm(2) if hasattr(tfm, "_set_core_tfm") else tfm
     kernel = get_kernel(tfm)
     state = _state_for(kernel, tfm)
@@ -429,7 +545,9 @@ def test_g4_5_sparse_buckets():
 # --------------------------------------------------------------------------- #
 # G4.6 -- the transient is bounded, not merely smaller.
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("kernel_name", ["rolling_mean", "rolling_std"])
+@pytest.mark.parametrize(
+    "kernel_name", ["rolling_mean", "rolling_std", "expanding_mean", "ewm"]
+)
 def test_g4_6_fit_transient_is_bounded_by_the_store(kernel_name):
     """Asserted against the block size, so a regression to full width fails.
 
@@ -440,11 +558,12 @@ def test_g4_6_fit_transient_is_bounded_by_the_store(kernel_name):
     # rows, which is the partitioned shape the block is oversized for and the
     # only one where the O(n_rows) floor does not swamp the measurement
     n_buckets, width, window, n = 1500, 500, 5, 40_000
-    tfm = (
-        L.RollingMean(window_size=window, global_=True)
-        if kernel_name == "rolling_mean"
-        else L.RollingStd(window_size=window, global_=True)
-    )
+    tfm = {
+        "rolling_mean": lambda: L.RollingMean(window_size=window, global_=True),
+        "rolling_std": lambda: L.RollingStd(window_size=window, global_=True),
+        "expanding_mean": lambda: L.ExpandingMean(global_=True),
+        "ewm": lambda: L.ExponentiallyWeightedMean(alpha=0.3, global_=True),
+    }[kernel_name]()
     tfm = tfm._set_core_tfm(1)
     kernel = get_kernel(tfm)
     rng = np.random.default_rng(0)
@@ -493,3 +612,41 @@ def test_g4_6_fit_transient_is_bounded_by_the_store(kernel_name):
     assert store_peak < 0.6 * dense_peak, (
         f"store peak {store_peak / 1e6:.1f}MB vs dense {dense_peak / 1e6:.1f}MB"
     )
+
+
+# --------------------------------------------------------------------------- #
+# G4.7 -- predict continues from a store-primed state exactly as from a dense one.
+# --------------------------------------------------------------------------- #
+def _predict_features(df, tfm, dense, h=3):
+    """The pooled feature at each horizon step, via `SaveFeatures`."""
+    uids = np.sort(df[ID].unique())
+    future = pd.DataFrame(
+        {
+            ID: np.repeat(uids, h),
+            TIME: np.tile(
+                pd.date_range(df[TIME].max() + pd.Timedelta(days=1), periods=h),
+                len(uids),
+            ),
+            "promo": np.tile(["0", "1", "2"], len(uids)),
+        }
+    )
+    with _dense_path() if dense else nullcontext():
+        fcst = MLForecast(
+            freq="D", models=[_Constant()], lags=[1], lag_transforms={1: [tfm]}
+        )
+        fcst.fit(df, static_features=["brand"], dropna=False, validate_data=False)
+        callback = SaveFeatures()
+        fcst.predict(h=h, X_df=future, before_predict_callback=callback)
+    col = [c for c in fcst.ts.features_order_ if c not in {"lag1", "brand", "promo"}][0]
+    return callback.get_features()[col].to_numpy()
+
+
+@pytest.mark.parametrize("mode", _MODES, ids=_MODE_IDS)
+@pytest.mark.parametrize("name,make", _ACCUMULATORS, ids=[n for n, _ in _ACCUMULATORS])
+def test_g4_7_predict_from_store_primed_state(name, make, mode):
+    """Fit on the store, trim, predict three steps: the same features as a
+    dense-primed fit gives, which pins the priming end to end."""
+    df = _panel()
+    ref = _predict_features(df, make(**mode), dense=True)
+    got = _predict_features(df, make(**mode), dense=False)
+    _assert_equivalent(ref, got, name)

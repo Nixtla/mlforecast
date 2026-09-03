@@ -214,6 +214,7 @@ class _CellStore:
             np.maximum.at(buf, cell_v, y_v)
             self.chan["max"] = buf
         self._by_ordinal: Optional[Tuple[np.ndarray, np.ndarray]] = None
+        self._starts: Optional[np.ndarray] = None
         self._views: Dict[str, Dict[str, np.ndarray]] = {}
         self._seasonal: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
@@ -235,26 +236,47 @@ class _CellStore:
             view.update(_collapse(self.chan, time_agg, want - view.keys()))
         return {name: view[name] for name in names}
 
+    @property
+    def starts(self) -> np.ndarray:
+        """CSR offsets: bucket ``b`` owns cells ``starts[b]:starts[b + 1]``."""
+        if self._starts is None:
+            self._starts = np.searchsorted(self.bucket, np.arange(self.n_buckets + 1))
+        return self._starts
+
+    def ragged(self, values: np.ndarray, keep: np.ndarray) -> CoreGroupedArray:
+        """The cells selected by ``keep``, as one coreforecast group per bucket.
+
+        Cells are ordered by ordinal within a bucket, so a coreforecast
+        transform walking a group sees that bucket's history in time order,
+        with the empty calendar positions simply absent.
+        """
+        starts = np.searchsorted(self.bucket[keep], np.arange(self.n_buckets + 1))
+        return CoreGroupedArray(values[keep], starts.astype(np.int32))
+
     # -- windows ---------------------------------------------------------
     # A window is a run of consecutive cells in some layout of the store: the
     # store itself for calendar windows, or a phase-major reordering for
     # seasonal ones. Bounds come from two searchsorted calls over every cell at
     # once, and a window of `w` calendar positions holds at most `w` cells.
 
+    def source_bound(self, lag: int) -> np.ndarray:
+        """Index after the last cell at or before ``ordinal - lag``, per cell.
+
+        The clamp keeps the key inside the cell's own bucket, so a source
+        before the calendar starts yields the bucket's first index -- an
+        empty window, never a cell of the bucket before.
+        """
+        src = np.maximum(self.ordinal - lag, -1)
+        return np.searchsorted(self.keys, self.bucket * self.width + src, side="right")
+
     def rolling_bounds(self, lag: int, window: int) -> Tuple[np.ndarray, np.ndarray]:
         """Half-open cell bounds of ``[t - lag - window + 1, t - lag]`` per cell.
 
-        The clamps keep both keys inside the cell's own bucket, so a window
-        that reaches before the calendar starts is simply shorter, and one
-        that starts before ordinal ``lag`` is empty.
+        A window that reaches before the calendar starts is simply shorter.
         """
-        base = self.bucket * self.width
-        src = self.ordinal - lag
-        hi = np.searchsorted(self.keys, base + np.maximum(src, -1), side="right")
-        lo = np.searchsorted(
-            self.keys, base + np.maximum(src - window + 1, 0), side="left"
-        )
-        return lo, hi
+        first = np.maximum(self.ordinal - lag - window + 1, 0)
+        lo = np.searchsorted(self.keys, self.bucket * self.width + first, side="left")
+        return lo, self.source_bound(lag)
 
     def seasonal_layout(self, season_length: int) -> Tuple[np.ndarray, np.ndarray]:
         """Cells reordered by ``(bucket, ordinal % season_length, ordinal)``.
@@ -472,11 +494,11 @@ class _PooledKernel:
     #: kernels that carry their own recurrence instead of delegating to a
     #: stateful coreforecast transform (see :class:`EwmK`).
     custom: bool = False
-    #: whether ``transform`` leaves behind state a later ``update`` reads back.
+    #: whether the fit pass leaves behind state a later ``update`` reads back.
     #: False for the kernels whose inners recompute from the block on every
     #: update (Rolling*/SeasonalRolling*/Lag) and for the row kernels, which
     #: re-gather from the raw observations; only the accumulator-carrying
-    #: kernels (Expanding*, EWM) need the priming pass to run at all.
+    #: kernels (Expanding*, EWM) need priming at all.
     primes_state: bool = True
 
     def __init__(self, tfm):
@@ -489,18 +511,19 @@ class _PooledKernel:
     def window_cells(self, ordinals: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
-    def fit_from_store(self, store: "_CellStore") -> Optional[np.ndarray]:  # noqa: ARG002
+    def fit_from_store(
+        self, _store: "_CellStore", _inner: Optional[Dict[str, Any]] = None
+    ) -> Optional[np.ndarray]:
         """Fit-time value per occupied cell, computed on the cell store.
 
-        Defined for the kernels whose window is bounded: each window is a run of
+        Every channel kernel defines it, two ways. A bounded window is a run of
         at most ``window_size`` consecutive cells in some layout of the store,
-        so it can be gathered and reduced without ever building the dense
-        block. ``None`` (the default) sends the kernel down the dense
-        ``transform`` path -- the accumulator kernels, which that pass also
-        primes, and the row kernels.
-
-        The window sums are combined with ``k = 1``: they already *are* sums,
-        so the count needs no ``k * mean`` round trip and is exact.
+        gathered and reduced outright; the sums are combined with ``k = 1``,
+        so the count needs no ``k * mean`` round trip and is exact. An
+        accumulator kernel runs its inner transforms over each bucket's
+        occupied cells instead, and when ``inner`` is given primes it off the
+        same pass. ``None`` (the default) sends the kernel down the dense
+        ``transform`` path -- the row kernels.
         """
         return None
 
@@ -620,7 +643,7 @@ class _RollingMixin:
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, self.tfm.window_size).astype(float)
 
-    def fit_from_store(self, store):
+    def fit_from_store(self, store, _inner=None):
         window = self.tfm.window_size
         lo, hi = store.rolling_bounds(self.lag, window)
         cells = store.channels_for(self.tfm.time_agg, self.channels)
@@ -638,7 +661,7 @@ class _SeasonalMixin:
         avail = np.floor_divide(np.maximum(ordinals - self.lag, -1), sl) + 1
         return np.clip(avail, 0, self.tfm.window_size).astype(float)
 
-    def fit_from_store(self, store):
+    def fit_from_store(self, store, _inner=None):
         window = self.tfm.window_size
         lo, hi, perm = store.seasonal_bounds(self.lag, window, self.tfm.season_length)
         cells = store.channels_for(self.tfm.time_agg, self.channels)
@@ -658,11 +681,72 @@ class _ExpandingMixin:
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, None).astype(float)
 
-    def _inner(self, cls, **kw):
-        return cls(lag=self.lag, **kw)
+    def _inner(self, cls, lag=None, **kw):
+        return cls(lag=self.lag if lag is None else lag, **kw)
 
     def min_samples(self):
         return 1.0
+
+    def fit_from_store(self, store, inner=None):
+        """Running statistics over each bucket's occupied cells, read at ``t - lag``.
+
+        An empty calendar position adds nothing to an expanding window, so the
+        inner transforms can walk the occupied cells alone, with ``lag=0``
+        since the lag is applied when the running value is looked up. Only the
+        cells at or before ``width - 1 - lag`` are ever a source at fit, so the
+        pass stops there -- which leaves the lag-0 inners holding the
+        accumulator the dense pass would have left in the state's own, to
+        within an ulp (the same values, minus the zeros). Priming copies it
+        over, with the cell count set to the calendar cells the dense pass
+        consumed, which is what ``window_cells`` derives the factor from.
+        """
+        cells = store.channels_for(self.tfm.time_agg, self.channels)
+        consumed = max(store.width - self.lag, 0)
+        keep = store.ordinal < consumed
+        n_kept = np.bincount(store.bucket[keep], minlength=store.n_buckets)
+        primed = self.make_inner(lag=0)
+        # coreforecast reads each group's last output for its state, which an
+        # empty group has to borrow from the group before -- so those buckets
+        # are refilled below, and a pass with nothing kept is skipped outright
+        running = {
+            name: tfm.transform(store.ragged(cells[name], keep))
+            if keep.any()
+            else np.empty(0)
+            for name, tfm in primed.items()
+        }
+        starts = store.starts
+        first = starts[store.bucket]
+        hi = store.source_bound(self.lag)
+        has = hi > first
+        # `hi` indexes the full store; the pass skipped the cells past the
+        # cutoff of every earlier bucket, so shift by that many
+        kept_before = np.concatenate([[0], np.cumsum(keep)])
+        at = (hi - 1 - (first - kept_before[first]))[has]
+        res = {}
+        for name, vals in running.items():
+            out = np.full(store.size, _FILL.get(name, 0.0))
+            out[has] = vals[at]
+            res[name] = out
+        k = np.where(has, hi - first, 0).astype(np.float64)
+        values = self.combine(res, k)
+        if inner is not None:
+            empty = n_kept == 0
+            for name, tfm in inner.items():
+                if keep.any():
+                    stats = np.array(primed[name].stats_, copy=True)
+                elif isinstance(tfm, core_tfms.ExpandingMean):
+                    stats = np.zeros((store.n_buckets, 2))
+                else:
+                    stats = np.zeros(store.n_buckets)
+                if stats.ndim == 2:
+                    # ``[cells consumed, cumsum]``: the dense pass consumes the
+                    # calendar, which is what ``window_cells`` counts against
+                    stats[:, 0] = consumed
+                    stats[empty, 1] = 0.0
+                else:
+                    stats[empty] = _expanding_fill(tfm, stats)
+                tfm.stats_ = stats
+        return values
 
 
 class RollingMeanK(_RollingMixin, _MeanKernel):
@@ -718,28 +802,28 @@ class SeasonalRollingMaxK(_SeasonalMixin, _MaxKernel):
 
 
 class ExpandingMeanK(_ExpandingMixin, _MeanKernel):
-    def make_inner(self):
-        return {c: self._inner(core_tfms.ExpandingMean) for c in self.channels}
+    def make_inner(self, lag=None):
+        return {c: self._inner(core_tfms.ExpandingMean, lag) for c in self.channels}
 
 
 class ExpandingStdK(_ExpandingMixin, _StdKernel):
-    def make_inner(self):
-        return {c: self._inner(core_tfms.ExpandingMean) for c in self.channels}
+    def make_inner(self, lag=None):
+        return {c: self._inner(core_tfms.ExpandingMean, lag) for c in self.channels}
 
 
 class ExpandingMinK(_ExpandingMixin, _MinKernel):
-    def make_inner(self):
+    def make_inner(self, lag=None):
         return {
-            "min": self._inner(core_tfms.ExpandingMin),
-            "count": self._inner(core_tfms.ExpandingMean),
+            "min": self._inner(core_tfms.ExpandingMin, lag),
+            "count": self._inner(core_tfms.ExpandingMean, lag),
         }
 
 
 class ExpandingMaxK(_ExpandingMixin, _MaxKernel):
-    def make_inner(self):
+    def make_inner(self, lag=None):
         return {
-            "max": self._inner(core_tfms.ExpandingMax),
-            "count": self._inner(core_tfms.ExpandingMean),
+            "max": self._inner(core_tfms.ExpandingMax, lag),
+            "count": self._inner(core_tfms.ExpandingMean, lag),
         }
 
 
@@ -755,7 +839,7 @@ class LagK(_PooledKernel):
     def window_cells(self, ordinals):
         return np.where(ordinals - self.tfm.lag >= 0, 1.0, 0.0)
 
-    def fit_from_store(self, store):
+    def fit_from_store(self, store, _inner=None):
         # a window of one calendar position: the cell at ``ordinal - lag``, if any
         lo, hi = store.rolling_bounds(self.tfm.lag, 1)
         cells = store.channels_for(self.tfm.time_agg, self.channels)
@@ -774,13 +858,15 @@ class LagK(_PooledKernel):
 class EwmK(_PooledKernel):
     """Pooled exponentially weighted mean over the per-timestamp value.
 
-    This is the one kernel that cannot delegate to ``coreforecast``.  A cell
-    with no observations must leave the decay untouched, but the grouped
-    ``update`` advances every bucket in lockstep and cannot skip one, and a
-    ratio of two exponentially weighted channels does *not* reproduce the
-    skip either -- it decays the accumulated mass and so over-weights the next
-    observation.  The recurrence is three lines, so it is carried here and
-    applied only where the bucket is actually observed.
+    This is the one kernel whose predict step cannot delegate to
+    ``coreforecast``.  A cell with no observations must leave the decay
+    untouched, but the grouped ``update`` advances every bucket in lockstep and
+    cannot skip one, and a ratio of two exponentially weighted channels does
+    *not* reproduce the skip either -- it decays the accumulated mass and so
+    over-weights the next observation.  The recurrence is three lines, so it is
+    carried here and applied only where the bucket is actually observed. At
+    fit the observed cells of a bucket are exactly the ragged series that
+    recurrence walks, so there ``coreforecast`` runs it after all.
     """
 
     channels = ("sum", "count")
@@ -788,6 +874,34 @@ class EwmK(_PooledKernel):
 
     def make_inner(self):
         return {"_state": {"s": None, "started": None, "next_src": 0}}
+
+    def fit_from_store(self, store, inner=None):
+        cells = store.channels_for(self.tfm.time_agg, self.channels)
+        counts = cells["count"]
+        consumed = max(store.width - self.lag, 0)
+        # the cells the fit folds: observed, and a source for some ordinal
+        obs = (counts > 0) & (store.ordinal < consumed)
+        v = np.divide(cells["sum"], counts, out=np.zeros(counts.shape), where=obs)
+        ewm = core_tfms.ExponentiallyWeightedMean(lag=0, alpha=self.tfm.alpha)
+        s = ewm.transform(store.ragged(v, obs)) if obs.any() else np.empty(0)
+        # the value at t is the state after the last observed source cell,
+        # found by counting observed cells up to the source bound
+        seen = np.concatenate([[0], np.cumsum(obs)])
+        first = store.starts[store.bucket]
+        pos = seen[store.source_bound(self.lag)]
+        started = pos > seen[first]
+        values = np.full(store.size, np.nan)
+        values[started] = s[pos[started] - 1]
+        if inner is not None:
+            st = inner["_state"]
+            last = seen[store.starts[1:]]
+            st["started"] = last > seen[store.starts[:-1]]
+            st["s"] = np.zeros(store.n_buckets)
+            st["s"][st["started"]] = s[last[st["started"]] - 1]
+            # negative when the lag outruns the calendar; `run_update` skips
+            # sources that predate it, so the cursor can start there
+            st["next_src"] = store.width - self.lag
+        return values
 
     def remap_buckets(self, inner, remap, n_new):
         # next_src is a calendar cursor shared by every bucket, so it doesn't move
@@ -1289,26 +1403,33 @@ class PooledState:
                 "the keep_last_n trim."
             )
 
-    def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
-        """Per-row feature values at fit.
-
-        Kernels with a bounded window compute them on the cell store, so nothing
-        full-width is built for them. The rest take the dense block -- which
-        materialises ``(n_buckets, width)`` per channel plus several same-shaped
-        temporaries inside ``combine`` -- and read the occupied cells out of it;
-        for the accumulator kernels that pass is also what primes the inner.
-        """
+    def _fit_store(self) -> _CellStore:
         self._require_untrimmed()
-        store = self._store
-        if store is None:
+        if self._store is None:
             raise RuntimeError(
-                "PooledState.fit_values() needs the fit-time cell store, which "
+                "PooledState needs the fit-time cell store for this, which "
                 "finish_fit() drops once the features exist."
             )
-        values = kernel.fit_from_store(store)
+        return self._store
+
+    def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
+        """Per-row feature values at fit, priming ``inner`` where it needs it.
+
+        The channel kernels compute on the cell store, so nothing full-width is
+        built for them. The row kernels take the dense block -- which
+        materialises ``(n_buckets, width)`` per channel -- and read the occupied
+        cells out of it.
+        """
+        store = self._fit_store()
+        values = kernel.fit_from_store(store, inner)
         if values is None:
             values = store.gather(self.transform(kernel, inner), 0)
         return store.row_values(values)
+
+    def prime(self, kernel, inner: Dict[str, Any]) -> None:
+        """Leave ``inner`` as a fit would, without keeping the features."""
+        if kernel.fit_from_store(self._fit_store(), inner) is None:
+            self.transform(kernel, inner)
 
     def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """Full ``(n_buckets, width)`` feature block, priming the inner state."""

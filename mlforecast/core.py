@@ -532,21 +532,20 @@ class TimeSeries:
         or ``predict(new_df=...)``). Local (coreforecast) transforms need a full
         ``transform`` pass so stateful transforms like ``ExpandingMean`` can
         initialize their internal buffers before the first ``update(...)`` call.
-        Pooled transforms need the same treatment: their per-channel
-        coreforecast transforms are primed by the state's ``transform`` pass, so
-        that is run here (and its result discarded) before the first ``update``.
+        Pooled transforms need the same treatment: the accumulator kernels'
+        inner state is primed by the fit pass, so that is run here (and its
+        result discarded) before the first ``update``.
         """
         for name, tfm in self._get_pooled_features().items():
             for leaf in tfm._pooled_leaves():
                 kernel = leaf._pooled_kernel
                 if not kernel.primes_state:
-                    # rolling/seasonal/lag `transform` assigns no state (their
-                    # `update` re-derives from the block) and the row kernels
-                    # re-gather from the raw observations, so priming them would
-                    # build a full-width block only to discard it
+                    # rolling/seasonal/lag `update` re-derives from the block
+                    # and the row kernels re-gather from the raw observations,
+                    # so there is nothing to prime
                     continue
                 state = self._pooled_states[leaf._pooled_key]
-                state.transform(kernel, leaf._pooled_inner)
+                state.prime(kernel, leaf._pooled_inner)
         core_tfms = self._get_core_lag_tfms()
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
