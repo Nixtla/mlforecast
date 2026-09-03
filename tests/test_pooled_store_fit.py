@@ -68,7 +68,6 @@ _D = pd.Timestamp("2020-01-01")
 _STORE_KERNELS = (
     pooled_mod._RollingMixin,
     pooled_mod._SeasonalMixin,
-    pooled_mod.LagK,
     pooled_mod._ExpandingMixin,
     pooled_mod.EwmK,
 )
@@ -323,7 +322,6 @@ def _all_kernel_specs():
             ),
         ),
         ("LookupLag", L.LookupLag(partition_by=["promo"])),
-        ("Lag", L.Lag(1)),
     ]
 
 

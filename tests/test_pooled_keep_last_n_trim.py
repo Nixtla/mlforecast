@@ -26,10 +26,13 @@ assert the *contract* instead:
 * **G2.3 suffix invariant** -- each retained aggregate vector equals the tail
   of the untrimmed vector and the retained calendar length equals
   ``max(keep_last_n, R_state)``, pinned per transform.
-* **G2.4 retention assertion** -- a state is trimmable iff every leaf declares
-  a finite ``_pooled_retention``. Expanding*/EWM *are* trimmable (they carry an
+* **G2.4 retention assertion** -- a state's block is trimmable iff every
+  channel leaf declares a finite ``_pooled_retention``, and its raw rows iff
+  every row leaf does. Expanding*/EWM *are* trimmable (they carry an
   accumulator, so the dropped prefix is already folded in); ``ExpandingQuantile``
-  and ``LookupLag`` are not, because they re-gather from ordinal 0.
+  and ``LookupLag`` keep every row, because they re-gather from ordinal 0, but
+  they read nothing off the block, so a finite leaf sharing their key still
+  gets its block trimmed.
 * **G2.5 prime-then-trim** -- ``PooledState.transform`` refuses to run on a
   trimmed state. It reads the window factor off relative column positions, so
   re-priming from a truncated prefix would be silently wrong; every legitimate
@@ -480,22 +483,38 @@ def test_g2_4a_row_gathering_states_keep_full_history():
     assert state._rows.ordinal.min() == 0
 
 
-def test_g2_4b_mixed_finite_and_unbounded_state_not_trimmed():
+def test_g2_4b_mixed_key_trims_the_block_and_keeps_the_rows():
     """A finite and an unbounded transform sharing one mode key produce ONE
-    state; because not every leaf declares a finite retention, it is not
-    trimmed."""
+    state. The unbounded leaf reads only the raw rows, so those stay whole,
+    while the channel block the finite leaf reads is trimmed to its retention
+    -- and predictions are unchanged."""
     T = 20
     df = _make_panel(T)
     lag_transforms = {
         1: [
-            RollingMean(3, global_=True),  # finite
-            ExpandingQuantile(p=0.5, global_=True),  # unbounded -> blocks the trim
+            RollingMean(3, global_=True),  # finite: retention 3
+            ExpandingQuantile(p=0.5, global_=True),  # unbounded: keeps every row
         ]
     }
     states = _preprocess_states(df, 3, lag_transforms)
     state = states[("global", (), ())]  # both transforms share this key
-    assert state.width == T
-    assert state.base["count"].shape[1] == T
+    assert state.width == 3
+    assert state.base["count"].shape[1] == 3
+    assert state._rows.ordinal.min() == 0
+
+    def preds(keep_last_n):
+        fcst = _build_fcst(lag_transforms)
+        fcst.fit(
+            df.drop(columns=["brand"]),
+            id_col=ID,
+            time_col=TIME,
+            target_col=TARGET,
+            static_features=[],
+            keep_last_n=keep_last_n,
+        )
+        return _sorted_preds(fcst.predict(3, X_df=_future_X(3, T)))
+
+    np.testing.assert_allclose(preds(3), preds(None), rtol=1e-12)
 
 
 def test_g2_4c_accumulator_states_are_trimmed():
@@ -534,7 +553,8 @@ def test_g2_4c_one_accumulator_leaf_no_longer_pins_the_shared_state():
 
 def test_g2_4_offset_and_combine_respect_inner_transform():
     """Offset/Combine delegate retention to their operands: a finite inner
-    keeps the state trimmable, an unbounded inner blocks it."""
+    keeps the state trimmable, an unbounded row-reading inner keeps the rows
+    whole while the block its sibling reads is still trimmed."""
     T = 20
     df = _make_panel(T)
 
@@ -552,7 +572,8 @@ def test_g2_4_offset_and_combine_respect_inner_transform():
         ]
     }
     state = _preprocess_states(df, 3, unbounded)[("global", (), ())]
-    assert state.width == T  # not trimmed
+    assert state.width == 3  # the block, for the rolling leaf
+    assert state._rows.ordinal.min() == 0  # the rows, for the quantile leaf
 
 
 def test_g2_4_wrapper_retention_delegates_without_double_counting():

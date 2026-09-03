@@ -4629,3 +4629,22 @@ def test_g5_2_sparse_window_gate_at_predict(engine, tfm_factory, expected):
     future = _make_df(engine, {"unique_id": ["a"], "ds": [_GATE_CELLS], "promo": [1]})
     fcst.predict(h=1, X_df=future, before_predict_callback=save_features)
     np.testing.assert_allclose(captured[0][0], expected)
+
+
+# %% kernel dispatch follows the class hierarchy
+def test_get_kernel_resolves_subclasses():
+    """A user subclass of a supported transform is pooled like its parent."""
+    from mlforecast.lag_transforms import _BaseLagTransform
+    from mlforecast.pooled import RollingMeanK, get_kernel
+
+    class MyRollingMean(RollingMean):
+        pass
+
+    tfm = MyRollingMean(3, global_=True)._set_core_tfm(1)
+    assert isinstance(get_kernel(tfm), RollingMeanK)
+
+    class NotPooled(_BaseLagTransform):
+        pass
+
+    with pytest.raises(NotImplementedError, match="NotPooled"):
+        get_kernel(NotPooled())

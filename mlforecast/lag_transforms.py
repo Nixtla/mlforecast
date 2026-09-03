@@ -25,7 +25,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Callable, List, Optional, Protocol, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
@@ -109,9 +109,17 @@ class _BaseLagTransform(BaseEstimator):
         init_args.pop("groupby", None)
         init_args.pop("partition_by", None)
         init_args.pop("time_agg", None)
-        self._core_tfm = getattr(core_tfms, self.__class__.__name__)(
-            lag=lag, **init_args
-        )
+        # resolved along the class hierarchy, so a subclass keeps its parent's
+        # coreforecast counterpart
+        for cls in type(self).__mro__:
+            core_cls = getattr(core_tfms, cls.__name__, None)
+            if core_cls is not None:
+                break
+        else:
+            raise AttributeError(
+                f"coreforecast has no transform for {type(self).__name__!r}"
+            )
+        self._core_tfm = core_cls(lag=lag, **init_args)
         return self
 
     def _get_name(self, lag: int) -> str:
@@ -178,17 +186,6 @@ class _BaseLagTransform(BaseEstimator):
         here is pooled.
         """
         return eval_leaf(self)
-
-    # The public pooled hooks below are template methods: they guard empty
-    # inputs, apply the ``time_agg`` re-aggregation exactly once, and dispatch
-    # to the ``*_impl`` methods, which return ``None`` on the base class when a
-    # transform doesn't support that path. Subclasses override the ``_impl``
-    # methods and never handle ``time_agg`` themselves — a transform that gains
-    # an ``_impl`` cannot skip the re-aggregation step. ``Offset`` and
-    # ``Combine`` override the public hooks instead, so each inner transform
-    # applies its own re-aggregation. Re-aggregation is lazy (see
-    # ``_ReaggregatedAggregates``), so applying it before an unsupported
-    # ``_impl`` that returns ``None`` costs nothing.
 
     def _get_configured_lag(self) -> int:
         return self._core_tfm.lag
@@ -266,21 +263,6 @@ class Lag(_BaseLagTransform):
     @property
     def _pooled_retention(self) -> Optional[int]:
         return self.lag
-
-
-class _WindowTransform(Protocol):
-    """Structural type accepted by :func:`_resolve_min_samples`.
-
-    Any rolling / seasonal-rolling transform (a ``_RollingBase`` or
-    ``_Seasonal_RollingBase`` subclass) satisfies this by exposing the pooling
-    mode flags and window sizing needed to resolve the ``min_samples`` default.
-    """
-
-    min_samples: Optional[int]
-    window_size: int
-    global_: bool
-    groupby: Optional[Sequence[str]]
-    partition_by: Optional[Sequence[str]]
 
 
 class LookupLag(_BaseLagTransform):

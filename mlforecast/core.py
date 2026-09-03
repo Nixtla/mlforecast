@@ -338,14 +338,16 @@ class TimeSeries:
     def _get_pooled_tfms(self) -> Dict[Tuple, List[_BaseLagTransform]]:
         """Group every pooled leaf by its bucket definition.
 
-        Key structure: ``(mode, group_cols, partition_cols, time_agg)``::
+        Key structure: ``(mode, group_cols, partition_cols)``::
 
-            ("global", (), (), None)                  -- pure global
-            ("groupby", ("brand",), (), "sum")        -- groupby, summed per timestamp
-            ("local", (), ("promo",), None)           -- local partition
-            ("nonlocal", (), ("promo",), None)        -- global+partition
-            ("nonlocal", ("brand",), ("promo",), None)-- groupby+partition
+            ("global", (), ())                    -- pure global
+            ("groupby", ("brand",), ())           -- pure groupby
+            ("local", (), ("promo",))             -- local partition
+            ("nonlocal", (), ("promo",))          -- global+partition
+            ("nonlocal", ("brand",), ("promo",))  -- groupby+partition
 
+        ``time_agg`` is not part of it: it changes how a bucket's rows are
+        summarised, not which rows are in it, so it is a view over the state.
         Leaves sharing a key share one `PooledState`, so the panel is
         aggregated once however many transforms read it.
         """
@@ -425,12 +427,21 @@ class TimeSeries:
             state = self._pooled_states.get(key)
             if state is None:
                 continue
-            retentions = [
-                r for r in (leaf._pooled_retention for leaf in leaves) if r is not None
-            ]
-            if len(retentions) != len(leaves):
-                continue  # an unbounded leaf pins the whole state at full history
-            state.trim_to_last(max(keep, *retentions))
+            # the channel block and the raw rows are trimmed on the same
+            # cutoff, except that a row leaf reaching back to ordinal 0
+            # (ExpandingQuantile, LookupLag) keeps the rows whole -- it no
+            # longer pins the block the other leaves read
+            block, rows = [], []
+            for leaf in leaves:
+                kind = rows if leaf._pooled_kernel.needs_rows else block
+                kind.append(leaf._pooled_retention)
+            if any(r is None for r in block):
+                continue
+            bounded = [r for r in block + rows if r is not None]
+            if not bounded:
+                continue
+            keep_rows = len(bounded) < len(block) + len(rows)
+            state.trim_to_last(max(keep, *bounded), keep_rows=keep_rows)
 
     def _update_pooled_states(self, df, sizes, values: np.ndarray) -> None:
         """Fold newly observed timestamps into the bucket aggregates.

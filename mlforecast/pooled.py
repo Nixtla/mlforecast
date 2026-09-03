@@ -672,7 +672,8 @@ class _PooledKernel:
         accumulator kernel runs its inner transforms over each bucket's
         occupied cells instead, and when ``inner`` is given primes it off the
         same pass. ``None`` (the default) sends the kernel down the dense
-        ``transform`` path -- the row kernels.
+        ``transform`` path, which no built-in kernel takes any more; the row
+        kernels compute on the row store through ``fit_rows`` instead.
         """
         return None
 
@@ -976,34 +977,6 @@ class ExpandingMaxK(_ExpandingMixin, _MaxKernel):
         }
 
 
-class LagK(_PooledKernel):
-    """Pooled ``Lag``: the collapsed bucket value at ``ordinal - lag``."""
-
-    channels = ("sum", "count")
-    primes_state = False
-
-    def make_inner(self):
-        return {c: core_tfms.Lag(lag=self.tfm.lag) for c in self.channels}
-
-    def window_cells(self, ordinals):
-        return np.where(ordinals - self.tfm.lag >= 0, 1.0, 0.0)
-
-    def fit_from_store(self, store, _inner=None):
-        # a window of one calendar position: the cell at ``ordinal - lag``, if any
-        lo, hi = store.rolling_bounds(self.tfm.lag, 1)
-        cells = store.channels_for(self.tfm.time_agg, self.channels)
-        return self.combine(store.reduce_windows(lo, hi, 1, cells), 1.0)
-
-    def min_samples(self):
-        return 1.0
-
-    def combine(self, res, k):
-        ok = (self._n_obs(res, k) >= 1.0) & (res["count"] > 0)
-        out = np.full(res["sum"].shape, np.nan)
-        np.divide(res["sum"], res["count"], out=out, where=ok)
-        return out
-
-
 class EwmK(_PooledKernel):
     """Pooled exponentially weighted mean over the per-timestamp value.
 
@@ -1255,7 +1228,6 @@ class LookupLagK(_RowKernel):
 
 
 _KERNELS = {
-    "Lag": LagK,
     "RollingQuantile": RollingQuantileK,
     "ExpandingQuantile": ExpandingQuantileK,
     "SeasonalRollingQuantile": SeasonalRollingQuantileK,
@@ -1294,14 +1266,20 @@ def base_channels(kernel_channels: Sequence[str], time_agg: Optional[str]) -> se
 
 
 def get_kernel(tfm) -> _PooledKernel:
-    name = type(tfm).__name__
-    kernel_cls = _KERNELS.get(name)
-    if kernel_cls is None:
-        raise NotImplementedError(
-            f"{name!r} does not support pooled (global_/groupby/partition_by) "
-            "computation. Supported: " + ", ".join(sorted(_KERNELS))
-        )
-    return kernel_cls(tfm)
+    """The kernel for a transform, resolved along its class hierarchy.
+
+    So a user subclass of a supported transform is pooled like its parent,
+    the way its local path already is.
+    """
+    for cls in type(tfm).__mro__:
+        kernel_cls = _KERNELS.get(cls.__name__)
+        if kernel_cls is not None:
+            return kernel_cls(tfm)
+    raise NotImplementedError(
+        f"{type(tfm).__name__!r} does not support pooled "
+        "(global_/groupby/partition_by) computation. Supported: "
+        + ", ".join(sorted(_KERNELS))
+    )
 
 
 # %% state
@@ -1320,9 +1298,10 @@ class PooledState:
     that start late carry ``count == 0`` cells and so contribute nothing.
 
     At fit the block is not built up front: `build` keeps a `_CellStore` of the
-    occupied cells, the bounded-window kernels compute on it directly, and the
-    dense block is only derived when something reads it whole -- or, after
-    `trim_to_last`, at the width the predict loop keeps.
+    occupied cells (and a `_RowStore` of the raw rows when a row kernel needs
+    them), the kernels compute on those directly, and the dense block is only
+    derived when something reads it whole -- or, after `trim_to_last`, at the
+    width the predict loop keeps.
     """
 
     def __init__(
@@ -1461,8 +1440,8 @@ class PooledState:
     def _require_untrimmed(self) -> None:
         if self.ordinal_offset:
             raise RuntimeError(
-                "PooledState.transform() can't run on a trimmed state: it reads "
-                "the window factor off relative column positions and would re-prime "
+                "The pooled fit pass can't run on a trimmed state: it reads the "
+                "window factor off relative column positions and would re-prime "
                 "the inner transforms from a truncated prefix. Priming must precede "
                 "the keep_last_n trim."
             )
@@ -1626,12 +1605,13 @@ class PooledState:
         self._views = {}
         return remap
 
-    def trim_to_last(self, n: int) -> None:
+    def trim_to_last(self, n: int, keep_rows: bool = False) -> None:
         """Keep only the last `n` calendar cells. ``n_ordinals`` keeps counting.
 
-        The raw row store is trimmed on the same criterion, by absolute ordinal:
-        a row-level kernel reaching further back than `n` would be reading cells
-        that no longer exist either.
+        The raw row store is trimmed on the same criterion, by absolute ordinal,
+        unless ``keep_rows``: a row kernel that reaches back to ordinal 0 needs
+        every row, but it reads nothing off the block, so the block can still
+        be trimmed for the leaves that do.
         """
         if n <= 0 or n >= self.width:
             return
@@ -1645,7 +1625,7 @@ class PooledState:
         self._width = n
         self._store = None
         self._views = {}
-        if self._rows is not None:
+        if self._rows is not None and not keep_rows:
             self._rows.trim(self.n_ordinals - n)
 
     def set_series_bucket_id(self, bucket_id: np.ndarray) -> None:
