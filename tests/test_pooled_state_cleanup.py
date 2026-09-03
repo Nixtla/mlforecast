@@ -128,17 +128,14 @@ def _assert_state_equal(got, ref):
             got.base[name],
             ref.base[name],
         )
-    if ref.rows_ord is None:
-        assert got.rows_ord is None
+    if ref._rows is None:
+        assert got._rows is None
     else:
-        for b, (go, ro) in enumerate(zip(got.rows_ord, ref.rows_ord)):
+        got_rows, ref_rows = got._rows.merged(), ref._rows.merged()
+        for attr in ("ordinal", "y", "indptr"):
             np.testing.assert_array_equal(
-                go,
-                ro,
-            )
-            np.testing.assert_array_equal(
-                got.rows_y[b],
-                ref.rows_y[b],
+                getattr(got_rows, attr),
+                getattr(ref_rows, attr),
             )
 
 

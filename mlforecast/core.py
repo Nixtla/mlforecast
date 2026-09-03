@@ -870,10 +870,13 @@ class TimeSeries:
             for leaf in leaves:
                 leaf._pooled_kernel = get_kernel(leaf)
                 leaf._pooled_inner = leaf._pooled_kernel.make_inner()
-                needed.update(
-                    base_channels(leaf._pooled_kernel.channels, leaf.time_agg)
-                )
-                needs_rows |= getattr(leaf._pooled_kernel, "needs_rows", False)
+                if leaf._pooled_kernel.needs_rows:
+                    # gathers the raw rows; a state of only these keeps no block
+                    needs_rows = True
+                else:
+                    needed.update(
+                        base_channels(leaf._pooled_kernel.channels, leaf.time_agg)
+                    )
             state = PooledState.build(
                 mode=mode,
                 group_cols=list(gcols),

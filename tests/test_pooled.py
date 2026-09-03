@@ -4200,22 +4200,24 @@ def test_lookup_lag_predict_various_lags(engine, lag):
 def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
     """LookupLag at predict: NaN when a bucket has fewer than `lag` occurrences,
     or when the looked-up occurrence carries no valid observation."""
-    from mlforecast.pooled import get_kernel
+    from mlforecast.pooled import _RowStore, get_kernel
 
     tfm = LookupLag(partition_by=["x"])
     tfm._set_core_tfm(2)  # lag = 2
     kernel = get_kernel(tfm)
 
-    # bucket 0: 3 valid occurrences; the one 2 back from ordinal 3 is 20.0
-    ords, ys = np.array([0, 1, 2]), np.array([10.0, 20.0, 30.0])
-    np.testing.assert_allclose(kernel.values_at(ords, ys, np.array([3]))[0], 20.0)
-
-    # a bucket with a single occurrence has nothing 2 back
-    assert np.isnan(kernel.values_at(np.array([0]), np.array([99.0]), np.array([1]))[0])
-
-    # the occurrence 2 back carries NaN, so the lookup is NaN
-    ords, ys = np.array([0, 1, 2]), np.array([5.0, np.nan, 7.0])
-    assert np.isnan(kernel.values_at(ords, ys, np.array([3]))[0])
+    # bucket 0: 3 valid occurrences, so the one 2 back from ordinal 3 is 20.0;
+    # bucket 1: a single occurrence has nothing 2 back;
+    # bucket 2: the occurrence 2 back carries NaN, so the lookup is NaN
+    rows = _RowStore.from_rows(
+        bucket_id=np.array([0, 0, 0, 1, 2, 2, 2]),
+        ordinal=np.array([0, 1, 2, 0, 0, 1, 2]),
+        y=np.array([10.0, 20.0, 30.0, 99.0, 5.0, np.nan, 7.0]),
+        n_buckets=3,
+    )
+    got = kernel.values_at(rows, np.array([0, 1, 2]), np.array([3, 1, 3]))
+    np.testing.assert_allclose(got[0], 20.0)
+    assert np.isnan(got[1]) and np.isnan(got[2])
 
 
 # %% bucket growth must remap per-kernel inner state

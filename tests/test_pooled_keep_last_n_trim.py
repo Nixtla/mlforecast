@@ -158,13 +158,15 @@ def _assert_state_byte_identical(got, ref, ctx=""):
         np.testing.assert_array_equal(
             got.base[name], ref.base[name], err_msg=f"{ctx}:base[{name}]"
         )
-    if ref.rows_ord is None:
-        assert got.rows_ord is None, f"{ctx}:rows-none"
+    if ref._rows is None:
+        assert got._rows is None, f"{ctx}:rows-none"
     else:
-        for b, (go, ro) in enumerate(zip(got.rows_ord, ref.rows_ord)):
-            np.testing.assert_array_equal(go, ro, err_msg=f"{ctx}:rows_ord[{b}]")
+        got_rows, ref_rows = got._rows.merged(), ref._rows.merged()
+        for attr in ("ordinal", "y", "indptr"):
             np.testing.assert_array_equal(
-                got.rows_y[b], ref.rows_y[b], err_msg=f"{ctx}:rows_y[{b}]"
+                getattr(got_rows, attr),
+                getattr(ref_rows, attr),
+                err_msg=f"{ctx}:rows.{attr}",
             )
 
 
@@ -475,7 +477,7 @@ def test_g2_4a_row_gathering_states_keep_full_history():
     states = _preprocess_states(df, 3, {1: [ExpandingQuantile(p=0.5, global_=True)]})
     state = states[("global", (), ())]
     assert state.width == T
-    assert state.base["count"].shape[1] == T
+    assert state._rows.ordinal.min() == 0
 
 
 def test_g2_4b_mixed_finite_and_unbounded_state_not_trimmed():

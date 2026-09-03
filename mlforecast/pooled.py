@@ -454,6 +454,153 @@ def _collapse(
     return {name: builders[name]() for name in (names or _ALL_CHANNELS)}
 
 
+# %% raw rows
+#: bucket stride of the row keys. Ordinals never come near it, so a key built
+#: from any window reach -- even a negative ordinal -- stays inside its own
+#: bucket's range; the price is a bucket count bounded at 2**23.
+_ROW_STRIDE = 1 << 40
+
+
+class _RowStore:
+    """Raw observations in CSR form, sorted by ``(bucket, ordinal)``.
+
+    The row kernels gather windows of actual observations, so they keep every
+    row -- ``O(n_rows)``, never a dense block. One key per row,
+    ``bucket * stride + ordinal``, lets a single ``searchsorted`` place a window
+    bound for every bucket at once.
+
+    Predictions appended at predict are stashed per step and folded in on the
+    next read. They carry the newest ordinal, so each bucket's new rows go
+    after its old ones and the merge is two scatters, no sort.
+    """
+
+    def __init__(self, ordinal: np.ndarray, y: np.ndarray, indptr: np.ndarray):
+        self.ordinal = ordinal
+        self.y = y
+        self.indptr = indptr
+        self._pending: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        self._keys: Optional[np.ndarray] = None
+        self._views: Dict[str, "_RowStore"] = {}
+
+    @classmethod
+    def from_rows(
+        cls, bucket_id: np.ndarray, ordinal: np.ndarray, y: np.ndarray, n_buckets: int
+    ) -> "_RowStore":
+        order = np.lexsort((ordinal, bucket_id))
+        counts = np.bincount(bucket_id, minlength=n_buckets)
+        indptr = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+        return cls(ordinal[order].astype(np.int64), y[order].astype(np.float64), indptr)
+
+    @property
+    def n_buckets(self) -> int:
+        return self.indptr.size - 1
+
+    @property
+    def bucket(self) -> np.ndarray:
+        return np.repeat(np.arange(self.n_buckets), np.diff(self.indptr))
+
+    @property
+    def keys(self) -> np.ndarray:
+        if self._keys is None:
+            self._keys = self.bucket * _ROW_STRIDE + self.ordinal
+        return self._keys
+
+    def search(self, bucket: np.ndarray, ordinal: np.ndarray, side: str) -> np.ndarray:
+        """Row position of ``ordinal`` within ``bucket``, broadcast over both."""
+        return np.searchsorted(self.keys, bucket * _ROW_STRIDE + ordinal, side=side)
+
+    def _invalidate(self) -> None:
+        self._keys = None
+        self._views = {}
+
+    def append(self, bucket_ids: np.ndarray, values: np.ndarray, ordinal: int) -> None:
+        self._pending.append((bucket_ids, values, ordinal))
+
+    def merged(self) -> "_RowStore":
+        """This store with the stashed rows folded in."""
+        if not self._pending:
+            return self
+        pb = np.concatenate([b for b, _, _ in self._pending])
+        pv = np.concatenate([v for _, v, _ in self._pending])
+        po = np.concatenate([np.full(b.size, o) for b, _, o in self._pending])
+        # stable, so within a bucket the rows keep their step order
+        order = np.argsort(pb, kind="stable")
+        pb, pv, po = pb[order], pv[order], po[order]
+        pstarts = np.concatenate(
+            [[0], np.cumsum(np.bincount(pb, minlength=self.n_buckets))]
+        )
+        n_old = self.ordinal.size
+        pos_old = np.arange(n_old) + pstarts[self.bucket]
+        pos_new = self.indptr[1:][pb] + np.arange(pb.size)
+        ordinal = np.empty(n_old + pb.size, dtype=np.int64)
+        y = np.empty(n_old + pb.size, dtype=np.float64)
+        ordinal[pos_old], ordinal[pos_new] = self.ordinal, po
+        y[pos_old], y[pos_new] = self.y, pv
+        self.ordinal, self.y, self.indptr = ordinal, y, self.indptr + pstarts
+        self._pending = []
+        self._invalidate()
+        return self
+
+    def collapsed(self, time_agg: str) -> "_RowStore":
+        """One row per observed ``(bucket, ordinal)``, reduced by ``time_agg``."""
+        view = self._views.get(time_agg)
+        if view is not None:
+            return view
+        keys, y = self.keys, self.y
+        if keys.size:
+            starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+            sizes = np.diff(np.r_[starts, keys.size])
+            if time_agg == "count":
+                v = sizes.astype(np.float64)
+            elif time_agg == "sum":
+                v = np.add.reduceat(y, starts)
+            elif time_agg == "mean":
+                v = np.add.reduceat(y, starts) / sizes
+            elif time_agg == "min":
+                v = np.minimum.reduceat(y, starts)
+            else:
+                v = np.maximum.reduceat(y, starts)
+        else:
+            starts, v = np.empty(0, dtype=np.int64), np.empty(0)
+        bucket = self.bucket[starts]
+        indptr = np.searchsorted(bucket, np.arange(self.n_buckets + 1))
+        view = self._views[time_agg] = _RowStore(self.ordinal[starts], v, indptr)
+        return view
+
+    def trim(self, cutoff: int) -> None:
+        """Drop the rows before ``cutoff``, an absolute ordinal."""
+        self.merged()
+        keep = self.ordinal >= cutoff
+        if keep.all():
+            return
+        counts = np.bincount(self.bucket[keep], minlength=self.n_buckets)
+        self.ordinal, self.y = self.ordinal[keep], self.y[keep]
+        self.indptr = np.concatenate([[0], np.cumsum(counts)])
+        self._invalidate()
+
+    def grow(self, remap: np.ndarray, n_new: int) -> None:
+        """Renumber the buckets into a grown vocabulary.
+
+        ``remap`` is increasing (a sorted vocabulary merged into a sorted one),
+        so the rows keep their order and only the offsets move.
+        """
+        self.merged()
+        counts = np.zeros(n_new, dtype=np.int64)
+        counts[remap] = np.diff(self.indptr)
+        self.indptr = np.concatenate([[0], np.cumsum(counts)])
+        self._invalidate()
+
+    # the arrays are replaced, never written in place, so references suffice
+    def snapshot(self):
+        self.merged()
+        return self.ordinal, self.y, self.indptr
+
+    def restore(self, snap) -> None:
+        self.ordinal, self.y, self.indptr = snap
+        self._pending = []
+        self._invalidate()
+
+
 # %% kernels
 def _grow_rows(arr: np.ndarray, remap: np.ndarray, n_new: int, fill) -> np.ndarray:
     """Permute per-bucket rows into a grown vocabulary; new buckets get ``fill``."""
@@ -494,6 +641,8 @@ class _PooledKernel:
     #: kernels that carry their own recurrence instead of delegating to a
     #: stateful coreforecast transform (see :class:`EwmK`).
     custom: bool = False
+    #: kernels that gather the raw observations (see :class:`_RowKernel`).
+    needs_rows: bool = False
     #: whether the fit pass leaves behind state a later ``update`` reads back.
     #: False for the kernels whose inners recompute from the block on every
     #: update (Rolling*/SeasonalRolling*/Lag) and for the row kernels, which
@@ -969,18 +1118,18 @@ class _RowKernel(_PooledKernel):
 
     Quantiles cannot be recovered from sums and counts, so these gather the rows
     inside each window instead.  Two things keep that affordable: values are only
-    produced at the cells that actually carry rows (the only ones `scatter` ever
-    reads back), and windows of equal length are gathered into one rectangular
-    block so the statistic runs once per distinct length rather than once per
-    position.
+    produced at the cells that actually carry rows (the only ones ever read
+    back), and windows of equal length are gathered into one rectangular block
+    so the statistic runs once per distinct length rather than once per
+    position. Every target is placed by one ``searchsorted`` over the row keys,
+    whatever bucket it is in, so there is no per-bucket loop.
     """
 
-    #: not read by the row gather, but the state needs one channel for its
-    #: width/append/trim bookkeeping
-    channels = ("count",)
+    #: reads the row store, not the channels, so its state carries no block
+    channels = ()
     custom = True
     needs_rows = True
-    #: the gather reads `rows_ord`/`rows_y`, never a primed inner
+    #: the gather reads the raw observations, never a primed inner
     primes_state = False
     #: cap on a temporary gather block, so a long expanding window is processed
     #: in chunks instead of being materialised all at once
@@ -993,17 +1142,24 @@ class _RowKernel(_PooledKernel):
         """Reduce each row of a ``(n_windows, window_len)`` block."""
         raise NotImplementedError
 
-    def window_bounds(self, ords: np.ndarray, targets: np.ndarray):
+    def window_bounds(self, rows: _RowStore, bucket: np.ndarray, ordinal: np.ndarray):
         """Half-open row bounds of each target's window, vectorised."""
         raise NotImplementedError
 
-    def values_at(self, ords, ys, targets):
-        lo, hi = self.window_bounds(ords, targets)
-        out = np.full(targets.shape, np.nan)
+    def _view(self, rows: _RowStore) -> _RowStore:
+        rows = rows.merged()
+        if self.tfm.time_agg is None:
+            return rows
+        return rows.collapsed(self.tfm.time_agg)
+
+    def values_at(self, rows: _RowStore, bucket, ordinal):
+        lo, hi = self.window_bounds(rows, bucket, ordinal)
+        out = np.full(np.shape(ordinal), np.nan)
         lengths = hi - lo
         usable = np.flatnonzero((lengths > 0) & (lengths >= self.min_samples()))
         if usable.size == 0:
             return out
+        ys = rows.y
         order = usable[np.argsort(lengths[usable], kind="stable")]
         sorted_len = lengths[order]
         starts = np.flatnonzero(np.r_[True, sorted_len[1:] != sorted_len[:-1]])
@@ -1017,51 +1173,32 @@ class _RowKernel(_PooledKernel):
                 out[sel] = self.stat(ys[lo[sel][:, None] + offsets])
         return out
 
-    @staticmethod
-    def _occupied(ords: np.ndarray) -> np.ndarray:
-        """Distinct ordinals present, which are the only cells read back."""
-        if ords.size == 0:
-            return ords
-        return ords[np.r_[True, ords[1:] != ords[:-1]]]
+    def fit_rows(self, rows: _RowStore, store: _CellStore) -> np.ndarray:
+        """Fit-time value per occupied cell -- the cells are the targets."""
+        return self.values_at(self._view(rows), store.bucket, store.ordinal)
 
     def run_transform(self, state, _st):
+        store = state._fit_store()
         out = np.full((state.n_buckets, state.width), np.nan)
-        for b in range(state.n_buckets):
-            ords, ys = state.rows(b, self.tfm.time_agg)
-            if ords.size == 0:
-                continue
-            targets = self._occupied(ords)
-            targets = targets[targets < state.width]
-            if targets.size:
-                out[b, targets] = self.values_at(ords, ys, targets)
+        out[store.bucket, store.ordinal] = self.fit_rows(state._rows, store)
         return out
 
     def run_update(self, state, _st):
-        out = np.full(state.n_buckets, np.nan)
-        target = np.array([state.n_ordinals])
-        for b in range(state.n_buckets):
-            ords, ys = state.rows(b, self.tfm.time_agg)
-            if ords.size:
-                out[b] = self.values_at(ords, ys, target)[0]
-        return out
+        n = state.n_buckets
+        targets = np.full(n, state.n_ordinals)
+        return self.values_at(self._view(state._rows), np.arange(n), targets)
 
 
 class _RollingRowMixin:
-    def window_bounds(self, ords, targets):
-        hi_ord = targets - self.lag
+    def window_bounds(self, rows, bucket, ordinal):
+        hi_ord = ordinal - self.lag
         lo_ord = hi_ord - self.tfm.window_size + 1
-        return (
-            np.searchsorted(ords, lo_ord, side="left"),
-            np.searchsorted(ords, hi_ord, side="right"),
-        )
+        return rows.search(bucket, lo_ord, "left"), rows.search(bucket, hi_ord, "right")
 
 
 class _ExpandingRowMixin:
-    def window_bounds(self, ords, targets):
-        return (
-            np.zeros(np.shape(targets), dtype=np.int64),
-            np.searchsorted(ords, targets - self.lag, side="right"),
-        )
+    def window_bounds(self, rows, bucket, ordinal):
+        return rows.indptr[bucket], rows.search(bucket, ordinal - self.lag, "right")
 
     def min_samples(self):
         return 1.0
@@ -1080,17 +1217,18 @@ class ExpandingQuantileK(_ExpandingRowMixin, _RowKernel):
 class SeasonalRollingQuantileK(_RowKernel):
     """Seasonal windows are strided, so the rows are gathered per season offset."""
 
-    def values_at(self, ords, ys, targets):
+    def values_at(self, rows, bucket, ordinal):
         sl, w = self.tfm.season_length, self.tfm.window_size
         ms = self.min_samples()
-        out = np.full(targets.shape, np.nan)
+        out = np.full(np.shape(ordinal), np.nan)
         # one searchsorted pair per (target, season offset) instead of a full
         # membership scan per target
-        wanted = targets[:, None] - self.lag - np.arange(w) * sl
-        lo = np.searchsorted(ords, wanted, side="left")
-        hi = np.searchsorted(ords, np.where(wanted >= 0, wanted, -1), side="right")
+        wanted = ordinal[:, None] - self.lag - np.arange(w) * sl
+        lo = rows.search(bucket[:, None], wanted, "left")
+        hi = rows.search(bucket[:, None], np.where(wanted >= 0, wanted, -1), "right")
         hi = np.where(wanted >= 0, hi, lo)
         counts = (hi - lo).sum(axis=1)
+        ys = rows.y
         for i in np.flatnonzero(counts >= max(ms, 1)):
             vals = np.concatenate(
                 [ys[lo[i, j] : hi[i, j]] for j in range(w) if hi[i, j] > lo[i, j]]
@@ -1107,12 +1245,12 @@ class LookupLagK(_RowKernel):
     away in time that is.
     """
 
-    def values_at(self, ords, ys, targets):
-        j = np.searchsorted(ords, targets, side="left") - self.tfm._core_tfm.lag
-        out = np.full(np.shape(targets), np.nan)
-        ok = (j >= 0) & (j < ys.size)
+    def values_at(self, rows, bucket, ordinal):
+        j = rows.search(bucket, ordinal, "left") - self.tfm._core_tfm.lag
+        out = np.full(np.shape(ordinal), np.nan)
+        ok = j >= rows.indptr[bucket]
         if ok.any():
-            out[ok] = ys[j[ok]]
+            out[ok] = rows.y[j[ok]]
         return out
 
 
@@ -1217,15 +1355,8 @@ class PooledState:
         self.series_bucket_id = series_bucket_id
         self.bucket_uniques = bucket_uniques
         self._views: Dict[str, Dict[str, np.ndarray]] = {}
-        # raw observations, kept only when a row-level kernel needs them
-        self.rows_ord: Optional[List[np.ndarray]] = None
-        self.rows_y: Optional[List[np.ndarray]] = None
-        self._pend_ord: Optional[List[List[int]]] = None
-        self._pend_y: Optional[List[List[float]]] = None
-        #: rows appended since the last flush; a counter rather than a scan, so
-        #: `rows()` stays O(1) when nothing is pending
-        self._n_pending = 0
-        self._rows_views: Dict[Optional[str], Any] = {}
+        #: raw observations, kept only when a row kernel needs them
+        self._rows: Optional[_RowStore] = None
 
     # -- construction ----------------------------------------------------
     @classmethod
@@ -1260,21 +1391,10 @@ class PooledState:
             store=store,
         )
         if needs_rows:
-            obj._set_rows(bucket_id_by_row, ordinal_by_row, y, n_buckets)
+            obj._rows = _RowStore.from_rows(
+                bucket_id_by_row, ordinal_by_row, y, n_buckets
+            )
         return obj
-
-    def _set_rows(self, bid, ordinal, y, n_buckets) -> None:
-        order = np.lexsort((ordinal, bid))
-        rb, ro, ry = bid[order], ordinal[order], y[order]
-        idx = np.arange(n_buckets)
-        starts = np.searchsorted(rb, idx, side="left")
-        ends = np.searchsorted(rb, idx, side="right")
-        self.rows_ord = [ro[a:b].astype(np.int64) for a, b in zip(starts, ends)]
-        self.rows_y = [ry[a:b].astype(np.float64) for a, b in zip(starts, ends)]
-        self._pend_ord = [[] for _ in range(n_buckets)]
-        self._pend_y = [[] for _ in range(n_buckets)]
-        self._n_pending = 0
-        self._rows_views = {}
 
     @property
     def base(self) -> Dict[str, np.ndarray]:
@@ -1292,7 +1412,8 @@ class PooledState:
     def base(self, value: Dict[str, np.ndarray]) -> None:
         self._base = value
         self.channel_names = tuple(value)
-        self._width = next(iter(value.values())).shape[1]
+        if value:  # a row-only state has no channels; its width is tracked alone
+            self._width = next(iter(value.values())).shape[1]
 
     @property
     def width(self) -> int:
@@ -1333,63 +1454,6 @@ class PooledState:
             view.update(_collapse(self.base, time_agg, want - view.keys()))
         return self._views[time_agg]
 
-    def rows(self, b: int, time_agg: Optional[str] = None):
-        """Materialised ``(ordinals, values)`` for one bucket, newest last."""
-        self._flush_pending()
-        if time_agg is None:
-            assert self.rows_ord is not None and self.rows_y is not None
-            return self.rows_ord[b], self.rows_y[b]
-        view = self._rows_views.get(time_agg)
-        if view is None:
-            view = self._collapse_rows(time_agg)
-            self._rows_views[time_agg] = view
-        return view[0][b], view[1][b]
-
-    def _flush_pending(self) -> None:
-        if self._pend_ord is None or self._pend_y is None:
-            return
-        if not self._n_pending:
-            return
-        assert self.rows_ord is not None and self.rows_y is not None
-        for b, pend in enumerate(self._pend_ord):
-            if not pend:
-                continue
-            self.rows_ord[b] = np.concatenate(
-                [self.rows_ord[b], np.asarray(pend, dtype=np.int64)]
-            )
-            self.rows_y[b] = np.concatenate(
-                [self.rows_y[b], np.asarray(self._pend_y[b], dtype=np.float64)]
-            )
-            pend.clear()
-            self._pend_y[b].clear()
-        self._n_pending = 0
-        self._rows_views = {}
-
-    def _collapse_rows(self, time_agg: str):
-        """One row per observed (bucket, timestamp), collapsed by ``time_agg``."""
-        assert self.rows_ord is not None and self.rows_y is not None
-        ords_out, vals_out = [], []
-        for o, v in zip(self.rows_ord, self.rows_y):
-            if o.size == 0:
-                ords_out.append(o)
-                vals_out.append(v)
-                continue
-            starts = np.flatnonzero(np.r_[True, o[1:] != o[:-1]])
-            uniq = o[starts]
-            if time_agg == "count":
-                vals = np.diff(np.r_[starts, o.size]).astype(np.float64)
-            elif time_agg == "sum":
-                vals = np.add.reduceat(v, starts)
-            elif time_agg == "mean":
-                vals = np.add.reduceat(v, starts) / np.diff(np.r_[starts, o.size])
-            elif time_agg == "min":
-                vals = np.minimum.reduceat(v, starts)
-            else:
-                vals = np.maximum.reduceat(v, starts)
-            ords_out.append(uniq)
-            vals_out.append(vals)
-        return ords_out, vals_out
-
     # -- feature computation --------------------------------------------
     def _channel_ga(self, cells: Dict[str, np.ndarray], name: str) -> CoreGroupedArray:
         return _block_ga(cells[name])
@@ -1415,15 +1479,18 @@ class PooledState:
     def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """Per-row feature values at fit, priming ``inner`` where it needs it.
 
-        The channel kernels compute on the cell store, so nothing full-width is
-        built for them. The row kernels take the dense block -- which
-        materialises ``(n_buckets, width)`` per channel -- and read the occupied
-        cells out of it.
+        The channel kernels compute on the cell store and the row kernels on
+        the row store, so nothing full-width is built; the dense ``transform``
+        stays as the fallback for a kernel defining neither.
         """
         store = self._fit_store()
-        values = kernel.fit_from_store(store, inner)
-        if values is None:
-            values = store.gather(self.transform(kernel, inner), 0)
+        if kernel.needs_rows:
+            assert self._rows is not None
+            values = kernel.fit_rows(self._rows, store)
+        else:
+            values = kernel.fit_from_store(store, inner)
+            if values is None:
+                values = store.gather(self.transform(kernel, inner), 0)
         return store.row_values(values)
 
     def prime(self, kernel, inner: Dict[str, Any]) -> None:
@@ -1506,13 +1573,9 @@ class PooledState:
             )
         self._width += 1
         self._extend_views(col)
-        if self._pend_ord is not None and self._pend_y is not None:
-            # row kernels re-gather from history, so predictions land here too;
-            # never trimmed, which is why they cost O(n_rows) memory
-            for bi, yi in zip(b.tolist(), v.tolist()):
-                self._pend_ord[bi].append(self.n_ordinals)
-                self._pend_y[bi].append(yi)
-            self._n_pending += len(b)
+        if self._rows is not None:
+            # row kernels re-gather from history, so predictions land there too
+            self._rows.append(b, v, self.n_ordinals)
         self.n_ordinals += 1
 
     def _extend_views(self, col: Dict[str, np.ndarray]) -> None:
@@ -1552,19 +1615,8 @@ class PooledState:
                 grown[:] = -np.inf
             grown[remap] = arr
             self.base[name] = grown
-        if self.rows_ord is not None and self.rows_y is not None:
-            ro: List[np.ndarray] = [np.empty(0, np.int64) for _ in range(n_new)]
-            ry: List[np.ndarray] = [np.empty(0, np.float64) for _ in range(n_new)]
-            po: List[List[int]] = [[] for _ in range(n_new)]
-            py: List[List[float]] = [[] for _ in range(n_new)]
-            for old, new in enumerate(remap):
-                ro[new], ry[new] = self.rows_ord[old], self.rows_y[old]
-                if self._pend_ord is not None and self._pend_y is not None:
-                    po[new], py[new] = self._pend_ord[old], self._pend_y[old]
-            self.rows_ord, self.rows_y = ro, ry
-            if self._pend_ord is not None:
-                self._pend_ord, self._pend_y = po, py
-                self._n_pending = sum(len(x) for x in po)
+        if self._rows is not None:
+            self._rows.grow(remap, n_new)
         known = self.series_bucket_id >= 0
         self.series_bucket_id = np.where(
             known, remap[np.clip(self.series_bucket_id, 0, None)], -1
@@ -1572,7 +1624,6 @@ class PooledState:
         self.bucket_uniques = merged
         self.n_buckets = n_new
         self._views = {}
-        self._rows_views = {}
         return remap
 
     def trim_to_last(self, n: int) -> None:
@@ -1594,15 +1645,8 @@ class PooledState:
         self._width = n
         self._store = None
         self._views = {}
-        if self.rows_ord is not None and self.rows_y is not None:
-            self._flush_pending()
-            cutoff = self.n_ordinals - n
-            for b, ords in enumerate(self.rows_ord):
-                if ords.size and ords[0] < cutoff:
-                    keep = int(np.searchsorted(ords, cutoff, side="left"))
-                    self.rows_ord[b] = ords[keep:]
-                    self.rows_y[b] = self.rows_y[b][keep:]
-            self._rows_views = {}
+        if self._rows is not None:
+            self._rows.trim(self.n_ordinals - n)
 
     def set_series_bucket_id(self, bucket_id: np.ndarray) -> None:
         self.series_bucket_id = bucket_id
@@ -1611,36 +1655,31 @@ class PooledState:
     def snapshot(self):
         # aggregates are only appended to during predict, so copying the array
         # references is enough -- no deep copy of the whole state per model
-        self._flush_pending()
         return (
             dict(self.base),
+            self._width,
             self.n_ordinals,
             self.series_bucket_id,
             self.n_buckets,
             self.bucket_uniques,
-            list(self.rows_ord) if self.rows_ord is not None else None,
-            list(self.rows_y) if self.rows_y is not None else None,
+            self._rows.snapshot() if self._rows is not None else None,
         )
 
     def restore(self, snap) -> None:
         (
             base,
+            self._width,
             self.n_ordinals,
             self.series_bucket_id,
             self.n_buckets,
             self.bucket_uniques,
-            rows_ord,
-            rows_y,
+            rows,
         ) = snap
         self.base = dict(base)
-        self.rows_ord = list(rows_ord) if rows_ord is not None else None
-        self.rows_y = list(rows_y) if rows_y is not None else None
-        if self.rows_ord is not None:
-            self._pend_ord = [[] for _ in range(self.n_buckets)]
-            self._pend_y = [[] for _ in range(self.n_buckets)]
-            self._n_pending = 0
+        if rows is not None:
+            assert self._rows is not None
+            self._rows.restore(rows)
         self._views = {}
-        self._rows_views = {}
 
     def __repr__(self) -> str:
         return (
