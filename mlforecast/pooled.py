@@ -205,6 +205,36 @@ def _build_cells(
 
 _ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
 
+#: Cell budget (buckets x calendar columns) for one fit-time chunk's source
+#: block. ``combine`` keeps several same-shaped temporaries live at its peak, so
+#: this bounds the fit transient at a small multiple of ``8 * _MAX_CHUNK_CELLS``
+#: however wide the calendar is. Same units as ``_RowKernel._max_gather``, which
+#: caps a row-gather block rather than one that gets multiplied.
+_MAX_CHUNK_CELLS = 1 << 20
+
+
+def _block_ga(block: np.ndarray) -> CoreGroupedArray:
+    """Wrap a ``(n_buckets, n_cols)`` block as one coreforecast group per bucket."""
+    n_buckets, n_cols = block.shape
+    data = np.ascontiguousarray(block).ravel()
+    indptr = np.arange(0, (n_buckets + 1) * n_cols, n_cols, dtype=np.int32)
+    return CoreGroupedArray(data, indptr)
+
+
+def _chunk_cols(n_buckets: int, width: int, lookback: int) -> int:
+    """Output columns per fit chunk; ``width`` when one chunk already fits.
+
+    Two constraints pull against each other: a chunk's source block spans
+    ``lookback + chunk`` columns, which the budget caps, but the lookback is
+    re-read by every chunk, so holding the chunk to at least the lookback keeps
+    that rework under 2x. The floor can exceed the budget, and only does when
+    ``n_buckets x lookback`` already does -- which is the width the trimmed
+    state keeps anyway, so there is nothing to save below it.
+    """
+    budget = max(1, _MAX_CHUNK_CELLS // max(n_buckets, 1))
+    chunk = max(budget - lookback, lookback, 1)
+    return width if chunk >= width else chunk
+
 
 def _collapse(
     cells: Dict[str, np.ndarray],
@@ -284,6 +314,12 @@ class _PooledKernel:
     #: kernels that carry their own recurrence instead of delegating to a
     #: stateful coreforecast transform (see :class:`EwmK`).
     custom: bool = False
+    #: whether ``transform`` leaves behind state a later ``update`` reads back.
+    #: False for the kernels whose inners recompute from the block on every
+    #: update (Rolling*/SeasonalRolling*/Lag) and for the row kernels, which
+    #: re-gather from the raw observations; only the accumulator-carrying
+    #: kernels (Expanding*, EWM) need the priming pass to run at all.
+    primes_state: bool = True
 
     def __init__(self, tfm):
         self.tfm = tfm
@@ -294,6 +330,22 @@ class _PooledKernel:
 
     def window_cells(self, ordinals: np.ndarray) -> np.ndarray:
         raise NotImplementedError
+
+    def lookback(self) -> Optional[int]:
+        """Source columns *before* an output column that its window reaches.
+
+        The counterpart to ``window_cells``: that says how many source cells the
+        window spans at an ordinal, this says how far back the oldest of them
+        sits -- which is what lets the block be computed a column range at a
+        time instead of at full calendar width.
+
+        ``None`` means unbounded (``Expanding*``, ``EWM``) or not expressed over
+        the channel blocks at all (the row kernels), and disables fit chunking.
+        Numerically equal to the transform's ``_pooled_retention`` wherever both
+        are finite: the same distance, measured from the output ordinal rather
+        than from the last stored column.
+        """
+        return None
 
     def min_samples(self) -> float:
         ms = getattr(self.tfm, "min_samples", None)
@@ -396,18 +448,30 @@ class _MaxKernel(_PooledKernel):
 
 
 class _RollingMixin:
+    primes_state = False
+
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, self.tfm.window_size).astype(float)
+
+    def lookback(self):
+        # oldest cell in the window at t is t - lag - window_size + 1
+        return self.lag + self.tfm.window_size - 1
 
     def _inner(self, cls, **kw):
         return cls(lag=self.lag, window_size=self.tfm.window_size, min_samples=1, **kw)
 
 
 class _SeasonalMixin:
+    primes_state = False
+
     def window_cells(self, ordinals):
         sl = self.tfm.season_length
         avail = np.floor_divide(np.maximum(ordinals - self.lag, -1), sl) + 1
         return np.clip(avail, 0, self.tfm.window_size).astype(float)
+
+    def lookback(self):
+        # the window strides back window_size - 1 seasons from t - lag
+        return self.lag + (self.tfm.window_size - 1) * self.tfm.season_length
 
     def _inner(self, cls, **kw):
         return cls(
@@ -512,12 +576,16 @@ class LagK(_PooledKernel):
     """Pooled ``Lag``: the collapsed bucket value at ``ordinal - lag``."""
 
     channels = ("sum", "count")
+    primes_state = False
 
     def make_inner(self):
         return {c: core_tfms.Lag(lag=self.tfm.lag) for c in self.channels}
 
     def window_cells(self, ordinals):
         return np.where(ordinals - self.tfm.lag >= 0, 1.0, 0.0)
+
+    def lookback(self):
+        return self.lag
 
     def min_samples(self):
         return 1.0
@@ -624,6 +692,8 @@ class _RowKernel(_PooledKernel):
     channels = ("count",)
     custom = True
     needs_rows = True
+    #: the gather reads `rows_ord`/`rows_y`, never a primed inner
+    primes_state = False
     #: cap on a temporary gather block, so a long expanding window is processed
     #: in chunks instead of being materialised all at once
     _max_gather = 1 << 22
@@ -853,6 +923,12 @@ class PooledState:
         #: `rows()` stays O(1) when nothing is pending
         self._n_pending = 0
         self._rows_views: Dict[Optional[str], Any] = {}
+        #: row -> (bucket, ordinal) for the fit pass, and those rows grouped by
+        #: ordinal so a column range maps to a contiguous slice. Set by `build`,
+        #: dropped once the features exist.
+        self._fit_row_bid: Optional[np.ndarray] = None
+        self._fit_row_ord: Optional[np.ndarray] = None
+        self._fit_row_order: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
     # -- construction ----------------------------------------------------
     @classmethod
@@ -994,14 +1070,9 @@ class PooledState:
 
     # -- feature computation --------------------------------------------
     def _channel_ga(self, cells: Dict[str, np.ndarray], name: str) -> CoreGroupedArray:
-        data = np.ascontiguousarray(cells[name]).ravel()
-        indptr = np.arange(
-            0, (self.n_buckets + 1) * self.width, self.width, dtype=np.int32
-        )
-        return CoreGroupedArray(data, indptr)
+        return _block_ga(cells[name])
 
-    def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
-        """Full ``(n_buckets, width)`` feature block, priming the inner state."""
+    def _require_untrimmed(self) -> None:
         if self.ordinal_offset:
             raise RuntimeError(
                 "PooledState.transform() can't run on a trimmed state: it reads "
@@ -1009,6 +1080,97 @@ class PooledState:
                 "the inner transforms from a truncated prefix. Priming must precede "
                 "the keep_last_n trim."
             )
+
+    def _chunk_cells(
+        self,
+        time_agg: Optional[str],
+        names: Optional[Collection[str]],
+        lo: int,
+        hi: int,
+    ) -> Dict[str, np.ndarray]:
+        """Channels over absolute column range ``[lo, hi)``, uncached.
+
+        ``_collapse`` is elementwise per cell, so collapsing a column slice gives
+        exactly that slice of the full collapsed view -- and skips building a
+        full-width one at fit that ``trim_to_last`` would immediately discard.
+        """
+        window = {name: block[:, lo:hi] for name, block in self.base.items()}
+        if time_agg is None:
+            return window
+        return _collapse(window, time_agg, set(names or _ALL_CHANNELS) | {"count"})
+
+    def _transform_range(
+        self, kernel, inner: Dict[str, Any], start: int, stop: int
+    ) -> np.ndarray:
+        """Feature block for absolute output columns ``[start, stop)``.
+
+        The window at ``start`` reaches ``lookback`` columns further back, so the
+        inner transform is fed ``[lo, stop)`` and its first ``start - lo`` columns
+        are dropped. Every window in the kept range is complete inside that slice,
+        so the transform cannot tell it is looking at one -- except through the
+        accumulator it carries, which is float-associativity noise, not a
+        different answer.
+        """
+        lo = max(start - kernel.lookback(), 0)
+        cells = self._chunk_cells(kernel.tfm.time_agg, kernel.channels, lo, stop)
+        n_cols = stop - lo
+        res = {
+            name: tfm.transform(_block_ga(cells[name])).reshape(self.n_buckets, n_cols)[
+                :, start - lo :
+            ]
+            for name, tfm in inner.items()
+        }
+        # absolute ordinals: `k` is the window factor at the output position, not
+        # at the position within the chunk
+        k = kernel.window_cells(np.arange(start, stop))[None, :]
+        return kernel.combine(res, k)
+
+    def _fit_rows_by_ordinal(self) -> Tuple[np.ndarray, np.ndarray]:
+        """``(perm, offsets)`` grouping the fit rows by calendar ordinal.
+
+        ``_fit_row_ord`` follows the id-then-time row order, so it is not sorted
+        by ordinal. One stable argsort, shared by every leaf on the state, turns
+        each column range into a contiguous slice of ``perm``.
+        """
+        if self._fit_row_order is None:
+            ords = self._fit_row_ord
+            assert ords is not None
+            perm = np.argsort(ords, kind="stable")
+            offsets = np.searchsorted(ords[perm], np.arange(self.width + 1))
+            self._fit_row_order = (perm, offsets)
+        return self._fit_row_order
+
+    def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
+        """Per-row feature values at fit, without holding the whole block.
+
+        The unchunked path materialises ``(n_buckets, width)`` per channel plus
+        several same-shaped temporaries inside ``combine``, scatters ``n_rows``
+        values out of the result and drops the rest. Chunking the calendar bounds
+        that at ``n_buckets x (lookback + chunk)`` for the kernels whose window
+        reach is bounded and whose inners carry nothing between calls -- the set
+        ``lookback()`` is defined for.
+        """
+        self._require_untrimmed()
+        bid, ord_ = self._fit_row_bid, self._fit_row_ord
+        assert bid is not None and ord_ is not None
+        chunk = self.width
+        if kernel.lookback() is not None and not kernel.primes_state:
+            chunk = _chunk_cols(self.n_buckets, self.width, kernel.lookback())
+        if chunk >= self.width:
+            return self.scatter(self.transform(kernel, inner), bid, ord_)
+        perm, offsets = self._fit_rows_by_ordinal()
+        out = np.full(ord_.shape, np.nan)
+        for start in range(0, self.width, chunk):
+            stop = min(start + chunk, self.width)
+            rows = perm[offsets[start] : offsets[stop]]
+            if rows.size:
+                block = self._transform_range(kernel, inner, start, stop)
+                out[rows] = self.scatter(block, bid[rows], ord_[rows], start)
+        return out
+
+    def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
+        """Full ``(n_buckets, width)`` feature block, priming the inner state."""
+        self._require_untrimmed()
         if kernel.custom:
             return kernel.run_transform(self, inner["_state"])
         cells = self.channels(kernel.tfm.time_agg, kernel.channels)
@@ -1033,9 +1195,11 @@ class PooledState:
         k = kernel.window_cells(np.array([self.n_ordinals]))[None, :]
         return kernel.combine(res, k)[:, 0]
 
-    def scatter(self, block, bucket_id_by_row, ordinal_by_row) -> np.ndarray:
+    def scatter(self, block, bucket_id_by_row, ordinal_by_row, start=0) -> np.ndarray:
+        """Read a block back onto rows. ``start`` is its first absolute column."""
+        n_cols = block.shape[1]
         return block.ravel()[
-            bucket_id_by_row.astype(np.int64) * self.width + ordinal_by_row
+            bucket_id_by_row.astype(np.int64) * n_cols + (ordinal_by_row - start)
         ]
 
     def broadcast(self, values: np.ndarray) -> np.ndarray:

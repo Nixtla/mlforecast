@@ -33,7 +33,9 @@ assert the *contract* instead:
 * **G2.5 prime-then-trim** -- ``PooledState.transform`` refuses to run on a
   trimmed state. It reads the window factor off relative column positions, so
   re-priming from a truncated prefix would be silently wrong; every legitimate
-  caller runs before ``_apply_keep_last_n``.
+  caller runs before ``_apply_keep_last_n``. Only the accumulator-carrying
+  kernels are primed at all: a stateless inner declares ``primes_state = False``
+  and is skipped, so it never reaches the guard in the first place.
 * **G2.6 EWM fails loudly** -- ``EwmK.run_update`` raises when a cell it needs
   existed and was trimmed away, rather than skipping it and under-decaying.
   Source ordinals that predate the calendar are still skipped, which is the
@@ -591,10 +593,9 @@ def test_g2_5_transform_on_trimmed_state_raises():
         state.transform(leaf._pooled_kernel, leaf._pooled_inner)
 
 
-def test_g2_5_reinitializing_states_after_a_trim_raises():
-    """The integration flavour: re-priming a trimmed instance is caught."""
+def _preprocessed_then_trimmed(lag_transforms):
     df = _make_panel(20)
-    fcst = _build_fcst({1: [RollingMean(4, global_=True)]})
+    fcst = _build_fcst(lag_transforms)
     fcst.preprocess(
         df,
         id_col=ID,
@@ -604,8 +605,33 @@ def test_g2_5_reinitializing_states_after_a_trim_raises():
         static_features=["brand"],
         dropna=False,
     )
+    return fcst
+
+
+def test_g2_5_reinitializing_states_after_a_trim_raises():
+    """The integration flavour: re-priming a trimmed instance is caught.
+
+    Uses an accumulator leaf because only those are primed at all -- a stateless
+    inner is skipped outright, which is the stronger version of the same
+    guarantee and is pinned just below.
+    """
+    fcst = _preprocessed_then_trimmed({1: [ExpandingMean(global_=True)]})
     with pytest.raises(RuntimeError, match="trimmed state"):
         fcst.ts._initialize_lag_transform_states()
+
+
+def test_g2_5_stateless_leaves_are_not_reprimed_at_all():
+    """`Rolling*`/`SeasonalRolling*`/`Lag` carry nothing between calls.
+
+    Their `transform` assigns no inner state and their `update` re-derives from
+    the stored block, so priming them would build a full-width block only to
+    discard it. Skipping it also means a trimmed state is never handed to
+    `transform` on this path, rather than being handed one and rejecting it.
+    """
+    fcst = _preprocessed_then_trimmed({1: [RollingMean(4, global_=True)]})
+    state = fcst.ts._pooled_states[("global", (), ())]
+    assert state.ordinal_offset > 0
+    fcst.ts._initialize_lag_transform_states()  # must not raise
 
 
 # --------------------------------------------------------------------------- #

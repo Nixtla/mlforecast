@@ -385,8 +385,7 @@ class TimeSeries:
             if updates_only:
                 vals = state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 return state.broadcast(vals)
-            block = state.transform(leaf._pooled_kernel, leaf._pooled_inner)
-            return state.scatter(block, state._fit_row_bid, state._fit_row_ord)
+            return state.fit_values(leaf._pooled_kernel, leaf._pooled_inner)
 
         return tfm._pooled_eval(eval_leaf)
 
@@ -525,6 +524,7 @@ class TimeSeries:
         for state in getattr(self, "_pooled_states", {}).values():
             # O(n_rows) fit-time scatter indices; not needed once features exist
             state._fit_row_bid = state._fit_row_ord = None
+            state._fit_row_order = None
 
     def _initialize_lag_transform_states(self) -> None:
         """Materialize lag transform state for subsequent update-based prediction.
@@ -540,8 +540,15 @@ class TimeSeries:
         """
         for name, tfm in self._get_pooled_features().items():
             for leaf in tfm._pooled_leaves():
+                kernel = leaf._pooled_kernel
+                if not kernel.primes_state:
+                    # rolling/seasonal/lag `transform` assigns no state (their
+                    # `update` re-derives from the block) and the row kernels
+                    # re-gather from the raw observations, so priming them would
+                    # build a full-width block only to discard it
+                    continue
                 state = self._pooled_states[leaf._pooled_key]
-                state.transform(leaf._pooled_kernel, leaf._pooled_inner)
+                state.transform(kernel, leaf._pooled_inner)
         core_tfms = self._get_core_lag_tfms()
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
