@@ -661,3 +661,33 @@ def test_g2_7_bounded_row_kernels_trim_to_their_gather_reach(make_tfm, reach):
         )
         preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
     np.testing.assert_allclose(preds["trimmed"], preds["full"], rtol=1e-9, atol=1e-9)
+
+
+def test_g2_1_trimmed_accumulator_survives_update_then_predict():
+    """The composite path: trim, then feed new observations, then forecast.
+
+    `update` appends to a block that no longer holds the prefix while the inner
+    accumulator still carries it, so this is where a retention that is right for
+    `predict` alone would still come apart.
+    """
+    T = 20
+    df = _make_panel(T)
+    head = df[df[TIME] < T]
+    tail = df[df[TIME] == T]
+    h = 4
+    X_df = _future_X(h)
+
+    preds = {}
+    for tag, kln in [("trimmed", 1), ("full", _NO_TRIM)]:
+        fcst = _build_fcst(_accumulator_lag_transforms())
+        fcst.fit(
+            head,
+            id_col=ID,
+            time_col=TIME,
+            target_col=TARGET,
+            static_features=["brand"],
+            keep_last_n=kln,
+        )
+        fcst.ts.update(tail)
+        preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
+    np.testing.assert_allclose(preds["trimmed"], preds["full"], rtol=1e-9, atol=1e-9)
