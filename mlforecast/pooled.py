@@ -190,6 +190,7 @@ class _CellStore:
         self.width = width
         flat = bucket_id.astype(np.int64) * width + ordinal
         keys, cell = np.unique(flat, return_inverse=True)
+        self.keys = keys
         self.cell_of_row = cell.ravel().astype(np.int64, copy=False)
         self.bucket = keys // width
         self.ordinal = keys - self.bucket * width
@@ -213,10 +214,112 @@ class _CellStore:
             np.maximum.at(buf, cell_v, y_v)
             self.chan["max"] = buf
         self._by_ordinal: Optional[Tuple[np.ndarray, np.ndarray]] = None
+        self._views: Dict[str, Dict[str, np.ndarray]] = {}
+        self._seasonal: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
     @property
     def size(self) -> int:
         return self.bucket.size
+
+    def channels_for(
+        self, time_agg: Optional[str], names: Collection[str]
+    ) -> Dict[str, np.ndarray]:
+        """Per-cell channels, collapsed by ``time_agg`` if given (cached)."""
+        if time_agg is None:
+            return {name: self.chan[name] for name in names}
+        want = set(names) | {"count"}
+        view = self._views.get(time_agg)
+        if view is None:
+            view = self._views[time_agg] = _collapse(self.chan, time_agg, want)
+        elif not want <= view.keys():
+            view.update(_collapse(self.chan, time_agg, want - view.keys()))
+        return {name: view[name] for name in names}
+
+    # -- windows ---------------------------------------------------------
+    # A window is a run of consecutive cells in some layout of the store: the
+    # store itself for calendar windows, or a phase-major reordering for
+    # seasonal ones. Bounds come from two searchsorted calls over every cell at
+    # once, and a window of `w` calendar positions holds at most `w` cells.
+
+    def rolling_bounds(self, lag: int, window: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Half-open cell bounds of ``[t - lag - window + 1, t - lag]`` per cell.
+
+        The clamps keep both keys inside the cell's own bucket, so a window
+        that reaches before the calendar starts is simply shorter, and one
+        that starts before ordinal ``lag`` is empty.
+        """
+        base = self.bucket * self.width
+        src = self.ordinal - lag
+        hi = np.searchsorted(self.keys, base + np.maximum(src, -1), side="right")
+        lo = np.searchsorted(
+            self.keys, base + np.maximum(src - window + 1, 0), side="left"
+        )
+        return lo, hi
+
+    def seasonal_layout(self, season_length: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Cells reordered by ``(bucket, ordinal % season_length, ordinal)``.
+
+        In that order the cells of one seasonal window -- same bucket, same
+        phase, ``window_size`` seasons back -- are consecutive.
+        """
+        layout = self._seasonal.get(season_length)
+        if layout is None:
+            phase = self.ordinal % season_length
+            keys = (self.bucket * season_length + phase) * self.width + self.ordinal
+            perm = np.argsort(keys, kind="stable")
+            layout = self._seasonal[season_length] = (keys[perm], perm)
+        return layout
+
+    def seasonal_bounds(
+        self, lag: int, window: int, season_length: int
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Bounds in the seasonal layout, plus the layout's cell permutation."""
+        keys, perm = self.seasonal_layout(season_length)
+        src = self.ordinal - lag
+        has = src >= 0
+        phase = np.where(has, src % season_length, 0)
+        base = (self.bucket * season_length + phase) * self.width
+        # the earliest ordinal on this phase is the phase itself
+        first = np.maximum(src - (window - 1) * season_length, phase)
+        lo = np.searchsorted(keys, base + first, side="left")
+        hi = np.searchsorted(keys, base + np.where(has, src, 0), side="right")
+        return lo, np.where(has, hi, lo), perm
+
+    def reduce_windows(
+        self,
+        lo: np.ndarray,
+        hi: np.ndarray,
+        window: int,
+        arrays: Dict[str, np.ndarray],
+        perm: Optional[np.ndarray] = None,
+    ) -> Dict[str, np.ndarray]:
+        """Reduce each window's cells: sums, or extremes for ``min``/``max``.
+
+        Gathered in row blocks capped at ``_MAX_GATHER`` cells, so the transient
+        is bounded whatever the window or the panel. Cells past ``hi`` are
+        masked with the channel's fill, which every reduction ignores.
+        """
+        n = lo.size
+        out = {name: np.full(n, _FILL.get(name, 0.0)) for name in arrays}
+        offsets = np.arange(window)
+        step = max(1, _MAX_GATHER // window)
+        last = max(self.size - 1, 0)
+        for a in range(0, n, step):
+            z = slice(a, min(a + step, n))
+            idx = lo[z][:, None] + offsets
+            ok = idx < hi[z][:, None]
+            np.minimum(idx, last, out=idx)
+            if perm is not None:
+                idx = perm[idx]
+            for name, arr in arrays.items():
+                vals = np.where(ok, arr[idx], _FILL.get(name, 0.0))
+                if name == "min":
+                    out[name][z] = vals.min(axis=1)
+                elif name == "max":
+                    out[name][z] = vals.max(axis=1)
+                else:
+                    out[name][z] = vals.sum(axis=1)
+        return out
 
     @property
     def nbytes(self) -> int:
@@ -276,12 +379,11 @@ def _build_cells(
 
 _ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
 
-#: Cell budget (buckets x calendar columns) for one fit-time chunk's source
-#: block. ``combine`` keeps several same-shaped temporaries live at its peak, so
-#: this bounds the fit transient at a small multiple of ``8 * _MAX_CHUNK_CELLS``
-#: however wide the calendar is. Same units as ``_RowKernel._max_gather``, which
-#: caps a row-gather block rather than one that gets multiplied.
-_MAX_CHUNK_CELLS = 1 << 20
+#: Cells per temporary gather block, for the window reductions at fit and the
+#: row kernels' gathers: a few same-shaped temporaries live at once, so this
+#: bounds those transients at a small multiple of ``8 * _MAX_GATHER`` bytes
+#: whatever the window or the panel.
+_MAX_GATHER = 1 << 20
 
 
 def _block_ga(block: np.ndarray) -> CoreGroupedArray:
@@ -290,21 +392,6 @@ def _block_ga(block: np.ndarray) -> CoreGroupedArray:
     data = np.ascontiguousarray(block).ravel()
     indptr = np.arange(0, (n_buckets + 1) * n_cols, n_cols, dtype=np.int32)
     return CoreGroupedArray(data, indptr)
-
-
-def _chunk_cols(n_buckets: int, width: int, lookback: int) -> int:
-    """Output columns per fit chunk; ``width`` when one chunk already fits.
-
-    Two constraints pull against each other: a chunk's source block spans
-    ``lookback + chunk`` columns, which the budget caps, but the lookback is
-    re-read by every chunk, so holding the chunk to at least the lookback keeps
-    that rework under 2x. The floor can exceed the budget, and only does when
-    ``n_buckets x lookback`` already does -- which is the width the trimmed
-    state keeps anyway, so there is nothing to save below it.
-    """
-    budget = max(1, _MAX_CHUNK_CELLS // max(n_buckets, 1))
-    chunk = max(budget - lookback, lookback, 1)
-    return width if chunk >= width else chunk
 
 
 def _collapse(
@@ -402,19 +489,18 @@ class _PooledKernel:
     def window_cells(self, ordinals: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
-    def lookback(self) -> Optional[int]:
-        """Source columns *before* an output column that its window reaches.
+    def fit_from_store(self, store: "_CellStore") -> Optional[np.ndarray]:  # noqa: ARG002
+        """Fit-time value per occupied cell, computed on the cell store.
 
-        The counterpart to ``window_cells``: that says how many source cells the
-        window spans at an ordinal, this says how far back the oldest of them
-        sits -- which is what lets the block be computed a column range at a
-        time instead of at full calendar width.
+        Defined for the kernels whose window is bounded: each window is a run of
+        at most ``window_size`` consecutive cells in some layout of the store,
+        so it can be gathered and reduced without ever building the dense
+        block. ``None`` (the default) sends the kernel down the dense
+        ``transform`` path -- the accumulator kernels, which that pass also
+        primes, and the row kernels.
 
-        ``None`` means unbounded (``Expanding*``, ``EWM``) or not expressed over
-        the channel blocks at all (the row kernels), and disables fit chunking.
-        Numerically equal to the transform's ``_pooled_retention`` wherever both
-        are finite: the same distance, measured from the output ordinal rather
-        than from the last stored column.
+        The window sums are combined with ``k = 1``: they already *are* sums,
+        so the count needs no ``k * mean`` round trip and is exact.
         """
         return None
 
@@ -534,9 +620,11 @@ class _RollingMixin:
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, self.tfm.window_size).astype(float)
 
-    def lookback(self):
-        # oldest cell in the window at t is t - lag - window_size + 1
-        return self.lag + self.tfm.window_size - 1
+    def fit_from_store(self, store):
+        window = self.tfm.window_size
+        lo, hi = store.rolling_bounds(self.lag, window)
+        cells = store.channels_for(self.tfm.time_agg, self.channels)
+        return self.combine(store.reduce_windows(lo, hi, window, cells), 1.0)
 
     def _inner(self, cls, **kw):
         return cls(lag=self.lag, window_size=self.tfm.window_size, min_samples=1, **kw)
@@ -550,9 +638,11 @@ class _SeasonalMixin:
         avail = np.floor_divide(np.maximum(ordinals - self.lag, -1), sl) + 1
         return np.clip(avail, 0, self.tfm.window_size).astype(float)
 
-    def lookback(self):
-        # the window strides back window_size - 1 seasons from t - lag
-        return self.lag + (self.tfm.window_size - 1) * self.tfm.season_length
+    def fit_from_store(self, store):
+        window = self.tfm.window_size
+        lo, hi, perm = store.seasonal_bounds(self.lag, window, self.tfm.season_length)
+        cells = store.channels_for(self.tfm.time_agg, self.channels)
+        return self.combine(store.reduce_windows(lo, hi, window, cells, perm), 1.0)
 
     def _inner(self, cls, **kw):
         return cls(
@@ -665,8 +755,11 @@ class LagK(_PooledKernel):
     def window_cells(self, ordinals):
         return np.where(ordinals - self.tfm.lag >= 0, 1.0, 0.0)
 
-    def lookback(self):
-        return self.lag
+    def fit_from_store(self, store):
+        # a window of one calendar position: the cell at ``ordinal - lag``, if any
+        lo, hi = store.rolling_bounds(self.tfm.lag, 1)
+        cells = store.channels_for(self.tfm.time_agg, self.channels)
+        return self.combine(store.reduce_windows(lo, hi, 1, cells), 1.0)
 
     def min_samples(self):
         return 1.0
@@ -777,7 +870,7 @@ class _RowKernel(_PooledKernel):
     primes_state = False
     #: cap on a temporary gather block, so a long expanding window is processed
     #: in chunks instead of being materialised all at once
-    _max_gather = 1 << 22
+    _max_gather = _MAX_GATHER
 
     def make_inner(self):
         return {"_state": {}}
@@ -975,8 +1068,8 @@ class PooledState:
     that start late carry ``count == 0`` cells and so contribute nothing.
 
     At fit the block is not built up front: `build` keeps a `_CellStore` of the
-    occupied cells, `fit_values` scatters column ranges out of it, and the dense
-    block is only derived when something reads it whole -- or, after
+    occupied cells, the bounded-window kernels compute on it directly, and the
+    dense block is only derived when something reads it whole -- or, after
     `trim_to_last`, at the width the predict loop keeps.
     """
 
@@ -1196,65 +1289,14 @@ class PooledState:
                 "the keep_last_n trim."
             )
 
-    def _chunk_cells(
-        self,
-        time_agg: Optional[str],
-        names: Optional[Collection[str]],
-        lo: int,
-        hi: int,
-    ) -> Dict[str, np.ndarray]:
-        """Channels over absolute column range ``[lo, hi)``, uncached.
-
-        ``_collapse`` is elementwise per cell, so collapsing a column slice gives
-        exactly that slice of the full collapsed view -- and skips building a
-        full-width one at fit that ``trim_to_last`` would immediately discard.
-        """
-        if self._base is None:
-            assert self._store is not None
-            want = base_channels(names, time_agg) if names else None
-            window = self._store.dense(lo, hi, want)
-        else:
-            window = {name: block[:, lo:hi] for name, block in self._base.items()}
-        if time_agg is None:
-            return window
-        return _collapse(window, time_agg, set(names or _ALL_CHANNELS) | {"count"})
-
-    def _transform_range(
-        self, kernel, inner: Dict[str, Any], start: int, stop: int
-    ) -> np.ndarray:
-        """Feature block for absolute output columns ``[start, stop)``.
-
-        The window at ``start`` reaches ``lookback`` columns further back, so the
-        inner transform is fed ``[lo, stop)`` and its first ``start - lo`` columns
-        are dropped. Every window in the kept range is complete inside that slice,
-        so the transform cannot tell it is looking at one -- except through the
-        accumulator it carries, which is float-associativity noise, not a
-        different answer.
-        """
-        lo = max(start - kernel.lookback(), 0)
-        cells = self._chunk_cells(kernel.tfm.time_agg, kernel.channels, lo, stop)
-        n_cols = stop - lo
-        res = {
-            name: tfm.transform(_block_ga(cells[name])).reshape(self.n_buckets, n_cols)[
-                :, start - lo :
-            ]
-            for name, tfm in inner.items()
-        }
-        # absolute ordinals: `k` is the window factor at the output position, not
-        # at the position within the chunk
-        k = kernel.window_cells(np.arange(start, stop))[None, :]
-        return kernel.combine(res, k)
-
     def fit_values(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
-        """Per-row feature values at fit, without holding the whole block.
+        """Per-row feature values at fit.
 
-        The unchunked path materialises ``(n_buckets, width)`` per channel plus
-        several same-shaped temporaries inside ``combine``, reads ``n_rows``
-        values out of the result and drops the rest. Chunking the calendar bounds
-        that at ``n_buckets x (lookback + chunk)`` for the kernels whose window
-        reach is bounded and whose inners carry nothing between calls -- the set
-        ``lookback()`` is defined for -- and since each chunk is scattered out of
-        the cell store, nothing full-width is built for them at all.
+        Kernels with a bounded window compute them on the cell store, so nothing
+        full-width is built for them. The rest take the dense block -- which
+        materialises ``(n_buckets, width)`` per channel plus several same-shaped
+        temporaries inside ``combine`` -- and read the occupied cells out of it;
+        for the accumulator kernels that pass is also what primes the inner.
         """
         self._require_untrimmed()
         store = self._store
@@ -1263,18 +1305,9 @@ class PooledState:
                 "PooledState.fit_values() needs the fit-time cell store, which "
                 "finish_fit() drops once the features exist."
             )
-        chunk = self.width
-        if kernel.lookback() is not None and not kernel.primes_state:
-            chunk = _chunk_cols(self.n_buckets, self.width, kernel.lookback())
-        if chunk >= self.width:
-            return store.row_values(store.gather(self.transform(kernel, inner), 0))
-        values = np.full(store.size, np.nan)
-        for start in range(0, self.width, chunk):
-            stop = min(start + chunk, self.width)
-            cells = store.cells_in(start, stop)
-            if cells.size:
-                block = self._transform_range(kernel, inner, start, stop)
-                values[cells] = store.gather(block, start, cells)
+        values = kernel.fit_from_store(store)
+        if values is None:
+            values = store.gather(self.transform(kernel, inner), 0)
         return store.row_values(values)
 
     def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
