@@ -421,14 +421,17 @@ class TimeSeries:
         """
         if self.keep_last_n is None:
             return
+        keep = self.keep_last_n
         for key, leaves in self._get_pooled_tfms().items():
             state = self._pooled_states.get(key)
             if state is None:
                 continue
-            needs = [leaf._pooled_retention for leaf in leaves]
-            if any(n is None for n in needs):
-                continue
-            state.trim_to_last(max(self.keep_last_n, max(needs)))
+            retentions = [
+                r for r in (leaf._pooled_retention for leaf in leaves) if r is not None
+            ]
+            if len(retentions) != len(leaves):
+                continue  # an unbounded leaf pins the whole state at full history
+            state.trim_to_last(max(keep, *retentions))
 
     def _update_pooled_states(self, df, sizes, values: np.ndarray) -> None:
         """Fold newly observed timestamps into the bucket aggregates.
@@ -804,12 +807,12 @@ class TimeSeries:
         row_cols = [c for c in key_cols if c in df.columns]
         part_cols = self._partition_cols
         missing = [
-            c
-            for c in part_cols
-            if c not in df.columns and c not in statics.columns
+            c for c in part_cols if c not in df.columns and c not in statics.columns
         ]
         if missing:
-            raise ValueError(f"partition_by column(s) {missing} not found in dataframe.")
+            raise ValueError(
+                f"partition_by column(s) {missing} not found in dataframe."
+            )
         key_rows: Dict[str, np.ndarray] = {}
         if row_cols:
             kdf = df[row_cols]
@@ -822,6 +825,7 @@ class TimeSeries:
             if col in key_rows:
                 return key_rows[col]
             return np.repeat(np.asarray(statics[col].to_numpy()), lens)
+
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
             if not pcols:

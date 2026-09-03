@@ -28,7 +28,7 @@ cancels).  See ``_PooledKernel`` subclasses for the full table.
 
 __all__ = ["PooledState"]
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import coreforecast.lag_transforms as core_tfms
@@ -168,7 +168,7 @@ _ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
 def _collapse(
     cells: Dict[str, np.ndarray],
     time_agg: str,
-    names: Optional[Sequence[str]] = None,
+    names: Optional[Collection[str]] = None,
 ) -> Dict[str, np.ndarray]:
     """Re-express cell aggregates as channels over the collapsed value ``v_t``.
 
@@ -790,7 +790,7 @@ class PooledState:
         self.base = base
         self.series_bucket_id = series_bucket_id
         self.bucket_uniques = bucket_uniques
-        self._views: Dict[Optional[str], Dict[str, np.ndarray]] = {}
+        self._views: Dict[str, Dict[str, np.ndarray]] = {}
         # raw observations, kept only when a row-level kernel needs them
         self.rows_ord: Optional[List[np.ndarray]] = None
         self.rows_y: Optional[List[np.ndarray]] = None
@@ -864,7 +864,7 @@ class PooledState:
 
     # -- views -----------------------------------------------------------
     def channels(
-        self, time_agg: Optional[str], names: Optional[Sequence[str]] = None
+        self, time_agg: Optional[str], names: Optional[Collection[str]] = None
     ) -> Dict[str, np.ndarray]:
         """Aggregate block per channel, collapsed by ``time_agg`` if given.
 

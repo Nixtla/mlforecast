@@ -943,8 +943,11 @@ class Combine(_BaseLagTransform):
 
     @property
     def _pooled_retention(self) -> Optional[int]:
-        needs = [self.tfm1._pooled_retention, self.tfm2._pooled_retention]
-        return None if any(n is None for n in needs) else max(needs)
+        r1 = self.tfm1._pooled_retention
+        r2 = self.tfm2._pooled_retention
+        if r1 is None or r2 is None:
+            return None
+        return max(r1, r2)
 
     def _get_configured_lag(self) -> int:
         lag1 = self.tfm1._get_configured_lag()
