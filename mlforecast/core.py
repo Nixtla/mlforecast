@@ -18,6 +18,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
@@ -431,7 +432,8 @@ class TimeSeries:
             # cutoff, except that a row leaf reaching back to ordinal 0
             # (ExpandingQuantile, LookupLag) keeps the rows whole -- it no
             # longer pins the block the other leaves read
-            block, rows = [], []
+            block: List[Optional[int]] = []
+            rows: List[Optional[int]] = []
             for leaf in leaves:
                 kind = rows if leaf._pooled_kernel.needs_rows else block
                 kind.append(leaf._pooled_retention)
@@ -876,7 +878,7 @@ class TimeSeries:
                 # seed with each series' assignment at its last observed
                 # timestamp; predict overwrites this per step from X_df
                 series_bid = row_bid[indptr[1:] - 1]
-            needed: set = set()
+            needed: Set[str] = set()
             needs_rows = False
             for leaf in leaves:
                 leaf._pooled_kernel = get_kernel(leaf)

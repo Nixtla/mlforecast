@@ -28,7 +28,7 @@ cancels).  See ``_PooledKernel`` subclasses for the full table.
 
 __all__ = ["PooledState"]
 
-from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -1258,7 +1258,7 @@ _TIME_AGG_SOURCE = {
 }
 
 
-def base_channels(kernel_channels: Sequence[str], time_agg: Optional[str]) -> set:
+def base_channels(kernel_channels: Sequence[str], time_agg: Optional[str]) -> Set[str]:
     """Base aggregates needed to serve a kernel's channels under ``time_agg``."""
     if time_agg:
         return {"count", _TIME_AGG_SOURCE[time_agg]}
@@ -1351,7 +1351,7 @@ class PooledState:
         n_buckets: int,
         n_ordinals: int,
         series_bucket_id: np.ndarray,
-        needed: Sequence[str],
+        needed: Collection[str],
         bucket_uniques: Optional[np.ndarray] = None,
         needs_rows: bool = False,
     ) -> "PooledState":
