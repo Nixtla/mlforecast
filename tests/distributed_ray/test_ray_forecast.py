@@ -16,14 +16,19 @@ warnings.simplefilter("ignore", FutureWarning)
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(sys.version_info < (3, 10), reason="Distributed tests are not supported on Python < 3.10")
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="Distributed tests are not supported on Python < 3.10",
+)
 @pytest.mark.parametrize(
     "model_class,model_kwargs",
     [
-        (RayLGBMForecast, {"verbosity": -1, "random_state": 0}),
-        (RayXGBForecast, {"random_state": 0}),
+        # these assert that predictions match across paths, not model quality,
+        # so a handful of trees is enough and keeps the run cheap
+        (RayLGBMForecast, {"verbosity": -1, "random_state": 0, "n_estimators": 5}),
+        (RayXGBForecast, {"random_state": 0, "n_estimators": 5}),
     ],
-    ids=["lightgbm", "xgboost"]
+    ids=["lightgbm", "xgboost"],
 )
 def test_ray_distributed_forecast(model_class, model_kwargs):
     series = generate_daily_series(
@@ -33,8 +38,8 @@ def test_ray_distributed_forecast(model_class, model_kwargs):
     # Create Ray dataset from pandas
     ray_dataset = ray.data.from_pandas(series)
     ray_dataset = ray_dataset.map_batches(
-        lambda batch: batch.assign(unique_id=batch['unique_id'].astype(str)),
-        batch_format="pandas"
+        lambda batch: batch.assign(unique_id=batch["unique_id"].astype(str)),
+        batch_format="pandas",
     )
 
     # test existing features provide the same result
@@ -53,17 +58,24 @@ def test_ray_distributed_forecast(model_class, model_kwargs):
         ray_dataset, static_features=[], dropna=False
     )
     fcst.fit(training_df_featured, static_features=[], dropna=False)
-    preds1 = fcst.predict(10).to_pandas().sort_values(["unique_id", "ds"], ignore_index = True)
-    fcst.save(f'/tmp/test_ray_forecast_model_{model_class.__name__}.pkl')
+    preds1 = (
+        fcst.predict(10).to_pandas().sort_values(["unique_id", "ds"], ignore_index=True)
+    )
+    fcst.save(f"/tmp/test_ray_forecast_model_{model_class.__name__}.pkl")
 
     # df without features
     fcst.preprocess(ray_dataset, static_features=[], dropna=False)
-    preds2 = fcst.predict(10).to_pandas().sort_values(["unique_id", "ds"], ignore_index = True)
+    preds2 = (
+        fcst.predict(10).to_pandas().sort_values(["unique_id", "ds"], ignore_index=True)
+    )
     pd.testing.assert_frame_equal(preds1, preds2)
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(sys.version_info < (3, 10), reason="Distributed tests are not supported on Python < 3.10")
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="Distributed tests are not supported on Python < 3.10",
+)
 def test_ray_distributed_forecast_with_x_df():
     """predict() with X_df as a Ray Dataset must give the same result as pandas X_df."""
     h = 7
@@ -76,7 +88,7 @@ def test_ray_distributed_forecast_with_x_df():
         batch_format="pandas",
     )
     fcst = DistributedMLForecast(
-        models=[RayLGBMForecast(verbosity=-1, random_state=0)],
+        models=[RayLGBMForecast(verbosity=-1, random_state=0, n_estimators=5)],
         freq="D",
         lags=[1, 2, 7],
         date_features=["dayofweek"],
@@ -84,7 +96,10 @@ def test_ray_distributed_forecast_with_x_df():
     fcst.fit(ray_series, static_features=[])
 
     last_dates = (
-        series.groupby("unique_id")["ds"].max().reset_index().rename(columns={"ds": "last_ds"})
+        series.groupby("unique_id")["ds"]
+        .max()
+        .reset_index()
+        .rename(columns={"ds": "last_ds"})
     )
     future_rows = []
     for _, row in last_dates.iterrows():
@@ -113,7 +128,10 @@ def test_ray_distributed_forecast_with_x_df():
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(sys.version_info < (3, 10), reason="Distributed tests are not supported on Python < 3.10")
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="Distributed tests are not supported on Python < 3.10",
+)
 def test_ray_weight_col_raises_not_implemented():
     """Ray engine must raise NotImplementedError when weight_col is passed to fit()."""
     series = generate_daily_series(5, min_length=50, max_length=50)
