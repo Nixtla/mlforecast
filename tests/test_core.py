@@ -875,6 +875,30 @@ def test_global_update_requires_complete_timestamps(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_pooled_update_with_no_new_rows_is_a_noop(engine):
+    """An update carrying no rows appends nothing; only a partial one is an error."""
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a", "a", "b", "b"],
+            "ds": [1, 2, 1, 2],
+            "y": [1.0, 2.0, 10.0, 20.0],
+        }
+    )
+    if engine == "polars":
+        df = pl.from_pandas(df)
+    tfm = ExpandingMean(global_=True)
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(df, id_col="unique_id", time_col="ds", target_col="y")
+    state = ts._pooled_states[("global", (), ())]
+    before = (state.n_ordinals, state.width)
+    ts.update(df.head(0))
+    assert (state.n_ordinals, state.width) == before
+    ts._predict_setup()
+    feats = ts._update_features()[tfm._get_name(1)].to_numpy()
+    np.testing.assert_allclose(feats, [8.25, 8.25])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_update_requires_complete_timestamps(engine):
     if engine == "polars":
         df = pl.DataFrame(

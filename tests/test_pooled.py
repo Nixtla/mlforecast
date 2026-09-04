@@ -2233,7 +2233,10 @@ def _assert_view_matches_direct(tfm_factory, lag, mode, time_agg):
     state = ts._pooled_states[key]
     agg = tfm.time_agg
     view = state.channels(agg)
-    direct = state.base if agg is None else _collapse(state.base, agg)
+    if agg is None:
+        direct = state.base
+    else:
+        direct = _collapse(*_view_value(state.base, agg), state.cell_shift(agg))
     for name in view:
         np.testing.assert_allclose(
             view[name], direct[name], equal_nan=True, err_msg=f"{col} {name}"
@@ -3003,11 +3006,10 @@ def test_polars_join_preserves_row_order():
     shuffled = rng.permutation(200)
     base = pl.DataFrame({"k": shuffled.tolist()})
     bids, uniques = factorize(_keys(base, ["k"]))
-    # id i corresponds to the i-th smallest encoded key, so ordering the shuffled
-    # keys by their id must recover ascending key order
-    assert sorted(zip(bids.tolist(), shuffled.tolist())) == sorted(
-        zip(bids.tolist(), shuffled.tolist())
-    )
+    # positional: each row's id must map back to that row's own key
+    np.testing.assert_array_equal(uniques[bids], encode_keys(_keys(base, ["k"])))
+    # and id i is the i-th smallest encoded key
+    assert uniques.tolist() == sorted(uniques.tolist())
     key_to_bid = dict(zip(shuffled.tolist(), bids.tolist()))
     reversed_df = pl.DataFrame({"k": shuffled[::-1].tolist()})
     look = lookup(_keys(reversed_df, ["k"]), uniques)
@@ -3430,6 +3432,7 @@ from mlforecast.lag_transforms import (  # noqa: E402
 from mlforecast.pooled import (  # noqa: E402
     _build_cells,
     _collapse,
+    _view_value,
 )
 
 _BASE = ("count", "sum", "sumsq", "min", "max")
@@ -3458,7 +3461,7 @@ def test_reaggregate_ts_aggs_values_and_nan():
         "max": [3.0, 5.0],
     }
     for agg, vals in expected.items():
-        r = _collapse(cells, agg)
+        r = _collapse(*_view_value(cells, agg), shift=0.0)
         obs = r["count"][0] > 0
         if agg == "count":
             # COUNT over an all-NULL group is 0, which is still an observation
@@ -3476,7 +3479,7 @@ def test_reaggregate_ts_aggs_does_not_mutate_input():
     _, _, _, cells = _one_bucket_cells()
     before = {k: v.copy() for k, v in cells.items()}
     for agg in ("sum", "count", "mean", "min", "max"):
-        _collapse(cells, agg)
+        _collapse(*_view_value(cells, agg), shift=0.0)
     for k, arr in before.items():
         np.testing.assert_allclose(cells[k], arr, equal_nan=True)
 
@@ -3487,7 +3490,8 @@ def test_collapse_matches_reaggregate(time_agg):
 
     This is the invariant that lets `PooledState` keep one base store per bucket
     key and derive each `time_agg` as a cached view instead of re-aggregating the
-    panel per `time_agg`.
+    panel per `time_agg`. It covers the ``sumsq`` centre too: both sides take
+    it from the bucket's first observed cell.
     """
     rng = np.random.default_rng(0)
     bid = np.repeat([0, 1], 10)
@@ -3497,11 +3501,11 @@ def test_collapse_matches_reaggregate(time_agg):
     y[7] = np.nan
     n_buckets, width = 2, 6
     base = _build_cells(bid, ordv, y, n_buckets, width, _BASE)
-    direct = _collapse(base, time_agg)
+    v, obs = _view_value(base, time_agg)
+    first = v[np.arange(n_buckets), obs.argmax(axis=1)][:, None]
+    direct = _collapse(v, obs, first)
 
     # the same collapse done by hand on the rows, then aggregated
-    obs = base["count"] > 0
-    v = direct["sum"]
     cb, co = np.nonzero(obs)
     cy = v[obs]
     via_rows = _build_cells(cb, co, cy, n_buckets, width, _BASE)
@@ -4220,6 +4224,150 @@ def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
     assert np.isnan(got[1]) and np.isnan(got[2])
 
 
+# %% row kernels: a NaN target is not an observation
+from mlforecast.lag_transforms import SeasonalRollingQuantile  # noqa: E402
+
+
+def _nan_rows():
+    """One bucket, two rows per ordinal, NaN in a few of them."""
+    y = np.array(
+        [np.nan, np.nan, 1.0, np.nan, 2.0, 3.0, np.nan, 4.0, 5.0, 6.0, np.nan, np.nan]
+    )
+    return np.zeros(y.size, dtype=np.int64), np.repeat(np.arange(6), 2), y
+
+
+def _median_reference(
+    ordinal, y, targets, window=None, lag=1, season_length=1, min_samples=1
+):
+    """Median of the non-NaN rows in each target's window; ``None`` is expanding."""
+    out = np.full(len(targets), np.nan)
+    for i, t in enumerate(targets):
+        if window is None:
+            wanted = ordinal <= t - lag
+        else:
+            wanted = np.isin(ordinal, t - lag - np.arange(window) * season_length)
+        vals = y[wanted]
+        vals = vals[~np.isnan(vals)]
+        if vals.size >= min_samples:
+            out[i] = np.median(vals)
+    return out
+
+
+@pytest.mark.parametrize(
+    "make_tfm, reference",
+    [
+        (
+            lambda: RollingQuantile(p=0.5, window_size=3, min_samples=2, global_=True),
+            dict(window=3, min_samples=2),
+        ),
+        (
+            lambda: SeasonalRollingQuantile(
+                p=0.5, season_length=2, window_size=2, min_samples=1, global_=True
+            ),
+            dict(window=2, season_length=2),
+        ),
+        (lambda: ExpandingQuantile(p=0.5, global_=True), dict()),
+    ],
+    ids=["rolling", "seasonal", "expanding"],
+)
+def test_row_kernels_skip_nan_targets(make_tfm, reference):
+    """A NaN target neither enters a quantile nor counts toward ``min_samples``.
+
+    The channels drop it at aggregation; the row store keeps every row, so the
+    gather has to leave it out itself -- one NaN in a window would otherwise
+    poison the whole quantile, and the expanding one for good.
+    """
+    from mlforecast.pooled import _RowStore, get_kernel
+
+    bucket_id, ordinal, y = _nan_rows()
+    kernel = get_kernel(make_tfm()._set_core_tfm(1))
+    rows = _RowStore.from_rows(bucket_id, ordinal, y, n_buckets=1)
+    targets = np.arange(1, 8)
+    got = kernel.values_at(kernel._view(rows), np.zeros(7, dtype=np.int64), targets)
+    want = _median_reference(ordinal, y, targets, **reference)
+    assert np.isfinite(want).sum() >= 4  # the case is not vacuous
+    np.testing.assert_allclose(got, want, equal_nan=True)
+
+
+def test_lookup_lag_keeps_nan_occurrences():
+    """The odd one out: a NaN row is still an occurrence, so the lookup lands on it."""
+    from mlforecast.pooled import _RowStore, get_kernel
+
+    kernel = get_kernel(LookupLag(partition_by=["x"])._set_core_tfm(1))
+    rows = _RowStore.from_rows(
+        bucket_id=np.zeros(3, dtype=np.int64),
+        ordinal=np.arange(3),
+        y=np.array([1.0, np.nan, 3.0]),
+        n_buckets=1,
+    )
+    got = kernel.values_at(
+        kernel._view(rows), np.zeros(2, dtype=np.int64), np.array([2, 3])
+    )
+    assert np.isnan(got[0])
+    np.testing.assert_allclose(got[1], 3.0)
+
+
+def test_nan_targets_left_by_a_target_transform_are_skipped():
+    """End to end: the NaN head `Differences` leaves is skipped, and doesn't count.
+
+    Values are ``1.5 * t``, so the differenced target is 3 everywhere it exists.
+    At lag 2 with a window of 4 the first timestamp whose window holds four
+    real observations is ``ds == 5``; before it the row count alone would
+    already satisfy ``min_samples``.
+    """
+    from mlforecast.target_transforms import Differences
+
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], 12),
+            "ds": np.tile(np.arange(12), 2),
+            "y": np.tile(1.5 * np.arange(12), 2),
+        }
+    )
+    tfm = RollingQuantile(p=0.5, window_size=4, global_=True)
+    ts = TimeSeries(
+        freq=1, lag_transforms={2: [tfm]}, target_transforms=[Differences([2])]
+    )
+    out = ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    got = out[tfm._get_name(2)].to_numpy()
+    want = np.where(out["ds"].to_numpy() >= 5, 3.0, np.nan)
+    np.testing.assert_allclose(got, want, equal_nan=True)
+
+
+# %% the row keys bound the bucket count, and windows never cross a bucket
+def test_row_store_bucket_count_is_bounded():
+    """Past the bound the keys wrap and every search silently misplaces its window."""
+    from mlforecast.pooled import _MAX_BUCKETS, _RowStore
+
+    args = (np.zeros(1, dtype=np.int64), np.zeros(1, dtype=np.int64), np.ones(1))
+    with pytest.raises(ValueError, match="buckets"):
+        _RowStore.from_rows(*args, n_buckets=_MAX_BUCKETS + 1)
+    rows = _RowStore.from_rows(*args, n_buckets=1)
+    with pytest.raises(ValueError, match="buckets"):
+        rows.grow(np.zeros(1, dtype=np.int64), _MAX_BUCKETS + 1)
+
+
+def test_row_store_search_stays_inside_the_bucket():
+    """A window reaching back before the calendar must not pick up another bucket's rows."""
+    from mlforecast.pooled import _ROW_STRIDE, _RowStore
+
+    rows = _RowStore.from_rows(
+        bucket_id=np.array([0, 0, 1, 1]),
+        ordinal=np.array([0, 1, 0, 1]),
+        y=np.arange(4.0),
+        n_buckets=2,
+    )
+    bucket = np.array([1])
+    far_back = np.array([-4 * _ROW_STRIDE])
+    for side in ("left", "right"):
+        assert rows.search(bucket, far_back, side)[0] == 2
+    # in-calendar targets are unaffected
+    assert rows.search(bucket, np.array([0]), "left")[0] == 2
+    assert rows.search(bucket, np.array([1]), "right")[0] == 4
+
+
 # %% bucket growth must remap per-kernel inner state
 def _stateful_inner_rows(ts):
     """Row count of every accumulator-carrying inner, per pooled leaf."""
@@ -4399,6 +4547,275 @@ def test_bucket_growth_survives_backup_restore(engine):
         assert all(n == state.n_buckets for n in _stateful_inner_rows(ts))
 
 
+# %% update() must advance the accumulator kernels, one appended timestamp at a time
+def _split_panel(n_appended, T=8):
+    """Three series in two brands, split into a fitted head and an appended tail.
+
+    The extremes sit exactly where a skipped fold would miss them: the last
+    fitted timestamp and the first appended one.
+    """
+    brands = {"a": "b1", "b": "b1", "c": "b2"}
+    rows = [
+        {"unique_id": sid, "ds": t, "y": 10.0 + (3 * t + 7 * i) % 5, "brand": brand}
+        for i, (sid, brand) in enumerate(brands.items())
+        for t in range(1, T + n_appended + 1)
+    ]
+    df = pd.DataFrame(rows)
+    df.loc[(df.unique_id == "a") & (df.ds == T), "y"] = 0.5
+    df.loc[(df.unique_id == "c") & (df.ds == T + 1), "y"] = 100.0
+    return df[df.ds <= T], df[df.ds > T], df
+
+
+def _fit_ts(df, tfm, lag, keep_last_n=None):
+    ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+        keep_last_n=keep_last_n,
+    )
+    return ts
+
+
+@pytest.mark.parametrize("keep_last_n", [None, 1], ids=["untrimmed", "trimmed"])
+@pytest.mark.parametrize("n_appended", [1, 2])
+@pytest.mark.parametrize("lag", _LAGS)
+@pytest.mark.parametrize(
+    "tfm_factory",
+    [
+        lambda: ExpandingMean(global_=True),
+        lambda: ExpandingMean(groupby=["brand"]),
+        lambda: ExpandingStd(groupby=["brand"]),
+        lambda: ExpandingMin(global_=True),
+        lambda: ExpandingMax(global_=True),
+        lambda: ExponentiallyWeightedMean(alpha=0.5, global_=True),
+    ],
+    ids=[
+        "exp_mean",
+        "exp_mean_groupby",
+        "exp_std_groupby",
+        "exp_min",
+        "exp_max",
+        "ewm",
+    ],
+)
+def test_update_advances_pooled_accumulators(tfm_factory, lag, n_appended, keep_last_n):
+    """`update` must leave the accumulators as a fit over everything would.
+
+    The inners fold one source cell per `PooledState.update`, which predict
+    calls once per timestamp. An update that only appended columns left them
+    behind by that many, so the next predict folded the newest source and
+    skipped the ones in between -- the last fitted timestamp among them.
+    """
+    head, tail, full = _split_panel(n_appended)
+    updated = _fit_ts(head, tfm_factory(), lag, keep_last_n)
+    updated.update(tail)
+    control = _fit_ts(full, tfm_factory(), lag, keep_last_n)
+    col = tfm_factory()._get_name(lag)
+    for ts in (updated, control):
+        ts._predict_setup()
+    got = updated._update_features()[col].to_numpy()
+    want = control._update_features()[col].to_numpy()
+    np.testing.assert_allclose(got, want, rtol=1e-12)
+    # and the inner state itself, not just the value read off it
+    (leaf,) = next(iter(updated._get_pooled_tfms().values()))
+    (ref,) = next(iter(control._get_pooled_tfms().values()))
+    for name, inner in leaf._pooled_inner.items():
+        stats = getattr(inner, "stats_", None)
+        if stats is not None:
+            np.testing.assert_allclose(
+                stats, ref._pooled_inner[name].stats_, rtol=1e-12
+            )
+
+
+# %% the sumsq channel is centred per bucket, so std survives an offset
+from mlforecast.lag_transforms import SeasonalRollingStd  # noqa: E402
+
+
+def _offset_panel(T=40, seed=0):
+    """Two brands at levels 1e6 and 1, two series each, unit-variance noise."""
+    rng = np.random.default_rng(seed)
+    series = {"a": ("b1", 1e6), "b": ("b1", 1e6), "c": ("b2", 1.0), "d": ("b2", 1.0)}
+    rows = [
+        {"unique_id": sid, "ds": t, "y": level + rng.standard_normal(), "brand": brand}
+        for sid, (brand, level) in series.items()
+        for t in range(1, T + 1)
+    ]
+    return pd.DataFrame(rows)
+
+
+def _std_reference(df, groups, lag, window=None, season_length=1, time_agg=None):
+    """Sample std over each row's window, in extended precision.
+
+    ``groups`` maps a series to its bucket; ``window=None`` is expanding.
+    """
+    ids, ords = df["unique_id"].to_numpy(), df["ds"].to_numpy()
+    ys = df["y"].to_numpy().astype(np.longdouble)
+    bucket = np.array([groups[s] for s in ids])
+    out = np.full(len(df), np.nan, dtype=np.longdouble)
+    for i in range(len(df)):
+        if window is None:
+            in_window = ords <= ords[i] - lag
+        else:
+            in_window = np.isin(ords, ords[i] - lag - np.arange(window) * season_length)
+        mask = (bucket == bucket[i]) & in_window
+        vals = ys[mask]
+        if time_agg == "mean":
+            vals = np.array(
+                [ys[mask & (ords == o)].mean() for o in np.unique(ords[mask])]
+            )
+        if vals.size >= 2:
+            out[i] = vals.std(ddof=1)
+    return out.astype(float)
+
+
+def _offset_groups(df, mode):
+    if "groupby" in mode:
+        return dict(zip(df["unique_id"], df["brand"]))
+    return {sid: 0 for sid in df["unique_id"]}
+
+
+_STD_CASES = [
+    (lambda **m: RollingStd(window_size=5, **m), dict(window=5)),
+    (
+        lambda **m: SeasonalRollingStd(season_length=3, window_size=3, **m),
+        dict(window=3, season_length=3),
+    ),
+    (lambda **m: ExpandingStd(**m), dict()),
+    (
+        lambda **m: RollingStd(window_size=5, time_agg="mean", **m),
+        dict(window=5, time_agg="mean"),
+    ),
+    (lambda **m: ExpandingStd(time_agg="mean", **m), dict(time_agg="mean")),
+]
+_STD_IDS = [
+    "rolling",
+    "seasonal",
+    "expanding",
+    "rolling_time_agg",
+    "expanding_time_agg",
+]
+
+
+@pytest.mark.parametrize(
+    "mode", [dict(global_=True), dict(groupby=["brand"])], ids=["global", "groupby"]
+)
+@pytest.mark.parametrize("make_tfm, reference", _STD_CASES, ids=_STD_IDS)
+def test_pooled_std_is_precise_on_offset_data(make_tfm, reference, mode):
+    """``sum(x**2) - sum(x)**2 / n`` keeps three figures at ``y ~ 1e6 +- 1``.
+
+    Centred on each bucket's first observed cell it keeps them all, and one
+    bucket at 1e6 next to one at 1 shows the centre has to be per bucket.
+    """
+    df = _offset_panel()
+    lag = 1
+    ts = TimeSeries(freq=1, lag_transforms={lag: [make_tfm(**mode)]})
+    out = ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    got = out[make_tfm(**mode)._get_name(lag)].to_numpy()
+    want = _std_reference(df, _offset_groups(df, mode), lag, **reference)
+    ok = ~np.isnan(got)
+    assert ok.sum() > len(df) // 2
+    np.testing.assert_allclose(got[ok], want[ok], rtol=1e-9)
+
+
+class _LevelModel:
+    """Predicts a fixed level per series, so the recursion feeds known values back."""
+
+    def __init__(self, levels):
+        self.levels = levels
+
+    def predict(self, X):  # noqa: ARG002
+        return self.levels
+
+
+@pytest.mark.parametrize("keep_last_n", [None, 1], ids=["untrimmed", "trimmed"])
+@pytest.mark.parametrize("time_agg", [None, "mean"], ids=["rows", "time_agg"])
+@pytest.mark.parametrize(
+    "make_tfm, reference",
+    [
+        (lambda **m: RollingStd(window_size=4, **m), dict(window=4)),
+        (lambda **m: ExpandingStd(**m), dict()),
+    ],
+    ids=["rolling", "expanding"],
+)
+def test_pooled_std_stays_centred_through_update_and_predict(
+    make_tfm, reference, time_agg, keep_last_n
+):
+    """Cells appended by `update` and by the predict loop centre where the fit did.
+
+    Trimmed, the block no longer holds the cell the centre came from, so this is
+    where a centre re-derived from what is left would silently drift.
+    """
+    T, h = 20, 2
+    df = _offset_panel(T=T + 2)
+    head, tail = df[df.ds <= T], df[df.ds > T]
+    mode = dict(groupby=["brand"], time_agg=time_agg)
+    lag = 1
+    ts = _fit_ts(head, make_tfm(**mode), lag, keep_last_n)
+    ts.update(tail)
+    col = make_tfm(**mode)._get_name(lag)
+    levels = np.array([1e6, 1e6, 1.0, 1.0])
+    seen = []
+
+    def capture(X):
+        seen.append(X[col].to_numpy())
+        return X
+
+    ts.predict({"m": _LevelModel(levels)}, horizon=h, before_predict_callback=capture)
+    # the reference sees the predictions as rows; the last row of each series
+    # only serves as a target
+    future = pd.DataFrame(
+        {
+            "unique_id": np.tile(["a", "b", "c", "d"], h + 1),
+            "ds": np.repeat(np.arange(T + 3, T + 4 + h), 4),
+            "y": np.tile(levels, h + 1),
+            "brand": np.tile(["b1", "b1", "b2", "b2"], h + 1),
+        }
+    )
+    ref_df = pd.concat([df, future], ignore_index=True)
+    want = _std_reference(
+        ref_df, _offset_groups(ref_df, mode), lag, time_agg=time_agg, **reference
+    )
+    for step in range(h):
+        at = (ref_df["ds"] == T + 3 + step).to_numpy()
+        np.testing.assert_allclose(seen[step], want[at], rtol=1e-9)
+
+
+def test_pooled_std_centre_survives_bucket_growth():
+    """A brand appearing at update renumbers the buckets; the centres move with them."""
+    T = 12
+    df = _offset_panel(T=T)
+    head, tail = df[df.ds <= T - 2], df[df.ds > T - 2]
+    new = pd.DataFrame(
+        {"unique_id": "e", "ds": [T - 1, T], "y": [50.0, 51.0], "brand": "a0"}
+    )
+    lag = 1
+    tfm = RollingStd(window_size=4, groupby=["brand"])
+    grown = _fit_ts(head, tfm, lag)
+    grown.update(pd.concat([tail, new]))
+    state = grown._pooled_states[("groupby", ("brand",), ())]
+    assert list(state.bucket_uniques) == ["a0", "b1", "b2"]
+    control = _fit_ts(
+        pd.concat([df, new]), RollingStd(window_size=4, groupby=["brand"]), lag
+    )
+    col = tfm._get_name(lag)
+    for ts in (grown, control):
+        ts._predict_setup()
+    got = grown._update_features()[col].to_numpy()
+    want = control._update_features()[col].to_numpy()
+    np.testing.assert_allclose(got, want, rtol=1e-9)
+
+
 # %% collapsed views are maintained incrementally, and only for what's read
 def _view_state(n_buckets=3, width=4, channels=("count", "sum", "sumsq", "min", "max")):
     from mlforecast.pooled import PooledState
@@ -4426,10 +4843,12 @@ _TIME_AGGS_ALL = ["sum", "count", "mean", "min", "max"]
 
 def _assert_views_fresh(state, ctx=""):
     """Every cached view must equal a collapse of the current base."""
-    from mlforecast.pooled import _collapse
+    from mlforecast.pooled import _collapse, _view_value
 
     for time_agg, view in state._views.items():
-        direct = _collapse(state.base, time_agg, list(view))
+        direct = _collapse(
+            *_view_value(state.base, time_agg), state.cell_shift(time_agg), list(view)
+        )
         for name in view:
             np.testing.assert_array_equal(
                 view[name], direct[name], err_msg=f"{ctx}:{time_agg}:{name}"

@@ -453,13 +453,20 @@ class TimeSeries:
         ones included. New series (and new partition values) extend the bucket
         vocabulary, which can renumber existing buckets -- `grow_buckets`
         permutes the stored aggregates to match.
+
+        The accumulator kernels (Expanding*/EWM) fold one source cell per
+        ``PooledState.update``, which the predict loop calls once per
+        timestamp; the same call is made here for every appended timestamp,
+        otherwise the next predict would skip straight to the newest one.
         """
         states = getattr(self, "_pooled_states", {})
         if not states:
             return
         counts = np.asarray(sizes["counts"].to_numpy())
-        n_new = int(counts[0]) if counts.size else 0
-        if n_new == 0 or not bool((counts == n_new).all()):
+        if not counts.any():
+            return  # nothing appended
+        n_new = int(counts[0])
+        if not bool((counts == n_new).all()):
             raise ValueError(
                 "Pooled lag transforms require updates to include all series for "
                 "each timestamp."
@@ -488,6 +495,8 @@ class TimeSeries:
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
             mode, gcols, pcols = key
+            leaves = leaves_by_key.get(key, ())
+            accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             bids = None
             for j in range(n_new):
                 if mode == "global" and not pcols:
@@ -503,11 +512,13 @@ class TimeSeries:
                     if remap is not None:
                         # growing renumbers buckets, so the per-kernel inner state
                         # has to be permuted and extended to match
-                        for leaf in leaves_by_key.get(key, ()):
+                        for leaf in leaves:
                             leaf._pooled_kernel.remap_buckets(
                                 leaf._pooled_inner, remap, state.n_buckets
                             )
                     bids = lookup(arrays, state.bucket_uniques)
+                for leaf in accumulators:
+                    state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
             if bids is not None:
                 state.set_series_bucket_id(bids)

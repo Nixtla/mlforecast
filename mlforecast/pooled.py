@@ -198,21 +198,15 @@ class _CellStore:
         valid = ~np.isnan(y)
         cell_v = self.cell_of_row[valid]
         y_v = y[valid]
-        self.chan: Dict[str, np.ndarray] = {}
-        if "count" in names:
-            self.chan["count"] = np.bincount(cell_v, minlength=n).astype(np.float64)
-        if "sum" in names:
-            self.chan["sum"] = np.bincount(cell_v, weights=y_v, minlength=n)
-        if "sumsq" in names:
-            self.chan["sumsq"] = np.bincount(cell_v, weights=y_v * y_v, minlength=n)
-        if "min" in names:
-            buf = np.full(n, np.inf)
-            np.minimum.at(buf, cell_v, y_v)
-            self.chan["min"] = buf
-        if "max" in names:
-            buf = np.full(n, -np.inf)
-            np.maximum.at(buf, cell_v, y_v)
-            self.chan["max"] = buf
+        #: per-bucket centre of each view's ``sumsq`` channel, keyed by
+        #: ``time_agg`` (``None`` for the base); see `_StdKernel`
+        self.shift: Dict[Optional[str], np.ndarray] = {}
+
+        def centre(mean, obs):
+            self.shift[None] = _fill_shift(None, mean, obs, n_buckets, self.bucket)
+            return self.shift[None][self.bucket[cell_v]]
+
+        self.chan = _cell_aggregates(cell_v, y_v, n, names, centre)
         self._by_ordinal: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self._starts: Optional[np.ndarray] = None
         self._views: Dict[str, Dict[str, np.ndarray]] = {}
@@ -229,12 +223,24 @@ class _CellStore:
         if time_agg is None:
             return {name: self.chan[name] for name in names}
         want = set(names) | {"count"}
-        view = self._views.get(time_agg)
-        if view is None:
-            view = self._views[time_agg] = _collapse(self.chan, time_agg, want)
-        elif not want <= view.keys():
-            view.update(_collapse(self.chan, time_agg, want - view.keys()))
+        view = self._views.setdefault(time_agg, {})
+        build = want - view.keys()
+        if build:
+            new, self.shift[time_agg] = _collapsed(
+                self.chan,
+                time_agg,
+                build,
+                self.shift.get(time_agg),
+                self.n_buckets,
+                self.bucket,
+            )
+            view.update(new)
         return {name: view[name] for name in names}
+
+    def cell_shift(self, time_agg: Optional[str]) -> Optional[np.ndarray]:
+        """Per-cell ``sumsq`` centre of a view, once the view has been built."""
+        shift = self.shift.get(time_agg)
+        return None if shift is None else shift[self.bucket]
 
     @property
     def starts(self) -> np.ndarray:
@@ -416,21 +422,90 @@ def _block_ga(block: np.ndarray) -> CoreGroupedArray:
     return CoreGroupedArray(data, indptr)
 
 
-def _collapse(
-    cells: Dict[str, np.ndarray],
-    time_agg: str,
-    names: Optional[Collection[str]] = None,
-) -> Dict[str, np.ndarray]:
-    """Re-express cell aggregates as channels over the collapsed value ``v_t``.
+def _first_observed(
+    values: np.ndarray, obs: np.ndarray, n_buckets: int, bucket: Optional[np.ndarray]
+) -> np.ndarray:
+    """Value of each bucket's first observed cell; NaN for a bucket with none.
 
-    With ``time_agg`` each timestamp contributes a single value, so the channels
-    become "one observation per observed timestamp".  Because the shape matches
-    the row-weighted channels exactly, every kernel combine below works
-    unchanged for both modes.
-
-    ``names`` limits the output to the channels a kernel actually reads; the
-    result is cached, so building all five would also keep them all alive.
+    ``values``/``obs`` are per cell: a ``(n_buckets, width)`` block (or one
+    value per bucket), or flat and bucket-major with ``bucket`` naming each
+    cell's bucket.
     """
+    out = np.full(n_buckets, np.nan)
+    if bucket is None:
+        values = values.reshape(n_buckets, -1)
+        obs = obs.reshape(n_buckets, -1)
+        seen = np.flatnonzero(obs.any(axis=1))
+        out[seen] = values[seen, obs.argmax(axis=1)[seen]]
+    else:
+        idx = np.flatnonzero(obs)
+        if idx.size:
+            lead = np.r_[True, bucket[idx[1:]] != bucket[idx[:-1]]]
+            out[bucket[idx[lead]]] = values[idx[lead]]
+    return out
+
+
+def _fill_shift(
+    shift: Optional[np.ndarray],
+    values: np.ndarray,
+    obs: np.ndarray,
+    n_buckets: int,
+    bucket: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """``shift`` with every bucket still unset taking its first observed value.
+
+    A bucket's shift is fixed the first time the bucket is observed and never
+    moves after, so every ``sumsq`` cell of the bucket is centred on the same
+    value (see `_StdKernel`). ``None`` is a shift with every bucket unset.
+    """
+    if shift is None:
+        shift = np.full(n_buckets, np.nan)
+    unset = np.isnan(shift)
+    if not unset.any():
+        return shift
+    return np.where(unset, _first_observed(values, obs, n_buckets, bucket), shift)
+
+
+def _cell_aggregates(
+    idx: np.ndarray,
+    y: np.ndarray,
+    n: int,
+    names: Collection[str],
+    centre,
+) -> Dict[str, np.ndarray]:
+    """The channels ``names`` of ``y`` aggregated by cell ``idx`` (``n`` cells).
+
+    ``centre(mean, obs)`` maps the cells' means and observed mask to the
+    ``sumsq`` centre per row; it is only called when that channel is asked for.
+    """
+    count = np.bincount(idx, minlength=n).astype(np.float64)
+    out: Dict[str, np.ndarray] = {}
+    if "count" in names:
+        out["count"] = count
+    if "sum" in names or "sumsq" in names:
+        total = np.bincount(idx, weights=y, minlength=n)
+    if "sum" in names:
+        out["sum"] = total
+    if "sumsq" in names:
+        obs = count > 0
+        mean = np.divide(total, count, out=np.zeros(n), where=obs)
+        dev = y - centre(mean, obs)
+        out["sumsq"] = np.bincount(idx, weights=dev * dev, minlength=n)
+    if "min" in names:
+        buf = np.full(n, np.inf)
+        np.minimum.at(buf, idx, y)
+        out["min"] = buf
+    if "max" in names:
+        buf = np.full(n, -np.inf)
+        np.maximum.at(buf, idx, y)
+        out["max"] = buf
+    return out
+
+
+def _view_value(
+    cells: Dict[str, np.ndarray], time_agg: str
+) -> Tuple[np.ndarray, np.ndarray]:
+    """The collapsed value ``v_t`` per cell, and which cells are observed."""
     counts = cells["count"]
     obs = counts > 0
     if time_agg == "count":
@@ -443,22 +518,73 @@ def _collapse(
         v = cells["max"]
     else:  # mean
         v = np.divide(cells["sum"], counts, out=np.zeros_like(cells["sum"]), where=obs)
+    return v, obs
+
+
+def _collapse(
+    v: np.ndarray,
+    obs: np.ndarray,
+    shift: Optional[np.ndarray],
+    names: Optional[Collection[str]] = None,
+) -> Dict[str, np.ndarray]:
+    """Re-express the collapsed value ``v_t`` (see `_view_value`) as channels.
+
+    With ``time_agg`` each timestamp contributes a single value, so the channels
+    become "one observation per observed timestamp".  Because the shape matches
+    the row-weighted channels exactly, every kernel combine below works
+    unchanged for both modes.
+
+    ``shift`` centres ``sumsq`` (see `_StdKernel`); it must broadcast against
+    ``v`` and is only read when that channel is built. ``names`` limits the
+    output to the channels a kernel actually reads; the result is cached, so
+    building all five would also keep them all alive.
+    """
     zero = np.zeros_like(v)
     builders = {
         "count": lambda: obs.astype(np.float64),
         "sum": lambda: np.where(obs, v, zero),
-        "sumsq": lambda: np.where(obs, v * v, zero),
+        "sumsq": lambda: np.where(obs, (v - shift) ** 2, zero),
         "min": lambda: np.where(obs, v, np.inf),
         "max": lambda: np.where(obs, v, -np.inf),
     }
     return {name: builders[name]() for name in (names or _ALL_CHANNELS)}
 
 
+def _collapsed(
+    cells: Dict[str, np.ndarray],
+    time_agg: str,
+    names: Collection[str],
+    shift: Optional[np.ndarray],
+    n_buckets: int,
+    bucket: Optional[np.ndarray] = None,
+) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    """Collapse ``cells`` into the channels ``names``, plus the view's shift.
+
+    ``shift`` is the view's per-bucket shift so far (``None`` before its first
+    build); it comes back filled for the buckets observed here for the first
+    time, and the ``sumsq`` built here is centred on it.
+    """
+    v, obs = _view_value(cells, time_agg)
+    shift = _fill_shift(shift, v, obs, n_buckets, bucket)
+    per_cell = shift[bucket] if bucket is not None else shift[:, None]
+    return _collapse(v, obs, per_cell, names), shift
+
+
 # %% raw rows
-#: bucket stride of the row keys. Ordinals never come near it, so a key built
-#: from any window reach -- even a negative ordinal -- stays inside its own
-#: bucket's range; the price is a bucket count bounded at 2**23.
-_ROW_STRIDE = 1 << 40
+#: bucket stride of the row keys, ``bucket * _ROW_STRIDE + ordinal``. Ordinals
+#: are calendar positions and never come near it, and `_RowStore.search` clamps
+#: a target before the calendar to -1, so every key stays inside its own
+#: bucket's range. The price is a bound on the bucket count, enforced wherever
+#: buckets are created.
+_ROW_STRIDE = 1 << 32
+_MAX_BUCKETS = (1 << 63) // _ROW_STRIDE
+
+
+def _check_bucket_count(n_buckets: int) -> None:
+    if n_buckets > _MAX_BUCKETS:
+        raise ValueError(
+            f"Pooled row kernels support up to {_MAX_BUCKETS} buckets; got {n_buckets}."
+        )
 
 
 class _RowStore:
@@ -486,6 +612,7 @@ class _RowStore:
     def from_rows(
         cls, bucket_id: np.ndarray, ordinal: np.ndarray, y: np.ndarray, n_buckets: int
     ) -> "_RowStore":
+        _check_bucket_count(n_buckets)
         order = np.lexsort((ordinal, bucket_id))
         counts = np.bincount(bucket_id, minlength=n_buckets)
         indptr = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
@@ -506,8 +633,13 @@ class _RowStore:
         return self._keys
 
     def search(self, bucket: np.ndarray, ordinal: np.ndarray, side: str) -> np.ndarray:
-        """Row position of ``ordinal`` within ``bucket``, broadcast over both."""
-        return np.searchsorted(self.keys, bucket * _ROW_STRIDE + ordinal, side=side)
+        """Row position of ``ordinal`` within ``bucket``, broadcast over both.
+
+        A target before the calendar resolves to the bucket's first row on
+        either side, so a window reaching back past ordinal 0 is just shorter.
+        """
+        clamped: np.ndarray = np.maximum(ordinal, -1)
+        return np.searchsorted(self.keys, bucket * _ROW_STRIDE + clamped, side=side)
 
     def _invalidate(self) -> None:
         self._keys = None
@@ -567,15 +699,32 @@ class _RowStore:
         view = self._views[time_agg] = _RowStore(self.ordinal[starts], v, indptr)
         return view
 
+    def valid(self) -> "_RowStore":
+        """This store without the rows whose target is NaN (cached).
+
+        A window holds the observations that exist, so a NaN row must neither
+        enter a quantile nor count toward ``min_samples``.
+        """
+        view = self._views.get("valid")
+        if view is None:
+            keep = ~np.isnan(self.y)
+            view = self if keep.all() else self._filtered(keep)
+            self._views["valid"] = view
+        return view
+
+    def _filtered(self, keep: np.ndarray) -> "_RowStore":
+        counts = np.bincount(self.bucket[keep], minlength=self.n_buckets)
+        indptr = np.concatenate([[0], np.cumsum(counts)])
+        return _RowStore(self.ordinal[keep], self.y[keep], indptr)
+
     def trim(self, cutoff: int) -> None:
         """Drop the rows before ``cutoff``, an absolute ordinal."""
         self.merged()
         keep = self.ordinal >= cutoff
         if keep.all():
             return
-        counts = np.bincount(self.bucket[keep], minlength=self.n_buckets)
-        self.ordinal, self.y = self.ordinal[keep], self.y[keep]
-        self.indptr = np.concatenate([[0], np.cumsum(counts)])
+        kept = self._filtered(keep)
+        self.ordinal, self.y, self.indptr = kept.ordinal, kept.y, kept.indptr
         self._invalidate()
 
     def grow(self, remap: np.ndarray, n_new: int) -> None:
@@ -584,6 +733,7 @@ class _RowStore:
         ``remap`` is increasing (a sorted vocabulary merged into a sorted one),
         so the rows keep their order and only the offsets move.
         """
+        _check_bucket_count(n_new)
         self.merged()
         counts = np.zeros(n_new, dtype=np.int64)
         counts[remap] = np.diff(self.indptr)
@@ -687,7 +837,15 @@ class _PooledKernel:
             return 1.0
         return float(getattr(self.tfm, "window_size", 1))
 
-    def combine(self, res: Dict[str, np.ndarray], k: np.ndarray) -> np.ndarray:
+    def combine(
+        self, res: Dict[str, np.ndarray], k: np.ndarray, shift: Optional[np.ndarray]
+    ) -> np.ndarray:
+        """Feature values from the reduced channels ``res``.
+
+        ``k`` is the number of cells each window spans (see ``window_cells``)
+        and ``shift`` the ``sumsq`` centre per cell, which only `_StdKernel`
+        reads; both broadcast against the channels.
+        """
         raise NotImplementedError
 
     # implemented by kernels with ``custom = True``, which carry their own
@@ -734,7 +892,7 @@ class _PooledKernel:
 class _MeanKernel(_PooledKernel):
     channels = ("sum", "count")
 
-    def combine(self, res, k):
+    def combine(self, res, k, _shift):
         # inline rather than named so the observation count, a full block, is
         # freed at the comparison instead of living to the end of the call
         ok = (self._n_obs(res, k) >= self.min_samples()) & (res["count"] > 0)
@@ -747,14 +905,29 @@ class _MeanKernel(_PooledKernel):
 
 
 class _StdKernel(_PooledKernel):
+    """Sample standard deviation off the ``sum``/``sumsq``/``count`` channels.
+
+    ``sumsq`` is not ``sum(x**2)`` but ``sum((x - c)**2)`` for a per-bucket
+    centre ``c``: the bucket's first observed cell, fixed when the bucket is
+    first seen and carried by the store, so every cell ever folded into the
+    channel is centred alike (a view over ``time_agg`` has a centre of its
+    own). The plain ``sum(x**2) - sum(x)**2 / n`` cancels catastrophically on
+    offset data -- at ``y ~ 1e6 +- 1`` it keeps about three significant figures
+    of the deviation -- while centred both terms are the size of the deviations
+    themselves, so nothing is lost to the level.
+    """
+
     channels = ("sum", "sumsq", "count")
 
-    def combine(self, res, k):
+    def combine(self, res, k, shift):
         n = self._n_obs(res, k)
         ok = (n >= max(self.min_samples(), 2.0)) & (n > 1)
         # 2.0 keeps ``safe_n - 1`` non-zero where ~ok; those cells are nan'd below
         safe_n = np.where(ok, n, 2.0)
         s1 = k * res["sum"]
+        # sum(x - c) = sum(x) - n c, matching the centred sumsq; `n` is free now
+        n *= shift
+        s1 -= n
         var = k * res["sumsq"]
         # accumulated in place: each temporary here is a full (bucket, cell) block
         s1 *= s1
@@ -772,7 +945,7 @@ class _StdKernel(_PooledKernel):
 class _MinKernel(_PooledKernel):
     channels = ("min", "count")
 
-    def combine(self, res, k):
+    def combine(self, res, k, _shift):
         n = self._n_obs(res, k)
         ok = (n >= self.min_samples()) & np.isfinite(res["min"])
         return np.where(ok, res["min"], np.nan)
@@ -781,7 +954,7 @@ class _MinKernel(_PooledKernel):
 class _MaxKernel(_PooledKernel):
     channels = ("max", "count")
 
-    def combine(self, res, k):
+    def combine(self, res, k, _shift):
         n = self._n_obs(res, k)
         ok = (n >= self.min_samples()) & np.isfinite(res["max"])
         return np.where(ok, res["max"], np.nan)
@@ -797,7 +970,8 @@ class _RollingMixin:
         window = self.tfm.window_size
         lo, hi = store.rolling_bounds(self.lag, window)
         cells = store.channels_for(self.tfm.time_agg, self.channels)
-        return self.combine(store.reduce_windows(lo, hi, window, cells), 1.0)
+        res = store.reduce_windows(lo, hi, window, cells)
+        return self.combine(res, 1.0, store.cell_shift(self.tfm.time_agg))
 
     def _inner(self, cls, **kw):
         return cls(lag=self.lag, window_size=self.tfm.window_size, min_samples=1, **kw)
@@ -815,7 +989,8 @@ class _SeasonalMixin:
         window = self.tfm.window_size
         lo, hi, perm = store.seasonal_bounds(self.lag, window, self.tfm.season_length)
         cells = store.channels_for(self.tfm.time_agg, self.channels)
-        return self.combine(store.reduce_windows(lo, hi, window, cells, perm), 1.0)
+        res = store.reduce_windows(lo, hi, window, cells, perm)
+        return self.combine(res, 1.0, store.cell_shift(self.tfm.time_agg))
 
     def _inner(self, cls, **kw):
         return cls(
@@ -878,7 +1053,7 @@ class _ExpandingMixin:
             out[has] = vals[at]
             res[name] = out
         k = np.where(has, hi - first, 0).astype(np.float64)
-        values = self.combine(res, k)
+        values = self.combine(res, k, store.cell_shift(self.tfm.time_agg))
         if inner is not None:
             empty = n_kept == 0
             for name, tfm in inner.items():
@@ -1120,7 +1295,8 @@ class _RowKernel(_PooledKernel):
         raise NotImplementedError
 
     def _view(self, rows: _RowStore) -> _RowStore:
-        rows = rows.merged()
+        """The rows the windows are taken over: the observed ones, collapsed."""
+        rows = rows.merged().valid()
         if self.tfm.time_agg is None:
             return rows
         return rows.collapsed(self.tfm.time_agg)
@@ -1198,8 +1374,7 @@ class SeasonalRollingQuantileK(_RowKernel):
         # membership scan per target
         wanted = ordinal[:, None] - self.lag - np.arange(w) * sl
         lo = rows.search(bucket[:, None], wanted, "left")
-        hi = rows.search(bucket[:, None], np.where(wanted >= 0, wanted, -1), "right")
-        hi = np.where(wanted >= 0, hi, lo)
+        hi = rows.search(bucket[:, None], wanted, "right")
         counts = (hi - lo).sum(axis=1)
         ys = rows.y
         for i in np.flatnonzero(counts >= max(ms, 1)):
@@ -1217,6 +1392,11 @@ class LookupLagK(_RowKernel):
     ``lag`` *occurrences* back inside the (id, partition) bucket, however far
     away in time that is.
     """
+
+    def _view(self, rows):
+        # a row whose target is NaN is still an occurrence: the lookup lands on
+        # it and returns the NaN rather than skipping to the occurrence before
+        return rows.merged()
 
     def values_at(self, rows, bucket, ordinal):
         j = rows.search(bucket, ordinal, "left") - self.tfm._core_tfm.lag
@@ -1331,6 +1511,11 @@ class PooledState:
             self._width = store.width
         else:
             raise ValueError("PooledState needs either `base` or `store`")
+        #: per-view, per-bucket centre of the ``sumsq`` channel (see
+        #: `_StdKernel`); shared with the store, which fills it during the fit
+        self.shift: Dict[Optional[str], np.ndarray] = (
+            store.shift if store is not None else {}
+        )
         self.series_bucket_id = series_bucket_id
         self.bucket_uniques = bucket_uniques
         self._views: Dict[str, Dict[str, np.ndarray]] = {}
@@ -1426,12 +1611,19 @@ class PooledState:
         if time_agg is None:
             return self.base
         want = set(names or _ALL_CHANNELS) | {"count"}
-        view = self._views.get(time_agg)
-        if view is None:
-            self._views[time_agg] = _collapse(self.base, time_agg, want)
-        elif not want <= view.keys():
-            view.update(_collapse(self.base, time_agg, want - view.keys()))
-        return self._views[time_agg]
+        view = self._views.setdefault(time_agg, {})
+        build = want - view.keys()
+        if build:
+            new, self.shift[time_agg] = _collapsed(
+                self.base, time_agg, build, self.shift.get(time_agg), self.n_buckets
+            )
+            view.update(new)
+        return view
+
+    def cell_shift(self, time_agg: Optional[str]) -> Optional[np.ndarray]:
+        """The ``sumsq`` centre of a view as a ``(n_buckets, 1)`` column, if built."""
+        shift = self.shift.get(time_agg)
+        return None if shift is None else shift[:, None]
 
     # -- feature computation --------------------------------------------
     def _channel_ga(self, cells: Dict[str, np.ndarray], name: str) -> CoreGroupedArray:
@@ -1490,7 +1682,7 @@ class PooledState:
             for name, tfm in inner.items()
         }
         k = kernel.window_cells(np.arange(self.width))[None, :]
-        return kernel.combine(res, k)
+        return kernel.combine(res, k, self.cell_shift(kernel.tfm.time_agg))
 
     def update(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
         """One value per bucket for the next timestamp, advancing inner state."""
@@ -1502,7 +1694,7 @@ class PooledState:
             for name, tfm in inner.items()
         }
         k = kernel.window_cells(np.array([self.n_ordinals]))[None, :]
-        return kernel.combine(res, k)[:, 0]
+        return kernel.combine(res, k, self.cell_shift(kernel.tfm.time_agg))[:, 0]
 
     def broadcast(self, values: np.ndarray) -> np.ndarray:
         """Map per-bucket values onto series using the current assignment."""
@@ -1519,23 +1711,13 @@ class PooledState:
         """One new column per base aggregate from a single timestamp of values."""
         b = bucket_ids.astype(np.int64)
         v = np.asarray(y, dtype=np.float64)
-        col: Dict[str, np.ndarray] = {}
-        names = self.channel_names
-        if "count" in names:
-            col["count"] = np.bincount(b, minlength=self.n_buckets).astype(np.float64)
-        if "sum" in names:
-            col["sum"] = np.bincount(b, weights=v, minlength=self.n_buckets)
-        if "sumsq" in names:
-            col["sumsq"] = np.bincount(b, weights=v * v, minlength=self.n_buckets)
-        if "min" in names:
-            buf = np.full(self.n_buckets, np.inf)
-            np.minimum.at(buf, b, v)
-            col["min"] = buf
-        if "max" in names:
-            buf = np.full(self.n_buckets, -np.inf)
-            np.maximum.at(buf, b, v)
-            col["max"] = buf
-        return col
+        n = self.n_buckets
+
+        def centre(mean, obs):
+            self.shift[None] = _fill_shift(self.shift.get(None), mean, obs, n)
+            return self.shift[None][b]
+
+        return _cell_aggregates(b, v, n, self.channel_names, centre)
 
     def append(
         self, y_hat: np.ndarray, bucket_ids: Optional[np.ndarray] = None
@@ -1545,7 +1727,10 @@ class PooledState:
         known = bid >= 0
         b = bid[known].astype(np.int64)
         v = np.asarray(y_hat, dtype=np.float64)[known]
-        col = self._cells_for(b, v)
+        # a NaN value is no observation of its bucket; the rows keep it, since
+        # a row kernel decides for itself whether it counts (see `LookupLagK`)
+        valid = ~np.isnan(v)
+        col = self._cells_for(b[valid], v[valid])
         for name in self.base:
             self.base[name] = np.concatenate(
                 [self.base[name], col[name][:, None]], axis=1
@@ -1567,7 +1752,9 @@ class PooledState:
             return
         cells = {name: values[:, None] for name, values in col.items()}
         for time_agg, view in self._views.items():
-            new = _collapse(cells, time_agg, list(view))
+            new, self.shift[time_agg] = _collapsed(
+                cells, time_agg, list(view), self.shift.get(time_agg), self.n_buckets
+            )
             for name in list(view):
                 view[name] = np.concatenate([view[name], new[name]], axis=1)
 
@@ -1594,6 +1781,8 @@ class PooledState:
                 grown[:] = -np.inf
             grown[remap] = arr
             self.base[name] = grown
+        for view, shift in self.shift.items():
+            self.shift[view] = _grow_rows(shift, remap, n_new, np.nan)
         if self._rows is not None:
             self._rows.grow(remap, n_new)
         known = self.series_bucket_id >= 0
@@ -1637,6 +1826,7 @@ class PooledState:
         # references is enough -- no deep copy of the whole state per model
         return (
             dict(self.base),
+            dict(self.shift),
             self._width,
             self.n_ordinals,
             self.series_bucket_id,
@@ -1648,6 +1838,7 @@ class PooledState:
     def restore(self, snap) -> None:
         (
             base,
+            shift,
             self._width,
             self.n_ordinals,
             self.series_bucket_id,
@@ -1656,6 +1847,7 @@ class PooledState:
             rows,
         ) = snap
         self.base = dict(base)
+        self.shift = dict(shift)
         if rows is not None:
             assert self._rows is not None
             self._rows.restore(rows)
