@@ -1065,8 +1065,9 @@ class TimeSeries:
         horizons: List[int],
         target_col: str,
         as_numpy: bool = False,
-    ) -> Iterator[Tuple[int, Union[DFType, np.ndarray], np.ndarray]]:
-        """Generator that yields (h, X, y) tuples for each horizon.
+        with_encoder_context: bool = True,
+    ) -> Iterator[tuple[Any, ...]]:
+        """Generate the training features and labels for each requested horizon.
 
         For horizon h:
         - Dynamic exogenous features are aligned to predict h steps ahead
@@ -1079,9 +1080,12 @@ class TimeSeries:
             horizons: List of horizons to process (0-indexed)
             target_col: Name of target column
             as_numpy: Whether to convert X to numpy array
+            with_encoder_context: Whether to include timestamp context for feature
+                encoders that need to determine when each label is observable.
 
         Yields:
-            Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
+            ``(horizon_index, X, y)`` tuples, optionally followed by an encoder
+            context dictionary when ``with_encoder_context=True``.
         """
         exog_cols = self._get_dynamic_exog_cols(self.features_order_)
         exog_cols_set = set(exog_cols)
@@ -1179,11 +1183,22 @@ class TimeSeries:
 
             X_h = ufp.filter_with_mask(X_h, valid)
             y_h = y_h[valid]
-
             if as_numpy:
                 X_h = ufp.to_numpy(X_h)
 
-            yield h, X_h, y_h
+            if with_encoder_context:
+                target_times = ufp.offset_times(prep[self.time_col], self.freq, h)
+                context = {
+                    "times": ufp.filter_with_mask(
+                        prep[self.time_col], valid
+                    ).to_numpy(),
+                    "target_times": ufp.filter_with_mask(
+                        target_times, valid
+                    ).to_numpy(),
+                }
+                yield h, X_h, y_h, context
+            else:
+                yield h, X_h, y_h
 
     def fit_transform(
         self,
