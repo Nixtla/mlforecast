@@ -3,8 +3,6 @@ import sys
 import pytest
 
 # Skip entire directory if Ray is not available or on Windows
-if sys.version_info >= (3, 14):
-    pytest.skip("Ray does not support Python 3.14+", allow_module_level=True)
 pytest.importorskip("ray", reason="Ray is required for distributed tests")
 # CI only runs these on linux, but they work locally on macOS; set
 # MLFORECAST_FORCE_RAY_TESTS=1 to run them there while developing.

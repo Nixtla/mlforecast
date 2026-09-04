@@ -41,10 +41,10 @@ Documentation = "https://nixtlaverse.nixtla.io/mlforecast/"
 [project.optional-dependencies]
 dask = ["fugue[dask]>=0.9.4", "dask[complete]", "lightgbm", "xgboost"]
 ray = [
-    "fugue[ray]>=0.9.4; sys_platform != 'win32' and python_version < '3.14'",
-    "ray[data,train]>=2.56; sys_platform != 'win32' and python_version < '3.14'",
-    "lightgbm>=4.6; sys_platform != 'win32' and python_version < '3.14'",
-    "xgboost>=2.0.0,<2.1.0; sys_platform != 'win32' and python_version < '3.14'"
+    "fugue[ray]>=0.9.4; sys_platform != 'win32'",
+    "ray[data,train]>=2.56; sys_platform != 'win32'",
+    "lightgbm>=4.6; sys_platform != 'win32'",
+    "xgboost>=2.0.0,<2.1.0; sys_platform != 'win32'"
 ]
 spark = ["fugue[spark]>=0.9.4", "pyspark>=3.3", "lightgbm", "xgboost"]
 aws = ["fsspec[s3]"]
