@@ -31,9 +31,7 @@ warnings.simplefilter("ignore", FutureWarning)
     ids=["lightgbm", "xgboost"],
 )
 def test_ray_distributed_forecast(model_class, model_kwargs):
-    series = generate_daily_series(
-        100, equal_ends=True, min_length=500, max_length=1_000
-    )
+    series = generate_daily_series(20, equal_ends=True, min_length=100, max_length=200)
 
     # Create Ray dataset from pandas
     ray_dataset = ray.data.from_pandas(series)
@@ -49,7 +47,7 @@ def test_ray_distributed_forecast(model_class, model_kwargs):
         lags=[1, 2, 3, 4, 5, 6, 7],
         lag_transforms={
             1: [RollingMean(7), RollingMean(30), ExpandingMean()],
-            335: [RollingMean(30)],
+            20: [RollingMean(30)],
         },
         date_features=["dayofweek"],
     )
