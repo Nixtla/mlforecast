@@ -5,17 +5,56 @@ title: RayLGBMForecast
 ---
 
 
-Wrapper of `lightgbm.ray.RayLGBMRegressor` that adds a `model_` property
-that contains the fitted booster and is sent to the workers to in the
-forecasting step.
+LightGBM forecaster trained with `ray.train.lightgbm.LightGBMTrainer`. Adds a
+`model_` property that contains the fitted booster as a local
+`lightgbm.LGBMRegressor` and is sent to the workers in the forecasting step.
 
 ### `RayLGBMForecast`
 
-Bases: <code>[RayLGBMRegressor](#lightgbm_ray.RayLGBMRegressor)</code>
+Bases: <code>[RayForecastBase](#mlforecast.distributed.models.ray._base.RayForecastBase)</code>
 
-#### `RayLGBMForecast.model_`
+Base for the ray models, trained through ray.train's Trainer API.
+
+Subclasses provide ``_trainer_cls``, ``_train_loop`` (a module level function,
+so that it can be shipped to the workers), ``_translate_params`` and
+``_local_model``.
+
+The ray specific arguments are keyword only so that they can't collide with
+the booster's parameters, which are taken as ``**params``.
+
+#### `RayLGBMForecast.fit`
 
 ```python
-model_
+fit(dataset, target_col)
+```
+
+#### `RayLGBMForecast.get_params`
+
+```python
+get_params(deep=True)
+```
+
+#### `RayLGBMForecast.num_workers`
+
+```python
+num_workers = num_workers
+```
+
+#### `RayLGBMForecast.params`
+
+```python
+params = params
+```
+
+#### `RayLGBMForecast.resources_per_worker`
+
+```python
+resources_per_worker = resources_per_worker
+```
+
+#### `RayLGBMForecast.set_params`
+
+```python
+set_params(**params)
 ```
 
