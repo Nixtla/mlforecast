@@ -160,16 +160,16 @@ SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
-Seasonal rolling quantile.
+Rolling statistic over seasonal periods
 
 <details class="note" open markdown="1">
 <summary>Note</summary>
 
-In pooled modes (``global_``/``groupby``/``partition_by``) this
-transform has no aggregate-cache fast path: a quantile can't be
-recovered from the cached channels, so it falls back to a row-level
-pass whose cost grows with ``unique timestamps x bucket rows``. Can be
-slow on large panels.
+In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+rolling transforms have no aggregate-cache fast path: they fall back
+to a row-level pass whose cost grows with ``unique timestamps x
+bucket rows`` at fit, and aggregates are rebuilt at every recursive
+prediction step. Can be slow on large panels.
 
 </details>
 
@@ -180,12 +180,34 @@ Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_Rollin
 
 Rolling statistic over seasonal periods
 
+<details class="note" open markdown="1">
+<summary>Note</summary>
+
+In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+rolling transforms have no aggregate-cache fast path: they fall back
+to a row-level pass whose cost grows with ``unique timestamps x
+bucket rows`` at fit, and aggregates are rebuilt at every recursive
+prediction step. Can be slow on large panels.
+
+</details>
+
 
 ### `SeasonalRollingMin`
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
+<details class="note" open markdown="1">
+<summary>Note</summary>
+
+In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+rolling transforms have no aggregate-cache fast path: they fall back
+to a row-level pass whose cost grows with ``unique timestamps x
+bucket rows`` at fit, and aggregates are rebuilt at every recursive
+prediction step. Can be slow on large panels.
+
+</details>
 
 
 ### `SeasonalRollingStd`
@@ -194,12 +216,34 @@ Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_Rollin
 
 Rolling statistic over seasonal periods
 
+<details class="note" open markdown="1">
+<summary>Note</summary>
+
+In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+rolling transforms have no aggregate-cache fast path: they fall back
+to a row-level pass whose cost grows with ``unique timestamps x
+bucket rows`` at fit, and aggregates are rebuilt at every recursive
+prediction step. Can be slow on large panels.
+
+</details>
+
 
 ### `SeasonalRollingMean`
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
 
 Rolling statistic over seasonal periods
+
+<details class="note" open markdown="1">
+<summary>Note</summary>
+
+In pooled modes (``global_``/``groupby``/``partition_by``) seasonal
+rolling transforms have no aggregate-cache fast path: they fall back
+to a row-level pass whose cost grows with ``unique timestamps x
+bucket rows`` at fit, and aggregates are rebuilt at every recursive
+prediction step. Can be slow on large panels.
+
+</details>
 
 
 ### `ExpandingQuantile`
