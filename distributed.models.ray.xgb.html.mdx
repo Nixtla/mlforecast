@@ -5,17 +5,56 @@ title: RayXGBForecast
 ---
 
 
-Wrapper of `xgboost.ray.RayXGBRegressor` that adds a `model_` property
-that contains the fitted model and is sent to the workers in the
-forecasting step.
+XGBoost forecaster trained with `ray.train.xgboost.XGBoostTrainer`. Adds a
+`model_` property that contains the fitted booster as a local
+`xgboost.XGBRegressor` and is sent to the workers in the forecasting step.
 
 ### `RayXGBForecast`
 
-Bases: <code>[RayXGBRegressor](#xgboost_ray.RayXGBRegressor)</code>
+Bases: <code>[RayForecastBase](#mlforecast.distributed.models.ray._base.RayForecastBase)</code>
 
-#### `RayXGBForecast.model_`
+Base for the ray models, trained through ray.train's Trainer API.
+
+Subclasses provide ``_trainer_cls``, ``_train_loop`` (a module level function,
+so that it can be shipped to the workers), ``_translate_params`` and
+``_local_model``.
+
+The ray specific arguments are keyword only so that they can't collide with
+the booster's parameters, which are taken as ``**params``.
+
+#### `RayXGBForecast.fit`
 
 ```python
-model_
+fit(dataset, target_col)
+```
+
+#### `RayXGBForecast.get_params`
+
+```python
+get_params(deep=True)
+```
+
+#### `RayXGBForecast.num_workers`
+
+```python
+num_workers = num_workers
+```
+
+#### `RayXGBForecast.params`
+
+```python
+params = params
+```
+
+#### `RayXGBForecast.resources_per_worker`
+
+```python
+resources_per_worker = resources_per_worker
+```
+
+#### `RayXGBForecast.set_params`
+
+```python
+set_params(**params)
 ```
 
