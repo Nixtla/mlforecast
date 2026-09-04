@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -114,6 +115,16 @@ def _frozen_backtest(
 
     _original_ts = fcst.ts
     try:
+        static_cols = set(fcst.ts.static_features_.columns)
+        dynamic_cols = [
+            col
+            for col in fcst.ts.features_order_
+            if col in new_df.columns and col not in static_cols
+        ]
+        partition_cols = sorted(
+            col for col in fcst.ts._partition_cols if col in new_df.columns
+        )
+        future_cols = list(dict.fromkeys([*dynamic_cols, *partition_cols]))
         all_results = []
         splits = ufp.backtest_splits(
             new_df,
@@ -125,7 +136,10 @@ def _frozen_backtest(
             step_size=step_size,
         )
         for cutoffs, train, valid in splits:
-            preds = fcst.predict(h=h, new_df=train)
+            X_df = None
+            if future_cols:
+                X_df = valid[[id_col, time_col, *future_cols]]
+            preds = fcst.predict(h=h, new_df=train, X_df=X_df)
             preds = ufp.join(preds, cutoffs, on=id_col, how="left")
             joined = ufp.join(
                 valid[[id_col, time_col, target_col]],
@@ -1631,6 +1645,15 @@ class MLForecast:
             _saved_cs_df_pre = self._cs_df
             _saved_pi = self.prediction_intervals
             _saved_source_scales = self._cs_source_scales_
+            transfer_preprocess = None
+            if spec.needs_preprocess:
+                transfer_preprocess = partial(
+                    self.preprocess,
+                    id_col=self.ts.id_col,
+                    time_col=self.ts.time_col,
+                    target_col=self.ts.target_col,
+                    static_features=self.ts.static_features,
+                )
             try:
                 _transfer_result = spec.fn(
                     new_df=new_df,
@@ -1641,7 +1664,7 @@ class MLForecast:
                     target_col=self.ts.target_col,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
-                    preprocess_fn=(self.preprocess if spec.needs_preprocess else None),
+                    preprocess_fn=transfer_preprocess,
                     source_cs_df=(self._cs_df if spec.needs_source_cs else None),
                     source_scales=(
                         self._cs_source_scales_ if spec.needs_source_cs else None
