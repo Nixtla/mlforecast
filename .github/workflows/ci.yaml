@@ -41,7 +41,7 @@ jobs:
         with:
           mode: simulation
           token: ${{ secrets.CODESPEED_TOKEN }}
-          run: uv run pytest tests/bench_pipeline.py tests/bench_pooled.py --codspeed -n 2 --no-cov -p no:rerunfailures
+          run: uv run pytest tests/bench_pipeline.py tests/bench_pooled.py --codspeed -n 4 --no-cov -p no:rerunfailures
         env:
           MLFORECAST_POOLED_ENGINE: narwhals
 
