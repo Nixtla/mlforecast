@@ -1,3 +1,4 @@
+import pickle
 import sys
 
 import lightgbm as lgb
@@ -5,74 +6,89 @@ import numpy as np
 import pandas as pd
 import pytest
 import ray
+import xgboost as xgb
 from sklearn.base import clone
 
 from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
 from mlforecast.distributed.models.ray.xgb import RayXGBForecast
 
+requires_py310 = pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="Distributed tests are not supported on Python < 3.10",
+)
+
 
 @pytest.mark.ray
 @pytest.mark.parametrize("model_cls", [RayLGBMForecast, RayXGBForecast])
 def test_clone_preserves_booster_params(model_cls):
-    """sklearn's introspection ignores **kwargs, so get_params is overridden.
+    """DistributedMLForecast._fit clones the model, so get_params has to be complete.
 
-    Without that override `clone` in DistributedMLForecast._fit would silently
-    drop every parameter the user passed.
+    sklearn's introspection reads the subclass' signature, which only names the
+    ray arguments, so the booster's parameters have to come from the library's
+    own get_params.
     """
-    model = model_cls(num_workers=2, random_state=0, learning_rate=0.05)
+    model = model_cls(num_workers=2, random_state=0, learning_rate=0.05, n_estimators=5)
     params = model.get_params()
+    assert params["num_workers"] == 2
     assert params["random_state"] == 0
     assert params["learning_rate"] == 0.05
-    assert params["num_workers"] == 2
+    assert params["n_estimators"] == 5
 
-    cloned = clone(model)
-    assert cloned.params == {"random_state": 0, "learning_rate": 0.05}
-    assert cloned.num_workers == 2
-
-
-@pytest.mark.ray
-def test_lgb_param_translation():
-    params, num_boost_round = RayLGBMForecast(
-        n_estimators=7, verbosity=-1, random_state=0
-    )._translate_params()
-    assert num_boost_round == 7
-    # lightgbm takes random_state as an alias of seed, so it's passed through
-    assert params == {"verbosity": -1, "random_state": 0, "objective": "regression"}
-
-
-@pytest.mark.ray
-def test_xgb_param_translation():
-    params, num_boost_round = RayXGBForecast(
-        n_estimators=7, random_state=0, max_depth=3
-    )._translate_params()
-    assert num_boost_round == 7
-    # the native API doesn't know random_state
-    assert params == {
-        "seed": 0,
-        "max_depth": 3,
-        "objective": "reg:squarederror",
-    }
+    cloned = clone(model).get_params()
+    assert cloned["num_workers"] == 2
+    assert cloned["random_state"] == 0
+    assert cloned["learning_rate"] == 0.05
+    assert cloned["n_estimators"] == 5
 
 
 @pytest.mark.ray
 def test_default_num_boost_round_matches_sklearn():
-    """The estimators defaulted to n_estimators=100; keep that."""
-    for model_cls in (RayLGBMForecast, RayXGBForecast):
-        _, num_boost_round = model_cls()._translate_params()
-        assert num_boost_round == 100
+    """The estimators defaulted to 100 rounds; keep that.
+
+    Each library resolves it its own way now: lightgbm reads `n_estimators`,
+    xgboost leaves it None and falls back to 100 in get_num_boosting_rounds.
+    """
+    assert RayLGBMForecast().get_params()["n_estimators"] == 100
+    assert RayXGBForecast().get_num_boosting_rounds() == 100
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
-def test_local_model_uses_the_trained_booster():
-    """model_ grafts the distributed booster onto a local estimator.
+@requires_py310
+def test_lgb_trains_on_the_full_dataset_across_workers():
+    """Every worker only sees its shard, so lightgbm needs its network params.
 
-    This is the fragile part of the lightgbm path (it copies private fitted
-    state, as lightgbm_ray did), so pin the estimator's predictions to the
-    booster's.
+    Without them each worker trains an independent model on 1/N of the data and
+    rank 0's is the one that gets checkpointed, with no error anywhere. The
+    feature is constant, so no split is possible and the prediction is exactly
+    the mean of whatever the model actually saw.
+    """
+    df = pd.DataFrame(
+        {"x": np.ones(200), "y": np.r_[np.zeros(100), np.full(100, 100.0)]}
+    )
+    model = RayLGBMForecast(num_workers=2, n_estimators=5, verbosity=-1, random_state=0)
+    model.fit(ray.data.from_pandas(df), target_col="y")
+
+    # 0.0 would mean rank 0 only ever saw the first shard
+    np.testing.assert_allclose(
+        model.model_.predict(pd.DataFrame({"x": [1.0]})), [50.0], atol=1e-6
+    )
+    # and each worker sizes its thread pool from its own CPU share rather than
+    # from every core on the box, as lightgbm_ray's _set_omp_num_threads did
+    assert model.model_.n_jobs == 1
+
+
+@pytest.mark.ray
+@requires_py310
+@pytest.mark.parametrize(
+    "model_cls,local_cls",
+    [(RayLGBMForecast, lgb.LGBMRegressor), (RayXGBForecast, xgb.XGBRegressor)],
+    ids=["lightgbm", "xgboost"],
+)
+def test_model_is_the_estimator_fitted_in_the_worker(model_cls, local_cls):
+    """model_ is the estimator the worker fitted, not one rebuilt from params.
+
+    Rebuilding it from the native params lost the user's arguments (n_estimators
+    came back as the default) and the booster's scores.
     """
     rng = np.random.default_rng(0)
     df = pd.DataFrame(
@@ -82,17 +98,67 @@ def test_local_model_uses_the_trained_booster():
             "y": rng.normal(size=200),
         }
     )
-    dataset = ray.data.from_pandas(df)
+    kwargs = {"verbosity": -1} if model_cls is RayLGBMForecast else {}
+    model = model_cls(random_state=0, n_estimators=5, **kwargs)
+    model.fit(ray.data.from_pandas(df), target_col="y")
 
-    model = RayLGBMForecast(verbosity=-1, random_state=0, n_estimators=5)
-    model.fit(dataset, target_col="y")
+    local = model.model_
+    assert isinstance(local, local_cls)
+    # the user's params survive the round trip
+    assert local.n_estimators == 5
+    assert local.random_state == 0
+    # and so do the fitted attributes
+    assert local.evals_result_
+    assert local.feature_importances_.shape == (2,)
 
-    assert isinstance(model.model_, lgb.LGBMRegressor)
     X = df[["lag1", "lag2"]].head(10)
-    np.testing.assert_allclose(
-        model.model_.predict(X), model.model_.booster_.predict(X)
-    )
-    assert model.model_.booster_.num_trees() == 5
+    booster = local.booster_ if model_cls is RayLGBMForecast else local.get_booster()
+    if model_cls is RayLGBMForecast:
+        np.testing.assert_allclose(local.predict(X), booster.predict(X))
+        assert booster.num_trees() == 5
+    else:
+        np.testing.assert_allclose(
+            local.predict(X), booster.predict(xgb.DMatrix(X)), rtol=1e-6
+        )
+
+
+@pytest.mark.ray
+@requires_py310
+def test_lgb_honors_param_aliases():
+    """The hand rolled translation dropped lightgbm's aliases; its own does not.
+
+    `objective` has five aliases, and the previous `setdefault("objective", ...)`
+    only checked the canonical name, so `application` was silently overridden
+    with `regression`. `num_iterations` has eleven, of which three were covered.
+    """
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=100), "y": rng.random(size=100)})
+    model = RayLGBMForecast(application="poisson", num_iterations=7, verbosity=-1)
+    model.fit(ray.data.from_pandas(df), target_col="y")
+
+    assert model.model_.objective_ == "poisson"
+    assert model.model_.booster_.num_trees() == 7
+
+
+@pytest.mark.ray
+@requires_py310
+def test_xgb_keeps_random_state_and_drops_the_ray_callback():
+    """xgb.train knows `random_state`, so there was never a `seed` to translate to.
+
+    xgboost also stores callbacks as a parameter, so the ray reporting callback
+    would otherwise ride back to the driver and into whatever the user pickles
+    through DistributedMLForecast.save.
+    """
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=100), "y": rng.random(size=100)})
+    model = RayXGBForecast(random_state=0, n_estimators=5)
+    model.fit(ray.data.from_pandas(df), target_col="y")
+
+    params = model.model_.get_params()
+    assert params["random_state"] == 0
+    assert "seed" not in params
+    assert params["callbacks"] is None
+    pickle.loads(pickle.dumps(model.model_))
 
 
 @pytest.mark.ray
