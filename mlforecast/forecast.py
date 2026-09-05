@@ -67,10 +67,24 @@ from .model_report import (
     aggregate_model_fit_reports,
     get_process_rss_bytes,
     make_feature_preparation_report,
+    metric_name,
+    summarize_model_metrics,
 )
 
 _get_conformal_method = get_conformal_method  # backward compat
 _get_transfer_method_spec = get_transfer_method_spec
+
+_CV_STATE_ATTRIBUTES = (
+    "cv_fit_reports_",
+    "cv_feature_preparation_reports_",
+    "cv_model_fit_reports_",
+    "cv_report_folds_",
+    "cv_models_",
+    "cv_fitted_values_",
+    "cv_model_metrics_",
+    "cv_model_metrics_by_fold_",
+    "cv_model_metrics_mean_",
+)
 
 
 def _ensure_h_int64(res):
@@ -181,6 +195,8 @@ class MLForecast:
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
+        report_level: str = "off",
+        model_metrics: Optional[Sequence[Callable]] = None,
     ):
         """Forecasting pipeline
 
@@ -195,7 +211,13 @@ class MLForecast:
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
+            report_level (str): Reporting detail level: 'off', 'basic', or 'detailed'. Defaults to 'off'.
+            model_metrics (sequence of callables, optional): Metrics to calculate from fitted values and cross-validation output. Defaults to None (disabled). Pass functions such as ``utilsforecast.losses.smape`` to enable metrics.
         """
+        if report_level not in {"off", "basic", "detailed"}:
+            raise ValueError(
+                "report_level must be one of 'off', 'basic', or 'detailed'."
+            )
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
         if isinstance(models, list):
@@ -204,6 +226,11 @@ class MLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        self.report_level = report_level
+        self.model_metrics = [] if model_metrics is None else list(model_metrics)
+        metric_names = [metric_name(metric) for metric in self.model_metrics]
+        if len(metric_names) != len(set(metric_names)):
+            raise ValueError("model_metrics must have unique names.")
         num_threads = _resolve_num_threads(num_threads)
         self.ts = TimeSeries(
             freq=freq,
@@ -477,7 +504,7 @@ class MLForecast:
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
         """
-        preprocess_start = perf_counter()
+        preprocess_start = perf_counter() if self.report_level != "off" else None
         # Run data validations if requested
         self._validate_data_or_warn(df, id_col, time_col, validate_data)
         self.ts.horizon_features_ = self._resolve_horizon_features(
@@ -508,12 +535,15 @@ class MLForecast:
             weight_col=weight_col,
         )
         features = result[0] if isinstance(result, tuple) else result
-        self.feature_preparation_report_ = make_feature_preparation_report(
-            df,
-            features,
-            as_numpy=as_numpy,
-            elapsed_seconds=perf_counter() - preprocess_start,
-        )
+        if self.report_level != "off":
+            assert preprocess_start is not None
+            self.feature_preparation_report_ = make_feature_preparation_report(
+                df,
+                features,
+                as_numpy=as_numpy,
+                elapsed_seconds=perf_counter() - preprocess_start,
+                detailed=self.report_level == "detailed",
+            )
         return result
 
     def history_warmup(
@@ -646,8 +676,10 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with trained models.
         """
-        model_fit_start = perf_counter()
-        model_fit_rss_start = get_process_rss_bytes()
+        model_fit_start = perf_counter() if self.report_level != "off" else None
+        model_fit_rss_start = (
+            get_process_rss_bytes() if self.report_level == "detailed" else None
+        )
         model_seconds: Dict[str, float] = {}
         fit_calls = 0
         models_fit_kwargs = models_fit_kwargs or {}
@@ -678,12 +710,13 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            start = perf_counter()
+            start = perf_counter() if self.report_level != "off" else None
             fitted_model = clone(model).fit(X, y, **fit_kwargs)
-            model_seconds[name] = model_seconds.get(name, 0.0) + (
-                perf_counter() - start
-            )
-            fit_calls += 1
+            if start is not None:
+                model_seconds[name] = model_seconds.get(name, 0.0) + (
+                    perf_counter() - start
+                )
+                fit_calls += 1
             return fitted_model
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
@@ -711,15 +744,20 @@ class MLForecast:
                 self.models_[name] = fit_model(
                     name, model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
-        self.model_fit_report_ = ModelFitReport(
-            elapsed_seconds=perf_counter() - model_fit_start,
-            fit_calls=fit_calls,
-            model_seconds=model_seconds,
-            rss_start_bytes=model_fit_rss_start,
-            rss_end_bytes=get_process_rss_bytes(),
-        )
-        if hasattr(self, "_calibration_fit_reports"):
-            self._calibration_fit_reports.append(self.model_fit_report_)
+        if model_fit_start is not None:
+            self.model_fit_report_ = ModelFitReport(
+                elapsed_seconds=perf_counter() - model_fit_start,
+                fit_calls=fit_calls,
+                model_seconds=model_seconds,
+                rss_start_bytes=model_fit_rss_start,
+                rss_end_bytes=(
+                    get_process_rss_bytes()
+                    if self.report_level == "detailed"
+                    else None
+                ),
+            )
+            if hasattr(self, "_calibration_fit_reports"):
+                self._calibration_fit_reports.append(self.model_fit_report_)
         return self
 
     def _conformity_scores(
@@ -757,24 +795,36 @@ class MLForecast:
                 f"settings are: {min_samples}, shortest serie has: {min_size}. "
                 "Please reduce the number of windows, horizon or remove those series."
             )
-        cv_results = self.cross_validation(
-            df=df,
-            n_windows=n_windows,
-            h=h,
-            refit=False,
-            id_col=id_col,
-            time_col=time_col,
-            target_col=target_col,
-            static_features=static_features,
-            dropna=dropna,
-            keep_last_n=keep_last_n,
-            max_horizon=max_horizon,
-            horizons=horizons,
-            horizon_features=horizon_features,
-            horizon_feature_templates=horizon_feature_templates,
-            prediction_intervals=None,
-            as_numpy=as_numpy,
-        )
+        saved_cv_state = {
+            attribute: getattr(self, attribute)
+            for attribute in _CV_STATE_ATTRIBUTES
+            if hasattr(self, attribute)
+        }
+        try:
+            cv_results = self.cross_validation(
+                df=df,
+                n_windows=n_windows,
+                h=h,
+                refit=False,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                horizons=horizons,
+                horizon_features=horizon_features,
+                horizon_feature_templates=horizon_feature_templates,
+                prediction_intervals=None,
+                as_numpy=as_numpy,
+            )
+        finally:
+            for attribute in _CV_STATE_ATTRIBUTES:
+                if attribute in saved_cv_state:
+                    setattr(self, attribute, saved_cv_state[attribute])
+                elif hasattr(self, attribute):
+                    delattr(self, attribute)
         # For weighted conformal methods, also store full model covariates so
         # that the DRE can use all lag/rolling/date/exogenous features.
         feature_cols = None
@@ -1214,10 +1264,12 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with series values and trained models.
         """
-        fit_start = perf_counter()
-        fit_rss_start = get_process_rss_bytes()
+        fit_start = perf_counter() if self.report_level != "off" else None
+        fit_rss_start = (
+            get_process_rss_bytes() if self.report_level == "detailed" else None
+        )
         has_calibration = prediction_intervals is not None
-        if has_calibration:
+        if has_calibration and self.report_level != "off":
             self._calibration_fit_reports: List[ModelFitReport] = []
         if fitted and self.ts.target_transforms is not None:
             for tfm in self.ts.target_transforms:
@@ -1361,24 +1413,39 @@ class MLForecast:
                     self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
                 elif hasattr(self, "_fitted_train_df_"):
                     delattr(self, "_fitted_train_df_")
-        final_model_fit_report = getattr(self, "model_fit_report_", None)
-        calibration_model_fit_report = None
-        model_fit_report = final_model_fit_report
-        if has_calibration:
-            all_model_fit_reports = self._calibration_fit_reports
-            calibration_model_fit_report = aggregate_model_fit_reports(
-                all_model_fit_reports[:-1]
+        if fitted and self.model_metrics:
+            self.model_metrics_ = summarize_model_metrics(
+                self.fcst_fitted_values_,
+                models=list(self.models),
+                metrics=self.model_metrics,
+                id_col=id_col,
+                target_col=target_col,
             )
-            model_fit_report = aggregate_model_fit_reports(all_model_fit_reports)
-            del self._calibration_fit_reports
-        self.fit_report_ = FitReport(
-            elapsed_seconds=perf_counter() - fit_start,
-            rss_start_bytes=fit_rss_start,
-            rss_end_bytes=get_process_rss_bytes(),
-            model_fit_report=model_fit_report,
-            calibration_model_fit_report=calibration_model_fit_report,
-            final_model_fit_report=final_model_fit_report,
-        )
+        elif hasattr(self, "model_metrics_"):
+            delattr(self, "model_metrics_")
+        if fit_start is not None:
+            final_model_fit_report = getattr(self, "model_fit_report_", None)
+            calibration_model_fit_report = None
+            model_fit_report = final_model_fit_report
+            if has_calibration:
+                all_model_fit_reports = self._calibration_fit_reports
+                calibration_model_fit_report = aggregate_model_fit_reports(
+                    all_model_fit_reports[:-1]
+                )
+                model_fit_report = aggregate_model_fit_reports(all_model_fit_reports)
+                del self._calibration_fit_reports
+            self.fit_report_ = FitReport(
+                elapsed_seconds=perf_counter() - fit_start,
+                rss_start_bytes=fit_rss_start,
+                rss_end_bytes=(
+                    get_process_rss_bytes()
+                    if self.report_level == "detailed"
+                    else None
+                ),
+                model_fit_report=model_fit_report,
+                calibration_model_fit_report=calibration_model_fit_report,
+                final_model_fit_report=final_model_fit_report,
+            )
         return self
 
     def forecast_fitted_values(
@@ -1561,8 +1628,10 @@ class MLForecast:
                 "No fitted models found. You have to call fit or preprocess + fit_models. "
                 "If you used cross_validation before please fit again."
             )
-        predict_start = perf_counter()
-        predict_rss_start = get_process_rss_bytes()
+        predict_start = perf_counter() if self.report_level != "off" else None
+        predict_rss_start = (
+            get_process_rss_bytes() if self.report_level == "detailed" else None
+        )
         first_model = next(iter(self.models_.values()))
         # Models are stored as dict for direct forecasting
         first_model_is_multi = isinstance(first_model, dict)
@@ -1919,12 +1988,17 @@ class MLForecast:
                         forecasts = _rescale_interval_columns(
                             forecasts, list(model_names), level_, sigma_tgt
                         )
-            self.predict_report_ = PredictReport(
-                elapsed_seconds=perf_counter() - predict_start,
-                rss_start_bytes=predict_rss_start,
-                rss_end_bytes=get_process_rss_bytes(),
-                horizon=h,
-            )
+            if predict_start is not None:
+                self.predict_report_ = PredictReport(
+                    elapsed_seconds=perf_counter() - predict_start,
+                    rss_start_bytes=predict_rss_start,
+                    rss_end_bytes=(
+                        get_process_rss_bytes()
+                        if self.report_level == "detailed"
+                        else None
+                    ),
+                    horizon=h,
+                )
             return forecasts
         finally:
             if _saved_cs_df is not None:
@@ -2000,6 +2074,18 @@ class MLForecast:
         results = []
         cv_models = []
         cv_fitted_values = []
+        for attribute in (
+            "cv_model_metrics_",
+            "cv_model_metrics_by_fold_",
+            "cv_model_metrics_mean_",
+        ):
+            if hasattr(self, attribute):
+                delattr(self, attribute)
+        if self.report_level != "off":
+            self.cv_fit_reports_: List[FitReport] = []
+            self.cv_feature_preparation_reports_: List[FeaturePreparationReport] = []
+            self.cv_model_fit_reports_: List[ModelFitReport] = []
+            self.cv_report_folds_: List[int] = []
         splits = ufp.backtest_splits(
             df,
             n_windows=n_windows,
@@ -2037,6 +2123,13 @@ class MLForecast:
                         weight_col=weight_col,
                         validate_data=False,
                     )
+                if self.report_level != "off":
+                    self.cv_fit_reports_.append(self.fit_report_)
+                    self.cv_feature_preparation_reports_.append(
+                        self.feature_preparation_report_
+                    )
+                    self.cv_model_fit_reports_.append(self.model_fit_report_)
+                    self.cv_report_folds_.append(i_window)
                 cv_models.append(self.models_)
                 if fitted:
                     cv_fitted_values.append(
@@ -2148,7 +2241,41 @@ class MLForecast:
         out = ufp.drop_index_if_pandas(out)
         first_out_cols = [id_col, time_col, "cutoff", target_col]
         remaining_cols = [c for c in out.columns if c not in first_out_cols]
-        return out[first_out_cols + remaining_cols]
+        out = out[first_out_cols + remaining_cols]
+        if self.model_metrics:
+            model_names = list(self.models)
+            self.cv_model_metrics_ = summarize_model_metrics(
+                out,
+                models=model_names,
+                metrics=self.model_metrics,
+                id_col=id_col,
+                target_col=target_col,
+            )
+            self.cv_model_metrics_by_fold_ = {
+                i_window: summarize_model_metrics(
+                    result,
+                    models=model_names,
+                    metrics=self.model_metrics,
+                    id_col=id_col,
+                    target_col=target_col,
+                )
+                for i_window, result in enumerate(results)
+            }
+            self.cv_model_metrics_mean_ = {
+                model: {
+                    metric_name: float(
+                        np.mean(
+                            [
+                                fold_metrics[model][metric_name]
+                                for fold_metrics in self.cv_model_metrics_by_fold_.values()
+                            ]
+                        )
+                    )
+                    for metric_name in self.cv_model_metrics_[model]
+                }
+                for model in model_names
+            }
+        return out
 
     def cross_validation_fitted_values(self):
         if not getattr(self, "cv_fitted_values_", []):
