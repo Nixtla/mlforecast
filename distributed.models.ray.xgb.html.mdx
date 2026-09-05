@@ -5,17 +5,46 @@ title: RayXGBForecast
 ---
 
 
-Wrapper of `xgboost.ray.RayXGBRegressor` that adds a `model_` property
-that contains the fitted model and is sent to the workers in the
-forecasting step.
+XGBoost forecaster trained with `ray.train.xgboost.XGBoostTrainer`. Adds a
+`model_` property that contains the fitted booster as a local
+`xgboost.XGBRegressor` and is sent to the workers in the forecasting step.
 
 ### `RayXGBForecast`
 
-Bases: <code>[RayXGBRegressor](#xgboost_ray.RayXGBRegressor)</code>
+Bases: <code>[RayForecastBase](#mlforecast.distributed.models.ray._base.RayForecastBase)</code>, <code>[XGBRegressor](#xgboost.XGBRegressor)</code>
 
-#### `RayXGBForecast.model_`
+XGBoost forecaster trained with `ray.train.xgboost.XGBoostTrainer`.
+
+The booster's parameters are taken as ``**kwargs`` and handled by
+``XGBRegressor`` itself; ``num_workers`` and ``resources_per_worker`` are
+keyword only so that they can't collide with them.
+
+``num_workers`` sets the number of ray train workers. The previous
+``xgboost_ray`` based implementation derived that from ``n_jobs``
+(``RayParams(num_actors=n_jobs)``); ``n_jobs`` is now the per worker thread
+count, as it is for the local estimator.
+
+``fit`` takes a ray ``Dataset`` and a target column rather than the sklearn
+``(X, y)`` pair, as the previous implementation did, so the inherited
+``predict``/``score`` can't be used before fitting. The fitted estimator is
+exposed as ``model_``, a local ``xgboost.XGBRegressor`` that is sent to the
+workers in the forecasting step.
+
+#### `RayXGBForecast.fit`
 
 ```python
-model_
+fit(dataset, target_col)
+```
+
+#### `RayXGBForecast.num_workers`
+
+```python
+num_workers: int = num_workers
+```
+
+#### `RayXGBForecast.resources_per_worker`
+
+```python
+resources_per_worker: Optional[Dict[str, float]] = resources_per_worker
 ```
 
