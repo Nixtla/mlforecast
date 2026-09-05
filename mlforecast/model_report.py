@@ -371,7 +371,7 @@ def summarize_model_metrics(
     target_col: str,
 ) -> Dict[str, Dict[str, float]]:
     """Compute per-model mean loss values from utilsforecast-style metrics."""
-    summary = {model: {} for model in models}
+    summary: Dict[str, Dict[str, float]] = {model: {} for model in models}
     for metric in metrics:
         name = metric_name(metric)
         evaluated = metric(

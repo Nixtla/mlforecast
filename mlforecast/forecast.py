@@ -751,9 +751,7 @@ class MLForecast:
                 model_seconds=model_seconds,
                 rss_start_bytes=model_fit_rss_start,
                 rss_end_bytes=(
-                    get_process_rss_bytes()
-                    if self.report_level == "detailed"
-                    else None
+                    get_process_rss_bytes() if self.report_level == "detailed" else None
                 ),
             )
             if hasattr(self, "_calibration_fit_reports"):
@@ -1438,9 +1436,7 @@ class MLForecast:
                 elapsed_seconds=perf_counter() - fit_start,
                 rss_start_bytes=fit_rss_start,
                 rss_end_bytes=(
-                    get_process_rss_bytes()
-                    if self.report_level == "detailed"
-                    else None
+                    get_process_rss_bytes() if self.report_level == "detailed" else None
                 ),
                 model_fit_report=model_fit_report,
                 calibration_model_fit_report=calibration_model_fit_report,
