@@ -406,6 +406,109 @@ def test_scale_aligned_weighted_composes(scale_aligned_setup):
     assert (preds["LGBMRegressor-lo-80"] <= preds["LGBMRegressor-hi-80"]).all()
 
 
+def test_scale_aligned_weighted_preserves_target_dre_weights():
+    """The composed method must retain DRE target weights for test mass."""
+    from mlforecast.conformal_prediction import (
+        _scale_aligned_weighted_transfer,
+        _weighted_conformal_transfer,
+    )
+
+    n_source = 20
+    n_target = 30
+    source_cs_df = pd.DataFrame(
+        {
+            "unique_id": ["source"] * n_source,
+            "ds": np.arange(n_source),
+            "cutoff": np.zeros(n_source, dtype=int),
+            "model": np.linspace(0.1, 2.0, n_source),
+            "lag1": np.linspace(-1.0, 1.0, n_source),
+        }
+    )
+    target = pd.DataFrame(
+        {
+            "unique_id": ["target"] * n_target,
+            "ds": np.arange(n_target),
+            "y": 10.0 + np.arange(n_target, dtype=float) ** 2,
+            "lag1": np.linspace(1.0, 3.0, n_target),
+        }
+    )
+    pi = PredictionIntervals(
+        method="weighted_conformal_error",
+        n_windows=2,
+        h=1,
+        scale_estimator="std",
+    )
+    tc = TransferConformal(method="scale_aligned_weighted", cv=0)
+
+    def preprocess_fn(df, **_):
+        return df
+
+    result = _scale_aligned_weighted_transfer(
+        new_df=target,
+        prediction_intervals=pi,
+        tc=tc,
+        model_names=["model"],
+        target_col="y",
+        preprocess_fn=preprocess_fn,
+        source_cs_df=source_cs_df,
+        source_scales={"source": 1.0},
+    )
+    weighted_result = _weighted_conformal_transfer(
+        new_df=target,
+        prediction_intervals=pi,
+        tc=tc,
+        model_names=["model"],
+        target_col="y",
+        preprocess_fn=preprocess_fn,
+        source_cs_df=source_cs_df,
+    )
+
+    assert result.target_weights is not None
+    assert result.target_weights.shape == (len(target),)
+    assert np.isfinite(result.target_weights).all()
+    np.testing.assert_allclose(result.target_weights, weighted_result.target_weights)
+
+
+def test_scale_aligned_weighted_checks_legacy_scales_before_dre():
+    """Missing saved scales take precedence over an otherwise failing DRE fit."""
+    from mlforecast.conformal_prediction import _scale_aligned_weighted_transfer
+
+    source_cs_df = pd.DataFrame(
+        {
+            "unique_id": ["source", "source"],
+            "ds": [0, 1],
+            "cutoff": [0, 0],
+            "model": [0.1, 0.2],
+            "lag1": [1.0, 2.0],
+        }
+    )
+    target = pd.DataFrame(
+        {
+            "unique_id": ["target", "target"],
+            "ds": [0, 1],
+            "y": [1.0, 3.0],
+            "lag1": [3.0, 4.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="predates source-scale persistence"):
+        _scale_aligned_weighted_transfer(
+            new_df=target,
+            prediction_intervals=PredictionIntervals(
+                method="weighted_conformal_error",
+                n_windows=2,
+                h=1,
+                scale_estimator="std",
+            ),
+            tc=TransferConformal(method="scale_aligned_weighted", cv=999),
+            model_names=["model"],
+            target_col="y",
+            preprocess_fn=lambda df, **_: df,
+            source_cs_df=source_cs_df,
+            source_scales=None,
+        )
+
+
 def test_scale_aligned_requires_scale_estimator():
     """scale_aligned transfer raises if model was fit without scale_estimator."""
     series = generate_daily_series(2, min_length=40, max_length=50, seed=3)

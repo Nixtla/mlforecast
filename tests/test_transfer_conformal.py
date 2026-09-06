@@ -1,3 +1,4 @@
+import cloudpickle
 import lightgbm
 import numpy as np
 import pandas as pd
@@ -127,6 +128,203 @@ def test_transfer_conformal_with_dynamic_partition_columns(method):
     np.testing.assert_allclose(result["LinearRegression"], baseline["LinearRegression"])
 
 
+def test_frozen_backtest_ignores_raw_lag_feature_name():
+    """Raw columns sharing lag-feature names are not future exogenous data."""
+    df = _dynamic_exog_system().drop(columns="u")
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].copy()
+    new_df["lag1"] = 99
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+
+    result = fcst.predict(
+        h=3,
+        new_df=new_df,
+        level=[90],
+        transfer_conformal="recalibrate",
+    )
+
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_transfer_recalibrate_supports_legacy_loaded_timeseries(tmp_path):
+    """A saved TimeSeries without `_partition_cols` remains usable for transfer."""
+    df = _dynamic_exog_system().drop(columns="u")
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df.iloc[:30],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+    delattr(fcst.ts, "_partition_cols")
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+    # Emulate the interval payload written before source scales were persisted.
+    intervals_path = savedir / "intervals.pkl"
+    with intervals_path.open("rb") as f:
+        intervals = cloudpickle.load(f)
+    del intervals["source_scales"]
+    with intervals_path.open("wb") as f:
+        cloudpickle.dump(intervals, f)
+
+    loaded = MLForecast.load(savedir)
+    result = loaded.predict(
+        h=3,
+        new_df=df.iloc[:45],
+        level=[90],
+        transfer_conformal="recalibrate",
+    )
+
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_transfer_recalibrate_supports_legacy_partition_transforms(tmp_path):
+    """Legacy models derive partition columns from their transforms for CV windows."""
+    df = _dynamic_exog_system().drop(columns="u")
+    df["promo"] = np.arange(len(df)) % 2
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={
+            1: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
+        },
+    )
+    fcst.fit(
+        df.iloc[:30],
+        static_features=[],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+    delattr(fcst.ts, "_partition_cols")
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+
+    loaded = MLForecast.load(savedir)
+    result = loaded.predict(
+        h=3,
+        new_df=df.iloc[:45],
+        X_df=df[["unique_id", "ds", "promo"]].iloc[45:48],
+        level=[90],
+        transfer_conformal="recalibrate",
+    )
+
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_transfer_scale_alignment_survives_save_load(tmp_path):
+    """Save/load preserves every source scale needed for scale-aligned transfer."""
+    df = generate_daily_series(2, min_length=45, max_length=45, seed=73)
+    ids = df["unique_id"].unique()
+    df.loc[df["unique_id"] == ids[1], "y"] *= 10.0
+    train = df.groupby("unique_id", observed=True).head(30).reset_index(drop=True)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        prediction_intervals=PredictionIntervals(
+            n_windows=2,
+            h=3,
+            scale_estimator="std",
+        ),
+    )
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+
+    source_scales = fcst._cs_source_scales_
+    assert source_scales is not None
+    assert len(source_scales) == 2
+    assert not np.isclose(source_scales[ids[0]], source_scales[ids[1]])
+    expected = fcst.predict(
+        h=3,
+        new_df=df,
+        level=[90],
+        transfer_conformal="scale_aligned",
+    )
+    loaded = MLForecast.load(savedir)
+    assert loaded._cs_source_scales_ == pytest.approx(source_scales)
+    result = loaded.predict(
+        h=3,
+        new_df=df,
+        level=[90],
+        transfer_conformal="scale_aligned",
+    )
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_legacy_scale_aligned_artifact_explains_how_to_recover(tmp_path):
+    """Missing persisted source scales should identify the legacy artifact issue."""
+    df = _dynamic_exog_system().drop(columns="u")
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df.iloc[:30],
+        prediction_intervals=PredictionIntervals(
+            n_windows=2,
+            h=3,
+            scale_estimator="std",
+        ),
+    )
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+    intervals_path = savedir / "intervals.pkl"
+    with intervals_path.open("rb") as f:
+        intervals = cloudpickle.load(f)
+    del intervals["source_scales"]
+    with intervals_path.open("wb") as f:
+        cloudpickle.dump(intervals, f)
+
+    loaded = MLForecast.load(savedir)
+    with pytest.raises(ValueError, match="predates source-scale persistence"):
+        loaded.predict(
+            h=3,
+            new_df=df.iloc[:45],
+            level=[90],
+            transfer_conformal="scale_aligned",
+        )
+
+
+def test_failed_weighted_transfer_preserves_source_forecasting_state():
+    """A failed target DRE calculation must not replace the source history."""
+    source = generate_daily_series(1, min_length=30, max_length=30, seed=71)
+    target = generate_daily_series(1, min_length=30, max_length=30, seed=72)
+    source["unique_id"] = "source"
+    target["unique_id"] = "target"
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        source,
+        prediction_intervals=PredictionIntervals(
+            n_windows=2,
+            h=3,
+            method="weighted_conformal_error",
+        ),
+    )
+    expected = fcst.predict(h=3, level=[90])
+
+    with pytest.raises(ValueError, match="cv=999"):
+        fcst.predict(
+            h=3,
+            new_df=target,
+            level=[90],
+            transfer_conformal=TransferConformal(
+                method="weighted_conformal",
+                cv=999,
+            ),
+        )
+
+    result = fcst.predict(h=3, level=[90])
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
 # ---------------------------------------------------------------------------
 # Task 1: data-model additions
 # ---------------------------------------------------------------------------
@@ -249,6 +447,40 @@ def _predict_transfer(
             transfer_conformal=method,
         )
     return _PREDICTION_CACHE[cache_key].copy()
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "error_scaled",
+        "scale_aligned",
+        "weighted_conformal",
+        "scale_aligned_weighted",
+    ],
+)
+def test_source_score_transfer_supports_target_id_subset(transfer_cp_setup, method):
+    """Source scores are pooled even when forecasting a subset of target IDs."""
+    mlf, target_train, _ = transfer_cp_setup
+    target_id = target_train["unique_id"].iloc[0]
+
+    full_result = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        transfer_conformal=method,
+    )
+    result = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        ids=[target_id],
+        transfer_conformal=method,
+    )
+
+    expected = full_result.loc[full_result["unique_id"] == target_id]
+    pd.testing.assert_frame_equal(
+        result.reset_index(drop=True), expected.reset_index(drop=True)
+    )
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)

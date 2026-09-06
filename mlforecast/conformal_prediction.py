@@ -967,14 +967,21 @@ def _scale_aligned_transfer(
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
-    if (
-        source_scales is None
-        or prediction_intervals.scale_estimator is None
-        or source_cs_df is None
-    ):
+    if prediction_intervals.scale_estimator is None:
         raise ValueError(
             "transfer_conformal_method='scale_aligned' requires the model to have "
             "been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
+        )
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal_method='scale_aligned' requires source conformity "
+            "scores. Refit the model with prediction_intervals."
+        )
+    if source_scales is None:
+        raise ValueError(
+            "Scale-aligned transfer requires source scales, but this artifact "
+            "predates source-scale persistence. Refit the source model with "
+            "PredictionIntervals(scale_estimator='mad' or 'std') and save it again."
         )
     target_scale_dict = _compute_series_scales(
         new_df,
@@ -1009,7 +1016,7 @@ def _scale_aligned_weighted_transfer(
         raise ValueError(
             "transfer_conformal_method='scale_aligned_weighted' requires source_cs_df."
         )
-    wc_result = _weighted_conformal_transfer(
+    sa_result = _scale_aligned_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
@@ -1021,7 +1028,7 @@ def _scale_aligned_weighted_transfer(
         source_cs_df=source_cs_df,
         source_scales=source_scales,
     )
-    sa_result = _scale_aligned_transfer(
+    wc_result = _weighted_conformal_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
@@ -1037,6 +1044,7 @@ def _scale_aligned_weighted_transfer(
         cs_df=source_cs_df,
         weights=wc_result.weights,
         target_scales=sa_result.target_scales,
+        target_weights=wc_result.target_weights,
     )
 
 
