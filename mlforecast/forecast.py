@@ -45,6 +45,7 @@ from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
+from .callbacks import Callback, _emit, _stage
 from .data_validation import validate_df
 from .compat import CatBoostRegressor
 from .target_transforms import _BaseGroupedArrayTargetTransform
@@ -167,6 +168,7 @@ class MLForecast:
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
+        callbacks: Optional[List[Callback]] = None,
     ):
         """Forecasting pipeline
 
@@ -181,6 +183,7 @@ class MLForecast:
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
+            callbacks (list of Callback, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.callbacks.Profiler`. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -190,6 +193,7 @@ class MLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        self.callbacks = list(callbacks or [])
         num_threads = _resolve_num_threads(num_threads)
         self.ts = TimeSeries(
             freq=freq,
@@ -420,6 +424,7 @@ class MLForecast:
             )
         return resolved
 
+    @_stage("preprocess")
     def preprocess(
         self,
         df: DFType,
@@ -605,6 +610,20 @@ class MLForecast:
         )
         return self
 
+    @_stage("fit_model")
+    def _fit_model(
+        self,
+        name: str,  # noqa: ARG002
+        model: BaseEstimator,
+        X: Union[DataFrame, np.ndarray],
+        y: np.ndarray,
+        h: Optional[int],  # noqa: ARG002
+        fit_kwargs: dict[str, Any],
+    ) -> BaseEstimator:
+        # name and h are only here so the fit_model stage reports them
+        return clone(model).fit(X, y, **fit_kwargs)
+
+    @_stage("fit_models")
     def fit_models(
         self,
         X: Union[DataFrame, np.ndarray, None] = None,
@@ -633,7 +652,13 @@ class MLForecast:
             )
 
         def fit_model(
-            model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
+            name,
+            model,
+            X,
+            y,
+            weight_col,
+            model_fit_kwargs: Optional[dict[str, Any]],
+            h: Optional[int] = None,
         ):
             fit_kwargs = model_fit_kwargs or {}
             if weight_col is not None:
@@ -650,7 +675,7 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            return clone(model).fit(X, y, **fit_kwargs)
+            return self._fit_model(name, model, X, y, h, fit_kwargs)
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
@@ -664,7 +689,7 @@ class MLForecast:
                 horizon_gen = generator_factory()
                 for h, X_h, y_h in horizon_gen:
                     fitted = fit_model(
-                        model, X_h, y_h, self.ts.weight_col, model_fit_kwargs
+                        name, model, X_h, y_h, self.ts.weight_col, model_fit_kwargs, h
                     )
                     self.models_[name][h] = fitted
         else:
@@ -675,7 +700,7 @@ class MLForecast:
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
                 self.models_[name] = fit_model(
-                    model, X, y, self.ts.weight_col, model_fit_kwargs
+                    name, model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
         return self
 
@@ -1119,6 +1144,7 @@ class MLForecast:
         result = result.sort_values([id_col, time_col]).reset_index(drop=True)
         return result
 
+    @_stage("fit")
     def fit(
         self,
         df: DataFrame,
@@ -1456,6 +1482,7 @@ class MLForecast:
         ids = [self.ts.id_col, self.ts.time_col]
         return ufp.anti_join(expected, X_df[ids], on=ids)
 
+    @_stage("predict")
     def predict(
         self,
         h: int,
@@ -1856,6 +1883,7 @@ class MLForecast:
             if _saved_cs_df is not None:
                 self._cs_df = _saved_cs_df
 
+    @_stage("cross_validation")
     def cross_validation(
         self,
         df: DFType,
@@ -1937,6 +1965,7 @@ class MLForecast:
             input_size=input_size,
         )
         for i_window, (cutoffs, train, valid) in enumerate(splits):
+            _emit(self, "on_start", "cv_window", i_window=i_window, cutoffs=cutoffs)
             should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
             if should_fit:
                 with warnings.catch_warnings():
@@ -2066,6 +2095,14 @@ class MLForecast:
                     "Please verify that the frequency set on the MLForecast constructor matches your series' "
                     "and that there aren't any missing periods."
                 )
+            _emit(
+                self,
+                "on_end",
+                "cv_window",
+                result=result,
+                i_window=i_window,
+                cutoffs=cutoffs,
+            )
             results.append(result)
         del self.models_
         self.cv_models_ = cv_models
