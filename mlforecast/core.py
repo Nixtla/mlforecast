@@ -402,6 +402,15 @@ class TimeSeries:
             w_state = max(tfm.update_samples for tfm in tfm_list)
             state.trim_to_last(max(self.keep_last_n, w_state))
 
+    def _stateful_cores(self) -> List[Any]:
+        """Inner coreforecast transforms that carry a per-group accumulator."""
+        return [
+            core
+            for tfm in self._get_local_tfms(self.transforms).values()
+            if isinstance(tfm, _BaseLagTransform)
+            for core in tfm._stateful_core_tfms()
+        ]
+
     def _apply_keep_last_n(self) -> None:
         """Resolve ``keep_last_n`` and trim the stored history accordingly.
 
@@ -410,6 +419,10 @@ class TimeSeries:
         and trims the pooled states (finite-window states only). Must run after
         the lag transforms have computed their state, since local stateful
         transforms (Expanding*/EWM) warm their buffers from the full history.
+
+        The retention has a floor of one more than any stateful transform's lag,
+        including over an explicit ``keep_last_n``, so that ``update`` can always
+        advance the accumulators (see ``_advance_lag_transform_states``).
         """
         update_samples = [
             getattr(tfm, "update_samples", -1) for tfm in self.transforms.values()
@@ -422,6 +435,12 @@ class TimeSeries:
             # user didn't set keep_last_n and we can infer it from the transforms
             self.keep_last_n = max(update_samples)
         if self.keep_last_n is not None:
+            # a serie trimmed to exactly a stateful transform's lag is
+            # indistinguishable from one that's only that long, and ``update``
+            # has to tell them apart: the first has an accumulator to advance,
+            # the second none to start from
+            min_kept = max((core.lag + 1 for core in self._stateful_cores()), default=0)
+            self.keep_last_n = max(self.keep_last_n, min_kept)
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
 
@@ -455,10 +474,10 @@ class TimeSeries:
         reading the value ``lag`` positions from the end. ``TimeSeries.update``
         appends several values at once, so the accumulators must be advanced
         here, one appended timestamp at a time, or they'd stay ``counts`` values
-        behind (see #726). Recomputing instead is only possible for the series
-        that haven't started accumulating (they're also the ones the fold can't
-        handle); for the rest ``keep_last_n`` has already dropped the history
-        the accumulator summarizes.
+        behind (see #726). Recomputing instead isn't possible once an
+        accumulator has started, since ``keep_last_n`` has dropped the history
+        it summarizes; the series that haven't started are exactly the ones the
+        trim leaves whole, so those are recomputed.
 
         Args:
             prev_ga: The stored series *before* the new values were appended.
@@ -468,12 +487,7 @@ class TimeSeries:
             new_groups: Mask over the updated id order marking series that
                 didn't exist before this update.
         """
-        cores = [
-            core
-            for tfm in self._get_local_tfms(self.transforms).values()
-            if isinstance(tfm, _BaseLagTransform)
-            for core in tfm._stateful_core_tfms()
-        ]
+        cores = self._stateful_cores()
         if not cores:
             return
         max_lag = max(core.lag for core in cores)
@@ -500,31 +514,24 @@ class TimeSeries:
                     offsets[i] : offsets[i + 1]
                 ]
             indptr = np.arange(0, (n_prev + 1) * max_lag, max_lag, dtype=np.int32)
-            prev_lens = stored_lens[existing]
             for j in range(k_max):
                 # groups of max_lag values ending on the j-th appended value, so
                 # that the read at position lag from the end lands on it
                 step = CoreGroupedArray(context[:, j : j + max_lag].ravel(), indptr)
+                # updates advance every group, so restore the ones that ran out
+                # of appended values
+                done = existing_counts <= j
                 for core in cores:
-                    # updates advance every group, so restore the ones that must
-                    # not move: the series that ran out of appended values, and
-                    # the ones whose read still lands in the nan pad, which every
-                    # accumulator absorbs and never recovers from
-                    keep = (existing_counts <= j) | (j < core.lag - prev_lens)
-                    kept = core.stats_[keep].copy()
+                    kept = core.stats_[done].copy()
                     core.update(step)
                     # some transforms rebind stats_ instead of updating in place
-                    core.stats_[keep] = kept
+                    core.stats_[done] = kept
         # a fit over at most ``lag`` values consumes none of them, and
         # coreforecast leaves stats_ uninitialized until it consumes one, so
         # those series (and every new one) take their state from a transform
-        # over their whole history, as a fit would. Only series the trim didn't
-        # touch qualify: one that keep_last_n cut short still has the state its
-        # full history produced, it's the values the fold needs that are gone.
-        if self.keep_last_n is None:
-            untrimmed = np.ones(counts.size, dtype=bool)
-        else:
-            untrimmed = new_groups | (stored_lens < self.keep_last_n)
+        # over their whole history, which is what a fit would have produced. The
+        # trim keeps every serie it touches longer than the lag, so a short one
+        # is always a serie we still hold in full.
         for core in cores:
             if new_groups.any():
                 stats = np.empty(
@@ -532,7 +539,7 @@ class TimeSeries:
                 )
                 stats[existing] = core.stats_
                 core.stats_ = stats
-            fresh = untrimmed & (stored_lens <= core.lag)
+            fresh = stored_lens <= core.lag
             if not fresh.any():
                 continue
             # self.ga already holds the appended values

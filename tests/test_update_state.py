@@ -73,7 +73,7 @@ def _series(lengths, seed=0):
     )
 
 
-def _fit(df, engine, lag_transforms=None):
+def _fit(df, engine, lag_transforms=None, keep_last_n=None):
     if engine == "polars":
         df = pl.from_pandas(df)
     fcst = MLForecast(
@@ -82,7 +82,7 @@ def _fit(df, engine, lag_transforms=None):
         lags=[1, 2, 3],
         lag_transforms=_lag_transforms() if lag_transforms is None else lag_transforms,
     )
-    return fcst.fit(df, static_features=[])
+    return fcst.fit(df, static_features=[], keep_last_n=keep_last_n)
 
 
 def _update(fcst, df, engine):
@@ -106,10 +106,17 @@ def _features(fcst, horizon):
 
 
 def _assert_matches_full_fit(
-    full, hist, updates, engine, horizon=3, lag_transforms=None, n_stateful=N_STATEFUL
+    full,
+    hist,
+    updates,
+    engine,
+    horizon=3,
+    lag_transforms=None,
+    n_stateful=N_STATEFUL,
+    keep_last_n=None,
 ):
-    expected = _fit(full, engine, lag_transforms)
-    actual = _fit(hist, engine, lag_transforms)
+    expected = _fit(full, engine, lag_transforms, keep_last_n)
+    actual = _fit(hist, engine, lag_transforms, keep_last_n)
     for update in updates:
         _update(actual, update, engine)
 
@@ -192,39 +199,26 @@ def test_update_of_series_not_longer_than_the_lag(engine, first):
         hist,
         [new.iloc[:first], new.iloc[first:]],
         engine,
-        lag_transforms={
-            lag: [ExpandingMean(), ExponentiallyWeightedMean(alpha=0.3)],
-            # keeps keep_last_n above the lag, so a stored length equal to it
-            # can only mean the trim never ran on that series
-            1: [RollingMean(window_size=6)],
-        },
+        lag_transforms={lag: [ExpandingMean(), ExponentiallyWeightedMean(alpha=0.3)]},
         n_stateful=2,
     )
 
 
-def test_user_keep_last_n_below_the_lag_does_not_poison_state():
-    """``keep_last_n`` dropped the values the fold would read.
-
-    The state can't be brought up to date, but it must stay usable.
-    """
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_user_keep_last_n_below_the_lag_matches_full_fit(engine):
+    """An explicit ``keep_last_n`` can't drop the values the fold reads."""
     lag = 5
-    n = 25
-    df = _series({"a": n, "b": n})
-    hist = df[df["ds"] <= START + (n - 4) * pd.offsets.Day()]
-    tail = df[df["ds"] > START + (n - 4) * pd.offsets.Day()]
-    fcst = MLForecast(
-        freq=FREQ,
-        models=[LinearRegression()],
-        lags=[1],
+    full = _series({"a": 25, "b": 25})
+    cutoff = full["ds"].max() - 3 * pd.offsets.Day()
+    _assert_matches_full_fit(
+        full,
+        full[full["ds"] <= cutoff],
+        [full[full["ds"] > cutoff]],
+        engine,
         lag_transforms={lag: [ExpandingMean(), ExponentiallyWeightedMean(alpha=0.3)]},
+        n_stateful=2,
+        keep_last_n=2,
     )
-    fcst.fit(hist, static_features=[], keep_last_n=2)
-    before = {key: core.stats_.copy() for key, core in _stateful_cores(fcst.ts).items()}
-    fcst.update(tail)
-    for key, core in _stateful_cores(fcst.ts).items():
-        np.testing.assert_array_equal(core.stats_, before[key], err_msg=str(key))
-    feats = _features(fcst, 1)
-    assert feats.filter(regex="expanding|exponentially").notnull().all(axis=None)
 
 
 def test_update_with_new_series_does_not_raise():
