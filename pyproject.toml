@@ -44,7 +44,9 @@ ray = [
     "fugue[ray]>=0.9.4; sys_platform != 'win32'",
     "ray[data,train]>=2.56; sys_platform != 'win32'",
     "lightgbm>=4.6; sys_platform != 'win32'",
-    "xgboost; sys_platform != 'win32'"
+    # RayXGBForecast mixes RayForecastBase into XGBRegressor, which needs
+    # XGBModel.get_params' "parent has no get_params" fallback, added in 2.1.4
+    "xgboost>=2.1.4; sys_platform != 'win32'"
 ]
 spark = ["fugue[spark]>=0.9.4", "pyspark>=3.3", "lightgbm", "xgboost"]
 aws = ["fsspec[s3]"]

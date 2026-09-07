@@ -2818,7 +2818,7 @@ requires-dist = [
     { name = "ray", extras = ["data", "train"], marker = "sys_platform != 'win32' and extra == 'ray'", specifier = ">=2.56" },
     { name = "scikit-learn" },
     { name = "utilsforecast", specifier = ">=0.2.9" },
-    { name = "xgboost", marker = "sys_platform != 'win32' and extra == 'ray'" },
+    { name = "xgboost", marker = "sys_platform != 'win32' and extra == 'ray'", specifier = ">=2.1.4" },
     { name = "xgboost", marker = "extra == 'dask'" },
     { name = "xgboost", marker = "extra == 'spark'" },
 ]
