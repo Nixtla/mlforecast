@@ -73,14 +73,14 @@ def _series(lengths, seed=0):
     )
 
 
-def _fit(df, engine):
+def _fit(df, engine, lag_transforms=None):
     if engine == "polars":
         df = pl.from_pandas(df)
     fcst = MLForecast(
         freq=ENGINE_FREQ[engine],
         models=[LinearRegression()],
         lags=[1, 2, 3],
-        lag_transforms=_lag_transforms(),
+        lag_transforms=_lag_transforms() if lag_transforms is None else lag_transforms,
     )
     return fcst.fit(df, static_features=[])
 
@@ -105,15 +105,17 @@ def _features(fcst, horizon):
     return feats.to_pandas() if isinstance(feats, pl.DataFrame) else feats
 
 
-def _assert_matches_full_fit(full, hist, updates, engine, horizon=3):
-    expected = _fit(full, engine)
-    actual = _fit(hist, engine)
+def _assert_matches_full_fit(
+    full, hist, updates, engine, horizon=3, lag_transforms=None, n_stateful=N_STATEFUL
+):
+    expected = _fit(full, engine, lag_transforms)
+    actual = _fit(hist, engine, lag_transforms)
     for update in updates:
         _update(actual, update, engine)
 
     exp_cores = _stateful_cores(expected.ts)
     act_cores = _stateful_cores(actual.ts)
-    assert len(exp_cores) == N_STATEFUL
+    assert len(exp_cores) == n_stateful
     assert exp_cores.keys() == act_cores.keys()
     for key, core in exp_cores.items():
         np.testing.assert_allclose(
@@ -171,6 +173,60 @@ def test_update_with_new_series_matches_full_fit(engine):
     _assert_matches_full_fit(full, hist, [tail], engine)
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("first", [2, 4])
+def test_update_of_series_not_longer_than_the_lag(engine, first):
+    """A series of at most ``lag`` values hasn't started accumulating.
+
+    Folding its appended values reads the nan pad, and nan is absorbing for
+    every accumulator, so its feature would be nan from then on.
+    """
+    lag = 4
+    full = _series({"a": 20, "b": 20, "c": 7})
+    is_new = full["unique_id"].eq("c")
+    hist = full[~is_new]
+    new = full[is_new]
+    # "c" enters at or below the lag and only crosses it on the second update
+    _assert_matches_full_fit(
+        full,
+        hist,
+        [new.iloc[:first], new.iloc[first:]],
+        engine,
+        lag_transforms={
+            lag: [ExpandingMean(), ExponentiallyWeightedMean(alpha=0.3)],
+            # keeps keep_last_n above the lag, so a stored length equal to it
+            # can only mean the trim never ran on that series
+            1: [RollingMean(window_size=6)],
+        },
+        n_stateful=2,
+    )
+
+
+def test_user_keep_last_n_below_the_lag_does_not_poison_state():
+    """``keep_last_n`` dropped the values the fold would read.
+
+    The state can't be brought up to date, but it must stay usable.
+    """
+    lag = 5
+    n = 25
+    df = _series({"a": n, "b": n})
+    hist = df[df["ds"] <= START + (n - 4) * pd.offsets.Day()]
+    tail = df[df["ds"] > START + (n - 4) * pd.offsets.Day()]
+    fcst = MLForecast(
+        freq=FREQ,
+        models=[LinearRegression()],
+        lags=[1],
+        lag_transforms={lag: [ExpandingMean(), ExponentiallyWeightedMean(alpha=0.3)]},
+    )
+    fcst.fit(hist, static_features=[], keep_last_n=2)
+    before = {key: core.stats_.copy() for key, core in _stateful_cores(fcst.ts).items()}
+    fcst.update(tail)
+    for key, core in _stateful_cores(fcst.ts).items():
+        np.testing.assert_array_equal(core.stats_, before[key], err_msg=str(key))
+    feats = _features(fcst, 1)
+    assert feats.filter(regex="expanding|exponentially").notnull().all(axis=None)
+
+
 def test_update_with_new_series_does_not_raise():
     """The shape mismatch reported in #726."""
     dates = pd.date_range(START, periods=11, freq=FREQ)
@@ -213,10 +269,13 @@ def test_update_with_new_series_does_not_raise():
 
 
 @pytest.mark.parametrize(
-    "tfm, expected",
-    [(ExpandingMin(), 1.0), (ExpandingMean(), 91.75)],
+    "tfm, feature, expected",
+    [
+        (ExpandingMin(), "expanding_min_lag1", 1.0),
+        (ExpandingMean(), "expanding_mean_lag1", 91.75),
+    ],
 )
-def test_update_does_not_skip_observations(tfm, expected):
+def test_update_does_not_skip_observations(tfm, feature, expected):
     """The accumulator used to fall behind by the number of appended values."""
     n = 12
     y = np.full(n, 100.0)
@@ -238,7 +297,7 @@ def test_update_does_not_skip_observations(tfm, expected):
     fcst.update(df.iloc[-1:])
     cb = SaveFeatures()
     fcst.predict(1, before_predict_callback=cb)
-    assert cb.get_features().iloc[0, -1] == pytest.approx(expected)
+    assert cb.get_features()[feature].item() == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("lag", [1, 3])

@@ -455,8 +455,10 @@ class TimeSeries:
         reading the value ``lag`` positions from the end. ``TimeSeries.update``
         appends several values at once, so the accumulators must be advanced
         here, one appended timestamp at a time, or they'd stay ``counts`` values
-        behind (see #726). Recomputing instead isn't possible: ``keep_last_n``
-        has already dropped the history the accumulator summarizes.
+        behind (see #726). Recomputing instead is only possible for the series
+        that haven't started accumulating (they're also the ones the fold can't
+        handle); for the rest ``keep_last_n`` has already dropped the history
+        the accumulator summarizes.
 
         Args:
             prev_ga: The stored series *before* the new values were appended.
@@ -479,6 +481,8 @@ class TimeSeries:
         offsets = np.append(0, counts.cumsum())
         existing = ~new_groups
         existing_counts = counts[existing]
+        stored_lens = np.zeros(counts.size, dtype=np.int64)
+        stored_lens[existing] = np.diff(prev_ga.indptr)
         # advance the pre-existing series first, while stats_ still has one row
         # per group of prev_ga
         if existing_counts.size and existing_counts.max() > 0:
@@ -496,39 +500,46 @@ class TimeSeries:
                     offsets[i] : offsets[i + 1]
                 ]
             indptr = np.arange(0, (n_prev + 1) * max_lag, max_lag, dtype=np.int32)
+            prev_lens = stored_lens[existing]
             for j in range(k_max):
                 # groups of max_lag values ending on the j-th appended value, so
                 # that the read at position lag from the end lands on it
-                step = CoreGroupedArray(
-                    np.ascontiguousarray(context[:, j : j + max_lag]).ravel(), indptr
-                )
-                # updates advance every group, so restore the ones that ran out
-                # of appended values
-                done = existing_counts <= j
+                step = CoreGroupedArray(context[:, j : j + max_lag].ravel(), indptr)
                 for core in cores:
-                    kept = core.stats_[done].copy()
+                    # updates advance every group, so restore the ones that must
+                    # not move: the series that ran out of appended values, and
+                    # the ones whose read still lands in the nan pad, which every
+                    # accumulator absorbs and never recovers from
+                    keep = (existing_counts <= j) | (j < core.lag - prev_lens)
+                    kept = core.stats_[keep].copy()
                     core.update(step)
                     # some transforms rebind stats_ instead of updating in place
-                    core.stats_[done] = kept
-        if new_groups.any():
-            new_idxs = np.flatnonzero(new_groups)
-            new_ga = CoreGroupedArray(
-                np.concatenate(
-                    [values[offsets[i] : offsets[i + 1]] for i in new_idxs]
-                ).astype(dtype, copy=False),
-                np.append(0, counts[new_idxs].cumsum()).astype(np.int32),
-            )
-            for core in cores:
-                # a new series' state is whatever a fit on its own values would
-                # have produced
-                primed = copy.deepcopy(core)
-                primed.transform(new_ga)
+                    core.stats_[keep] = kept
+        # a fit over at most ``lag`` values consumes none of them, and
+        # coreforecast leaves stats_ uninitialized until it consumes one, so
+        # those series (and every new one) take their state from a transform
+        # over their whole history, as a fit would. Only series the trim didn't
+        # touch qualify: one that keep_last_n cut short still has the state its
+        # full history produced, it's the values the fold needs that are gone.
+        if self.keep_last_n is None:
+            untrimmed = np.ones(counts.size, dtype=bool)
+        else:
+            untrimmed = new_groups | (stored_lens < self.keep_last_n)
+        for core in cores:
+            if new_groups.any():
                 stats = np.empty(
                     (counts.size, *core.stats_.shape[1:]), dtype=core.stats_.dtype
                 )
                 stats[existing] = core.stats_
-                stats[new_groups] = primed.stats_
                 core.stats_ = stats
+            fresh = untrimmed & (stored_lens <= core.lag)
+            if not fresh.any():
+                continue
+            # self.ga already holds the appended values
+            sub = self.ga.take(np.flatnonzero(fresh))
+            primed = copy.deepcopy(core)
+            primed.transform(CoreGroupedArray(sub.data, sub.indptr.astype(np.int32)))
+            core.stats_[fresh] = primed.stats_
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""

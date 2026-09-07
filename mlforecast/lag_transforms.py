@@ -1763,7 +1763,9 @@ class Offset(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        return self.tfm.update_samples + self.n
+        # ``_set_core_tfm(lag + n)`` already bakes the offset into the inner
+        # transform's core lag, so adding ``n`` here would count it twice.
+        return self.tfm.update_samples
 
     @property
     def _is_finite_window(self) -> bool:
