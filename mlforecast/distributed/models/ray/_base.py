@@ -1,12 +1,13 @@
 __all__ = ["RayForecastBase"]
 
 
+import contextlib
 import pickle
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-_RAY_PARAMS = ("num_workers", "resources_per_worker")
+_RAY_PARAMS = ("num_workers", "resources_per_worker", "storage_path")
 _MODEL_FILE = "model.pkl"
 
 
@@ -76,18 +77,36 @@ class RayForecastBase:
 
     num_workers: int
     resources_per_worker: Optional[Dict[str, float]]
+    storage_path: Optional[str]
 
     def __init__(
         self,
         *,
         num_workers: int = 1,
         resources_per_worker: Optional[Dict[str, float]] = None,
+        storage_path: Optional[str] = None,
         **kwargs: Any,
     ):
         # cooperative: goes on to LGBMRegressor / XGBRegressor
         super().__init__(**kwargs)
         self.num_workers = num_workers
         self.resources_per_worker = resources_per_worker
+        self.storage_path = storage_path
+
+    def _resources_per_worker(self) -> Dict[str, float]:
+        """The CPUs each worker gets, and therefore the booster's thread count.
+
+        ``ScalingConfig`` assigns a single CPU per worker when this isn't set,
+        which would make a default fit single threaded. ``xgboost_ray`` split the
+        cluster's CPUs across its actors instead (``_autodetect_resources``);
+        that's kept here so that the default isn't a slowdown.
+        """
+        import ray
+
+        if self.resources_per_worker is not None:
+            return self.resources_per_worker
+        cpus = int(ray.cluster_resources().get("CPU", 1))
+        return {"CPU": max(1, cpus // self.num_workers)}
 
     def _train(
         self,
@@ -96,21 +115,28 @@ class RayForecastBase:
         dataset: Any,
         target_col: str,
     ) -> "RayForecastBase":
-        from ray.train import ScalingConfig
+        from ray.train import RunConfig, ScalingConfig
 
         params = self.get_params()  # type: ignore[attr-defined]
         for name in _RAY_PARAMS:
             params.pop(name, None)
-        trainer = trainer_cls(
-            train_loop,
-            train_loop_config={"params": params, "target_col": target_col},
-            scaling_config=ScalingConfig(
-                num_workers=self.num_workers,
-                resources_per_worker=self.resources_per_worker,
-            ),
-            datasets={"train": dataset},
-        )
-        with trainer.fit().checkpoint.as_directory() as ckpt_dir:
-            with open(Path(ckpt_dir, _MODEL_FILE), "rb") as f:
-                self.model_ = pickle.load(f)
+        with contextlib.ExitStack() as stack:
+            storage_path = self.storage_path
+            if storage_path is None:
+                # the default (~/ray_results) would grow by one run per model per
+                # fit, which neither of the previous wrappers did.
+                storage_path = stack.enter_context(tempfile.TemporaryDirectory())
+            trainer = trainer_cls(
+                train_loop,
+                train_loop_config={"params": params, "target_col": target_col},
+                scaling_config=ScalingConfig(
+                    num_workers=self.num_workers,
+                    resources_per_worker=self._resources_per_worker(),
+                ),
+                run_config=RunConfig(storage_path=storage_path),
+                datasets={"train": dataset},
+            )
+            with trainer.fit().checkpoint.as_directory() as ckpt_dir:
+                with open(Path(ckpt_dir, _MODEL_FILE), "rb") as f:
+                    self.model_ = pickle.load(f)
         return self

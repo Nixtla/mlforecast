@@ -46,6 +46,9 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     model.fit(
         df, label, eval_set=[(df, label)], eval_names=["train"], callbacks=[callback]
     )
+    # the clamp is for this worker's thread pool; model_ is shipped to the
+    # forecasting workers and returned by to_local, so it keeps what was asked for
+    model.set_params(n_jobs=config["params"].get("n_jobs"))
     report_fitted_model(
         model, model.booster_, _ReportCallback.CHECKPOINT_NAME, callback.last_metrics
     )
@@ -55,13 +58,25 @@ class RayLGBMForecast(RayForecastBase, lgb.LGBMRegressor):
     """LightGBM forecaster trained with `ray.train.lightgbm.LightGBMTrainer`.
 
     The booster's parameters are taken as ``**kwargs`` and handled by
-    ``LGBMRegressor`` itself; ``num_workers`` and ``resources_per_worker`` are
-    keyword only so that they can't collide with them.
+    ``LGBMRegressor`` itself; the ray arguments are keyword only
+    so that they can't collide with them.
 
     ``num_workers`` sets the number of ray train workers. The previous
     ``lightgbm_ray`` based implementation derived that from ``n_jobs``
     (``RayParams(num_actors=n_jobs)``); ``n_jobs`` is now the per worker thread
     count, as it is for the local estimator.
+
+    ``resources_per_worker`` is the CPU knob: it decides how many CPUs each
+    worker is given and therefore how many threads the booster can use. It
+    defaults to the cluster's CPUs split evenly across the workers, as
+    ``xgboost_ray._autodetect_resources`` did, and ``n_jobs`` can only lower it
+    below that share. ``model_`` keeps the requested ``n_jobs`` rather than the clamp.
+
+    ``storage_path`` is where ray train writes the run. It defaults to a
+    temporary directory that is discarded once the fitted model has been read
+    back, so that ``~/ray_results`` doesn't grow by a run per model per fit; as
+    with ray's own default, a local path only works on a single node, so point
+    it at shared storage for a multi node cluster.
 
     ``fit`` takes a ray ``Dataset`` and a target column rather than the sklearn
     ``(X, y)`` pair, as the previous implementation did, so the inherited
