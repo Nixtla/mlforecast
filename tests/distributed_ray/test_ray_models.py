@@ -1,5 +1,5 @@
 import pickle
-import sys
+from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
@@ -11,11 +11,6 @@ from sklearn.base import clone
 
 from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
 from mlforecast.distributed.models.ray.xgb import RayXGBForecast
-
-requires_py310 = pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
 
 
 @pytest.mark.ray
@@ -53,7 +48,6 @@ def test_default_num_boost_round_matches_sklearn():
 
 
 @pytest.mark.ray
-@requires_py310
 def test_lgb_trains_on_the_full_dataset_across_workers():
     """Every worker only sees its shard, so lightgbm needs its network params.
 
@@ -65,20 +59,20 @@ def test_lgb_trains_on_the_full_dataset_across_workers():
     df = pd.DataFrame(
         {"x": np.ones(200), "y": np.r_[np.zeros(100), np.full(100, 100.0)]}
     )
-    model = RayLGBMForecast(num_workers=2, n_estimators=5, verbosity=-1, random_state=0)
+    model = RayLGBMForecast(
+        num_workers=2, n_estimators=5, verbosity=-1, random_state=0, n_jobs=2
+    )
     model.fit(ray.data.from_pandas(df), target_col="y")
 
     # 0.0 would mean rank 0 only ever saw the first shard
     np.testing.assert_allclose(
         model.model_.predict(pd.DataFrame({"x": [1.0]})), [50.0], atol=1e-6
     )
-    # and each worker sizes its thread pool from its own CPU share rather than
-    # from every core on the box, as lightgbm_ray's _set_omp_num_threads did
-    assert model.model_.n_jobs == 1
+    # the clamp is the worker's business; model_ carries what was asked for
+    assert model.model_.n_jobs == 2
 
 
 @pytest.mark.ray
-@requires_py310
 @pytest.mark.parametrize(
     "model_cls,local_cls",
     [(RayLGBMForecast, lgb.LGBMRegressor), (RayXGBForecast, xgb.XGBRegressor)],
@@ -123,7 +117,6 @@ def test_model_is_the_estimator_fitted_in_the_worker(model_cls, local_cls):
 
 
 @pytest.mark.ray
-@requires_py310
 def test_lgb_honors_param_aliases():
     """The hand rolled translation dropped lightgbm's aliases; its own does not.
 
@@ -141,7 +134,6 @@ def test_lgb_honors_param_aliases():
 
 
 @pytest.mark.ray
-@requires_py310
 def test_xgb_keeps_random_state_and_drops_the_ray_callback():
     """xgb.train knows `random_state`, so there was never a `seed` to translate to.
 
@@ -175,3 +167,60 @@ def test_reclaim_placement_groups_frees_a_leaked_group():
     _reclaim_placement_groups()
 
     assert all(info["state"] == "REMOVED" for info in placement_group_table().values())
+
+
+@pytest.mark.ray
+def test_reclaim_placement_groups_keeps_a_pre_existing_group():
+    """A group a fixture legitimately holds across tests has to survive the cleanup."""
+    from ray.util.placement_group import (
+        placement_group,
+        placement_group_table,
+        remove_placement_group,
+    )
+
+    from .conftest import _reclaim_placement_groups
+
+    pg = placement_group([{"CPU": 1}])
+    ray.get(pg.ready())
+
+    _reclaim_placement_groups(keep={pg.id.hex()})
+
+    assert placement_group_table()[pg.id.hex()]["state"] == "CREATED"
+    remove_placement_group(pg)
+
+
+@pytest.mark.ray
+def test_workers_get_a_share_of_the_cluster_cpus():
+    """ScalingConfig assigns one CPU per worker, which would train single threaded.
+
+    `xgboost_ray._autodetect_resources` split the cluster's CPUs across its
+    actors instead, so `n_jobs` alone could never raise the thread count back up.
+    """
+    cpus = int(ray.cluster_resources()["CPU"])
+    assert RayLGBMForecast()._resources_per_worker() == {"CPU": cpus}
+    assert RayLGBMForecast(num_workers=2)._resources_per_worker() == {"CPU": cpus // 2}
+    # an explicit value wins
+    assert RayXGBForecast(resources_per_worker={"CPU": 1})._resources_per_worker() == {
+        "CPU": 1
+    }
+
+
+@pytest.mark.ray
+def test_fit_does_not_write_to_the_default_storage_path(tmp_path):
+    """The default RunConfig would grow ~/ray_results by a run per model per fit."""
+    default_storage = Path("~/ray_results").expanduser()
+    before = set(default_storage.iterdir()) if default_storage.exists() else set()
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=100), "y": rng.random(size=100)})
+    dataset = ray.data.from_pandas(df)
+    RayLGBMForecast(n_estimators=2, verbosity=-1).fit(dataset, target_col="y")
+
+    after = set(default_storage.iterdir()) if default_storage.exists() else set()
+    assert after == before
+
+    # and an explicit path is honoured
+    RayLGBMForecast(n_estimators=2, verbosity=-1, storage_path=str(tmp_path)).fit(
+        dataset, target_col="y"
+    )
+    assert any(tmp_path.iterdir())
