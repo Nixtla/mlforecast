@@ -121,16 +121,9 @@ def _frozen_backtest(
         for col in fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
         if col in new_df.columns
     ]
-    partition_cols = getattr(fcst.ts, "_partition_cols", None)
-    if partition_cols is None:
-        # Models saved before ``_partition_cols`` existed still retain
-        # partition metadata on their lag transforms.
-        partition_cols = {
-            col
-            for tfm in fcst.ts.transforms.values()
-            for col in (getattr(tfm, "partition_by", None) or [])
-        }
-    partition_cols = sorted(col for col in partition_cols if col in new_df.columns)
+    partition_cols = sorted(
+        col for col in fcst.ts._partition_cols if col in new_df.columns
+    )
     future_cols = list(dict.fromkeys([*dynamic_cols, *partition_cols]))
     all_results = []
     splits = ufp.backtest_splits(
@@ -143,9 +136,7 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for cutoffs, train, valid in splits:
-        X_df = None
-        if future_cols:
-            X_df = valid[[id_col, time_col, *future_cols]]
+        X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
         preds = fcst.predict(h=h, new_df=train, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
         joined = ufp.join(
@@ -169,9 +160,8 @@ def _frozen_backtest(
 
 
 class MLForecast:
-    # Calibration state, set by ``fit`` and ``load``. The defaults are what an
-    # instance never fit with intervals holds, so instances pickled before
-    # these fields existed keep loading.
+    # Calibration state (set in ``fit``/``history_warmup``/``load``). Declared
+    # here so mypy has a type regardless of method processing order.
     prediction_intervals: Optional[PredictionIntervals] = None
     _cs_df: Optional[DataFrame] = None
     _cs_source_scales_: Optional[Dict] = None
@@ -1755,34 +1745,27 @@ class MLForecast:
                         "PredictionIntervals(method='weighted_conformal_error') or "
                         "'weighted_conformal_distribution'."
                     )
-                if ids is not None:
-                    if _cs_weights is not None and not is_transfer:
+                if is_transfer:
+                    # Keep all pooled source calibration scores. Filtering
+                    # them by target IDs would discard every source row.
+                    cs_df = conformity_scores
+                    n_series = len(cs_df) // (
+                        self.prediction_intervals.n_windows
+                        * self.prediction_intervals.h
+                    )
+                elif ids is not None:
+                    if _cs_weights is not None:
                         raise ValueError(
                             "TransferConformal with DRE weights cannot be used together with "
                             "ids= filtering: the weights array aligns with the full calibration "
                             "set and would misalign after id-based filtering."
                         )
-                    if is_transfer:
-                        # Keep all pooled source calibration scores. Filtering
-                        # them by target IDs would discard every source row.
-                        cs_df = conformity_scores
-                        n_series = len(cs_df) // (
-                            self.prediction_intervals.n_windows
-                            * self.prediction_intervals.h
-                        )
-                    else:
-                        ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
-                        cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
-                        n_series = len(ids)
+                    ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
+                    cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
+                    n_series = len(ids)
                 else:
                     cs_df = conformity_scores
-                    if is_transfer:
-                        n_series = len(cs_df) // (
-                            self.prediction_intervals.n_windows
-                            * self.prediction_intervals.h
-                        )
-                    else:
-                        n_series = ts.ga.n_groups
+                    n_series = ts.ga.n_groups
                 _target_scales = (
                     _transfer_result.target_scales
                     if _transfer_result is not None

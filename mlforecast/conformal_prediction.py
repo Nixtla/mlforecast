@@ -972,11 +972,6 @@ def _scale_aligned_transfer(
             "transfer_conformal_method='scale_aligned' requires the model to have "
             "been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
         )
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='scale_aligned' requires source conformity "
-            "scores. Refit the model with prediction_intervals."
-        )
     if source_scales is None:
         raise ValueError(
             "Scale-aligned transfer requires source scales, but this artifact "

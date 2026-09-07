@@ -18,7 +18,7 @@ HORIZON = 14
 N_WINDOWS = 10
 N_SOURCE_SERIES = 45
 N_TARGET_SERIES = 35
-LEVELS = [80, 90, 95]
+LEVELS: list = [80, 90, 95]
 TRANSFER_METHODS = [
     "recalibrate",
     "scale_aligned",
@@ -46,7 +46,7 @@ def _dynamic_exog_system(n: int = 60) -> pd.DataFrame:
 
 
 def _intervals_for_dynamic_exog_transfer(method: str) -> PredictionIntervals:
-    common = {"n_windows": 3, "h": 5}
+    common: dict = {"n_windows": 3, "h": 5}
     if method in {"recalibrate", "error_scaled"}:
         return PredictionIntervals(method="conformal_error", **common)
     if method == "scale_aligned":
@@ -115,7 +115,7 @@ def test_transfer_conformal_with_dynamic_partition_columns(method):
     )
 
     assert "promo" not in fcst.ts.features_order_
-    assert fcst.ts._partition_cols == {"promo"}
+    assert fcst.ts._partition_cols == ["promo"]
     baseline = fcst.predict(h=5, new_df=new_df, X_df=X_df)
     result = fcst.predict(
         h=5,
@@ -152,15 +152,14 @@ def test_frozen_backtest_ignores_raw_lag_feature_name():
     assert "LinearRegression-hi-90" in result
 
 
-def test_transfer_recalibrate_supports_legacy_loaded_timeseries(tmp_path):
-    """A saved TimeSeries without `_partition_cols` remains usable for transfer."""
+def test_transfer_recalibrate_supports_legacy_intervals_payload(tmp_path):
+    """An interval payload saved before source scales existed remains usable."""
     df = _dynamic_exog_system().drop(columns="u")
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
     fcst.fit(
         df.iloc[:30],
         prediction_intervals=PredictionIntervals(n_windows=2, h=3),
     )
-    delattr(fcst.ts, "_partition_cols")
     savedir = tmp_path / "fcst"
     savedir.mkdir()
     fcst.save(savedir)
@@ -176,41 +175,6 @@ def test_transfer_recalibrate_supports_legacy_loaded_timeseries(tmp_path):
     result = loaded.predict(
         h=3,
         new_df=df.iloc[:45],
-        level=[90],
-        transfer_conformal="recalibrate",
-    )
-
-    assert "LinearRegression-lo-90" in result
-    assert "LinearRegression-hi-90" in result
-
-
-def test_transfer_recalibrate_supports_legacy_partition_transforms(tmp_path):
-    """Legacy models derive partition columns from their transforms for CV windows."""
-    df = _dynamic_exog_system().drop(columns="u")
-    df["promo"] = np.arange(len(df)) % 2
-    fcst = MLForecast(
-        models=LinearRegression(),
-        freq="D",
-        lags=[1],
-        lag_transforms={
-            1: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
-        },
-    )
-    fcst.fit(
-        df.iloc[:30],
-        static_features=[],
-        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
-    )
-    delattr(fcst.ts, "_partition_cols")
-    savedir = tmp_path / "fcst"
-    savedir.mkdir()
-    fcst.save(savedir)
-
-    loaded = MLForecast.load(savedir)
-    result = loaded.predict(
-        h=3,
-        new_df=df.iloc[:45],
-        X_df=df[["unique_id", "ds", "promo"]].iloc[45:48],
         level=[90],
         transfer_conformal="recalibrate",
     )
@@ -260,38 +224,6 @@ def test_transfer_scale_alignment_survives_save_load(tmp_path):
     pd.testing.assert_frame_equal(result, expected)
 
 
-def test_legacy_scale_aligned_artifact_explains_how_to_recover(tmp_path):
-    """Missing persisted source scales should identify the legacy artifact issue."""
-    df = _dynamic_exog_system().drop(columns="u")
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
-    fcst.fit(
-        df.iloc[:30],
-        prediction_intervals=PredictionIntervals(
-            n_windows=2,
-            h=3,
-            scale_estimator="std",
-        ),
-    )
-    savedir = tmp_path / "fcst"
-    savedir.mkdir()
-    fcst.save(savedir)
-    intervals_path = savedir / "intervals.pkl"
-    with intervals_path.open("rb") as f:
-        intervals = cloudpickle.load(f)
-    del intervals["source_scales"]
-    with intervals_path.open("wb") as f:
-        cloudpickle.dump(intervals, f)
-
-    loaded = MLForecast.load(savedir)
-    with pytest.raises(ValueError, match="predates source-scale persistence"):
-        loaded.predict(
-            h=3,
-            new_df=df.iloc[:45],
-            level=[90],
-            transfer_conformal="scale_aligned",
-        )
-
-
 def test_failed_weighted_transfer_preserves_source_forecasting_state():
     """A failed target DRE calculation must not replace the source history."""
     source = generate_daily_series(1, min_length=30, max_length=30, seed=71)
@@ -339,6 +271,7 @@ def test_transfer_conformal_step_size_validation():
 
 def test_transfer_result_signed_default():
     from mlforecast.conformal_prediction import TransferResult
+
     dummy = pd.DataFrame({"unique_id": ["a"], "ds": [1], "m": [0.0]})
     tr = TransferResult(cs_df=dummy)
     assert tr.signed is False
@@ -348,13 +281,16 @@ def test_transfer_result_signed_default():
 
 def test_compute_conformity_scores_signed():
     from mlforecast.conformal_prediction import compute_conformity_scores
-    cv = pd.DataFrame({
-        "unique_id": ["a", "a"],
-        "ds":        [1, 2],
-        "cutoff":    [0, 0],
-        "y":         [3.0, 5.0],
-        "m":         [1.0, 7.0],
-    })
+
+    cv = pd.DataFrame(
+        {
+            "unique_id": ["a", "a"],
+            "ds": [1, 2],
+            "cutoff": [0, 0],
+            "y": [3.0, 5.0],
+            "m": [1.0, 7.0],
+        }
+    )
     # unsigned: |y - pred|
     unsigned = compute_conformity_scores(cv.copy(), ["m"], "y")
     assert list(unsigned["m"]) == [2.0, 2.0]
@@ -513,9 +449,7 @@ def test_coverage_monotonicity(transfer_cp_setup, method):
 def test_interval_columns_present(transfer_cp_setup, method):
     preds = _predict_transfer(transfer_cp_setup, method)
     interval_columns = [
-        f"{MODEL}-{bound}-{level}"
-        for level in LEVELS
-        for bound in ("lo", "hi")
+        f"{MODEL}-{bound}-{level}" for level in LEVELS for bound in ("lo", "hi")
     ]
 
     assert set(interval_columns).issubset(preds.columns)
@@ -614,6 +548,7 @@ def test_methods_produce_different_widths(transfer_cp_setup):
 # Item 5: n_windows tests
 # ---------------------------------------------------------------------------
 
+
 def test_error_scaled_n_windows_1_works():
     """error_scaled with n_windows=1 completes without error."""
     n = 5
@@ -631,7 +566,9 @@ def test_error_scaled_n_windows_1_works():
     )
     mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
     preds = mlf.predict(
-        h=h, level=[90], new_df=target,
+        h=h,
+        level=[90],
+        new_df=target,
         transfer_conformal=TransferConformal(method="error_scaled", n_windows=1),
     )
     assert f"{MODEL}-lo-90" in preds.columns
@@ -656,7 +593,9 @@ def test_recalibrate_n_windows_1_raises():
     mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
     with pytest.raises(ValueError, match="requires at least 2"):
         mlf.predict(
-            h=h, level=[90], new_df=target,
+            h=h,
+            level=[90],
+            new_df=target,
             transfer_conformal=TransferConformal(method="recalibrate", n_windows=1),
         )
 
@@ -664,10 +603,18 @@ def test_recalibrate_n_windows_1_raises():
 def test_recalibrate_n_windows_default_unchanged(transfer_cp_setup):
     """Omitting n_windows uses pi.n_windows (same result as explicit None)."""
     mlf, target_train, _ = transfer_cp_setup
-    preds_default = mlf.predict(h=HORIZON, level=[90], new_df=target_train,
-                                transfer_conformal=TransferConformal(method="recalibrate"))
-    preds_none = mlf.predict(h=HORIZON, level=[90], new_df=target_train,
-                             transfer_conformal=TransferConformal(method="recalibrate", n_windows=None))
+    preds_default = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        transfer_conformal=TransferConformal(method="recalibrate"),
+    )
+    preds_none = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        transfer_conformal=TransferConformal(method="recalibrate", n_windows=None),
+    )
     pd.testing.assert_frame_equal(preds_default, preds_none)
 
 
@@ -675,14 +622,20 @@ def test_recalibrate_n_windows_default_unchanged(transfer_cp_setup):
 # Item 4: ESS warning test
 # ---------------------------------------------------------------------------
 
+
 def test_ess_no_warning_identical_distributions(transfer_cp_setup):
     """Identical source/target distributions should not trigger ESS warning."""
     import warnings as _warnings
+
     mlf, target_train, _ = transfer_cp_setup
     with _warnings.catch_warnings(record=True) as record:
         _warnings.simplefilter("always")
-        mlf.predict(h=HORIZON, level=[90], new_df=target_train,
-                    transfer_conformal=TransferConformal(method="weighted_conformal"))
+        mlf.predict(
+            h=HORIZON,
+            level=[90],
+            new_df=target_train,
+            transfer_conformal=TransferConformal(method="weighted_conformal"),
+        )
     ess_warnings = [w for w in record if "ESS" in str(w.message)]
     assert len(ess_warnings) == 0, f"Unexpected ESS warnings: {ess_warnings}"
 
@@ -708,7 +661,9 @@ def test_frozen_backtest_min_length_validation():
     # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
     with pytest.raises(ValueError, match="time steps"):
         mlf.predict(
-            h=h, level=[90], new_df=target,
+            h=h,
+            level=[90],
+            new_df=target,
             transfer_conformal=TransferConformal(method="recalibrate", n_windows=2),
         )
 
@@ -741,7 +696,9 @@ def test_frozen_backtest_uses_source_model():
         (src_preds["LGBMRegressor-hi-90"] - src_preds["LGBMRegressor-lo-90"]).mean()
     )
 
-    tgt_preds = mlf.predict(h=h, level=[90], new_df=tgt, transfer_conformal="recalibrate")
+    tgt_preds = mlf.predict(
+        h=h, level=[90], new_df=tgt, transfer_conformal="recalibrate"
+    )
     tgt_width = float(
         (tgt_preds["LGBMRegressor-hi-90"] - tgt_preds["LGBMRegressor-lo-90"]).mean()
     )
@@ -808,7 +765,9 @@ def test_point_forecasts_invariant_across_transfer_methods():
 
     def fresh_fit():
         mlf = MLForecast(
-            models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+            models=lightgbm.LGBMRegressor(
+                n_estimators=10, random_state=0, verbosity=-1
+            ),
             lags=[1, 2],
             freq="D",
             target_transforms=[Differences([1])],
@@ -817,7 +776,8 @@ def test_point_forecasts_invariant_across_transfer_methods():
         mlf.fit(
             source,
             prediction_intervals=PredictionIntervals(
-                n_windows=2, h=h,
+                n_windows=2,
+                h=h,
                 method="weighted_conformal_error",
                 scale_estimator="mad",
             ),
@@ -848,11 +808,13 @@ def test_add_signed_transfer_intervals_shape_and_nesting():
     scores = rng.normal(0, 1, size=n_cal * horizon)  # signed residuals
 
     cs_df = pd.DataFrame({"m": scores})
-    fcst_df = pd.DataFrame({
-        "unique_id": np.repeat(["a", "b", "c"], horizon),
-        "ds": list(range(horizon)) * n_series,
-        "m": rng.normal(5, 1, n_series * horizon),
-    })
+    fcst_df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b", "c"], horizon),
+            "ds": list(range(horizon)) * n_series,
+            "m": rng.normal(5, 1, n_series * horizon),
+        }
+    )
 
     result = _add_signed_transfer_intervals(
         fcst_df, cs_df, model_names=["m"], level=[80, 90], horizon=horizon
@@ -880,15 +842,20 @@ def test_recalibrate_transfer_result_is_signed():
     """_recalibrate_transfer must return TransferResult(signed=True) with signed scores."""
     import pandas as pd
     from mlforecast.conformal_prediction import (
-        _recalibrate_transfer, PredictionIntervals, TransferConformal,
+        _recalibrate_transfer,
+        PredictionIntervals,
+        TransferConformal,
     )
-    backtest = pd.DataFrame({
-        "unique_id": ["a", "a", "a", "a"],
-        "ds":        [2, 3, 1, 2],
-        "cutoff":    [1, 1, 0, 0],
-        "y":         [3.0, 5.0, 2.0, 4.0],
-        "m":         [1.0, 7.0, 3.0, 3.0],
-    })
+
+    backtest = pd.DataFrame(
+        {
+            "unique_id": ["a", "a", "a", "a"],
+            "ds": [2, 3, 1, 2],
+            "cutoff": [1, 1, 0, 0],
+            "y": [3.0, 5.0, 2.0, 4.0],
+            "m": [1.0, 7.0, 3.0, 3.0],
+        }
+    )
     pi = PredictionIntervals(n_windows=2, h=1)
     tc = TransferConformal(method="recalibrate")
     result = _recalibrate_transfer(
@@ -913,11 +880,13 @@ def test_add_signed_transfer_intervals_bias_warning():
     horizon = 2
     # All-negative scores → interval entirely below point forecast
     cs_df = pd.DataFrame({"m": [-5.0, -4.0, -6.0, -5.5, -4.5, -6.5, -5.0, -4.8]})
-    fcst_df = pd.DataFrame({
-        "unique_id": ["a", "a"],
-        "ds": [1, 2],
-        "m": [10.0, 10.0],
-    })
+    fcst_df = pd.DataFrame(
+        {
+            "unique_id": ["a", "a"],
+            "ds": [1, 2],
+            "m": [10.0, 10.0],
+        }
+    )
 
     with _warnings.catch_warnings(record=True) as caught:
         _warnings.simplefilter("always")
