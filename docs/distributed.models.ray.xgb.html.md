@@ -6,7 +6,7 @@ title: RayXGBForecast
 
 
 XGBoost forecaster trained with `ray.train.xgboost.XGBoostTrainer`. Adds a
-`model_` property that contains the fitted booster as a local
+`model_` attribute that contains the fitted booster as a local
 `xgboost.XGBRegressor` and is sent to the workers in the forecasting step.
 
 ::: mlforecast.distributed.models.ray.xgb.RayXGBForecast
