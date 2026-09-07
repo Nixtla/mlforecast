@@ -25,7 +25,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
