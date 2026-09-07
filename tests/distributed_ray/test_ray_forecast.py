@@ -1,4 +1,3 @@
-import sys
 import warnings
 
 import numpy as np
@@ -16,10 +15,6 @@ warnings.simplefilter("ignore", FutureWarning)
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
 @pytest.mark.parametrize(
     "model_class,model_kwargs",
     [
@@ -70,10 +65,6 @@ def test_ray_distributed_forecast(model_class, model_kwargs):
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
 def test_ray_distributed_forecast_with_x_df():
     """predict() with X_df as a Ray Dataset must give the same result as pandas X_df."""
     h = 7
@@ -126,10 +117,6 @@ def test_ray_distributed_forecast_with_x_df():
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
 def test_ray_weight_col_raises_not_implemented():
     """Ray engine must raise NotImplementedError when weight_col is passed to fit()."""
     series = generate_daily_series(5, min_length=50, max_length=50)

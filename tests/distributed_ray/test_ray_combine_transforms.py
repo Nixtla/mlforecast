@@ -1,5 +1,4 @@
 import operator
-import sys
 
 import pandas as pd
 import pytest
@@ -13,10 +12,6 @@ from mlforecast.utils import generate_daily_series
 
 
 @pytest.mark.ray
-@pytest.mark.skipif(
-    sys.version_info <= (3, 9),
-    reason="Distributed tests are not supported on Python < 3.10",
-)
 def test_ray_combine_transforms():
     """Test Combine transform with Ray distributed forecast"""
     series = generate_daily_series(
