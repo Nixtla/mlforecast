@@ -1969,6 +1969,12 @@ class MLForecast:
                         ufp.assign_columns(self.fcst_fitted_values_, "fold", i_window)
                     )
             if fitted and not should_fit:
+                prediction_ts = None
+                if self.ts.target_transforms is not None:
+                    # `preprocess` refits target transforms. Run it on a copy so
+                    # the state fitted together with the frozen models is preserved.
+                    prediction_ts = self.ts
+                    self.ts = copy.deepcopy(self.ts)
                 if self.ts.target_transforms is not None:
                     for tfm in self.ts.target_transforms:
                         if hasattr(tfm, "store_fitted"):
@@ -2015,6 +2021,8 @@ class MLForecast:
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
+                if prediction_ts is not None:
+                    self.ts = prediction_ts
             static = [c for c in self.ts.static_features_.columns if c != id_col]
             dynamic = [
                 c
@@ -2027,11 +2035,28 @@ class MLForecast:
                 )
             else:
                 X_df = None
+            prediction_df = train if not should_fit else None
+            if not should_fit and self.ts.target_transforms is not None:
+                # Keep the transforms fitted alongside the frozen models and only
+                # advance state that depends on the latest observed targets.
+                last_dates = type(train)(
+                    {
+                        id_col: self.ts.uids,
+                        "_last_date": self.ts.last_dates,
+                    }
+                )
+                updates = ufp.join(train, last_dates, on=id_col, how="left")
+                updates = ufp.filter_with_mask(
+                    updates, updates[time_col] > updates["_last_date"]
+                )
+                updates = ufp.drop_columns(updates, "_last_date")
+                self.update(updates)
+                prediction_df = None
             y_pred = self.predict(
                 h=h,
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
-                new_df=train if not should_fit else None,
+                new_df=prediction_df,
                 level=level,
                 X_df=X_df,
             )

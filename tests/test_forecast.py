@@ -614,6 +614,80 @@ def test_cv_no_refit(setup_forecast_data):
     )
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("fitted", [False, True])
+@pytest.mark.parametrize("difference", [False, True])
+def test_cv_no_refit_preserves_target_transform_state(engine, fitted, difference):
+    n = 100
+    trend = np.arange(n, dtype=float)
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": trend**2,
+            "trend": trend,
+            "trend_squared": trend**2,
+        }
+    )
+    target_transforms = [LocalStandardScaler()]
+    if difference:
+        target_transforms.insert(0, Differences([1]))
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="1d" if engine == "polars" else "D",
+        target_transforms=target_transforms,
+    )
+    if engine == "polars":
+        series = pl.from_pandas(series)
+
+    cv = fcst.cross_validation(
+        series,
+        n_windows=20,
+        h=2,
+        step_size=1,
+        static_features=[],
+        refit=False,
+        fitted=fitted,
+    )
+
+    np.testing.assert_allclose(cv["LinearRegression"].to_numpy(), cv["y"].to_numpy())
+
+
+def test_prediction_intervals_preserve_target_transform_state():
+    n = 100
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": np.arange(n, dtype=float),
+            "trend": np.arange(n, dtype=float),
+        }
+    )
+    future = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-04-11", periods=2, freq="D"),
+            "trend": [100.0, 101.0],
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        target_transforms=[LocalStandardScaler()],
+    )
+
+    fcst.fit(
+        series,
+        static_features=[],
+        prediction_intervals=PredictionIntervals(n_windows=20, h=2),
+    )
+    preds = fcst.predict(h=2, X_df=future, level=[80])
+
+    expected = np.array([100.0, 101.0])
+    for col in ["LinearRegression", "LinearRegression-lo-80", "LinearRegression-hi-80"]:
+        np.testing.assert_allclose(preds[col], expected)
+
+
 @pytest.mark.parametrize("refit", [True, False])
 def test_cv_weight_col(refit):
     """Test that cross_validation works with weight_col and weights are used.
