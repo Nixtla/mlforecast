@@ -1,4 +1,4 @@
-import time
+from unittest.mock import patch
 
 import optuna
 import pandas as pd
@@ -251,13 +251,18 @@ def test_nonstandard_column_names(weekly_data):
     )
 
 
-def test_input_size_speedup(weekly_data):
+def test_input_size_limits_training_data(weekly_data):
+    """`input_size` caps each window, so the search trains on far less data.
+
+    Asserted on the rows the estimator is actually handed rather than on wall
+    clock: the two searches run in a couple of seconds either way, so a bare
+    `time_with_limit < time_no_limit` came down to runner noise and flaked.
+    """
     train, _, info = weekly_data
     h = info.horizon
     season_length = info.seasonality
-    model = AutoMLForecast(
-        freq=1, season_length=season_length, models={"ridge": AutoRidge()}
-    )
+    input_size = 50
+    n_series = train["unique_id"].nunique()
     fit_kwargs = dict(
         n_windows=3,
         h=h,
@@ -265,16 +270,34 @@ def test_input_size_speedup(weekly_data):
         optimize_kwargs={"timeout": 60},
     )
 
-    start = time.perf_counter()
-    model.fit(df=train, **fit_kwargs)
-    time_no_limit = time.perf_counter() - start
+    def train_rows(**extra) -> list[int]:
+        """Rows per estimator fit over a whole `AutoMLForecast.fit`."""
+        seen: list[int] = []
+        original_fit = Ridge.fit
 
-    start = time.perf_counter()
-    model.fit(df=train, input_size=50, **fit_kwargs)
-    time_with_limit = time.perf_counter() - start
+        def spy(self, X, y, *args, **kwargs):
+            seen.append(X.shape[0])
+            return original_fit(self, X, y, *args, **kwargs)
 
-    assert time_with_limit < time_no_limit
-    
+        model = AutoMLForecast(
+            freq=1, season_length=season_length, models={"ridge": AutoRidge()}
+        )
+        with patch.object(Ridge, "fit", spy):
+            model.fit(df=train, **fit_kwargs, **extra)
+        return seen
+
+    unlimited = train_rows()
+    limited = train_rows(input_size=input_size)
+
+    # the trailing fit is the best model being refit on the full frame, which
+    # `input_size` deliberately doesn't restrict, so compare the search fits
+    search_unlimited, search_limited = unlimited[:-1], limited[:-1]
+    assert search_unlimited and search_limited
+    # every window holds at most `input_size` samples per serie
+    assert max(search_limited) <= n_series * input_size
+    # which is strictly less data than the expanding windows train on
+    assert max(search_limited) < max(search_unlimited)
+
 
 def test_reuse_cv_splits_same_predictions(weekly_data):
     train, valid, info = weekly_data
