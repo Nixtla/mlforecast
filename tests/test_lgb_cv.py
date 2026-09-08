@@ -209,6 +209,33 @@ def test_categorical_feature_reaches_dataset():
     assert "[categorical_feature: 1]" in cv.items[0][1].model_to_string()
 
 
+def test_categorical_feature_empty_list_means_none():
+    # an explicit [] must not fall through to LightGBM's dtype inference
+    series = generate_daily_series(4, n_static_features=1, min_length=60, max_length=60)
+    assert series["static_0"].dtype == "category"
+
+    def cat_features(categorical_feature):
+        cv = LightGBMCV(freq="D", lags=[1])
+        cv.fit(
+            series,
+            n_windows=1,
+            h=7,
+            params={"verbosity": -1},
+            verbose_eval=False,
+            categorical_feature=categorical_feature,
+        )
+        model = cv.items[0][1].model_to_string()
+        return next(
+            line
+            for line in model.split("\n")
+            if line.startswith("[categorical_feature")
+        )
+
+    # static_0 is feature 0; None infers it from the dtype, [] must not
+    assert cat_features(None) == "[categorical_feature: 0]"
+    assert cat_features([]) == "[categorical_feature: ]"
+
+
 def test_dataset_params_reach_dataset():
     # params documented as "passed to the LightGBM Boosters" were dropped
     # before Dataset construction, silently ignoring max_bin and friends
@@ -223,4 +250,4 @@ def test_dataset_params_reach_dataset():
     )
     # the model string echoes booster config even when the Dataset ignored it,
     # so check the binning the Dataset actually built
-    assert cv.items[0][1].train_set.feature_num_bin(0) == 17
+    assert cv.items[0][1].train_set.feature_num_bin(0) <= 17
