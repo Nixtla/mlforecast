@@ -23,12 +23,27 @@ from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import TransformerMixin, clone
 from utilsforecast.compat import DataFrame
 
+from .compat import core_scalers_support_skipna
 from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
 
 
+def _validate_scaler_skipna(skipna: bool) -> None:
+    if skipna and not core_scalers_support_skipna():
+        raise ValueError(
+            "skipna=True requires a coreforecast version that supports it; the "
+            "installed one does not (it was added after 0.0.16). Please upgrade "
+            "coreforecast."
+        )
+
+
 class BaseTargetTransform(abc.ABC):
     """Base class used for target transformations."""
+
+    # Whether this transform tolerates NaN in the target. Gates
+    # ``allow_null_target=True``, which would otherwise let a NaN-propagating
+    # transform turn every fitted value and prediction into NaN silently.
+    _nan_safe: bool = False
 
     def set_column_names(self, id_col: str, time_col: str, target_col: str):
         self.id_col = id_col
@@ -54,6 +69,7 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
 
     num_threads: int = 1
     scaler_: core_scalers._BaseLocalScaler
+    _nan_safe: bool = False
 
     def set_num_threads(self, num_threads: int) -> None:
         self.num_threads = num_threads
@@ -377,13 +393,30 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
 class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
     scaler_factory: type
+    skipna: bool = False
+
+    @property
+    def _nan_safe(self) -> bool:  # type: ignore[override]
+        # With skipna the statistics are computed over the observed values only,
+        # and ``_scaler_transform`` leaves NaN in place positionally, so the
+        # null rows survive as nulls and get dropped before fitting.
+        return bool(self.skipna)
+
+    def _skipna_kwargs(self) -> dict:
+        # skipna=True is rejected at construction on an older coreforecast, so
+        # when unsupported only the default is possible and the kwarg is dropped
+        # rather than passed as False (which that version wouldn't accept).
+        return {"skipna": self.skipna} if core_scalers_support_skipna() else {}
+
+    def _make_scaler(self):
+        return self.scaler_factory()
 
     def update(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.transform(ga), ga.indptr)
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        self.scaler_ = self.scaler_factory()
+        self.scaler_ = self._make_scaler()
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         transformed = self.scaler_.fit_transform(core_ga)
         return GroupedArray(transformed, ga.indptr)
@@ -400,15 +433,43 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
 
 
 class LocalStandardScaler(_BaseLocalScaler):
-    """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
+    """Standardizes each serie by subtracting its mean and dividing by its standard deviation.
+
+    Args:
+        skipna (bool): Compute the mean and standard deviation over the observed
+            values only, leaving NaN in place instead of turning the whole serie
+            into NaN. Required to combine this transform with
+            ``allow_null_target=True``. Defaults to False.
+    """
 
     scaler_factory = core_scalers.LocalStandardScaler
 
+    def __init__(self, skipna: bool = False):
+        _validate_scaler_skipna(skipna)
+        self.skipna = skipna
+
+    def _make_scaler(self):
+        return self.scaler_factory(**self._skipna_kwargs())
+
 
 class LocalMinMaxScaler(_BaseLocalScaler):
-    """Scales each serie to be in the [0, 1] interval."""
+    """Scales each serie to be in the [0, 1] interval.
+
+    Args:
+        skipna (bool): Compute the min and max over the observed values only,
+            leaving NaN in place instead of turning the whole serie into NaN.
+            Required to combine this transform with ``allow_null_target=True``.
+            Defaults to False.
+    """
 
     scaler_factory = core_scalers.LocalMinMaxScaler
+
+    def __init__(self, skipna: bool = False):
+        _validate_scaler_skipna(skipna)
+        self.skipna = skipna
+
+    def _make_scaler(self):
+        return self.scaler_factory(**self._skipna_kwargs())
 
 
 class LocalRobustScaler(_BaseLocalScaler):
@@ -417,10 +478,18 @@ class LocalRobustScaler(_BaseLocalScaler):
     Args:
         scale (str): Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Absolute Deviation).
             Defaults to 'iqr'.
+        skipna (bool): Compute the statistic over the observed values only, leaving
+            NaN in place instead of turning the whole serie into NaN. Required to
+            combine this transform with ``allow_null_target=True``. Defaults to False.
     """
 
-    def __init__(self, scale: str):
-        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale)  # type: ignore
+    def __init__(self, scale: str, skipna: bool = False):
+        _validate_scaler_skipna(skipna)
+        self.scale = scale
+        self.skipna = skipna
+
+    def _make_scaler(self):
+        return core_scalers.LocalRobustScaler(self.scale, **self._skipna_kwargs())
 
 
 class LocalBoxCox(_BaseLocalScaler):

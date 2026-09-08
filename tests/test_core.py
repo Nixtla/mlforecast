@@ -365,6 +365,7 @@ def test_keep_last_n(flow_config2, series):
             series_with_nulls, id_col="unique_id", time_col="ds", target_col="y"
         )
     assert "y column contains null values" in str(exec.value)
+    assert "allow_null_target=True" in str(exec.value)
 
 
 # unsorted df

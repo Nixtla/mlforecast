@@ -11,6 +11,32 @@ import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
 
 
+def validate_observed_calibration_targets(
+    cv_results: DFType,
+    target_col: str,
+    n_windows: int,
+    h: int,
+    *,
+    source: str = "prediction interval",
+) -> None:
+    """Reject calibration windows that contain unobserved actuals.
+
+    Conformity scores are reshaped to ``(n_windows, n_series, h)`` downstream, so
+    the offending rows can't simply be dropped, and a null score turns into a
+    null interval at the quantile step. Calibrating on a subset of each window
+    would also change the coverage guarantee, so make the caller decide rather
+    than quietly degrading it. Only reachable with ``allow_null_target=True``.
+    """
+    if not ufp.is_nan_or_none(cv_results[target_col]).any():
+        return
+    raise ValueError(
+        f"The {source} calibration windows contain unobserved targets. "
+        "Conformal calibration needs an observed actual for every one of the "
+        f"last {n_windows} x {h} steps of each serie. Reduce `n_windows`/`h`, "
+        "or calibrate on a history whose tail is fully observed."
+    )
+
+
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
 
@@ -865,6 +891,13 @@ def _recalibrate_transfer(
             f"transfer method 'recalibrate' requires at least 2 window(s), "
             f"got n_windows={effective_n}."
         )
+    validate_observed_calibration_targets(
+        backtest_results,
+        target_col,
+        effective_n,
+        prediction_intervals.h,
+        source="transfer conformal 'recalibrate'",
+    )
     return TransferResult(
         cs_df=compute_conformity_scores(
             backtest_results, model_names, target_col, signed=True
@@ -1042,8 +1075,8 @@ def _scale_aligned_weighted_transfer(
 
 def _error_scaled_transfer(
     new_df: DFType,  # noqa: ARG001
-    prediction_intervals: PredictionIntervals,  # noqa: ARG001
-    tc: TransferConformal,  # noqa: ARG001
+    prediction_intervals: PredictionIntervals,
+    tc: TransferConformal,
     model_names: List[str],
     target_col: str,
     backtest_results: Optional[DFType] = None,
@@ -1065,6 +1098,15 @@ def _error_scaled_transfer(
             "transfer_conformal_method='error_scaled' requires source_cs_df; "
             "ensure the model was fit with prediction_intervals."
         )
+    # A single null residual makes the pooled IQR ratio NaN, which scales *every*
+    # source score to NaN and yields entirely null intervals.
+    validate_observed_calibration_targets(
+        backtest_results,
+        target_col,
+        tc.n_windows if tc.n_windows is not None else prediction_intervals.n_windows,
+        prediction_intervals.h,
+        source="transfer conformal 'error_scaled'",
+    )
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
     scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
