@@ -46,13 +46,15 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         h=horizon,
         params={"verbose": -1},
         compute_cv_preds=True,
-        metric=metric
+        metric=metric,
     )
     cv = LightGBMCV(
         freq=1,
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist = cv.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
+    hist = cv.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
     preds = cv.predict(horizon)
     eval1 = evaluate_on_valid(preds, valid)
     cv2 = LightGBMCV(
@@ -60,23 +62,28 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist2 = cv2.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
-    if metric=='mape':
+    hist2 = cv2.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
+    if metric == "mape":
         assert hist2[-1][1] < hist[-1][1]
     else:
         assert hist2[-1][1] > hist[-1][1]
     preds2 = cv2.predict(horizon)
     eval2 = evaluate_on_valid(preds2, valid)
     assert eval2 < eval1
-    
+
     cv3 = LightGBMCV(
         freq=1,
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
-        lag_transforms={48: [SeasonalRollingMean(season_length=24, window_size=7)],
-        }
+        lag_transforms={
+            48: [SeasonalRollingMean(season_length=24, window_size=7)],
+        },
     )
-    hist3 = cv3.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
+    hist3 = cv3.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
     assert hist3[-1][1] < hist2[-1][1]
     # preds3 = cv3.predict(horizon)
     # eval3 = evaluate_on_valid(preds3, valid)
@@ -89,13 +96,7 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         freq=1,
         lags=[24 * (i + 1) for i in range(7)],
     )
-    cv4.setup(
-        train,
-        n_windows=2,
-        h=horizon,
-        params={"verbose": -1},
-        metric=metric
-    )
+    cv4.setup(train, n_windows=2, h=horizon, params={"verbose": -1}, metric=metric)
     score = cv4.partial_fit(10)
     assert np.isclose(hist[0][1], score, atol=1e-7)
     score2 = cv4.partial_fit(20)
@@ -128,7 +129,7 @@ def test_lightgbmcv_callback():
 def test_lightgbmcv_custom_metric(m4_data):
     train, _, horizon = m4_data
 
-    def weighted_mape(y_true, y_pred, ids, dates):
+    def weighted_mape(y_true, y_pred, ids, _dates):
         abs_pct_err = abs(y_true - y_pred) / abs(y_true)
         mape_by_serie = abs_pct_err.groupby(ids).mean()
         totals_per_serie = y_pred.groupby(ids).sum()
@@ -156,7 +157,7 @@ def test_lightgbmcv_num_threads_minus_one():
     series = generate_daily_series(5, min_length=50, max_length=100, equal_ends=True)
 
     lgb_cv_multi = LightGBMCV(
-        freq='D',
+        freq="D",
         lags=[1, 2, 3],
         num_threads=-1,
     )
@@ -175,7 +176,7 @@ def test_lightgbmcv_num_threads_minus_one():
 
     # Compare with num_threads=1 (same seed for reproducibility)
     lgb_cv_single = LightGBMCV(
-        freq='D',
+        freq="D",
         lags=[1, 2, 3],
         num_threads=1,
     )
