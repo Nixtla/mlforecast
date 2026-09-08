@@ -54,7 +54,7 @@ Name | Type | Description | Default
 `horizon_feature_templates` | <code>list of str</code> | Template patterns for horizon-specific dynamic exogenous features. Each template must include exactly one '{h}' placeholder (1-indexed), for example: ['feature_h{h}']. Acts as shorthand for `horizon_features` and is only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
 `prediction_intervals` | <code>[PredictionIntervals](#mlforecast.conformal_prediction.PredictionIntervals)</code> | Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Save in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
@@ -201,7 +201,7 @@ Name | Type | Description | Default
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
 `horizon_feature_templates` | <code>list of str</code> | Template patterns for horizon-specific dynamic exogenous features. Each template must include exactly one '{h}' placeholder (1-indexed), for example: ['feature_h{h}']. Acts as shorthand for `horizon_features` and is only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
 `return_X_y` | <code>[bool](#bool)</code> | Return a tuple with the features and the target. If False will return a single dataframe. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to True. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 
@@ -314,7 +314,7 @@ Name | Type | Description | Default
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `fitted` | <code>[bool](#bool)</code> | Store the in-sample predictions. Defaults to False. | <code>False</code>
-`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to True. | <code>False</code>
+`as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 

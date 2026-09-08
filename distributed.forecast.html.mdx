@@ -22,7 +22,7 @@ Create distributed forecast object
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `models` | <code>regressor or list of regressors</code> | Models that will be trained and used to compute the forecasts. | *required*
-`freq` | <code>[str](#str) or [int](#int)</code> | Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. Defaults to None. | *required*
+`freq` | <code>[str](#str) or [int](#int)</code> | Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
