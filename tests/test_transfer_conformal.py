@@ -152,6 +152,29 @@ def test_frozen_backtest_ignores_raw_lag_feature_name():
     assert "LinearRegression-hi-90" in result
 
 
+def test_transfer_conformal_missing_exog_in_new_df_raises():
+    """A dynamic exog absent from `new_df` is named, not silently dropped."""
+    df = _dynamic_exog_system()
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].drop(columns="u")
+    X_df = df[["unique_id", "ds", "u"]].iloc[45:50]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+    )
+
+    with pytest.raises(ValueError, match=r"`new_df` is missing future values"):
+        fcst.predict(
+            h=5,
+            new_df=new_df,
+            X_df=X_df,
+            transfer_conformal="recalibrate",
+            level=[90],
+        )
+
+
 def test_transfer_recalibrate_supports_legacy_intervals_payload(tmp_path):
     """An interval payload saved before source scales existed remains usable."""
     df = _dynamic_exog_system().drop(columns="u")
