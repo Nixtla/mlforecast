@@ -476,7 +476,7 @@ class LocalRobustScaler(_BaseLocalScaler):
     """Scaler robust to outliers.
 
     Args:
-        scale (str): Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Asbolute Deviation).
+        scale (str): Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Absolute Deviation).
             Defaults to 'iqr'.
         skipna (bool): Compute the statistic over the observed values only, leaving
             NaN in place instead of turning the whole serie into NaN. Required to
