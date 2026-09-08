@@ -115,15 +115,15 @@ def _frozen_backtest(
 
     _original_ts = fcst.ts
     try:
-        dynamic_cols = [
-            col
-            for col in fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
-            if col in new_df.columns
-        ]
-        partition_cols = sorted(
-            col for col in fcst.ts._partition_cols if col in new_df.columns
-        )
+        dynamic_cols = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
+        partition_cols = sorted(fcst.ts._partition_cols)
         future_cols = list(dict.fromkeys([*dynamic_cols, *partition_cols]))
+        missing_future = [col for col in future_cols if col not in new_df.columns]
+        if missing_future:
+            raise ValueError(
+                "`new_df` is missing future values required for feature generation "
+                f"or model inputs used during training: {missing_future}."
+            )
         all_results = []
         splits = ufp.backtest_splits(
             new_df,
