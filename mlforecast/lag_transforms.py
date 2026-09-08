@@ -155,14 +155,6 @@ class _BaseLagTransform(BaseEstimator):
         return self
 
     @property
-    def _is_pooled(self) -> bool:
-        return bool(
-            getattr(self, "global_", False)
-            or getattr(self, "groupby", None)
-            or getattr(self, "partition_by", None)
-        )
-
-    @property
     def _accepts_skipna(self) -> bool:
         """Whether this transform takes ``skipna`` at all.
 
