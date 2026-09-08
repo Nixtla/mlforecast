@@ -26,9 +26,10 @@ count, as it is for the local estimator.
 
 ``resources_per_worker`` is the CPU knob: it decides how many CPUs each
 worker is given and therefore how many threads the booster can use. It
-defaults to the cluster's CPUs split evenly across the workers, as
-``xgboost_ray._autodetect_resources`` did, and ``n_jobs`` can only lower it
-below that share. ``model_`` keeps the requested ``n_jobs`` rather than the clamp.
+defaults to the cluster's CPUs split evenly across the workers and bounded by
+the smallest node, as ``xgboost_ray._autodetect_resources`` did, and ``n_jobs``
+can only lower it below that share. ``model_`` keeps the requested ``n_jobs``
+rather than the clamp.
 
 ``storage_path`` is where ray train writes the run. It defaults to a
 temporary directory that is discarded once the fitted model has been read
