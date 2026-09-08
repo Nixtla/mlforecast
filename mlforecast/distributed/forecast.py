@@ -426,7 +426,8 @@ class DistributedMLForecast:
                 trained_model = clone(model).fit(X, y, sample_weight=weights)
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
-            # Need to materialize
+            # Need to materialize. Each model's fit would otherwise re-execute
+            # this same dataset, since they all get handed the lazy one.
             if weight_col is not None:
                 raise NotImplementedError(
                     "Only spark and dask engines currently support sample weights."

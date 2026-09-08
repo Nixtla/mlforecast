@@ -196,6 +196,7 @@ def test_workers_get_a_share_of_the_cluster_cpus():
     `xgboost_ray._autodetect_resources` split the cluster's CPUs across its
     actors instead, so `n_jobs` alone could never raise the thread count back up.
     """
+    # the test cluster is a single node, so its CPUs are also the smallest node's
     cpus = int(ray.cluster_resources()["CPU"])
     assert RayLGBMForecast()._resources_per_worker() == {"CPU": cpus}
     assert RayLGBMForecast(num_workers=2)._resources_per_worker() == {"CPU": cpus // 2}
@@ -203,6 +204,85 @@ def test_workers_get_a_share_of_the_cluster_cpus():
     assert RayXGBForecast(resources_per_worker={"CPU": 1})._resources_per_worker() == {
         "CPU": 1
     }
+
+
+@pytest.mark.ray
+@pytest.mark.timeout(300, method="thread")
+def test_fit_executes_a_pending_dataset_before_taking_the_cpus():
+    """A dataset with work left to do can't run once the workers hold the CPUs.
+
+    Ray train hands `ScalingConfig.total_resources` to ray data as
+    `exclude_resources`, so the default share (every CPU on the node) leaves data
+    a budget of zero and `fit` blocks forever rather than failing.
+
+    The timeout is what turns a regression here into a failure instead of a hung
+    CI job, and it has to be the thread method: pytest-timeout's default raises
+    from a SIGALRM handler, which never runs while the main thread sits in ray's
+    C++ core worker. Measured, a plain `--timeout=90` didn't fire in 21 minutes.
+    """
+    df = pd.DataFrame(
+        {"x": np.ones(200), "y": np.r_[np.zeros(100), np.full(100, 100.0)]}
+    )
+    # map_batches leaves the dataset pending, unlike a bare from_pandas
+    dataset = ray.data.from_pandas(df).map_batches(lambda b: b, batch_size=50)
+    model = RayLGBMForecast(n_estimators=5, verbosity=-1)
+    # the whole cluster, so ray data would be left with nothing
+    assert model._resources_per_worker() == {"CPU": int(ray.cluster_resources()["CPU"])}
+    model.fit(dataset, target_col="y")
+
+    np.testing.assert_allclose(
+        model.model_.predict(pd.DataFrame({"x": [1.0]})), [50.0], atol=1e-6
+    )
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize(
+    "nodes,num_workers,expected",
+    [
+        # the cluster has 4 CPUs but neither node can fit a 4 CPU bundle
+        ([2.0, 2.0], 1, 2),
+        # heterogeneous: 8 // 2 = 4, which only the larger node could take
+        ([1.0, 7.0], 2, 1),
+        # the node bound is what binds here, not the split
+        ([8.0, 8.0], 1, 8),
+    ],
+    ids=["even", "heterogeneous", "bounded-by-node"],
+)
+def test_worker_share_fits_on_a_single_node(monkeypatch, nodes, num_workers, expected):
+    """A placement group bundle has to be schedulable on one node.
+
+    Sizing it from `cluster_resources` alone asks for more than any single node
+    has, which the autoscaler can't fulfill, so `fit` hangs instead of failing.
+    """
+    node_table = [{"Alive": True, "Resources": {"CPU": cpus}} for cpus in nodes]
+    # a stopped 1 CPU node shouldn't pull the bound down to 1
+    node_table.append({"Alive": False, "Resources": {"CPU": 1.0}})
+    monkeypatch.setattr(ray, "cluster_resources", lambda: {"CPU": sum(nodes)})
+    monkeypatch.setattr(ray, "nodes", lambda: node_table)
+    assert RayLGBMForecast(num_workers=num_workers)._resources_per_worker() == {
+        "CPU": expected
+    }
+
+
+@pytest.mark.ray
+def test_worker_n_jobs_is_capped_by_the_assigned_cpus():
+    """The thread pool is sized from the CPUs the train worker was actually given.
+
+    `model_` carries the requested `n_jobs` rather than the clamp, so asserting on
+    it after a fit doesn't exercise this.
+    """
+    from mlforecast.distributed.models.ray._base import worker_n_jobs
+
+    @ray.remote
+    def assigned(requested):
+        return worker_n_jobs(requested)
+
+    # the session fixture starts the cluster with 2 CPUs
+    assert ray.get(assigned.options(num_cpus=2).remote(8)) == 2
+    # unset falls back to the whole share
+    assert ray.get(assigned.options(num_cpus=2).remote(None)) == 2
+    # a smaller explicit value is honoured
+    assert ray.get(assigned.options(num_cpus=2).remote(1)) == 1
 
 
 @pytest.mark.ray

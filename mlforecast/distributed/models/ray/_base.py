@@ -99,14 +99,32 @@ class RayForecastBase:
         ``ScalingConfig`` assigns a single CPU per worker when this isn't set,
         which would make a default fit single threaded. ``xgboost_ray`` split the
         cluster's CPUs across its actors instead (``_autodetect_resources``);
-        that's kept here so that the default isn't a slowdown.
+        that's kept here so that the default isn't a slowdown, bound by the
+        smallest node included.
+
+        The share also becomes ray data's ``exclude_resources``
+        (``DataParallelTrainer`` hands it ``scaling_config.total_resources``), so
+        a worker that takes every CPU on its node leaves data none to execute
+        with. ``_train`` materializes before building the trainer so that there
+        is nothing left for data to do by then.
         """
         import ray
 
         if self.resources_per_worker is not None:
             return self.resources_per_worker
         cpus = int(ray.cluster_resources().get("CPU", 1))
-        return {"CPU": max(1, cpus // self.num_workers)}
+        # a placement group bundle has to fit on a single node, so the cluster
+        # wide share is bounded by the smallest one as well
+        min_node_cpus = min(
+            (
+                node.get("Resources", {}).get("CPU", 0.0)
+                for node in ray.nodes()
+                if node.get("Alive", False)
+            ),
+            default=0.0,
+        )
+        share = min(int(min_node_cpus or 1), cpus // self.num_workers)
+        return {"CPU": max(1, share)}
 
     def _train(
         self,
@@ -120,6 +138,13 @@ class RayForecastBase:
         params = self.get_params()  # type: ignore[attr-defined]
         for name in _RAY_PARAMS:
             params.pop(name, None)
+        # execute the dataset before the trainer exists. ray train reserves the
+        # workers' CPUs away from ray data (`ScalingConfig.total_resources`
+        # becomes data's `exclude_resources`), so a dataset with work still
+        # pending once the placement group holds them has nothing left to run
+        # with and blocks forever. Nothing is given up by doing it here: the
+        # train loops build a `Dataset`/`DMatrix` from the whole shard anyway.
+        dataset = dataset.materialize()
         with contextlib.ExitStack() as stack:
             storage_path = self.storage_path
             if storage_path is None:
