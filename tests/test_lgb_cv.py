@@ -189,3 +189,37 @@ def test_lightgbmcv_num_threads_minus_one():
     assert lgb_cv_single.best_iteration_ is not None
     # With same seed, best_iteration should be the same
     assert lgb_cv_multi.best_iteration_ == lgb_cv_single.best_iteration_
+
+
+def test_categorical_feature_reaches_dataset():
+    # https://github.com/Nixtla/mlforecast/issues/691
+    series = generate_daily_series(4, min_length=100, max_length=100)
+    cv = LightGBMCV(freq="D", lags=[1], date_features=["dayofweek"])
+    cv.fit(
+        series,
+        n_windows=2,
+        h=7,
+        params={"verbosity": -1},
+        verbose_eval=False,
+        static_features=[],
+        categorical_feature=["dayofweek"],
+    )
+    # dayofweek is the 2nd feature (lag1, dayofweek) -> index 1
+    assert "[categorical_feature: 1]" in cv.items[0][1].model_to_string()
+
+
+def test_dataset_params_reach_dataset():
+    # params documented as "passed to the LightGBM Boosters" were dropped
+    # before Dataset construction, silently ignoring max_bin and friends
+    series = generate_daily_series(4, min_length=100, max_length=100)
+    cv = LightGBMCV(freq="D", lags=[1, 2])
+    cv.fit(
+        series,
+        n_windows=1,
+        h=7,
+        params={"verbosity": -1, "max_bin": 17},
+        verbose_eval=False,
+    )
+    # the model string echoes booster config even when the Dataset ignored it,
+    # so check the binning the Dataset actually built
+    assert cv.items[0][1].train_set.feature_num_bin(0) == 17
