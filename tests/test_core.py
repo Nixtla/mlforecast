@@ -2211,6 +2211,98 @@ def test_timeseries_num_threads_minus_one(series):
 
 
 # ---------------------------------------------------------------------------
+# date_features_as_categorical tests
+# ---------------------------------------------------------------------------
+
+
+def test_date_feature_categorical_pandas(series):
+    """dayofweek keeps its name but becomes a categorical with the full range."""
+    ts = TimeSeries(
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek", "year"],
+        date_features_as_categorical=True,
+    )
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    # names are unchanged, unlike the dummies encoding
+    assert ts._date_feature_names == ["dayofweek", "year"]
+    assert result["dayofweek"].dtype == "category"
+    # categories come from the known range, not from the observed data
+    assert list(result["dayofweek"].cat.categories) == list(range(7))
+    # 'year' has no known finite range, so it stays ordinal
+    assert result["year"].dtype != "category"
+
+
+def test_date_feature_categorical_default_is_ordinal(series):
+    ts = TimeSeries(freq="D", lags=[1], date_features=["dayofweek"])
+    result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
+    assert result["dayofweek"].dtype != "category"
+
+
+def test_date_feature_categorical_predict_keeps_categories(series):
+    """The recursive predict path must not re-infer categories from one date."""
+    from mlforecast.callbacks import SaveFeatures
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import Ridge
+
+    fcst = MLForecast(
+        models={"ridge": Ridge()},
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_categorical=True,
+    )
+    fcst.fit(series)
+    save_feats = SaveFeatures()
+    preds = fcst.predict(7, before_predict_callback=save_feats)
+    assert preds.shape[0] == series["unique_id"].nunique() * 7
+    for step_features in save_feats._inputs:
+        assert step_features["dayofweek"].dtype == "category"
+        assert list(step_features["dayofweek"].cat.categories) == list(range(7))
+
+
+def test_date_feature_categorical_survives_save_load(series):
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import Ridge
+
+    fcst = MLForecast(
+        models={"ridge": Ridge()},
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_categorical=True,
+    )
+    fcst.fit(series)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fcst.save(tmpdir)
+        fcst2 = MLForecast.load(tmpdir)
+    assert fcst2.ts.date_features_as_categorical
+    pd.testing.assert_frame_equal(fcst.predict(7), fcst2.predict(7))
+
+
+def test_date_feature_categorical_rejects_dummies():
+    with pytest.raises(ValueError, match="competing encodings"):
+        TimeSeries(
+            freq="D",
+            date_features=["dayofweek"],
+            date_features_as_dummies=True,
+            date_features_as_categorical=True,
+        )
+
+
+def test_date_feature_categorical_rejects_polars():
+    series_pl = generate_daily_series(2, engine="polars")
+    ts = TimeSeries(
+        freq="1d",
+        lags=[1],
+        date_features=["month"],
+        date_features_as_categorical=True,
+    )
+    with pytest.raises(NotImplementedError, match="only supported with pandas"):
+        ts.fit_transform(series_pl, id_col="unique_id", time_col="ds", target_col="y")
+
+
+# ---------------------------------------------------------------------------
 # date_features_as_dummies tests
 # ---------------------------------------------------------------------------
 

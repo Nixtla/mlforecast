@@ -236,6 +236,26 @@ def test_categorical_feature_empty_list_means_none():
     assert cat_features([]) == "[categorical_feature: ]"
 
 
+def test_date_features_as_categorical_survives_from_cv():
+    # unlike the categorical_feature argument, this is carried over by from_cv
+    from mlforecast import MLForecast
+
+    series = generate_daily_series(4, min_length=80, max_length=80)
+    cv = LightGBMCV(
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_categorical=True,
+    )
+    cv.fit(series, n_windows=2, h=7, params={"verbosity": -1}, verbose_eval=False)
+    assert "[categorical_feature: 1]" in cv.items[0][1].model_to_string()
+
+    fcst = MLForecast.from_cv(cv)
+    fcst.fit(series)
+    booster = fcst.models_["LGBMRegressor"].booster_
+    assert "[categorical_feature: 1]" in booster.model_to_string()
+
+
 def test_dataset_params_reach_dataset():
     # params documented as "passed to the LightGBM Boosters" were dropped
     # before Dataset construction, silently ignoring max_bin and friends

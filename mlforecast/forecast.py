@@ -166,6 +166,7 @@ class MLForecast:
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
+        date_features_as_categorical: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         """Forecasting pipeline
@@ -180,6 +181,7 @@ class MLForecast:
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
+            date_features_as_categorical (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are cast to a pandas categorical dtype with the full range as its categories, so models that support them (e.g. LightGBM) treat them as categorical instead of ordinal integers. pandas input only. Cannot be combined with `date_features_as_dummies`. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
         """
         if not isinstance(models, dict) and not isinstance(models, list):
@@ -200,6 +202,7 @@ class MLForecast:
             target_transforms=target_transforms,
             lag_transforms_namer=lag_transforms_namer,
             date_features_as_dummies=date_features_as_dummies,
+            date_features_as_categorical=date_features_as_categorical,
             drop_auxiliary_columns=drop_auxiliary_columns,
         )
 

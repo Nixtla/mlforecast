@@ -282,10 +282,17 @@ class TimeSeries:
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
+        date_features_as_categorical: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         self.freq = freq
+        if date_features_as_dummies and date_features_as_categorical:
+            raise ValueError(
+                "date_features_as_dummies and date_features_as_categorical are "
+                "competing encodings of the same features, please set only one."
+            )
         self.date_features_as_dummies = date_features_as_dummies
+        self.date_features_as_categorical = date_features_as_categorical
         num_threads = _resolve_num_threads(num_threads)
         if not isinstance(num_threads, int) or num_threads < 1:
             warnings.warn("Setting num_threads to 1.")
@@ -1058,6 +1065,18 @@ class TimeSeries:
         ):
             return _compute_date_dummies(dates, feature)
 
+        as_categorical = (
+            self.date_features_as_categorical
+            and isinstance(feature, str)
+            and feature in _DUMMY_FEATURE_VALUES
+        )
+        if as_categorical and not isinstance(dates, (pd.Index, pd.Series)):
+            # polars' Categorical rejects integers and its Enum stringifies them,
+            # which would silently change the feature values on that backend
+            raise NotImplementedError(
+                "date_features_as_categorical is only supported with pandas input."
+            )
+
         if callable(feature):
             feat_name = feature.__name__
             feat_vals = feature(dates)
@@ -1082,6 +1101,13 @@ class TimeSeries:
                     feat_vals = feat_vals.astype(feat_dtype)
         else:
             feat_vals = getattr(dates.dt, feature)()
+        if as_categorical:
+            # categories come from the known range, never from the data: predict
+            # computes features one date at a time and data-inferred categories
+            # would remap the codes on every horizon step
+            feat_vals = pd.Categorical(
+                feat_vals, categories=_DUMMY_FEATURE_VALUES[feature]
+            )
         return {feat_name: feat_vals}
 
     def _transform(

@@ -117,6 +117,7 @@ class LightGBMCV:
         date_features: Optional[Iterable[DateFeature]] = None,
         num_threads: int = 1,
         target_transforms: Optional[List[TargetTransform]] = None,
+        date_features_as_categorical: bool = False,
     ):
         """Create LightGBM CV object.
 
@@ -129,6 +130,10 @@ class LightGBMCV:
             num_threads (int): Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1.
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step.
                 Defaults to None.
+            date_features_as_categorical (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month')
+                are cast to a pandas categorical dtype with the full range as its categories, so LightGBM treats them as categorical
+                instead of ordinal integers. Unlike the `categorical_feature` argument of `fit`, this is carried over by
+                `MLForecast.from_cv`. Defaults to False.
         """
         num_threads = _resolve_num_threads(num_threads)
         self.num_threads = num_threads
@@ -145,6 +150,7 @@ class LightGBMCV:
             date_features=date_features,
             num_threads=self.bst_threads,
             target_transforms=target_transforms,
+            date_features_as_categorical=date_features_as_categorical,
         )
 
     def __repr__(self):
