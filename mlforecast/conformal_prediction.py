@@ -915,6 +915,23 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
+    if tc.weights is not None:
+        # User-supplied weights replace the fitted density ratio. They align with
+        # the full source calibration set, which the transfer path never filters.
+        if callable(tc.weights):
+            src_all = np.column_stack(
+                [source_cs_df[c].to_numpy() for c in feature_cols]
+            ).astype(float)
+            weights = np.asarray(tc.weights(src_all), dtype=float)
+        else:
+            weights = np.asarray(tc.weights, dtype=float)
+        if weights.shape != (len(source_cs_df),):
+            raise ValueError(
+                "TransferConformal.weights must have one entry per source "
+                f"calibration row ({len(source_cs_df)},), got {weights.shape}."
+            )
+        return TransferResult(cs_df=source_cs_df, weights=weights)
+
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
 
@@ -967,6 +984,11 @@ def _scale_aligned_transfer(
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal_method='scale_aligned' requires source_cs_df; "
+            "ensure the model was fit with prediction_intervals."
+        )
     if prediction_intervals.scale_estimator is None:
         raise ValueError(
             "transfer_conformal_method='scale_aligned' requires the model to have "

@@ -116,9 +116,7 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    dynamic_cols = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
-    partition_cols = sorted(fcst.ts._partition_cols)
-    future_cols = list(dict.fromkeys([*dynamic_cols, *partition_cols]))
+    future_cols = fcst.ts._required_future_cols()
     missing_future = [col for col in future_cols if col not in new_df.columns]
     if missing_future:
         raise ValueError(
@@ -1608,12 +1606,21 @@ class MLForecast:
             scratch = self._with_ts(self.ts._clone_cold())
             transfer_preprocess = None
             if spec.needs_preprocess:
+                # Mirror the fit-time column configuration so the DRE classifier
+                # matches the stored source calibration features by name.
+                # ``dropna`` and ``horizons`` are deliberately left at their
+                # defaults: the source calibration rows are model predictions and
+                # so are always fully lagged, whereas forwarding ``dropna=False``
+                # would hand the classifier NaN target rows, and a per-horizon
+                # frame only drops rows without changing the feature columns.
                 transfer_preprocess = partial(
                     scratch.preprocess,
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
                     target_col=self.ts.target_col,
-                    static_features=self.ts.static_features,
+                    static_features=self.ts._fitted_static_features,
+                    weight_col=self.ts.weight_col,
+                    keep_last_n=self.ts.keep_last_n,
                 )
             _transfer_result = spec.fn(
                 new_df=new_df,
@@ -1655,11 +1662,15 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                cs_ids = set(
-                    nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
-                    .unique()
-                    .to_list()
-                )
+                # Full scan over `conformity_scores` (n_windows x n_series x h
+                # rows), so only run it on the two paths that consume it.
+                def cs_ids() -> set:
+                    return set(
+                        nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
+                        .unique()
+                        .to_list()
+                    )
+
                 is_transfer = (
                     new_df is not None
                     and transfer_conformal is not None
@@ -1667,7 +1678,7 @@ class MLForecast:
                 )
                 if ids is None:
                     active_ids = set(ts.uids)
-                    if cs_ids != active_ids and new_df is None:
+                    if new_df is None and cs_ids() != active_ids:
                         raise ValueError(
                             "Prediction intervals were calibrated on a different set of series "
                             "than the current forecasting state. Please rerun `fit` before "
@@ -1678,7 +1689,7 @@ class MLForecast:
                     # the source domain, whose IDs need not exist in ``new_df``.
                     # ``ts.predict`` above has already validated any requested
                     # target IDs against the target forecasting state.
-                    missing_ids = set(ids) - cs_ids
+                    missing_ids = set(ids) - cs_ids()
                     if missing_ids:
                         raise ValueError(
                             "Prediction intervals are only available for series seen during "
