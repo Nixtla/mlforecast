@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -36,6 +37,7 @@ from mlforecast.core import (
     Models,
     TargetTransform,
     TimeSeries,
+    _TargetTransformState,
     _get_model_name,
     _name_models,
     _validate_horizon_params,
@@ -974,6 +976,16 @@ class MLForecast:
                 if hasattr(tfm, "fitted_"):
                     tfm.fitted_ = []
         return fitted_values
+
+    @contextmanager
+    def _use_time_series(self, ts: TimeSeries) -> Iterator[None]:
+        """Temporarily use scratch state and always restore fitted state."""
+        fitted_ts = self.ts
+        self.ts = ts
+        try:
+            yield
+        finally:
+            self.ts = fitted_ts
 
     def _compute_recursive_fitted_values_on_demand(
         self,
@@ -1926,6 +1938,8 @@ class MLForecast:
         results = []
         cv_models = []
         cv_fitted_values = []
+        target_state: Optional[_TargetTransformState] = None
+        has_non_refit_windows = n_windows > 1 and refit != 1
         splits = ufp.backtest_splits(
             df,
             n_windows=n_windows,
@@ -1964,55 +1978,85 @@ class MLForecast:
                         validate_data=False,
                     )
                 cv_models.append(self.models_)
+                target_state = (
+                    _TargetTransformState.from_time_series(self.ts)
+                    if has_non_refit_windows and self.ts.target_transforms is not None
+                    else None
+                )
                 if fitted:
                     cv_fitted_values.append(
                         ufp.assign_columns(self.fcst_fitted_values_, "fold", i_window)
                     )
+            window_ts: Optional[TimeSeries] = None
+            window_prep: Optional[DFType] = None
+            if not should_fit and target_state is not None:
+                updates = target_state.new_observations(train)
+                if updates.shape[0] > 0:
+                    target_state.update(updates)
+                transformed_train, window_transforms = target_state.replay_history(
+                    train, store_fitted=fitted
+                )
+                window_ts, window_prep = self.ts._build_from_transformed_history(
+                    transformed=transformed_train,
+                    target_transforms=window_transforms,
+                    static_features=static_features,
+                    dropna=dropna,
+                    keep_last_n=keep_last_n,
+                    max_horizon=max_horizon,
+                    horizons=horizons,
+                    as_numpy=as_numpy,
+                    weight_col=weight_col,
+                    materialize_fitted=fitted,
+                )
             if fitted and not should_fit:
-                if self.ts.target_transforms is not None:
-                    for tfm in self.ts.target_transforms:
-                        if hasattr(tfm, "store_fitted"):
-                            tfm.store_fitted = True
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pooled.*validate_data",
-                        category=UserWarning,
-                    )
-                    prep = self.preprocess(
-                        train,
+                if window_ts is None:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Pooled.*validate_data",
+                            category=UserWarning,
+                        )
+                        prep = self.preprocess(
+                            train,
+                            id_col=id_col,
+                            time_col=time_col,
+                            target_col=target_col,
+                            static_features=static_features,
+                            dropna=dropna,
+                            keep_last_n=keep_last_n,
+                            max_horizon=max_horizon,
+                            horizons=horizons,
+                            horizon_features=horizon_features,
+                            horizon_feature_templates=horizon_feature_templates,
+                            return_X_y=False,
+                            weight_col=weight_col,
+                            validate_data=False,
+                        )
+                    assert not isinstance(prep, tuple)
+                    fitted_ts = self.ts
+                else:
+                    assert window_prep is not None
+                    prep = window_prep
+                    fitted_ts = window_ts
+                with self._use_time_series(fitted_ts):
+                    effective_max_horizon = self.ts.max_horizon
+                    base = prep[[id_col, time_col]]
+                    train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
+                    if as_numpy:
+                        train_X = ufp.to_numpy(train_X)
+                    fitted_values = self._compute_fitted_values(
+                        base=base,
+                        X=train_X,
+                        y=train_y,
                         id_col=id_col,
                         time_col=time_col,
                         target_col=target_col,
-                        static_features=static_features,
-                        dropna=dropna,
-                        keep_last_n=keep_last_n,
-                        max_horizon=max_horizon,
-                        horizons=horizons,
-                        horizon_features=horizon_features,
-                        horizon_feature_templates=horizon_feature_templates,
-                        return_X_y=False,
+                        max_horizon=effective_max_horizon,
                         weight_col=weight_col,
-                        validate_data=False,
+                        original_df=(
+                            train if effective_max_horizon is not None else None
+                        ),
                     )
-                assert not isinstance(prep, tuple)
-                effective_max_horizon = self.ts.max_horizon
-                base = prep[[id_col, time_col]]
-                train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
-                if as_numpy:
-                    train_X = ufp.to_numpy(train_X)
-                del prep
-                fitted_values = self._compute_fitted_values(
-                    base=base,
-                    X=train_X,
-                    y=train_y,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    max_horizon=effective_max_horizon,
-                    weight_col=weight_col,
-                    original_df=train if effective_max_horizon is not None else None,
-                )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
             static = [c for c in self.ts.static_features_.columns if c != id_col]
@@ -2027,14 +2071,16 @@ class MLForecast:
                 )
             else:
                 X_df = None
-            y_pred = self.predict(
-                h=h,
-                before_predict_callback=before_predict_callback,
-                after_predict_callback=after_predict_callback,
-                new_df=train if not should_fit else None,
-                level=level,
-                X_df=X_df,
-            )
+            prediction_df = train if not should_fit and window_ts is None else None
+            with self._use_time_series(window_ts or self.ts):
+                y_pred = self.predict(
+                    h=h,
+                    before_predict_callback=before_predict_callback,
+                    after_predict_callback=after_predict_callback,
+                    new_df=prediction_df,
+                    level=level,
+                    X_df=X_df,
+                )
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(
                 valid[[id_col, time_col, target_col]],
