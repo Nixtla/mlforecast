@@ -833,3 +833,118 @@ def test_inferred_skipna_survives_predict(series):
     direct = fcst.predict(2)
     rebuilt = fcst.predict(2, new_df=series)
     pd.testing.assert_frame_equal(direct, rebuilt)
+
+
+@pytest.mark.parametrize("lag", [1, 2, 3, 4, 5, 6, 7, 24])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ExpandingMean",
+        "ExpandingStd",
+        "ExpandingMin",
+        "ExpandingMax",
+        "ExponentiallyWeightedMean",
+    ],
+)
+def test_skipna_probe_detects_broken_updates_at_every_lag(lag, name):
+    import coreforecast.lag_transforms as ct
+    from mlforecast.compat import _probe_core_update_skipna
+
+    kwargs = {"alpha": 0.5} if name == "ExponentiallyWeightedMean" else {}
+    tfm = getattr(ct, name)(lag=lag, skipna=True, **kwargs)
+    assert not _probe_core_update_skipna(tfm)
+    assert not hasattr(tfm, "stats_")
+
+
+@pytest.mark.parametrize("lags", [(1, 3, 7), (7, 3, 1)])
+@pytest.mark.parametrize("explicit_first", [False, True])
+def test_broken_skipna_guard_is_independent_of_call_order(series, lags, explicit_first):
+    for lag in lags:
+        for explicit in [explicit_first, not explicit_first]:
+            if explicit:
+                with pytest.raises(ValueError, match="not supported in local mode"):
+                    _fcst(lag_transforms={lag: [ExpandingMean(skipna=True)]})
+            else:
+                fcst = _fcst(lag_transforms={lag: [ExpandingMean()]})
+                with pytest.warns(UserWarning, match="can't skip them"):
+                    fcst.preprocess(series, allow_null_target=True, dropna=False)
+                assert not next(iter(fcst.ts.transforms.values()))._core_tfm.skipna
+
+
+@pytest.mark.parametrize("explicit_first", [False, True])
+def test_fixed_core_update_allows_inferred_and_explicit_skipna(
+    series, monkeypatch, explicit_first
+):
+    import coreforecast.lag_transforms as ct
+    from mlforecast.compat import _probe_core_update_skipna
+
+    # Stand in for a future fixed accumulator, using coreforecast's working
+    # rolling update. Keep the suspect's class name to exercise the guard.
+    class ExpandingMean(ct.RollingMean):
+        def __init__(self, lag, skipna=False):
+            super().__init__(lag=lag, window_size=3, min_samples=1, skipna=skipna)
+
+    monkeypatch.setattr(ct, "ExpandingMean", ExpandingMean)
+    for lag in [3, 1, 7]:
+        for explicit in [explicit_first, not explicit_first]:
+            core = ExpandingMean(lag, skipna=explicit)
+            assert _probe_core_update_skipna(core)
+            assert core.skipna is explicit
+            from mlforecast.lag_transforms import ExpandingMean as Transform
+
+            fcst = _fcst(
+                lag_transforms={lag: [Transform(skipna=True if explicit else None)]}
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", UserWarning)
+                fcst.preprocess(series, allow_null_target=True, dropna=False)
+            assert next(iter(fcst.ts.transforms.values()))._core_tfm.skipna
+
+
+@pytest.mark.parametrize("skipna", [None, False, True])
+@pytest.mark.parametrize(
+    "scope",
+    [{}, {"global_": True}, {"groupby": ["brand"]}, {"partition_by": ["brand"]}],
+)
+def test_rolling_quantile_normalizes_skipna_before_resolution(skipna, scope):
+    tfm = RollingQuantile(0.5, 3, 1, skipna=skipna, **scope)._set_core_tfm(1)
+    assert tfm._core_tfm.skipna is (skipna is True)
+
+
+@pytest.mark.parametrize(
+    "scope", [{"global_": True}, {"groupby": ["brand"]}, {"partition_by": ["brand"]}]
+)
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda **kw: RollingMean(3, 1, **kw),
+        lambda **kw: RollingQuantile(0.5, 3, 1, **kw),
+        lambda **kw: SeasonalRollingMean(2, 3, 1, **kw),
+        lambda **kw: ExpandingMean(**kw),
+        lambda **kw: ExponentiallyWeightedMean(0.5, **kw),
+    ],
+)
+def test_pooled_skipna_with_older_coreforecast(two_series, monkeypatch, scope, make):
+    monkeypatch.setattr("mlforecast.lag_transforms.core_supports_skipna", lambda: False)
+    with pytest.raises(ValueError, match="requires a coreforecast version"):
+        make(skipna=True)
+    outputs = []
+    for skipna in [None, True]:
+        tfm = make(skipna=skipna, **scope)
+        prep = _fcst(lag_transforms={1: [tfm]}).preprocess(
+            two_series, allow_null_target=True, dropna=False
+        )
+        outputs.append(prep.iloc[:, -1].to_numpy())
+    np.testing.assert_allclose(*outputs, equal_nan=True)
+
+
+def test_skipna_probe_rejects_finite_but_incorrect_updates():
+    import coreforecast.lag_transforms as ct
+    from mlforecast.compat import _probe_core_update_skipna
+
+    class IncorrectRollingMean(ct.RollingMean):
+        def update(self, ga):
+            return super().update(ga) + 1.0
+
+    tfm = IncorrectRollingMean(lag=3, window_size=3, min_samples=1, skipna=True)
+    assert not _probe_core_update_skipna(tfm)

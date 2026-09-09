@@ -48,24 +48,32 @@ _SKIPNA_UPDATE_SUSPECTS = frozenset(
 )
 
 
-_skipna_update_probe_cache: dict = {}
-
-
 def _probe_core_update_skipna(core_tfm) -> bool:
     probe = copy.deepcopy(core_tfm)
-    hist = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    indptr = np.array([0, hist.size], dtype=np.int32)
-    ga_hist = _CoreGroupedArray(hist, indptr)
-    ga_nan = _CoreGroupedArray(
-        np.append(hist, np.nan), np.array([0, hist.size + 1], dtype=np.int32)
-    )
+    # Test the requested capability even when the caller has not yet resolved
+    # its deferred skipna setting. Never mutate the caller's transform/state.
+    probe.skipna = True
+    hist = np.arange(1.0, probe.lag + 6.0)
+
+    def grouped(values):
+        return _CoreGroupedArray(values, np.array([0, values.size], dtype=np.int32))
+
     try:
-        probe.transform(ga_hist)
-        probe.update(ga_hist)  # incorporate the last real observation
-        out = probe.update(ga_nan)  # a NaN observation arrives
+        probe.transform(grouped(hist))
+        # update predicts the next row, whereas transform includes that row.
+        # Advance far enough for the NaN and subsequent observations to reach
+        # the accumulator even at lags larger than the initial sample series.
+        for value in [np.nan, *range(probe.lag + 2)]:
+            expected = copy.deepcopy(core_tfm)
+            expected.skipna = True
+            want = expected.transform(grouped(np.append(hist, value)))[-1:]
+            out = probe.update(grouped(hist))
+            if not np.isfinite(want).all() or not np.allclose(out, want):
+                return False
+            hist = np.append(hist, value)
     except Exception:  # pragma: no cover - defensive, treat as unsupported
         return False
-    return not bool(np.isnan(np.asarray(out)).any())
+    return True
 
 
 def core_update_honors_skipna(core_tfm) -> bool:
@@ -78,11 +86,9 @@ def core_update_honors_skipna(core_tfm) -> bool:
     name = type(core_tfm).__name__
     if name not in _SKIPNA_UPDATE_SUSPECTS:
         return True
-    # Which branch ``update`` takes is structural (per class), not
-    # parameter-dependent, so caching on the class name is enough.
-    if name not in _skipna_update_probe_cache:
-        _skipna_update_probe_cache[name] = _probe_core_update_skipna(core_tfm)
-    return _skipna_update_probe_cache[name]
+    # The probe depends on the instance's lag and other parameters. It is
+    # small enough to run directly, avoiding process-order-dependent caching.
+    return _probe_core_update_skipna(core_tfm)
 
 
 try:

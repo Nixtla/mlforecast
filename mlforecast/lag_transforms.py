@@ -84,7 +84,7 @@ def _validate_time_agg(time_agg, global_, groupby, *, allow_none=True, scope_exe
         )
 
 
-def _validate_skipna(skipna: Optional[bool]) -> None:
+def _validate_skipna(skipna: Optional[bool], *, pooled: bool) -> None:
     """Validate an explicit ``skipna`` request at construction time.
 
     Only checks what's knowable before the core transform exists, and only for
@@ -93,7 +93,7 @@ def _validate_skipna(skipna: Optional[bool]) -> None:
     incremental ``update`` honors ``skipna`` is checked separately, in
     ``_BaseLagTransform._check_skipna_update_support``.
     """
-    if skipna is not True:
+    if skipna is not True or pooled:
         return
     if not core_supports_skipna():
         raise ValueError(
@@ -136,9 +136,9 @@ class _BaseLagTransform(BaseEstimator):
                 # conservative default and let ``_resolve_skipna`` flip it.
                 init_args["skipna"] = init_args["skipna"] is True
             else:
-                # skipna=True is rejected at construction time, so only the
-                # default reaches here; older coreforecast doesn't accept the
-                # kwarg at all.
+                # Local skipna=True is rejected at construction time; pooled
+                # transforms ignore it. Older coreforecast does not accept
+                # the kwarg at all.
                 init_args.pop("skipna")
         # resolved along the class hierarchy, so a subclass keeps its parent's
         # coreforecast counterpart
@@ -510,7 +510,7 @@ class _RollingBase(_BaseLagTransform):
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
-        _validate_skipna(skipna)
+        _validate_skipna(skipna, pooled=self._is_pooled)
         if (
             min_samples is not None
             and min_samples == 0
@@ -581,7 +581,7 @@ class RollingQuantile(_RollingBase):
         self.p = p
 
     def _set_core_tfm(self, lag: int):
-        extra = {"skipna": self.skipna} if core_supports_skipna() else {}
+        extra = {"skipna": self.skipna is True} if core_supports_skipna() else {}
         self._core_tfm = core_tfms.RollingQuantile(
             lag=lag,
             p=self.p,
@@ -674,7 +674,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
-        _validate_skipna(skipna)
+        _validate_skipna(skipna, pooled=self._is_pooled)
         if (
             min_samples is not None
             and min_samples == 0
@@ -801,7 +801,7 @@ class _ExpandingBase(_BaseLagTransform):
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
-        _validate_skipna(skipna)
+        _validate_skipna(skipna, pooled=self._is_pooled)
 
     @property
     def update_samples(self) -> int:
@@ -936,7 +936,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             allow_none=False,
             scope_exempt=("mean",),
         )
-        _validate_skipna(skipna)
+        _validate_skipna(skipna, pooled=self._is_pooled)
         if self.partition_by:
             warnings.warn(
                 "Partitioned EWM skips timestamps where the partition bucket "
