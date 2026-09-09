@@ -9,7 +9,7 @@ title: MLForecast
 ### `MLForecast`
 
 ```python
-MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, date_features_as_categorical=False, drop_auxiliary_columns=True)
+MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, drop_auxiliary_columns=True)
 ```
 
 Forecasting pipeline
@@ -27,7 +27,6 @@ Name | Type | Description | Default
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 `date_features_as_dummies` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
-`date_features_as_categorical` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are cast to a pandas categorical dtype with the full range as its categories, so models that support them (e.g. LightGBM) treat them as categorical instead of ordinal integers. pandas input only. Cannot be combined with `date_features_as_dummies`. Defaults to False. | <code>False</code>
 `drop_auxiliary_columns` | <code>bool or list of str</code> | Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns). | <code>True</code>
 
 #### `MLForecast.fit`

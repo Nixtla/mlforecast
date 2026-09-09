@@ -75,7 +75,7 @@ serie
 ### `TimeSeries`
 
 ```python
-TimeSeries(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, date_features_as_categorical=False, drop_auxiliary_columns=True)
+TimeSeries(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, drop_auxiliary_columns=True)
 ```
 
 Utility class for storing and transforming time series data.
@@ -83,7 +83,7 @@ Utility class for storing and transforming time series data.
 #### `TimeSeries.fit_transform`
 
 ```python
-fit_transform(data, id_col, time_col, target_col, static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, return_X_y=False, as_numpy=False, weight_col=None)
+fit_transform(data, id_col, time_col, target_col, static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, return_X_y=False, as_numpy=False, weight_col=None, horizon_features=None)
 ```
 
 Add the features to `data` and save the required information for the predictions step.
@@ -98,11 +98,12 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `max_horizon` | <code>[Optional](#typing.Optional)[[int](#int)]</code> | Train models for all horizons 1 to max_horizon. | <code>None</code>
 `horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Train models only for specific horizons (1-indexed).       Mutually exclusive with max_horizon. | <code>None</code>
+`horizon_features` | <code>[Optional](#typing.Optional)[[Dict](#typing.Dict)[[int](#int), [List](#typing.List)[[str](#str)]]]</code> | Mapping of 1-indexed horizons to the dynamic exogenous columns each horizon's model uses. | <code>None</code>
 
 #### `TimeSeries.history_warmup`
 
 ```python
-history_warmup(df, id_col, time_col, target_col, static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, as_numpy=None, trim=True)
+history_warmup(df, id_col, time_col, target_col, static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, as_numpy=None, trim=True, horizon_features=None)
 ```
 
 Build all internal state from `df` without materializing features.
@@ -128,6 +129,7 @@ Name | Type | Description | Default
 `horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. | <code>None</code>
 `as_numpy` | <code>[Optional](#typing.Optional)[[bool](#bool)]</code> | Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). | <code>None</code>
 `trim` | <code>[bool](#bool)</code> | Apply the `keep_last_n` trim after warming the transform state. `predict(new_df=...)` disables this to keep the full provided history. | <code>True</code>
+`horizon_features` | <code>[Optional](#typing.Optional)[[Dict](#typing.Dict)[[int](#int), [List](#typing.List)[[str](#str)]]]</code> | Mapping of 1-indexed horizons to the dynamic exogenous columns each horizon's model uses. When None, any mapping from a previous fit is preserved. | <code>None</code>
 
 #### `TimeSeries.predict`
 
