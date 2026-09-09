@@ -9,7 +9,7 @@ title: LightGBMCV
 ### `LightGBMCV`
 
 ```python
-LightGBMCV(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None)
+LightGBMCV(freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, date_features_as_categorical=False)
 ```
 
 Create LightGBM CV object.
@@ -24,6 +24,7 @@ Name | Type | Description | Default
 `date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
 `num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
+`date_features_as_categorical` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are cast to a pandas categorical dtype with the full range as its categories, so LightGBM treats them as categorical instead of ordinal integers. Unlike the `categorical_feature` argument of `fit`, this is carried over by `MLForecast.from_cv`. Defaults to False. | <code>False</code>
 
 #### `LightGBMCV.fit`
 
