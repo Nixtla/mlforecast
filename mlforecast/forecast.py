@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -114,6 +115,13 @@ def _frozen_backtest(
 
     _original_ts = fcst.ts
     try:
+        future_cols = fcst.ts._required_future_cols()
+        missing_future = [col for col in future_cols if col not in new_df.columns]
+        if missing_future:
+            raise ValueError(
+                "`new_df` is missing future values required for feature generation "
+                f"or model inputs used during training: {missing_future}."
+            )
         all_results = []
         splits = ufp.backtest_splits(
             new_df,
@@ -125,7 +133,8 @@ def _frozen_backtest(
             step_size=step_size,
         )
         for cutoffs, train, valid in splits:
-            preds = fcst.predict(h=h, new_df=train)
+            X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
+            preds = fcst.predict(h=h, new_df=train, X_df=X_df)
             preds = ufp.join(preds, cutoffs, on=id_col, how="left")
             joined = ufp.join(
                 valid[[id_col, time_col, target_col]],
@@ -152,8 +161,8 @@ def _frozen_backtest(
 class MLForecast:
     # Calibration state (set in ``fit``/``history_warmup``/``load``). Declared
     # here so mypy has a type regardless of method processing order.
-    _cs_df: Optional[DataFrame]
-    _cs_source_scales_: Optional[Dict]
+    _cs_df: Optional[DataFrame] = None
+    _cs_source_scales_: Optional[Dict] = None
 
     def __init__(
         self,
@@ -587,10 +596,6 @@ class MLForecast:
                     "Pass `horizon_features` explicitly to reconfigure the model "
                     "shape, or include the columns in `df`."
                 )
-        if not hasattr(self, "_cs_df"):
-            self._cs_df = None
-        if not hasattr(self, "_cs_source_scales_"):
-            self._cs_source_scales_ = None
         self.ts.history_warmup(
             df,
             id_col=id_col,
@@ -1513,21 +1518,7 @@ class MLForecast:
 
         new_ts: Optional[TimeSeries] = None
         if new_df is not None:
-            new_ts = TimeSeries(
-                freq=self.ts.freq,
-                lags=self.ts.lags,
-                lag_transforms=self.ts.lag_transforms,
-                date_features=self.ts.date_features,
-                num_threads=self.ts.num_threads,
-                # Deep copy: target transforms store fitted state (e.g. last values
-                # for Differences) inside the objects. Sharing them with self.ts
-                # lets nested predict calls (e.g. _frozen_backtest windows) clobber
-                # the state this prediction's inverse transform relies on.
-                target_transforms=copy.deepcopy(self.ts.target_transforms),
-                lag_transforms_namer=self.ts.lag_transforms_namer,
-                date_features_as_dummies=self.ts.date_features_as_dummies,
-                drop_auxiliary_columns=self.ts.drop_auxiliary_columns,
-            )
+            new_ts = self.ts._new_from_config()
             # Builds `_pooled_states` (global/groupby/partition_by), whose
             # `_ts_aggs` are computed from the full `new_df` history, and warms
             # up local (coreforecast) lag-transform buffers before the first
@@ -1545,6 +1536,9 @@ class MLForecast:
             )
             new_ts.max_horizon = self.ts.max_horizon
             new_ts._horizons = self.ts._horizons
+            # history_warmup doesn't set it, and `self.ts = new_ts` below makes
+            # this object the source of fit-time config for any later call.
+            new_ts.dropna = self.ts.dropna
             new_ts.as_numpy = self.ts.as_numpy
             new_ts.horizon_features_ = copy.deepcopy(self.ts.horizon_features_)
             ts = new_ts
@@ -1631,6 +1625,31 @@ class MLForecast:
             _saved_cs_df_pre = self._cs_df
             _saved_pi = self.prediction_intervals
             _saved_source_scales = self._cs_source_scales_
+            transfer_preprocess = None
+            if spec.needs_preprocess:
+                # Mirror the fit-time column configuration so the DRE classifier
+                # matches the stored source calibration features by name.
+                # ``dropna`` and ``horizons`` are deliberately left at their
+                # defaults: the source calibration rows are model predictions and
+                # so are always fully lagged, whereas forwarding ``dropna=False``
+                # would hand the classifier NaN target rows, and a per-horizon
+                # frame only drops rows without changing the feature columns.
+                transfer_preprocess = partial(
+                    self.preprocess,
+                    id_col=_saved_ts_for_cv.id_col,
+                    time_col=_saved_ts_for_cv.time_col,
+                    target_col=_saved_ts_for_cv.target_col,
+                    static_features=_saved_ts_for_cv._fitted_static_features,
+                    weight_col=_saved_ts_for_cv.weight_col,
+                    keep_last_n=_saved_ts_for_cv.keep_last_n,
+                )
+                # ``preprocess`` mutates ``self.ts``.  Run the target-domain
+                # preparation against a scratch object so a failed DRE fit cannot
+                # replace the source forecasting state.  A config-only TimeSeries
+                # is enough: ``preprocess`` overwrites it wholesale via
+                # ``fit_transform``, so copying the fitted series data would only
+                # double peak memory.
+                self.ts = _saved_ts_for_cv._new_from_config()
             try:
                 _transfer_result = spec.fn(
                     new_df=new_df,
@@ -1638,10 +1657,12 @@ class MLForecast:
                     tc=transfer_conformal,
                     backtest_results=_backtest_results,
                     model_names=list(self.models.keys()),
-                    target_col=self.ts.target_col,
-                    id_col=self.ts.id_col,
-                    time_col=self.ts.time_col,
-                    preprocess_fn=(self.preprocess if spec.needs_preprocess else None),
+                    # `self.ts` may be the scratch object above; the column names
+                    # always come from the source fit.
+                    target_col=_saved_ts_for_cv.target_col,
+                    id_col=_saved_ts_for_cv.id_col,
+                    time_col=_saved_ts_for_cv.time_col,
+                    preprocess_fn=transfer_preprocess,
                     source_cs_df=(self._cs_df if spec.needs_source_cs else None),
                     source_scales=(
                         self._cs_source_scales_ if spec.needs_source_cs else None
@@ -1683,21 +1704,36 @@ class MLForecast:
                     )
                     warnings.warn(warn_msg, UserWarning)
                 else:
-                    cs_ids = set(
-                        nw.from_native(self._cs_df, eager_only=True)[self.ts.id_col]
-                        .unique()
-                        .to_list()
+                    # Source-score transfer methods pool calibration rows from
+                    # the source domain, whose IDs need not exist in ``new_df``.
+                    # ``ts.predict`` above has already validated any requested
+                    # target IDs against the target forecasting state.
+                    is_transfer = (
+                        new_df is not None
+                        and transfer_conformal is not None
+                        and transfer_conformal.method != "recalibrate"
                     )
+                    # Full scan over `_cs_df` (n_windows x n_series x h rows), so
+                    # only run it on the two paths that consume it.
+                    _cs_df = self._cs_df
+
+                    def cs_ids() -> set:
+                        return set(
+                            nw.from_native(_cs_df, eager_only=True)[self.ts.id_col]
+                            .unique()
+                            .to_list()
+                        )
+
                     if ids is None:
                         active_ids = set(self.ts.uids)
-                        if cs_ids != active_ids and new_df is None:
+                        if new_df is None and cs_ids() != active_ids:
                             raise ValueError(
                                 "Prediction intervals were calibrated on a different set of series "
                                 "than the current forecasting state. Please rerun `fit` before "
                                 "requesting intervals."
                             )
-                    else:
-                        missing_ids = set(ids) - cs_ids
+                    elif not is_transfer:
+                        missing_ids = set(ids) - cs_ids()
                         if missing_ids:
                             raise ValueError(
                                 "Prediction intervals are only available for series seen during "
@@ -1713,11 +1749,6 @@ class MLForecast:
                             "Please rerun the `fit` method passing a proper value "
                             "to prediction intervals."
                         )
-                    is_transfer = (
-                        new_df is not None
-                        and transfer_conformal is not None
-                        and transfer_conformal.method != "recalibrate"
-                    )
                     if self.prediction_intervals.h == 1 and h > 1:
                         if is_transfer:
                             raise ValueError(
@@ -1771,7 +1802,15 @@ class MLForecast:
                             "PredictionIntervals(method='weighted_conformal_error') or "
                             "'weighted_conformal_distribution'."
                         )
-                    if ids is not None:
+                    if is_transfer:
+                        # Keep all pooled source calibration scores. Filtering
+                        # them by target IDs would discard every source row.
+                        cs_df = self._cs_df
+                        n_series = len(cs_df) // (
+                            self.prediction_intervals.n_windows
+                            * self.prediction_intervals.h
+                        )
+                    elif ids is not None:
                         if _cs_weights is not None:
                             raise ValueError(
                                 "TransferConformal with DRE weights cannot be used together with "
@@ -1783,13 +1822,7 @@ class MLForecast:
                         n_series = len(ids)
                     else:
                         cs_df = self._cs_df
-                        if is_transfer:
-                            n_series = len(cs_df) // (
-                                self.prediction_intervals.n_windows
-                                * self.prediction_intervals.h
-                            )
-                        else:
-                            n_series = self.ts.ga.n_groups
+                        n_series = self.ts.ga.n_groups
                     _target_scales = (
                         _transfer_result.target_scales
                         if _transfer_result is not None
@@ -2097,7 +2130,12 @@ class MLForecast:
         if self._cs_df is not None:
             with fsspec.open(f"{path}/intervals.pkl", "wb") as f:
                 cloudpickle.dump(
-                    {"scores": self._cs_df, "settings": self.prediction_intervals}, f
+                    {
+                        "scores": self._cs_df,
+                        "settings": self.prediction_intervals,
+                        "source_scales": self._cs_source_scales_,
+                    },
+                    f,
                 )
 
     @staticmethod
@@ -2121,6 +2159,7 @@ class MLForecast:
         if intervals is not None:
             fcst.prediction_intervals = intervals["settings"]
             fcst._cs_df = intervals["scores"]
+            fcst._cs_source_scales_ = intervals.get("source_scales")
         return fcst
 
     def update(self, df: DataFrame, validate_new_data: bool = False) -> None:
