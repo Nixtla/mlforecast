@@ -13,6 +13,8 @@ of these times.
 Here are a couple of examples:
 
 ```python
+import copy
+
 import lightgbm as lgb
 import numpy as np
 from IPython.display import display
@@ -130,18 +132,21 @@ np.testing.assert_array_less(
 
 
 ```python
-working = fcst.ts._predict_copy()
-state = working._predict_setup()
+fcst.ts._uids = fcst.ts.uids
+fcst.ts._idxs = None
+fcst.ts._static_features = fcst.ts.static_features_
+fcst.ts._ga = copy.copy(fcst.ts.ga)
+fcst.ts._predict_setup()
 
 for attr in ('head', 'tail'):
-    new_x = working._get_features_for_next_step(state, None)
+    new_x = fcst.ts._get_features_for_next_step(None)
     original_preds = fcst.models_['model'].predict(new_x)
 
     expected = 1.1 * original_preds
     actual = getattr(scaled_preds.groupby('unique_id')['model'], attr)(1).values
     np.testing.assert_equal(expected, actual)
 
-    working._update_y(state, actual)
+    fcst.ts._update_y(actual)
 ```
 
 
