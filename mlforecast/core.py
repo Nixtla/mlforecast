@@ -7,6 +7,7 @@ import reprlib
 import warnings
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Any,
@@ -251,6 +252,197 @@ def _to_native_index(values, *, df):
     if isinstance(df, pd.DataFrame):
         return pd.Index(values)
     return pl_Series(values)
+
+
+@dataclass
+class _MatchedUpdate:
+    df: DataFrame
+    uids: Any
+    matched_ids: Any
+
+
+@dataclass
+class _PreparedUpdate(_MatchedUpdate):
+    """Backend-normalized inputs shared by all update paths."""
+
+    id_counts: DataFrame
+    sizes: DataFrame
+    new_groups: Any
+
+
+def _match_update_data(
+    df: DataFrame,
+    *,
+    uids: Any,
+    id_col: str,
+    time_col: str,
+) -> _MatchedUpdate:
+    """Match update IDs to the fitted backend and sort the rows."""
+    native_uids = _index_to_series(uids)
+    native_uids, matched_ids = ufp.match_if_categorical(native_uids, df[id_col])
+    df = ufp.copy_if_pandas(df, deep=False)
+    df = ufp.assign_columns(df, id_col, matched_ids)
+    df = ufp.sort(df, by=[id_col, time_col])
+    return _MatchedUpdate(df=df, uids=native_uids, matched_ids=matched_ids)
+
+
+def _prepare_update_data(matched: _MatchedUpdate, *, id_col: str) -> _PreparedUpdate:
+    """Compute group sizes and detect series introduced by an update."""
+    id_counts = ufp.counts_by_id(matched.df, id_col)
+    try:
+        sizes = ufp.join(matched.uids, id_counts, on=id_col, how="outer_coalesce")
+    except (KeyError, ValueError):
+        # pandas raises key error, polars before coalesce raises value error
+        sizes = ufp.join(matched.uids, id_counts, on=id_col, how="outer")
+    sizes = ufp.fill_null(sizes, {"counts": 0})
+    sizes = ufp.sort(sizes, by=id_col)
+    new_groups = ~ufp.is_in(sizes[id_col], matched.uids)
+    return _PreparedUpdate(
+        df=matched.df,
+        uids=matched.uids,
+        matched_ids=matched.matched_ids,
+        id_counts=id_counts,
+        sizes=sizes,
+        new_groups=new_groups,
+    )
+
+
+def _updated_last_dates(
+    df: DataFrame,
+    *,
+    uids: Any,
+    sizes: DataFrame,
+    last_dates: Any,
+    id_col: str,
+    time_col: str,
+) -> Any:
+    """Advance each fitted series' last date from a prepared update."""
+    current_col = "_mlforecast_current_last_date"
+    while current_col in df.columns:
+        current_col = f"_{current_col}"
+    updated = ufp.group_by_agg(df, id_col, {time_col: "max"})
+    updated = ufp.join(sizes, updated, on=id_col, how="left")
+    current = type(df)({id_col: uids, current_col: last_dates})
+    updated = ufp.join(updated, current, on=id_col, how="left")
+    updated = ufp.fill_null(updated, {time_col: updated[current_col]})
+    updated = ufp.sort(updated, by=id_col)
+    values = ufp.cast(updated[time_col], last_dates.dtype)
+    return _to_native_index(values, df=df)
+
+
+@dataclass
+class _TargetTransformState:
+    """Target-only state advanced between frozen-model CV windows."""
+
+    transforms: List[TargetTransform]
+    uids: Any
+    last_dates: Any
+    id_col: str
+    time_col: str
+    target_col: str
+    target_dtype: np.dtype
+
+    @classmethod
+    def from_time_series(cls, ts: "TimeSeries") -> "_TargetTransformState":
+        """Copy only state required to advance and replay target transforms."""
+        if ts.target_transforms is None:
+            raise ValueError("No fitted target transforms are available.")
+        return cls(
+            transforms=copy.deepcopy(ts.target_transforms),
+            uids=copy.deepcopy(ts.uids),
+            last_dates=copy.deepcopy(ts.last_dates),
+            id_col=ts.id_col,
+            time_col=ts.time_col,
+            target_col=ts.target_col,
+            target_dtype=ts.ga.data.dtype,
+        )
+
+    def new_observations(self, train: DataFrame) -> DataFrame:
+        """Return rows in ``train`` that are newer than this state."""
+        last_date_col = "_mlforecast_last_date"
+        while last_date_col in train.columns:
+            last_date_col = f"_{last_date_col}"
+        last_dates = type(train)(
+            {self.id_col: self.uids, last_date_col: self.last_dates}
+        )
+        updates = ufp.join(train, last_dates, on=self.id_col, how="left")
+        unknown = (
+            nw.from_native(updates[last_date_col], series_only=True)
+            .is_null()
+            .to_native()
+        )
+        if unknown.any():
+            unknown_ids = ufp.filter_with_mask(updates[self.id_col], unknown)
+            raise ValueError(
+                "Can not update target_transforms with new series: "
+                f"{list(unknown_ids)!r}."
+            )
+        updates = ufp.filter_with_mask(
+            updates, updates[self.time_col] > updates[last_date_col]
+        )
+        return ufp.drop_columns(updates, last_date_col)
+
+    def update(self, df: DataFrame) -> None:
+        """Advance target transforms without creating feature state."""
+        validate_format(df, self.id_col, self.time_col, self.target_col)
+        matched = _match_update_data(
+            df,
+            uids=self.uids,
+            id_col=self.id_col,
+            time_col=self.time_col,
+        )
+        prepared = _prepare_update_data(matched, id_col=self.id_col)
+        if prepared.new_groups.any():
+            raise ValueError("Can not update target_transforms with new series.")
+        df = prepared.df
+        values = df[self.target_col].to_numpy().astype(self.target_dtype, copy=False)
+        has_grouped_transforms = any(
+            isinstance(tfm, _BaseGroupedArrayTargetTransform) for tfm in self.transforms
+        )
+        if has_grouped_transforms:
+            indptr = np.append(0, prepared.sizes["counts"]).cumsum()
+        for tfm in self.transforms:
+            if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                ga = tfm.update(GroupedArray(values, indptr))
+                df = ufp.assign_columns(df, self.target_col, ga.data)
+            else:
+                df = tfm.update(df)
+            values = df[self.target_col].to_numpy()
+
+        self.last_dates = _updated_last_dates(
+            df,
+            uids=prepared.uids,
+            sizes=prepared.sizes,
+            last_dates=self.last_dates,
+            id_col=self.id_col,
+            time_col=self.time_col,
+        )
+
+    def replay_history(
+        self, df: DataFrame, store_fitted: bool
+    ) -> Tuple[DataFrame, List[TargetTransform]]:
+        """Replay a bounded history with frozen fitted parameters."""
+        transformed = ufp.sort(df, by=[self.id_col, self.time_col])
+        transformed = ufp.copy_if_pandas(transformed, deep=False)
+        uids, _, values, indptr, _ = ufp.process_df(
+            transformed, self.id_col, self.time_col, self.target_col
+        )
+        if list(uids) != list(self.uids):
+            raise ValueError("History must contain exactly the fitted series.")
+        if values.ndim == 2:
+            values = values[:, 0]
+        transforms = copy.deepcopy(self.transforms)
+        ga = GroupedArray(values, indptr)
+        for tfm in transforms:
+            if hasattr(tfm, "store_fitted"):
+                tfm.store_fitted = store_fitted
+            if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                ga = tfm._transform_history(ga)
+                transformed = ufp.assign_columns(transformed, self.target_col, ga.data)
+            else:
+                transformed = tfm._transform_history(transformed)
+                ga.data = transformed[self.target_col].to_numpy()
+        return transformed, transforms
 
 
 class TimeSeries:
@@ -682,11 +874,62 @@ class TimeSeries:
         keep_last_n: Optional[int] = None,
         weight_col: Optional[str] = None,
     ) -> "TimeSeries":
-        """Save the series values, ids and last dates."""
+        """Validate raw targets and initialize the time-series state."""
         validate_format(df, id_col, time_col, target_col)
         validate_freq(df[time_col], self.freq)
         if ufp.is_nan_or_none(df[target_col]).any():
             raise ValueError(f"{target_col} column contains null values.")
+        return self._fit_core(
+            df=df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+        )
+
+    def _fit_transformed(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
+        weight_col: Optional[str] = None,
+    ) -> "TimeSeries":
+        """Initialize state from a target transformed by a fitted transform.
+
+        Target transforms can introduce leading nulls (for example,
+        differencing), so this internal path intentionally omits the raw-target
+        null check while preserving all structural validation.
+        """
+        if self.target_transforms is not None:
+            raise ValueError("Transformed target data requires target_transforms=None.")
+        validate_format(df, id_col, time_col, target_col)
+        validate_freq(df[time_col], self.freq)
+        return self._fit_core(
+            df=df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+        )
+
+    def _fit_core(
+        self,
+        df: DataFrame,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        static_features: Optional[List[str]] = None,
+        keep_last_n: Optional[int] = None,
+        weight_col: Optional[str] = None,
+    ) -> "TimeSeries":
+        """Save the series values, ids and last dates."""
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col
@@ -802,6 +1045,66 @@ class TimeSeries:
         self.features_order_ = [f for f in self.features_order_ if f not in to_exclude]
         self._build_pooled_states(df, sorted_df, ga)
         return self
+
+    def _copy_config(self) -> "TimeSeries":
+        """Create an unfitted instance with the same feature configuration."""
+        return TimeSeries(
+            freq=self.freq,
+            lags=self.lags,
+            lag_transforms=self.lag_transforms,
+            date_features=self.date_features,
+            num_threads=self.num_threads,
+            target_transforms=None,
+            lag_transforms_namer=self.lag_transforms_namer,
+            date_features_as_dummies=self.date_features_as_dummies,
+            drop_auxiliary_columns=self.drop_auxiliary_columns,
+        )
+
+    def _build_from_transformed_history(
+        self,
+        transformed: DataFrame,
+        target_transforms: List[TargetTransform],
+        static_features: Optional[List[str]],
+        dropna: bool,
+        keep_last_n: Optional[int],
+        max_horizon: Optional[int],
+        horizons: Optional[List[int]],
+        as_numpy: bool,
+        weight_col: Optional[str],
+        materialize_fitted: bool,
+    ) -> Tuple["TimeSeries", Optional[DataFrame]]:
+        """Build bounded feature state from already fitted target transforms."""
+        window = self._copy_config()
+        window._fit_transformed(
+            df=transformed,
+            id_col=self.id_col,
+            time_col=self.time_col,
+            target_col=self.target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+        )
+        window.target_transforms = target_transforms
+        window.horizon_features_ = copy.deepcopy(self.horizon_features_)
+        if materialize_fitted:
+            prep = window._transform(
+                df=transformed,
+                dropna=dropna,
+                max_horizon=max_horizon,
+                horizons=horizons,
+                return_X_y=False,
+                as_numpy=False,
+            )
+        else:
+            window._initialize_lag_transform_states()
+            window._apply_keep_last_n()
+            del window._restore_idxs, window._sort_idxs
+            window._horizons, window.max_horizon = _validate_horizon_params(
+                max_horizon, horizons
+            )
+            prep = None
+        window.as_numpy = as_numpy
+        return window, prep
 
     def _build_pooled_states(self, df, sorted_df, ga) -> None:
         """Aggregate the panel into per-bucket channels, one state per key.
@@ -2062,11 +2365,15 @@ class TimeSeries:
             validate_new_data: If True, validate continuity, start dates, and frequency.
         """
         validate_format(df, self.id_col, self.time_col, self.target_col)
-        uids = _index_to_series(self.uids)
-        uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
-        df = ufp.copy_if_pandas(df, deep=False)
-        df = ufp.assign_columns(df, self.id_col, new_ids)
-        df = ufp.sort(df, by=[self.id_col, self.time_col])
+        matched = _match_update_data(
+            df,
+            uids=self.uids,
+            id_col=self.id_col,
+            time_col=self.time_col,
+        )
+        df = matched.df
+        uids = matched.uids
+        new_ids = matched.matched_ids
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
@@ -2091,28 +2398,23 @@ class TimeSeries:
                 )
         if validate_new_data:
             self._validate_new_df(df=df)
-        id_counts = ufp.counts_by_id(df, self.id_col)
-        try:
-            sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
-        except (KeyError, ValueError):
-            # pandas raises key error, polars before coalesce raises value error
-            sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer")
-        sizes = ufp.fill_null(sizes, {"counts": 0})
-        sizes = ufp.sort(sizes, by=self.id_col)
-        new_groups = ~ufp.is_in(sizes[self.id_col], uids)
-        last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
-        last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
-        curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
-        last_dates = ufp.join(last_dates, curr_last_dates, on=self.id_col, how="left")
-        last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
-        last_dates = ufp.sort(last_dates, by=self.id_col)
-        self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
-        self.uids = ufp.sort(sizes[self.id_col])
-        self.uids = _to_native_index(self.uids, df=df)
-        self.last_dates = _to_native_index(self.last_dates, df=df)
+        prepared = _prepare_update_data(matched, id_col=self.id_col)
+        id_counts = prepared.id_counts
+        sizes = prepared.sizes
+        new_groups = prepared.new_groups
+        if new_groups.any() and self.target_transforms is not None:
+            raise ValueError("Can not update target_transforms with new series.")
+        self.last_dates = _updated_last_dates(
+            df,
+            uids=uids,
+            sizes=sizes,
+            last_dates=self.last_dates,
+            id_col=self.id_col,
+            time_col=self.time_col,
+        )
         if new_groups.any():
-            if self.target_transforms is not None:
-                raise ValueError("Can not update target_transforms with new series.")
+            self.uids = _to_native_index(ufp.sort(sizes[self.id_col]), df=df)
+        if new_groups.any():
             new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
             new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)

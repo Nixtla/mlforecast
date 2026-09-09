@@ -3298,6 +3298,52 @@ def test_target_transforms_with_pooled_predict(engine):
     )
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_target_transforms_with_pooled_cv_no_refit(engine):
+    """Frozen-model CV warms pooled state from replayed target history."""
+    from mlforecast import MLForecast
+    from mlforecast.target_transforms import Differences
+    from sklearn.linear_model import LinearRegression
+
+    n_times = 30
+    ids = np.repeat(["a", "b"], n_times)
+    times = np.tile(np.arange(n_times), 2)
+    y = np.concatenate([3.0 * np.arange(n_times), 100.0 + 3.0 * np.arange(n_times)])
+    promos = np.tile([0, 1], n_times)
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ids.tolist(),
+            "ds": times.tolist(),
+            "y": y.tolist(),
+            "promo": promos.tolist(),
+        },
+    )
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        target_transforms=[Differences([1])],
+        lag_transforms={
+            1: [
+                RollingMean(2, min_samples=1, global_=True),
+                RollingMean(2, min_samples=1, partition_by=["promo"]),
+            ]
+        },
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cv = fcst.cross_validation(
+            df,
+            n_windows=3,
+            h=2,
+            static_features=[],
+            refit=False,
+        )
+
+    assert cv.shape[0] == 12
+
+
 def _range_quantile_oracle(
     hist, qid, qt, qpromo, mode, p=0.5, lag=1, window=3, min_samples=1
 ):

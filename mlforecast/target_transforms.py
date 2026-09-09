@@ -38,6 +38,17 @@ class BaseTargetTransform(abc.ABC):
     def update(self, df: DataFrame) -> DataFrame:
         raise NotImplementedError
 
+    def _transform_history(self, df: DataFrame) -> DataFrame:
+        """Replay historical data using already fitted parameters.
+
+        Stateful transforms should rebuild any runtime state needed to invert
+        forecasts at the end of ``df``, without relearning fitted parameters.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _transform_history to support "
+            "cross_validation with frozen models."
+        )
+
     @staticmethod
     def stack(transforms: Sequence["BaseTargetTransform"]) -> "BaseTargetTransform":
         raise NotImplementedError
@@ -60,6 +71,13 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
 
     @abc.abstractmethod
     def update(self, ga: GroupedArray) -> GroupedArray: ...
+
+    def _transform_history(self, ga: GroupedArray) -> GroupedArray:
+        """Replay historical data using already fitted parameters."""
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _transform_history to support "
+            "cross_validation with frozen models."
+        )
 
     @abc.abstractmethod
     def fit_transform(self, ga: GroupedArray) -> GroupedArray: ...
@@ -121,6 +139,11 @@ class Differences(_BaseGroupedArrayTargetTransform):
             transformed = scaler.update(core_ga)
             core_ga = core_ga._with_data(transformed)
         return GroupedArray(transformed, ga.indptr)
+
+    def _transform_history(self, ga: GroupedArray) -> GroupedArray:
+        # Differences has no learned parameters. Rebuilding the scalers gives
+        # them tails aligned with the end of this history.
+        return self.fit_transform(ga)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
@@ -236,6 +259,24 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
     def update(self, ga: GroupedArray) -> GroupedArray:
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.update(core_ga), ga.indptr)
+
+    def _transform_history(self, ga: GroupedArray) -> GroupedArray:
+        """Apply learned differencing decisions and rebuild inversion tails."""
+        core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
+        self.fitted_ = []
+        self.fitted_indptr_ = None
+        if self.store_fitted:
+            self.fitted_indptr_ = core_ga.indptr.copy()
+        self.scaler_.tails_ = []
+        transformed = core_ga.data.copy()
+        for differences in self._diffs_per_step(core_ga.indptr.dtype):
+            core_ga = core_ga._with_data(transformed)
+            if self.store_fitted:
+                self.fitted_.append(core_ga.data.copy())
+            tails_indptr: np.ndarray = np.append(0, differences.cumsum())
+            self.scaler_.tails_.append(core_ga._tails(tails_indptr))
+            transformed = core_ga._diffs(differences)
+        return GroupedArray(transformed, ga.indptr)
 
     def inverse_transform(self, ga: GroupedArray) -> GroupedArray:
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
@@ -379,6 +420,9 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
     scaler_factory: type
 
     def update(self, ga: GroupedArray) -> GroupedArray:
+        return self._transform_history(ga)
+
+    def _transform_history(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.transform(ga), ga.indptr)
 
@@ -458,6 +502,9 @@ class GlobalSklearnTransformer(BaseTargetTransform):
         return ufp.assign_columns(df, cols_to_transform, transformed)
 
     def update(self, df: DataFrame) -> DataFrame:
+        return self._transform_history(df)
+
+    def _transform_history(self, df: DataFrame) -> DataFrame:
         df = ufp.copy_if_pandas(df, deep=False)
         transformed = self.transformer_.transform(df[[self.target_col]].to_numpy())
         return ufp.assign_columns(df, self.target_col, transformed[:, 0])

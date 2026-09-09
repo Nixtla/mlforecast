@@ -18,13 +18,21 @@ from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
 
 from mlforecast import MLForecast
+from mlforecast.core import _TargetTransformState
 from mlforecast.lag_transforms import (
     ExpandingMean,
     ExponentiallyWeightedMean,
     RollingMean,
 )
 from mlforecast.lgb_cv import LightGBMCV
-from mlforecast.target_transforms import Differences, LocalStandardScaler
+from mlforecast.target_transforms import (
+    AutoDifferences,
+    AutoSeasonalDifferences,
+    AutoSeasonalityAndDifferences,
+    BaseTargetTransform,
+    Differences,
+    LocalStandardScaler,
+)
 from mlforecast.utils import (
     PredictionIntervals,
     generate_daily_series,
@@ -617,7 +625,8 @@ def test_cv_no_refit(setup_forecast_data):
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("fitted", [False, True])
 @pytest.mark.parametrize("difference", [False, True])
-def test_cv_no_refit_preserves_target_transform_state(engine, fitted, difference):
+@pytest.mark.parametrize("refit", [False, 2])
+def test_cv_preserves_target_transform_state(engine, fitted, difference, refit):
     n = 100
     trend = np.arange(n, dtype=float)
     series = pd.DataFrame(
@@ -646,7 +655,7 @@ def test_cv_no_refit_preserves_target_transform_state(engine, fitted, difference
         h=2,
         step_size=1,
         static_features=[],
-        refit=False,
+        refit=refit,
         fitted=fitted,
     )
 
@@ -763,6 +772,204 @@ def test_cv_no_refit_fitted_values_preserve_target_transform_state():
     )
 
 
+@pytest.mark.parametrize(
+    "target_transform",
+    [
+        AutoDifferences(max_diffs=2),
+        AutoSeasonalDifferences(season_length=7, max_diffs=1),
+        AutoSeasonalityAndDifferences(max_season_length=7, max_diffs=1),
+    ],
+)
+def test_cv_no_refit_reuses_learned_auto_differences(target_transform):
+    """Scratch windows rebuild tails without relearning auto differences."""
+    n = 100
+    trend = np.arange(n, dtype=float)
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": trend,
+            "trend": trend,
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        target_transforms=[target_transform],
+    )
+
+    cv = fcst.cross_validation(
+        series,
+        n_windows=3,
+        h=2,
+        static_features=[],
+        refit=False,
+        fitted=True,
+    )
+    fitted_values = fcst.cross_validation_fitted_values()
+
+    np.testing.assert_allclose(cv["LinearRegression"], cv["y"], atol=1e-12)
+    np.testing.assert_allclose(
+        fitted_values["LinearRegression"], fitted_values["y"], atol=1e-12
+    )
+
+
+def test_cv_no_refit_restores_fitted_state_after_prediction_error():
+    """A failure while using scratch state must not replace fitted state."""
+    n = 40
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": np.arange(n, dtype=float),
+            "trend": np.arange(n, dtype=float),
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        target_transforms=[LocalStandardScaler()],
+    )
+    prediction_states = []
+
+    def fail_on_second_window(features):
+        prediction_states.append(fcst.ts)
+        if len(prediction_states) == 2:
+            raise RuntimeError("prediction failed")
+        return features
+
+    with pytest.raises(RuntimeError, match="prediction failed"):
+        fcst.cross_validation(
+            series,
+            n_windows=2,
+            h=1,
+            static_features=[],
+            refit=False,
+            before_predict_callback=fail_on_second_window,
+        )
+
+    assert len(prediction_states) == 2
+    assert prediction_states[0] is not prediction_states[1]
+    assert fcst.ts is prediction_states[0]
+
+
+@pytest.mark.parametrize(("fitted", "expected_calls"), [(False, 1), (True, 3)])
+def test_cv_no_refit_only_materializes_requested_fitted_values(
+    monkeypatch, fitted, expected_calls
+):
+    """Scratch windows only materialize training features for fitted values."""
+    from mlforecast.core import TimeSeries
+
+    calls = 0
+    original_transform = TimeSeries._transform
+
+    def track_transform(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_transform(self, *args, **kwargs)
+
+    monkeypatch.setattr(TimeSeries, "_transform", track_transform)
+    n = 40
+    trend = np.arange(n, dtype=float)
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": trend,
+            "trend": trend,
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        target_transforms=[LocalStandardScaler()],
+    )
+
+    fcst.cross_validation(
+        series,
+        n_windows=3,
+        h=2,
+        static_features=[],
+        refit=False,
+        fitted=fitted,
+    )
+
+    assert calls == expected_calls
+
+
+def test_cv_no_refit_requires_history_replay_for_custom_transform():
+    """Unsupported custom transforms fail with an actionable error."""
+
+    class IdentityTransformWithoutReplay(BaseTargetTransform):
+        def fit_transform(self, df):
+            return df
+
+        def update(self, df):
+            return df
+
+        def inverse_transform(self, df):
+            return df
+
+    n = 20
+    trend = np.arange(n, dtype=float)
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": trend,
+            "trend": trend,
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        target_transforms=[IdentityTransformWithoutReplay()],
+    )
+
+    with pytest.raises(NotImplementedError, match="must implement _transform_history"):
+        fcst.cross_validation(
+            series,
+            n_windows=2,
+            h=1,
+            static_features=[],
+            refit=False,
+        )
+
+
+def test_cv_no_refit_supports_unaligned_series_history():
+    """Replay preserves panels whose series have different start dates."""
+    dates = pd.date_range("2025-01-01", periods=60, freq="D")
+    series = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": "a",
+                    "ds": dates,
+                    "y": np.arange(60, dtype=float),
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "unique_id": "b",
+                    "ds": dates[10:],
+                    "y": np.arange(10, 60, dtype=float),
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        target_transforms=[LocalStandardScaler()],
+    )
+
+    cv = fcst.cross_validation(series, n_windows=3, h=2, refit=False)
+
+    assert cv.shape[0] == 12
+
+
 def test_cv_no_refit_honors_input_size():
     """``input_size`` must keep bounding the state used for non-refit windows.
 
@@ -820,15 +1027,16 @@ def test_cv_no_refit_honors_input_size():
     )
 
 
-def test_cv_no_refit_last_date_column_collision():
-    """A user column named ``_last_date`` must not collide with the update join."""
+@pytest.mark.parametrize("last_date_col", ["_last_date", "_mlforecast_last_date"])
+def test_cv_no_refit_last_date_column_collision(last_date_col):
+    """User columns must not collide with the internal update join column."""
     n = 60
     series = pd.DataFrame(
         {
             "unique_id": "series",
             "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
             "y": np.arange(n, dtype=float),
-            "_last_date": 1.0,
+            last_date_col: 1.0,
         }
     )
     fcst = MLForecast(
@@ -843,6 +1051,74 @@ def test_cv_no_refit_last_date_column_collision():
     )
 
     assert cv.shape[0] == 6
+
+
+def test_target_transform_state_rejects_unknown_ids():
+    """Target-only updates must not silently discard unknown series."""
+    n = 20
+    series = pd.DataFrame(
+        {
+            "unique_id": "known",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": np.arange(n, dtype=float),
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        target_transforms=[LocalStandardScaler()],
+    )
+    fcst.fit(series)
+    state = _TargetTransformState.from_time_series(fcst.ts)
+    unknown = pd.DataFrame(
+        {
+            "unique_id": "unknown",
+            "ds": [series["ds"].iloc[-1]],
+            "y": [0.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="new series.*unknown"):
+        state.new_observations(pd.concat([series, unknown], ignore_index=True))
+
+
+def test_cv_no_refit_honors_keep_last_n_with_target_transforms():
+    """Every scratch window must retain only the requested target history."""
+    n = 60
+    series = pd.DataFrame(
+        {
+            "unique_id": "series",
+            "ds": pd.date_range("2025-01-01", periods=n, freq="D"),
+            "y": np.arange(n, dtype=float),
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        target_transforms=[LocalStandardScaler()],
+    )
+    window_states = []
+    retained_lengths = []
+
+    def record_retained_history(features):
+        if not any(fcst.ts is state for state in window_states):
+            window_states.append(fcst.ts)
+            retained_lengths.extend(np.diff(fcst.ts.ga.indptr))
+        return features
+
+    fcst.cross_validation(
+        series,
+        n_windows=3,
+        h=2,
+        refit=False,
+        keep_last_n=5,
+        before_predict_callback=record_retained_history,
+    )
+
+    assert len(window_states) == 3
+    assert retained_lengths == [5, 5, 5]
 
 
 @pytest.mark.parametrize("refit", [True, False])
