@@ -2835,3 +2835,17 @@ def test_fit_with_intervals_leaves_no_cv_state():
     assert not hasattr(fcst, "cv_fitted_values_")
     assert fcst._cs_df is not None
     assert fcst.models_ is not None
+
+
+def test_predict_new_df_keeps_state_when_intervals_fail():
+    # `new_df` becomes the instance's history only once the whole call
+    # succeeded, including the interval step that runs after the forecast
+    df = generate_daily_series(3, min_length=30, max_length=30)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    fcst.fit(df, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
+    original_ts = fcst.ts
+    with pytest.raises(ValueError, match="range"):
+        fcst.predict(1, new_df=df, level=[150])
+    assert fcst.ts is original_ts
+    fcst.predict(1, new_df=df, level=[80])
+    assert fcst.ts is not original_ts

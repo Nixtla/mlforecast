@@ -1626,9 +1626,6 @@ class MLForecast:
             X_df=X_df,
             ids=ids,
         )
-        if new_ts is not None:
-            # Persist transfer-learning state only after a successful prediction.
-            self.ts = new_ts
         if level is not None:
             if conformity_scores is None or self.prediction_intervals is None:
                 warn_msg = (
@@ -1638,12 +1635,12 @@ class MLForecast:
                 warnings.warn(warn_msg, UserWarning)
             else:
                 cs_ids = set(
-                    nw.from_native(conformity_scores, eager_only=True)[self.ts.id_col]
+                    nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
                     .unique()
                     .to_list()
                 )
                 if ids is None:
-                    active_ids = set(self.ts.uids)
+                    active_ids = set(ts.uids)
                     if cs_ids != active_ids and new_df is None:
                         raise ValueError(
                             "Prediction intervals were calibrated on a different set of series "
@@ -1730,7 +1727,7 @@ class MLForecast:
                             "ids= filtering: the weights array aligns with the full calibration "
                             "set and would misalign after id-based filtering."
                         )
-                    ids_mask = ufp.is_in(conformity_scores[self.ts.id_col], ids)
+                    ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
                     cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
                     n_series = len(ids)
                 else:
@@ -1741,7 +1738,7 @@ class MLForecast:
                             * self.prediction_intervals.h
                         )
                     else:
-                        n_series = self.ts.ga.n_groups
+                        n_series = ts.ga.n_groups
                 _target_scales = (
                     _transfer_result.target_scales
                     if _transfer_result is not None
@@ -1753,7 +1750,7 @@ class MLForecast:
                     cs_df = _apply_scale_alignment(
                         cs_df=cs_df,
                         model_names=list(model_names),
-                        id_col=self.ts.id_col,
+                        id_col=ts.id_col,
                         source_scales=self._cs_source_scales_,
                     )
                 if _transfer_result is not None and _transfer_result.signed:
@@ -1789,7 +1786,7 @@ class MLForecast:
                 if _target_scales is not None:
                     from .conformal_prediction import _rescale_interval_columns
 
-                    fcst_uid_arr = forecasts[self.ts.id_col].to_numpy()
+                    fcst_uid_arr = forecasts[ts.id_col].to_numpy()
                     codes, uniques = pd.factorize(fcst_uid_arr)
                     sigma_tgt = np.array(
                         [_target_scales.get(uid, 1.0) for uid in uniques],
@@ -1798,6 +1795,9 @@ class MLForecast:
                     forecasts = _rescale_interval_columns(
                         forecasts, list(model_names), level_, sigma_tgt
                     )
+        if new_ts is not None:
+            # the instance moves to `new_df` only once the whole call succeeded
+            self.ts = new_ts
         return forecasts
 
     def cross_validation(
