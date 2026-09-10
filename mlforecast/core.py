@@ -1531,6 +1531,9 @@ class TimeSeries:
             # back to 1-indexed; `_validate_horizon_params` maps this to the
             # same (_horizons, max_horizon) pair for both flavours of fit
             settings["horizons"] = [h + 1 for h in self._horizons]
+        elif self.max_horizon is not None:
+            # instances fit before sparse horizons existed only carry max_horizon
+            settings["max_horizon"] = self.max_horizon
         return settings
 
     def _clone_cold(self) -> "TimeSeries":
