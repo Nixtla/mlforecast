@@ -1536,17 +1536,20 @@ class TimeSeries:
     def _clone_unfit(self) -> "TimeSeries":
         """A fresh instance with this one's constructor arguments and no fit state.
 
-        Target transforms are deep-copied: they store fitted state (e.g. the
-        last values `Differences` needs), so sharing them would let the clone's
-        fit clobber the state this instance's inverse transform relies on.
+        Target transforms are cloned unfitted: sharing them would let the
+        clone's fit clobber the state this instance's inverse transform relies
+        on, and the clone refits them anyway.
         """
+        target_transforms = None
+        if self.target_transforms is not None:
+            target_transforms = [tfm.clone() for tfm in self.target_transforms]
         return TimeSeries(
             freq=self.freq,
             lags=self.lags,
             lag_transforms=self.lag_transforms,
             date_features=self.date_features,
             num_threads=self.num_threads,
-            target_transforms=copy.deepcopy(self.target_transforms),
+            target_transforms=target_transforms,
             lag_transforms_namer=self.lag_transforms_namer,
             date_features_as_dummies=self.date_features_as_dummies,
             drop_auxiliary_columns=self.drop_auxiliary_columns,

@@ -91,6 +91,53 @@ def test_short_series(setup_series):
     assert "[0]" in str(exec_info.value)
 
 # stack
+@pytest.mark.parametrize(
+    "tfm",
+    [
+        Differences([1, 2]),
+        AutoDifferences(2),
+        AutoSeasonalDifferences(season_length=7, max_diffs=1),
+        AutoSeasonalityAndDifferences(max_season_length=7, max_diffs=1),
+        LocalStandardScaler(),
+        LocalMinMaxScaler(),
+        LocalRobustScaler(scale="mad"),
+        LocalBoxCox(),
+    ],
+)
+def test_clone_is_unfitted_and_independent(tfm, setup_series):
+    series, _, _, indptr, ga = setup_series
+    tfm.set_num_threads(2)
+    tfm.fit_transform(ga)
+    cloned = tfm.clone()
+    assert type(cloned) is type(tfm)
+    assert cloned is not tfm
+    assert cloned.num_threads == 2
+    # nothing fit_transform builds is on the clone
+    fitted_attrs = {k for k in vars(cloned) if k.endswith("_")}
+    assert fitted_attrs <= {"scaler_"}
+    if "scaler_" in fitted_attrs:
+        assert not hasattr(cloned.scaler_, "tails_")
+    # fitting the clone on other data leaves the original's state alone
+    n_series = ga.n_groups
+    new_values = GroupedArray(
+        np.random.default_rng(0).random(n_series), np.arange(n_series + 1)
+    )
+    before = tfm.inverse_transform(new_values).data.copy()
+    cloned.fit_transform(GroupedArray(2 * ga.data + 1, indptr))
+    np.testing.assert_allclose(tfm.inverse_transform(new_values).data, before)
+
+
+def test_clone_global_sklearn_transformer():
+    tfm = GlobalSklearnTransformer(PowerTransformer())
+    tfm.set_column_names("unique_id", "ds", "y")
+    df = generate_daily_series(2)
+    tfm.fit_transform(df)
+    cloned = tfm.clone()
+    assert type(cloned) is type(tfm)
+    assert not hasattr(cloned, "transformer_")
+    assert cloned.transformer is tfm.transformer
+
+
 def test_stack(setup_series):
     series, _, _, indptr, ga = setup_series
     diffs = Differences([1, 2, 5])

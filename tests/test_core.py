@@ -10,6 +10,8 @@ import polars as pl
 import pytest
 import utilsforecast.processing as ufp
 
+from sklearn.linear_model import LinearRegression
+
 from mlforecast.callbacks import SaveFeatures
 from mlforecast.core import (
     TimeSeries,
@@ -101,6 +103,21 @@ def x():
     )
     x["y"] = x["ds"] * 0.1 + x["y"]
     return x
+
+
+def test_fit_only_instance_uses_class_defaults():
+    # LightGBMCV and the distributed partitions only run `_fit`, so their
+    # instances (and pickles of them) lack the settings fit_transform stores
+    series = generate_daily_series(3, min_length=20, max_length=20)
+    ts = TimeSeries(freq="D", lags=[1, 2])
+    X, y = ts.fit_transform(
+        series, id_col="unique_id", time_col="ds", target_col="y", return_X_y=True
+    )
+    model = LinearRegression().fit(X, y)
+    expected = ts.predict({"m": model}, horizon=3)
+    for name in ("as_numpy", "max_horizon", "_horizons"):
+        ts.__dict__.pop(name, None)
+    pd.testing.assert_frame_equal(ts.predict({"m": model}, horizon=3), expected)
 
 
 # differences
