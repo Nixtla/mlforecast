@@ -1533,7 +1533,7 @@ class TimeSeries:
             settings["horizons"] = [h + 1 for h in self._horizons]
         return settings
 
-    def _clone_unfit(self) -> "TimeSeries":
+    def _clone_cold(self) -> "TimeSeries":
         """A fresh instance with this one's constructor arguments and no fit state.
 
         Target transforms are cloned unfitted: sharing them would let the
@@ -1563,7 +1563,7 @@ class TimeSeries:
         `overrides` replace individual settings, e.g. `static_features`. The
         default `trim=False` keeps the full history `df` provides.
         """
-        out = self._clone_unfit()
+        out = self._clone_cold()
         out.history_warmup(df, **{**self._fit_settings(), **overrides}, trim=trim)
         return out
 

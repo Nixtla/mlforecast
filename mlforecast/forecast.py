@@ -741,7 +741,7 @@ class MLForecast:
         # cross-validation and preprocessing fit the TimeSeries they run on and
         # leave CV state behind; run them on a copy so `self` only carries what
         # `fit` sets afterwards
-        scratch = self._with_ts(self.ts._clone_unfit())
+        scratch = self._with_ts(self.ts._clone_cold())
         cv_results = scratch.cross_validation(
             df=df,
             n_windows=n_windows,
@@ -1593,7 +1593,7 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
-            scratch = self._with_ts(self.ts._clone_unfit())
+            scratch = self._with_ts(self.ts._clone_cold())
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
