@@ -194,7 +194,10 @@ a class that inherits from
 `mlforecast.target_transforms.BaseTargetTransform` (this takes care of
 setting the column names as the `id_col`, `time_col` and `target_col`
 attributes) and implement the `fit_transform` and `inverse_transform`
-methods. Here’s an example on how to define a min-max scaler.
+methods. If your transformation stores large fitted state, also
+implement `clone` to return an unfitted instance built from the same
+arguments; the default copies the fitted state along. Here’s an example
+on how to define a min-max scaler.
 
 ```python
 from mlforecast.target_transforms import BaseTargetTransform

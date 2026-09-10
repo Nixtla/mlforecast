@@ -23,6 +23,17 @@ Bases: <code>[ABC](#abc.ABC)</code>
 
 Base class used for target transformations.
 
+#### `BaseTargetTransform.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments.
+
+The default copies the fitted state along, which is safe for any
+subclass; override it when that state is large.
+
 
 ### `Differences`
 
@@ -33,6 +44,14 @@ Differences(differences)
 Bases: <code>[_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
 
 Subtracts previous values of the serie. Can be used to remove trend or seasonalities.
+
+#### `Differences.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
 
 
 ```python
@@ -109,6 +128,14 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 
+#### `AutoDifferences.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
+
 #### `AutoDifferences.inverse_transform_fitted`
 
 ```python
@@ -157,6 +184,14 @@ Name | Type | Description | Default
 `season_length` | <code>[int](#int)</code> | Length of the seasonal period. | *required*
 `max_diffs` | <code>[int](#int)</code> | Maximum number of differences to apply. | *required*
 `n_seasons` | <code>[int](#int)</code> | Number of seasons to use to determine the number of differences. Defaults to 10. If `None` will use all samples, otherwise `season_length` * `n_seasons samples` will be used for the test. Smaller values will be faster but could be less accurate. | <code>10</code>
+
+#### `AutoSeasonalDifferences.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
 
 #### `AutoSeasonalDifferences.inverse_transform_fitted`
 
@@ -212,6 +247,14 @@ Name | Type | Description | Default
 Type | Description
 ---- | -----------
 <code>[ValueError](#ValueError)</code> | If any series has fewer than `max_diffs + 4` observations. This ensures that after differencing, there are at least 4 observations remaining for STL decomposition (minimum 2 periods × minimum period of 2).
+
+#### `AutoSeasonalityAndDifferences.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
 
 #### `AutoSeasonalityAndDifferences.inverse_transform_fitted`
 
@@ -280,12 +323,28 @@ Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)<
 
 Standardizes each serie by subtracting its mean and dividing by its standard deviation.
 
+#### `LocalStandardScaler.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
+
 
 ### `LocalMinMaxScaler`
 
 Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Scales each serie to be in the [0, 1] interval.
+
+#### `LocalMinMaxScaler.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
 
 
 ### `LocalRobustScaler`
@@ -304,6 +363,14 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `scale` | <code>[str](#str)</code> | Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Absolute Deviation). Defaults to 'iqr'. | *required*
 
+#### `LocalRobustScaler.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
+
 
 ### `LocalBoxCox`
 
@@ -314,6 +381,14 @@ LocalBoxCox()
 Bases: <code>[_BaseLocalScaler](#mlforecast.target_transforms._BaseLocalScaler)</code>
 
 Finds the optimum lambda for each serie and applies the Box-Cox transformation
+
+#### `LocalBoxCox.clone`
+
+```python
+clone()
+```
+
+An unfitted instance with the same arguments and thread count.
 
 
 ### `GlobalSklearnTransformer`
