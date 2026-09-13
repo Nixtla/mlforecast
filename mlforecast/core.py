@@ -737,6 +737,51 @@ class TimeSeries:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
 
+    def _required_future_cols(self) -> List[str]:
+        """Columns whose future values must be supplied at predict time.
+
+        Pooled groupby/partition keys count even when ``drop_auxiliary_columns``
+        removed them from ``features_order_``: the pooled state still needs them
+        to assign each row to a leaf. Static ones are excluded — the assignment
+        reads those from ``static_features_`` instead.
+        """
+        statics = set(self.static_features_.columns)
+        return list(
+            dict.fromkeys(
+                [
+                    *self._get_dynamic_exog_cols(self.features_order_),
+                    *(c for c in self._pooled_aux_cols if c not in statics),
+                ]
+            )
+        )
+
+    @property
+    def _fitted_static_features(self) -> List[str]:
+        """The static split resolved at fit time, as an explicit list.
+
+        ``self.static_features`` is ``None`` when fit inferred the split, which
+        would let a different dataframe re-infer a different one.
+        """
+        return [c for c in self.static_features_.columns if c != self.id_col]
+
+    def _new_from_config(self) -> "TimeSeries":
+        """A fresh, unfitted TimeSeries carrying this one's configuration."""
+        return TimeSeries(
+            freq=self.freq,
+            lags=self.lags,
+            lag_transforms=self.lag_transforms,
+            date_features=self.date_features,
+            num_threads=self.num_threads,
+            # Deep copy: target transforms store fitted state (e.g. last values
+            # for Differences) inside the objects. Sharing them with the source
+            # lets nested predict calls (e.g. _frozen_backtest windows) clobber
+            # the state this prediction's inverse transform relies on.
+            target_transforms=copy.deepcopy(self.target_transforms),
+            lag_transforms_namer=self.lag_transforms_namer,
+            date_features_as_dummies=self.date_features_as_dummies,
+            drop_auxiliary_columns=self.drop_auxiliary_columns,
+        )
+
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
@@ -2032,15 +2077,12 @@ class TimeSeries:
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            required_future_cols = self._required_future_cols()
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
                     "for feature generation or model inputs used during training: "
-                    f"{sorted(required_future_cols)}."
+                    f"{required_future_cols}."
                 )
         with self._maybe_subset(idxs):
             # invalidate the per-predict statics cache in _predict_setup
@@ -2066,11 +2108,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = [c for c in self._required_future_cols() if c not in dynamics]
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
