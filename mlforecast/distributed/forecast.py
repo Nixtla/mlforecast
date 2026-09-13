@@ -29,7 +29,6 @@ try:
 except ModuleNotFoundError:
     SPARK_INSTALLED = False
 try:
-    from lightgbm_ray import RayDMatrix
     from ray.data import Dataset as RayDataset
 
     RAY_INSTALLED = True
@@ -81,7 +80,7 @@ class DistributedMLForecast:
 
         Args:
             models (regressor or list of regressors): Models that will be trained and used to compute the forecasts.
-            freq (str or int, optional): Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. Defaults to None.
+            freq (str or int): Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
             lags (list of int, optional): Lags of the target to use as features. Defaults to None.
             lag_transforms (dict of int to list of functions, optional): Mapping of target lags to their transformations. Defaults to None.
             date_features (list of str or callable, optional): Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
@@ -427,7 +426,8 @@ class DistributedMLForecast:
                 trained_model = clone(model).fit(X, y, sample_weight=weights)
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
-            # Need to materialize
+            # Need to materialize. Each model's fit would otherwise re-execute
+            # this same dataset, since they all get handed the lazy one.
             if weight_col is not None:
                 raise NotImplementedError(
                     "Only spark and dask engines currently support sample weights."
@@ -435,12 +435,8 @@ class DistributedMLForecast:
             prep_selected = prep.select_columns(
                 cols=features + [target_col]
             ).materialize()
-            X = RayDMatrix(
-                prep_selected,
-                label=target_col,
-            )
             for name, model in self.models.items():
-                trained_model = clone(model).fit(X, y=None)
+                trained_model = clone(model).fit(prep_selected, target_col=target_col)
                 self.models_[name] = trained_model.model_
         else:
             raise NotImplementedError(
