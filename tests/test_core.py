@@ -115,9 +115,12 @@ def test_fit_only_instance_uses_class_defaults():
     )
     model = LinearRegression().fit(X, y)
     expected = ts.predict({"m": model}, horizon=3)
-    for name in ("as_numpy", "max_horizon", "_horizons"):
+    for name in ("as_numpy", "max_horizon", "_horizons", "horizon_features_"):
         ts.__dict__.pop(name, None)
     pd.testing.assert_frame_equal(ts.predict({"m": model}, horizon=3), expected)
+    # the settings a warm clone reads must fall through to the defaults as well
+    warm = ts._clone_warm(series)
+    pd.testing.assert_frame_equal(warm.predict({"m": model}, horizon=3), expected)
 
 
 def test_clone_warm_keeps_max_horizon_without_horizons():

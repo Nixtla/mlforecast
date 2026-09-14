@@ -127,6 +127,30 @@ def test_clone_is_unfitted_and_independent(tfm, setup_series):
     np.testing.assert_allclose(tfm.inverse_transform(new_values).data, before)
 
 
+@pytest.mark.parametrize(
+    "cls,kwargs",
+    [
+        (Differences, {"differences": [1, 2]}),
+        (AutoDifferences, {"max_diffs": 2}),
+        (AutoSeasonalDifferences, {"season_length": 7, "max_diffs": 1}),
+        (AutoSeasonalityAndDifferences, {"max_season_length": 7, "max_diffs": 1}),
+        (LocalStandardScaler, {}),
+        (LocalMinMaxScaler, {}),
+        (LocalRobustScaler, {"scale": "mad"}),
+        (LocalBoxCox, {}),
+    ],
+)
+def test_clone_preserves_subclass(cls, kwargs, setup_series):
+    # TimeSeries._clone_cold clones the target transforms instead of deep-copying
+    # them, so a subclass overriding e.g. inverse_transform must survive
+    _, _, _, _, ga = setup_series
+    subclass = type(f"My{cls.__name__}", (cls,), {})
+    tfm = subclass(**kwargs)
+    tfm.fit_transform(ga)
+    assert type(tfm.clone()) is subclass
+    assert type(tfm.take(np.array([0, 1]))) is subclass
+
+
 def test_clone_global_sklearn_transformer():
     tfm = GlobalSklearnTransformer(PowerTransformer())
     tfm.set_column_names("unique_id", "ds", "y")
@@ -136,6 +160,8 @@ def test_clone_global_sklearn_transformer():
     assert type(cloned) is type(tfm)
     assert not hasattr(cloned, "transformer_")
     assert cloned.transformer is tfm.transformer
+    subclass = type("MyGlobalSklearnTransformer", (GlobalSklearnTransformer,), {})
+    assert type(subclass(PowerTransformer()).clone()) is subclass
 
 
 def test_stack(setup_series):

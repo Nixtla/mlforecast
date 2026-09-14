@@ -27,6 +27,17 @@ from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
 
 _GATransform = TypeVar("_GATransform", bound="_BaseGroupedArrayTargetTransform")
+_Transform = TypeVar("_Transform")
+
+
+def _bare_instance(obj: _Transform) -> _Transform:
+    """An instance of `obj`'s class with no attributes set.
+
+    Calling the constructor instead would downgrade a user subclass whose
+    `__init__` takes different arguments, so clones start from this and copy
+    over the arguments they know about.
+    """
+    return type(obj).__new__(type(obj))
 
 
 class BaseTargetTransform(abc.ABC):
@@ -114,7 +125,9 @@ class Differences(_BaseGroupedArrayTargetTransform):
         self.differences = list(differences)
 
     def _clone(self) -> "Differences":
-        return Differences(self.differences)
+        out = _bare_instance(self)
+        out.differences = list(self.differences)
+        return out
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         self.fitted_: List[np.ndarray] = []
@@ -219,7 +232,9 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
 
     def _clone(self) -> "AutoDifferences":
-        return AutoDifferences(self.scaler_.max_diffs)
+        out = _bare_instance(self)
+        out.scaler_ = core_scalers.AutoDifferences(self.scaler_.max_diffs)
+        return out
 
     def _diffs_per_step(self, indptr_dtype: np.dtype) -> List[np.ndarray]:
         """Convert stored differences into per-step difference arrays.
@@ -353,11 +368,13 @@ class AutoSeasonalDifferences(AutoDifferences):
         )
 
     def _clone(self) -> "AutoSeasonalDifferences":
-        return AutoSeasonalDifferences(
+        out = _bare_instance(self)
+        out.scaler_ = core_scalers.AutoSeasonalDifferences(
             season_length=self.scaler_.season_length,
             max_diffs=self.scaler_.max_diffs,
             n_seasons=self.scaler_.n_seasons,
         )
+        return out
 
 
 class AutoSeasonalityAndDifferences(AutoDifferences):
@@ -386,11 +403,14 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         )
 
     def _clone(self) -> "AutoSeasonalityAndDifferences":
-        return AutoSeasonalityAndDifferences(
+        out = _bare_instance(self)
+        out.max_diffs = self.max_diffs
+        out.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=self.scaler_.max_season_length,
             max_diffs=self.scaler_.max_diffs,
             n_seasons=self.scaler_.n_seasons,
         )
+        return out
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         # Validate that each series has enough data for STL decomposition
@@ -436,7 +456,7 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
 
     def _clone(self) -> "_BaseLocalScaler":
         # an unfitted local scaler is its factory; `scaler_` is what fit builds
-        out = type(self).__new__(type(self))
+        out = _bare_instance(self)
         out.scaler_factory = self.scaler_factory
         return out
 
@@ -486,7 +506,9 @@ class GlobalSklearnTransformer(BaseTargetTransform):
         self.transformer = transformer
 
     def clone(self) -> "GlobalSklearnTransformer":
-        return GlobalSklearnTransformer(self.transformer)
+        out = _bare_instance(self)
+        out.transformer = self.transformer
+        return out
 
     def fit_transform(self, df: DataFrame) -> DataFrame:
         df = ufp.copy_if_pandas(df, deep=False)

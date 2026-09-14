@@ -277,6 +277,8 @@ class TimeSeries:
     as_numpy: bool = False
     max_horizon: Optional[int] = None
     _horizons: Optional[List[int]] = None
+    # shared dict is safe: every writer rebinds the attribute
+    horizon_features_: Dict[int, List[str]] = {}
 
     def __init__(
         self,
@@ -323,7 +325,7 @@ class TimeSeries:
             lag_transforms=self.lag_transforms,
             namer=lag_transforms_namer,
         )
-        self.horizon_features_: Dict[int, List[str]] = {}
+        self.horizon_features_ = {}
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
