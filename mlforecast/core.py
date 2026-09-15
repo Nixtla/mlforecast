@@ -30,6 +30,7 @@ import narwhals as nw
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
+from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 from utilsforecast.compat import (
@@ -462,6 +463,14 @@ class TimeSeries:
     last_dates: Any
     static_features_: DataFrame
     features_order_: List[str]
+    # Settings that arrive with ``fit_transform``/``history_warmup``. Instances
+    # that only went through ``_fit`` (LightGBMCV, distributed partitions) and
+    # older pickles fall through to the value ``predict`` assumed for them.
+    as_numpy: bool = False
+    max_horizon: Optional[int] = None
+    _horizons: Optional[List[int]] = None
+    # shared dict is safe: every writer rebinds the attribute
+    horizon_features_: Dict[int, List[str]] = {}
 
     def __init__(
         self,
@@ -508,7 +517,7 @@ class TimeSeries:
             lag_transforms=self.lag_transforms,
             namer=lag_transforms_namer,
         )
-        self.horizon_features_: Dict[int, List[str]] = {}
+        self.horizon_features_ = {}
         self.ga: GroupedArray
 
     def _get_core_lag_tfms(self) -> Dict[str, _BaseLagTransform]:
@@ -715,6 +724,15 @@ class TimeSeries:
             if bids is not None:
                 state.set_series_bucket_id(bids)
 
+    def _stateful_cores(self) -> List[Any]:
+        """Inner coreforecast transforms that carry a per-group accumulator."""
+        return [
+            core
+            for tfm in self._get_local_tfms(self.transforms).values()
+            if isinstance(tfm, _BaseLagTransform)
+            for core in tfm._stateful_core_tfms()
+        ]
+
     def _apply_keep_last_n(self) -> None:
         """Resolve ``keep_last_n`` and trim the stored history accordingly.
 
@@ -723,6 +741,10 @@ class TimeSeries:
         and trims the pooled states (finite-window states only). Must run after
         the lag transforms have computed their state, since local stateful
         transforms (Expanding*/EWM) warm their buffers from the full history.
+
+        The retention has a floor of one more than any stateful transform's lag,
+        including over an explicit ``keep_last_n``, so that ``update`` can always
+        advance the accumulators (see ``_advance_lag_transform_states``).
         """
         update_samples = [
             getattr(tfm, "update_samples", -1) for tfm in self.transforms.values()
@@ -735,6 +757,12 @@ class TimeSeries:
             # user didn't set keep_last_n and we can infer it from the transforms
             self.keep_last_n = max(update_samples)
         if self.keep_last_n is not None:
+            # a serie trimmed to exactly a stateful transform's lag is
+            # indistinguishable from one that's only that long, and ``update``
+            # has to tell them apart: the first has an accumulator to advance,
+            # the second none to start from
+            min_kept = max((core.lag + 1 for core in self._stateful_cores()), default=0)
+            self.keep_last_n = max(self.keep_last_n, min_kept)
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
         for state in getattr(self, "_pooled_states", {}).values():
@@ -765,6 +793,95 @@ class TimeSeries:
         core_tfms = self._get_core_lag_tfms()
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
+
+    def _advance_lag_transform_states(
+        self,
+        prev_ga: GroupedArray,
+        counts: np.ndarray,
+        values: np.ndarray,
+        new_groups: np.ndarray,
+    ) -> None:
+        """Fold observations appended by ``update`` into the stateful transforms.
+
+        ``Expanding*``/``ExponentiallyWeightedMean`` carry a running accumulator
+        (``stats_``) instead of recomputing from the stored array, and
+        coreforecast advances it by exactly one observation per ``update`` call,
+        reading the value ``lag`` positions from the end. ``TimeSeries.update``
+        appends several values at once, so the accumulators must be advanced
+        here, one appended timestamp at a time, or they'd stay ``counts`` values
+        behind (see #726). Recomputing instead isn't possible once an
+        accumulator has started, since ``keep_last_n`` has dropped the history
+        it summarizes; the series that haven't started are exactly the ones the
+        trim leaves whole, so those are recomputed.
+
+        Args:
+            prev_ga: The stored series *before* the new values were appended.
+            counts: Number of appended values per series, in the updated id
+                order (0 for series absent from the update).
+            values: The appended values, grouped by series in that same order.
+            new_groups: Mask over the updated id order marking series that
+                didn't exist before this update.
+        """
+        cores = self._stateful_cores()
+        if not cores:
+            return
+        max_lag = max(core.lag for core in cores)
+        dtype = self.ga.data.dtype
+        offsets = np.append(0, counts.cumsum())
+        existing = ~new_groups
+        existing_counts = counts[existing]
+        stored_lens = np.zeros(counts.size, dtype=np.int64)
+        stored_lens[existing] = np.diff(prev_ga.indptr)
+        # advance the pre-existing series first, while stats_ still has one row
+        # per group of prev_ga
+        if existing_counts.size and existing_counts.max() > 0:
+            n_prev = prev_ga.n_groups
+            k_max = int(existing_counts.max())
+            # per series: the last max_lag stored values followed by the
+            # appended ones. A series with less than max_lag stored values is
+            # padded with nans, which is what the reads past the start of a
+            # group return during prediction as well.
+            context = np.full((n_prev, max_lag + k_max), np.nan, dtype=dtype)
+            for group, i in enumerate(np.flatnonzero(existing)):
+                stored = prev_ga[group][-max_lag:]
+                context[group, max_lag - stored.size : max_lag] = stored
+                context[group, max_lag : max_lag + counts[i]] = values[
+                    offsets[i] : offsets[i + 1]
+                ]
+            indptr = np.arange(0, (n_prev + 1) * max_lag, max_lag, dtype=np.int32)
+            for j in range(k_max):
+                # groups of max_lag values ending on the j-th appended value, so
+                # that the read at position lag from the end lands on it
+                step = CoreGroupedArray(context[:, j : j + max_lag].ravel(), indptr)
+                # updates advance every group, so restore the ones that ran out
+                # of appended values
+                done = existing_counts <= j
+                for core in cores:
+                    kept = core.stats_[done].copy()
+                    core.update(step)
+                    # some transforms rebind stats_ instead of updating in place
+                    core.stats_[done] = kept
+        # a fit over at most ``lag`` values consumes none of them, and
+        # coreforecast leaves stats_ uninitialized until it consumes one, so
+        # those series (and every new one) take their state from a transform
+        # over their whole history, which is what a fit would have produced. The
+        # trim keeps every serie it touches longer than the lag, so a short one
+        # is always a serie we still hold in full.
+        for core in cores:
+            if new_groups.any():
+                stats = np.empty(
+                    (counts.size, *core.stats_.shape[1:]), dtype=core.stats_.dtype
+                )
+                stats[existing] = core.stats_
+                core.stats_ = stats
+            fresh = stored_lens <= core.lag
+            if not fresh.any():
+                continue
+            # self.ga already holds the appended values
+            sub = self.ga.take(np.flatnonzero(fresh))
+            primed = copy.deepcopy(core)
+            primed.transform(CoreGroupedArray(sub.data, sub.indptr.astype(np.int32)))
+            core.stats_[fresh] = primed.stats_
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
@@ -1593,6 +1710,7 @@ class TimeSeries:
         return_X_y: bool = False,
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
+        horizon_features: Optional[Dict[int, List[str]]] = None,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -1604,9 +1722,12 @@ class TimeSeries:
             max_horizon: Train models for all horizons 1 to max_horizon.
             horizons: Train models only for specific horizons (1-indexed).
                       Mutually exclusive with max_horizon.
+            horizon_features: Mapping of 1-indexed horizons to the dynamic
+                exogenous columns each horizon's model uses.
         """
         self.dropna = dropna
         self.as_numpy = as_numpy
+        self.horizon_features_ = {} if horizon_features is None else horizon_features
         self._fit(
             df=data,
             id_col=id_col,
@@ -1637,6 +1758,7 @@ class TimeSeries:
         max_horizon: Optional[int] = None,
         horizons: Optional[List[int]] = None,
         as_numpy: Optional[bool] = None,
+        horizon_features: Optional[Dict[int, List[str]]] = None,
         trim: bool = True,
     ) -> "TimeSeries":
         """Build all internal state from `df` without materializing features.
@@ -1664,6 +1786,9 @@ class TimeSeries:
             as_numpy: Whether prediction passes a numpy array to the model
                 instead of a dataframe. When None, any value from a previous
                 fit is preserved (False for a fresh instance).
+            horizon_features: Mapping of 1-indexed horizons to the dynamic
+                exogenous columns the models were trained with. When None, any
+                mapping from a previous fit is preserved.
             trim: Apply the `keep_last_n` trim after warming the transform
                 state. `predict(new_df=...)` disables this to keep the full
                 provided history.
@@ -1683,20 +1808,72 @@ class TimeSeries:
         if trim:
             self._apply_keep_last_n()
         del self._restore_idxs, self._sort_idxs
+        # a None argument keeps the value from a previous fit (e.g. an unpickled
+        # instance being re-warmed); a fresh instance has the class defaults
         if max_horizon is not None or horizons is not None:
             self._horizons, self.max_horizon = _validate_horizon_params(
                 max_horizon, horizons
             )
-        else:
-            # preserve model-shape metadata from a previous fit (e.g. an
-            # unpickled instance being re-warmed); default to recursive mode
-            self._horizons = getattr(self, "_horizons", None)
-            self.max_horizon = getattr(self, "max_horizon", None)
         if as_numpy is not None:
             self.as_numpy = as_numpy
-        else:
-            self.as_numpy = getattr(self, "as_numpy", False)
+        if horizon_features is not None:
+            self.horizon_features_ = horizon_features
         return self
+
+    def _fit_settings(self) -> Dict[str, Any]:
+        """Arguments that warm a fresh instance the way this one was fit."""
+        settings: Dict[str, Any] = dict(
+            id_col=self.id_col,
+            time_col=self.time_col,
+            target_col=self.target_col,
+            static_features=self.static_features,
+            keep_last_n=self.keep_last_n,
+            weight_col=self.weight_col,
+            as_numpy=self.as_numpy,
+            horizon_features=copy.deepcopy(self.horizon_features_),
+        )
+        if self._horizons is not None:
+            # back to 1-indexed; `_validate_horizon_params` maps this to the
+            # same (_horizons, max_horizon) pair for both flavours of fit
+            settings["horizons"] = [h + 1 for h in self._horizons]
+        elif self.max_horizon is not None:
+            # instances fit before sparse horizons existed only carry max_horizon
+            settings["max_horizon"] = self.max_horizon
+        return settings
+
+    def _clone_cold(self) -> "TimeSeries":
+        """A fresh instance with this one's constructor arguments and no fit state.
+
+        Target transforms are cloned unfitted: sharing them would let the
+        clone's fit clobber the state this instance's inverse transform relies
+        on, and the clone refits them anyway.
+        """
+        target_transforms = None
+        if self.target_transforms is not None:
+            target_transforms = [tfm.clone() for tfm in self.target_transforms]
+        return TimeSeries(
+            freq=self.freq,
+            lags=self.lags,
+            lag_transforms=self.lag_transforms,
+            date_features=self.date_features,
+            num_threads=self.num_threads,
+            target_transforms=target_transforms,
+            lag_transforms_namer=self.lag_transforms_namer,
+            date_features_as_dummies=self.date_features_as_dummies,
+            drop_auxiliary_columns=self.drop_auxiliary_columns,
+        )
+
+    def _clone_warm(
+        self, df: DataFrame, *, trim: bool = False, **overrides: Any
+    ) -> "TimeSeries":
+        """A fresh instance with this one's fit settings, warmed from `df`.
+
+        `overrides` replace individual settings, e.g. `static_features`. The
+        default `trim=False` keeps the full history `df` provides.
+        """
+        out = self._clone_cold()
+        out.history_warmup(df, **{**self._fit_settings(), **overrides}, trim=trim)
+        return out
 
     def _update_y(self, new: np.ndarray) -> None:
         """Appends the elements of `new` to every time serie.
@@ -2035,7 +2212,7 @@ class TimeSeries:
             )
 
         # Determine horizons to predict based on _horizons (sparse) or all up to horizon
-        internal_horizons = getattr(self, "_horizons", None)
+        internal_horizons = self._horizons
 
         # Check if horizons are sparse (not a contiguous range from 0)
         full_range = list(range(self.max_horizon))
@@ -2437,9 +2614,17 @@ class TimeSeries:
                 else:
                     df = tfm.update(df)
                 values = df[self.target_col].to_numpy()
+        # the outer join above can make the sizes float, which the offset
+        # arithmetic in _advance_lag_transform_states needs as integers
+        appended_counts = sizes["counts"].to_numpy().astype(np.int64)
+        new_groups_mask = new_groups.to_numpy()
+        prev_ga = self.ga
         self.ga = self.ga.append_several(
-            new_sizes=sizes["counts"].to_numpy().astype(np.int32),
+            new_sizes=appended_counts.astype(np.int32),
             new_values=values,
-            new_groups=new_groups.to_numpy(),
+            new_groups=new_groups_mask,
+        )
+        self._advance_lag_transform_states(
+            prev_ga, appended_counts, values, new_groups_mask
         )
         self._update_pooled_states(df, sizes, values)
