@@ -330,21 +330,3 @@ Type | Description
 from_cv(cv)
 ```
 
-Create a forecaster from a fitted `LightGBMCV`.
-
-The forecaster uses the same features and `params` as the CV object, with the number of estimators set to its best iteration
-and the same `categorical_feature`, which `fit` uses unless `models_fit_kwargs` provides one for the model.
-Feature names in `categorical_feature` need the features as a DataFrame, so they can't be combined with `as_numpy=True`.
-
-**Parameters:**
-
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`cv` | <code>[LightGBMCV](#mlforecast.lgb_cv.LightGBMCV)</code> | Fitted CV object. | *required*
-
-**Returns:**
-
-Name | Type | Description
----- | ---- | -----------
-`MLForecast` | <code>[MLForecast](#mlforecast.forecast.MLForecast)</code> | Forecaster with a single `LGBMRegressor` model, named 'LGBMRegressor'.
-
