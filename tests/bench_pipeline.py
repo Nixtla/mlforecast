@@ -26,13 +26,15 @@ class SeasonalNaive(BaseEstimator):
         return X["lag7"]
 
 
+N_STATIC = 10
+
+
 def _panel(min_length, max_length, n_series=1_000):
-    n_static = 10
     return generate_daily_series(
         n_series=n_series,
         min_length=min_length,
         max_length=max_length,
-        n_static_features=n_static,
+        n_static_features=N_STATIC,
         static_as_categorical=False,
         equal_ends=True,
     )
@@ -110,8 +112,8 @@ def short_history_fcst():
 
 
 @pytest.fixture
-def statics(series):
-    return series.columns.drop(["unique_id", "ds", "y"]).tolist()
+def statics():
+    return [f"static_{i}" for i in range(N_STATIC)]
 
 
 @pytest.fixture
