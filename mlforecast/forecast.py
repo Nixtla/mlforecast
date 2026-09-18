@@ -227,6 +227,7 @@ class MLForecast:
 
         The forecaster uses the same features and `params` as the CV object, with the number of estimators set to its best iteration
         and the same `categorical_feature`, which `fit` uses unless `models_fit_kwargs` provides one for the model.
+        Feature names in `categorical_feature` need the features as a DataFrame, so they can't be combined with `as_numpy=True`.
 
         Args:
             cv (LightGBMCV): Fitted CV object.
@@ -239,7 +240,9 @@ class MLForecast:
         from mlforecast.lgb_cv import _LGBMRegressor
 
         model = _LGBMRegressor(**{**cv.params, "n_estimators": cv.best_iteration_})
-        model.categorical_feature = cv.categorical_feature
+        model.categorical_feature = copy.copy(
+            getattr(cv, "categorical_feature", "auto")
+        )
         return cls._from_ts(copy.deepcopy(cv.ts), models={"LGBMRegressor": model})
 
     @classmethod

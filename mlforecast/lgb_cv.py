@@ -117,6 +117,16 @@ def _update_and_predict(
 
 
 CVResult = Tuple[int, float]
+CategoricalFeature = Union[List[str], List[int], Literal["auto"]]
+_CATEGORICAL_FEATURE_ALIASES = frozenset(
+    [
+        "categorical_feature",
+        "categorical_features",
+        "cat_feature",
+        "categorical_column",
+        "cat_column",
+    ]
+)
 
 
 class _LGBMRegressor(lgb.LGBMRegressor):
@@ -125,11 +135,11 @@ class _LGBMRegressor(lgb.LGBMRegressor):
     It's kept out of `get_params` because LightGBM forwards those to the booster, where it isn't a valid parameter.
     """
 
-    categorical_feature: Union[List[str], List[int], Literal["auto"]] = "auto"
+    categorical_feature: CategoricalFeature = "auto"
 
     def __sklearn_clone__(self) -> "_LGBMRegressor":
         new = super().__sklearn_clone__()
-        new.categorical_feature = self.categorical_feature
+        new.categorical_feature = copy.copy(self.categorical_feature)
         return new
 
     def set_params(self, **params: Any) -> "_LGBMRegressor":
@@ -138,9 +148,19 @@ class _LGBMRegressor(lgb.LGBMRegressor):
         )
         return super().set_params(**params)
 
-    def fit(self, X, y, *args, **kwargs):
-        kwargs.setdefault("categorical_feature", self.categorical_feature)
-        return super().fit(X, y, *args, **kwargs)
+    def fit(
+        self,
+        X,
+        y,
+        *args,
+        categorical_feature: Optional[CategoricalFeature] = None,
+        **kwargs,
+    ):
+        if categorical_feature is None:
+            categorical_feature = self.categorical_feature
+        return super().fit(
+            X, y, *args, categorical_feature=categorical_feature, **kwargs
+        )
 
 
 class LightGBMCV:
@@ -209,7 +229,7 @@ class LightGBMCV:
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
-        categorical_feature: Union[List[str], List[int], Literal["auto"]] = "auto",
+        categorical_feature: CategoricalFeature = "auto",
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -262,6 +282,11 @@ class LightGBMCV:
         self.time_col = time_col
         self.target_col = target_col
         self.params = {} if params is None else params
+        ignored = sorted(_CATEGORICAL_FEATURE_ALIASES.intersection(self.params))
+        if ignored:
+            warnings.warn(
+                f"{ignored} in `params` is ignored, use the `categorical_feature` argument instead."
+            )
         self.categorical_feature = categorical_feature
         splits = backtest_splits(
             df,
@@ -293,9 +318,7 @@ class LightGBMCV:
             else:
                 current_weights = None
             ds = lgb.Dataset(
-                prep.drop(
-                    columns=[id_col, time_col, target_col, weight_col], errors="ignore"
-                ),
+                prep[ts.features_order_],
                 prep[target_col],
                 weight=current_weights,
                 categorical_feature=categorical_feature,
@@ -466,7 +489,7 @@ class LightGBMCV:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
-        categorical_feature: Union[List[str], List[int], Literal["auto"]] = "auto",
+        categorical_feature: CategoricalFeature = "auto",
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
