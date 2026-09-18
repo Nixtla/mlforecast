@@ -28,7 +28,7 @@ Name | Type | Description | Default
 #### `LightGBMCV.fit`
 
 ```python
-fit(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, num_iterations=100, params=None, static_features=None, dropna=True, keep_last_n=None, eval_every=10, weights=None, metric='mape', verbose_eval=True, early_stopping_evals=2, early_stopping_pct=0.01, compute_cv_preds=False, before_predict_callback=None, after_predict_callback=None, input_size=None, weight_col=None)
+fit(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, num_iterations=100, params=None, static_features=None, dropna=True, keep_last_n=None, eval_every=10, weights=None, metric='mape', verbose_eval=True, early_stopping_evals=2, early_stopping_pct=0.01, compute_cv_preds=False, before_predict_callback=None, after_predict_callback=None, input_size=None, weight_col=None, categorical_feature='auto')
 ```
 
 Train boosters simultaneously and assess their performance on the complete forecasting window.
@@ -59,6 +59,8 @@ Name | Type | Description | Default
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
+`weight_col` | <code>[str](#str)</code> | Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation. | <code>None</code>
+`categorical_feature` | <code>list of str or int</code> | Names or positions of the features that LightGBM should treat as categorical, e.g. date features like 'hour'. 'auto' marks only the pandas categorical columns; a list replaces that detection, so include any categorical static features in it. Defaults to 'auto'. | <code>'auto'</code>
 
 **Returns:**
 
@@ -92,7 +94,7 @@ Type | Description
 #### `LightGBMCV.setup`
 
 ```python
-setup(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, params=None, static_features=None, dropna=True, keep_last_n=None, weights=None, metric='mape', input_size=None, weight_col=None)
+setup(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, params=None, static_features=None, dropna=True, keep_last_n=None, weights=None, metric='mape', input_size=None, weight_col=None, categorical_feature='auto')
 ```
 
 Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
@@ -116,6 +118,7 @@ Name | Type | Description | Default
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `weight_col` | <code>[str](#str)</code> | Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation. | <code>None</code>
+`categorical_feature` | <code>list of str or int</code> | Names or positions of the features that LightGBM should treat as categorical, e.g. date features like 'hour'. 'auto' marks only the pandas categorical columns; a list replaces that detection, so include any categorical static features in it. Defaults to 'auto'. | <code>'auto'</code>
 
 **Returns:**
 
