@@ -688,7 +688,7 @@ class TimeSeries:
             # self.ga already holds the appended values
             sub = self.ga.take(np.flatnonzero(fresh))
             primed = copy.deepcopy(core)
-            primed.transform(CoreGroupedArray(sub.data, sub.indptr.astype(np.int32)))
+            primed.transform(CoreGroupedArray(sub.data, sub.indptr))
             core.stats_[fresh] = primed.stats_
 
     def _check_aligned_ends(self) -> None:
@@ -1211,8 +1211,7 @@ class TimeSeries:
             if isinstance(df, pd.DataFrame):
                 # all kinds of trickery to make this fast
                 unique_dates = pd.Index(unique_dates)
-                date2pos = {date: i for i, date in enumerate(unique_dates)}
-                restore_idxs = df[self.time_col].map(date2pos)
+                restore_idxs = unique_dates.get_indexer(df[self.time_col])
                 for feature in date_features:
                     for feat_name, feat_vals in self._compute_date_feature(
                         unique_dates, feature
@@ -1681,6 +1680,10 @@ class TimeSeries:
         if isinstance(self.uids, pl_Series):
             idxs = np.repeat(np.arange(len(self.uids)), h)
             return self.uids.gather(idxs).sort()
+        if pd.api.types.is_extension_array_dtype(self.uids.dtype):
+            # repeating the index keeps the extension array, going through numpy
+            # rebuilds it from objects. numpy is faster for object and int ids
+            return pd.Series(self.uids.repeat(h), name=self.id_col)
         repeated = np.repeat(np.asarray(self.uids), h)
         return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
 
