@@ -1211,8 +1211,7 @@ class TimeSeries:
             if isinstance(df, pd.DataFrame):
                 # all kinds of trickery to make this fast
                 unique_dates = pd.Index(unique_dates)
-                date2pos = {date: i for i, date in enumerate(unique_dates)}
-                restore_idxs = df[self.time_col].map(date2pos)
+                restore_idxs = unique_dates.get_indexer(df[self.time_col])
                 for feature in date_features:
                     for feat_name, feat_vals in self._compute_date_feature(
                         unique_dates, feature
@@ -1681,6 +1680,9 @@ class TimeSeries:
         if isinstance(self.uids, pl_Series):
             idxs = np.repeat(np.arange(len(self.uids)), h)
             return self.uids.gather(idxs).sort()
+        if isinstance(self.uids, pd.CategoricalIndex):
+            # repeating the index repeats the codes, going through numpy re-factorizes
+            return pd.Series(self.uids.repeat(h), name=self.id_col)
         repeated = np.repeat(np.asarray(self.uids), h)
         return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
 
