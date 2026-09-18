@@ -688,7 +688,7 @@ class TimeSeries:
             # self.ga already holds the appended values
             sub = self.ga.take(np.flatnonzero(fresh))
             primed = copy.deepcopy(core)
-            primed.transform(CoreGroupedArray(sub.data, sub.indptr.astype(np.int32)))
+            primed.transform(CoreGroupedArray(sub.data, sub.indptr))
             core.stats_[fresh] = primed.stats_
 
     def _check_aligned_ends(self) -> None:

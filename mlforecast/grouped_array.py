@@ -68,7 +68,7 @@ def _sizes_to_indptr(sizes: np.ndarray, dtype: np.dtype) -> np.ndarray:
 def _gather_idxs(starts: np.ndarray, sizes: np.ndarray) -> np.ndarray:
     """Positions of the elements of the groups that start at `starts` and have `sizes` elements.
 
-    They're ordered by group, so this maps a contiguous layout of the groups to a ragged one."""
+    They're ordered by group, so indexing with them lays the groups out contiguously."""
     ends = np.cumsum(sizes)
     total = int(ends[-1]) if ends.size else 0
     return np.repeat(starts - (ends - sizes), sizes) + np.arange(
@@ -114,6 +114,8 @@ class GroupedArray:
 
     def take(self, idxs: np.ndarray) -> "GroupedArray":
         idxs = np.asarray(idxs)
+        if (idxs < 0).any():
+            raise IndexError("negative group indices are not supported")
         starts = self.indptr[idxs]
         sizes = self.indptr[idxs + 1] - starts
         indptr = _sizes_to_indptr(sizes, self.indptr.dtype)
@@ -218,8 +220,10 @@ class GroupedArray:
 
     def take_from_groups(self, idx: Union[int, slice]) -> "GroupedArray":
         """Takes `idx` from each group in the array."""
-        if isinstance(idx, slice) and idx.step in (None, 1):
-            group_sizes = np.diff(self.indptr)
+        group_sizes = np.diff(self.indptr)
+        if isinstance(idx, slice):
+            if idx.step not in (None, 1):
+                raise NotImplementedError("stepped slices are not supported")
             starts = _clip_slice_bound(
                 idx.start, group_sizes, np.zeros_like(group_sizes)
             )
@@ -227,13 +231,11 @@ class GroupedArray:
             sizes = np.maximum(stops - starts, 0)
             data = self.data[_gather_idxs(self.indptr[:-1] + starts, sizes)]
         else:
-            ranges = [
-                range(self.indptr[i], self.indptr[i + 1])[idx]
-                for i in range(self.n_groups)
-            ]
-            items = [self.data[rng] for rng in ranges]
-            sizes = np.array([item.size for item in items])
-            data = np.hstack(items)
+            positions = np.where(idx < 0, group_sizes + idx, idx)
+            if ((positions < 0) | (positions >= group_sizes)).any():
+                raise IndexError(f"index {idx} is out of range for some groups")
+            data = self.data[self.indptr[:-1] + positions]
+            sizes = np.ones_like(group_sizes)
         return GroupedArray(data, _sizes_to_indptr(sizes, self.indptr.dtype))
 
     def append(self, new_data: np.ndarray) -> "GroupedArray":
