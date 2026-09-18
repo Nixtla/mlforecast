@@ -1,9 +1,12 @@
+import pickle
 import random
 import numpy as np
 
 import pytest
+from sklearn.base import clone
 from datasetsforecast.m4 import M4, M4Info
 
+from mlforecast import MLForecast
 from mlforecast.lag_transforms import SeasonalRollingMean
 from mlforecast.lgb_cv import LightGBMCV
 from mlforecast.target_transforms import Differences
@@ -189,3 +192,41 @@ def test_lightgbmcv_num_threads_minus_one():
     assert lgb_cv_single.best_iteration_ is not None
     # With same seed, best_iteration should be the same
     assert lgb_cv_multi.best_iteration_ == lgb_cv_single.best_iteration_
+
+
+def test_lightgbmcv_categorical_feature(tmp_path):
+    series = generate_daily_series(5, min_length=50, max_length=100, equal_ends=True)
+    fit_kwargs = dict(n_windows=2, h=7, params={"verbosity": -1}, verbose_eval=False)
+
+    def categories(bst):
+        return bst.dump_model()["feature_infos"]["dayofweek"]["values"]
+
+    cv = LightGBMCV(freq="D", lags=[7], date_features=["dayofweek"])
+    cv.fit(series, **fit_kwargs)
+    assert all(categories(bst) == [] for bst in cv.cv_models_.values())
+
+    cv.fit(series, **fit_kwargs, categorical_feature=["dayofweek"])
+    assert all(len(categories(bst)) > 0 for bst in cv.cv_models_.values())
+    assert cv.predict(7).shape[0] == 5 * 7
+
+    # from_cv carries categorical_feature over, models_fit_kwargs overrides it
+    fcst = MLForecast.from_cv(cv)
+    model = fcst.models["LGBMRegressor"]
+    assert "categorical_feature" not in model.get_params()
+    assert clone(model).categorical_feature == ["dayofweek"]
+    fcst.fit(series)
+    assert len(categories(fcst.models_["LGBMRegressor"].booster_)) > 0
+    assert fcst.models_["LGBMRegressor"].n_estimators == cv.best_iteration_
+    fcst = pickle.loads(pickle.dumps(fcst))
+    assert fcst.predict(7).shape[0] == 5 * 7
+    fcst.save(tmp_path)
+    fcst = MLForecast.load(tmp_path)
+    fcst.fit(series)
+    assert len(categories(fcst.models_["LGBMRegressor"].booster_)) > 0
+    fcst.fit(
+        series, models_fit_kwargs={"LGBMRegressor": {"categorical_feature": "auto"}}
+    )
+    assert categories(fcst.models_["LGBMRegressor"].booster_) == []
+
+    with pytest.raises(TypeError, match="unknown name"):
+        cv.fit(series, **fit_kwargs, categorical_feature=["not_a_feature"])

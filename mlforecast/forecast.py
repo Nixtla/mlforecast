@@ -223,12 +223,24 @@ class MLForecast:
 
     @classmethod
     def from_cv(cls, cv: "LightGBMCV") -> "MLForecast":
+        """Create a forecaster from a fitted `LightGBMCV`.
+
+        The forecaster uses the same features and `params` as the CV object, with the number of estimators set to its best iteration
+        and the same `categorical_feature`, which `fit` uses unless `models_fit_kwargs` provides one for the model.
+
+        Args:
+            cv (LightGBMCV): Fitted CV object.
+
+        Returns:
+            MLForecast: Forecaster with a single `LGBMRegressor` model, named 'LGBMRegressor'.
+        """
         if not hasattr(cv, "best_iteration_"):
             raise ValueError("LightGBMCV object must be fitted first.")
-        import lightgbm as lgb
+        from mlforecast.lgb_cv import _LGBMRegressor
 
-        model = lgb.LGBMRegressor(**{**cv.params, "n_estimators": cv.best_iteration_})
-        return cls._from_ts(copy.deepcopy(cv.ts), models=model)
+        model = _LGBMRegressor(**{**cv.params, "n_estimators": cv.best_iteration_})
+        model.categorical_feature = cv.categorical_feature
+        return cls._from_ts(copy.deepcopy(cv.ts), models={"LGBMRegressor": model})
 
     @classmethod
     def _from_ts(
