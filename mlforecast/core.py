@@ -1680,8 +1680,9 @@ class TimeSeries:
         if isinstance(self.uids, pl_Series):
             idxs = np.repeat(np.arange(len(self.uids)), h)
             return self.uids.gather(idxs).sort()
-        if isinstance(self.uids, pd.CategoricalIndex):
-            # repeating the index repeats the codes, going through numpy re-factorizes
+        if pd.api.types.is_extension_array_dtype(self.uids.dtype):
+            # repeating the index keeps the extension array, going through numpy
+            # rebuilds it from objects. numpy is faster for object and int ids
             return pd.Series(self.uids.repeat(h), name=self.id_col)
         repeated = np.repeat(np.asarray(self.uids), h)
         return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
