@@ -25,7 +25,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
@@ -113,10 +113,53 @@ class _BaseLagTransform(BaseEstimator):
             not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         }
 
+    def _init_pooled_scope(
+        self,
+        global_: bool,
+        groupby: Optional[Sequence[str]],
+        partition_by: Optional[Sequence[str]],
+        time_agg: Optional[str],
+        kwargs: Dict[str, Any],
+        *,
+        allow_none: bool = True,
+        scope_exempt: Sequence[str] = (),
+        min_samples: Optional[int] = None,
+    ) -> None:
+        """Set the bucket scope from a constructor's arguments.
+
+        ``kwargs`` is the constructor's catch-all: it may carry the legacy
+        ``global=`` spelling and nothing else. ``allow_none`` and
+        ``scope_exempt`` are `_validate_time_agg`'s policy, and ``min_samples``
+        is given by the transforms that have one, to warn when it is 0 under a
+        pooled scope.
+        """
+        if "global" in kwargs:
+            global_ = kwargs.pop("global")
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+        self.global_ = global_
+        self.groupby = _normalize_columns(groupby)
+        self.partition_by = _normalize_columns(partition_by)
+        self.time_agg = time_agg
+        if self.global_ and self.groupby:
+            raise ValueError("`global_` and `groupby` can't be used together.")
+        _validate_time_agg(
+            time_agg,
+            self.global_,
+            self.groupby,
+            allow_none=allow_none,
+            scope_exempt=scope_exempt,
+        )
+        if min_samples == 0 and self._is_pooled:
+            warnings.warn(
+                "min_samples=0 with pooled transforms (global_/groupby/partition_by) "
+                "produces NaN for timestamps with no observations in the window.",
+                stacklevel=3,
+            )
+
     def _set_core_tfm(self, lag: int) -> "_BaseLagTransform":
         init_args = {k: getattr(self, k) for k in self._get_init_signature()}
         init_args.pop("global_", None)
-        init_args.pop("global", None)
         init_args.pop("groupby", None)
         init_args.pop("partition_by", None)
         init_args.pop("time_agg", None)
@@ -136,15 +179,13 @@ class _BaseLagTransform(BaseEstimator):
     def _get_name(self, lag: int) -> str:
         init_params = self._get_init_signature()
         prefix = ""
-        groupby = getattr(self, "groupby", None)
-        partition_by = getattr(self, "partition_by", None)
-        if getattr(self, "global_", False):
+        if self.global_:
             prefix = "global_"
-        elif groupby:
-            group_str = "__".join(groupby)
+        elif self.groupby:
+            group_str = "__".join(self.groupby)
             prefix = f"groupby_{group_str}_"
-        if partition_by:
-            part_str = "__".join(partition_by)
+        if self.partition_by:
+            part_str = "__".join(self.partition_by)
             prefix += f"partby_{part_str}_"
         result = f"{prefix}{_pascal2camel(self.__class__.__name__)}_lag{lag}"
         changed_params = [
@@ -407,33 +448,11 @@ class _RollingBase(_BaseLagTransform):
                 identity). Defaults to None, which treats each row as an individual
                 pooled sample.
         """
-        if "global" in kwargs:
-            global_ = kwargs.pop("global")
-        if "groupby" in kwargs:
-            groupby = kwargs.pop("groupby")
-        if "partition_by" in kwargs:
-            partition_by = kwargs.pop("partition_by")
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.window_size = window_size
         self.min_samples = min_samples
-        self.global_ = global_
-        self.groupby = _normalize_columns(groupby)
-        self.partition_by = _normalize_columns(partition_by)
-        self.time_agg = time_agg
-        if self.global_ and self.groupby:
-            raise ValueError("`global_` and `groupby` can't be used together.")
-        _validate_time_agg(time_agg, self.global_, self.groupby)
-        if (
-            min_samples is not None
-            and min_samples == 0
-            and (self.global_ or self.groupby or self.partition_by)
-        ):
-            warnings.warn(
-                "min_samples=0 with pooled transforms (global_/groupby/partition_by) "
-                "produces NaN for timestamps with no observations in the window.",
-                stacklevel=2,
-            )
+        self._init_pooled_scope(
+            global_, groupby, partition_by, time_agg, kwargs, min_samples=min_samples
+        )
 
     @property
     def update_samples(self) -> int:
@@ -490,15 +509,6 @@ class RollingQuantile(_RollingBase):
             **kwargs,
         )
         self.p = p
-
-    def _set_core_tfm(self, lag: int):
-        self._core_tfm = core_tfms.RollingQuantile(
-            lag=lag,
-            p=self.p,
-            window_size=self.window_size,
-            min_samples=self.min_samples,
-        )
-        return self
 
 
 class _Seasonal_RollingBase(_BaseLagTransform):
@@ -557,34 +567,12 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires
                 ``global_`` or ``groupby``. Defaults to None.
         """
-        if "global" in kwargs:
-            global_ = kwargs.pop("global")
-        if "groupby" in kwargs:
-            groupby = kwargs.pop("groupby")
-        if "partition_by" in kwargs:
-            partition_by = kwargs.pop("partition_by")
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.season_length = season_length
         self.window_size = window_size
         self.min_samples = min_samples
-        self.global_ = global_
-        self.groupby = _normalize_columns(groupby)
-        self.partition_by = _normalize_columns(partition_by)
-        self.time_agg = time_agg
-        if self.global_ and self.groupby:
-            raise ValueError("`global_` and `groupby` can't be used together.")
-        _validate_time_agg(time_agg, self.global_, self.groupby)
-        if (
-            min_samples is not None
-            and min_samples == 0
-            and (self.global_ or self.groupby or self.partition_by)
-        ):
-            warnings.warn(
-                "min_samples=0 with pooled transforms (global_/groupby/partition_by) "
-                "produces NaN for timestamps with no observations in the window.",
-                stacklevel=2,
-            )
+        self._init_pooled_scope(
+            global_, groupby, partition_by, time_agg, kwargs, min_samples=min_samples
+        )
 
     @property
     def update_samples(self) -> int:
@@ -674,21 +662,7 @@ class _ExpandingBase(_BaseLagTransform):
         time_agg: Optional[str] = None,
         **kwargs,
     ):
-        if "global" in kwargs:
-            global_ = kwargs.pop("global")
-        if "groupby" in kwargs:
-            groupby = kwargs.pop("groupby")
-        if "partition_by" in kwargs:
-            partition_by = kwargs.pop("partition_by")
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
-        self.global_ = global_
-        self.groupby = _normalize_columns(groupby)
-        self.partition_by = _normalize_columns(partition_by)
-        self.time_agg = time_agg
-        if self.global_ and self.groupby:
-            raise ValueError("`global_` and `groupby` can't be used together.")
-        _validate_time_agg(time_agg, self.global_, self.groupby)
+        self._init_pooled_scope(global_, groupby, partition_by, time_agg, kwargs)
 
     @property
     def update_samples(self) -> int:
@@ -791,25 +765,13 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         time_agg: str = "mean",
         **kwargs,
     ):
-        if "global" in kwargs:
-            global_ = kwargs.pop("global")
-        if "groupby" in kwargs:
-            groupby = kwargs.pop("groupby")
-        if "partition_by" in kwargs:
-            partition_by = kwargs.pop("partition_by")
-        if kwargs:
-            raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
         self.alpha = alpha
-        self.global_ = global_
-        self.groupby = _normalize_columns(groupby)
-        self.partition_by = _normalize_columns(partition_by)
-        self.time_agg = time_agg
-        if self.global_ and self.groupby:
-            raise ValueError("`global_` and `groupby` can't be used together.")
-        _validate_time_agg(
+        self._init_pooled_scope(
+            global_,
+            groupby,
+            partition_by,
             time_agg,
-            self.global_,
-            self.groupby,
+            kwargs,
             allow_none=False,
             scope_exempt=("mean",),
         )
@@ -847,9 +809,9 @@ class Offset(_BaseLagTransform):
     def __init__(self, tfm: _BaseLagTransform, n: int):
         self.tfm = tfm
         self.n = n
-        self.global_ = getattr(tfm, "global_", False)
-        self.groupby = getattr(tfm, "groupby", None)
-        self.partition_by = getattr(tfm, "partition_by", None)
+        self.global_ = tfm.global_
+        self.groupby = tfm.groupby
+        self.partition_by = tfm.partition_by
         # time_agg is intentionally not mirrored (unlike the mode attributes
         # above, nothing reads it on the wrapper): the delegated hooks apply
         # the inner transform's own re-aggregation.
@@ -907,27 +869,23 @@ class Combine(_BaseLagTransform):
         self.tfm1 = tfm1
         self.tfm2 = tfm2
         self.operator = operator
-        global_1 = getattr(tfm1, "global_", False)
-        global_2 = getattr(tfm2, "global_", False)
-        groupby_1 = getattr(tfm1, "groupby", None)
-        groupby_2 = getattr(tfm2, "groupby", None)
-        if global_1 != global_2:
+        if tfm1.global_ != tfm2.global_:
             raise ValueError(
                 "Can't combine transforms with different global_ settings."
             )
-        if (groupby_1 or groupby_2) and groupby_1 != groupby_2:
+        if (tfm1.groupby or tfm2.groupby) and tfm1.groupby != tfm2.groupby:
             raise ValueError(
                 "Can't combine transforms with different groupby settings."
             )
-        self.global_ = global_1
-        self.groupby = groupby_1
-        partition_by_1 = getattr(tfm1, "partition_by", None)
-        partition_by_2 = getattr(tfm2, "partition_by", None)
-        if (partition_by_1 or partition_by_2) and partition_by_1 != partition_by_2:
+        self.global_ = tfm1.global_
+        self.groupby = tfm1.groupby
+        if (
+            tfm1.partition_by or tfm2.partition_by
+        ) and tfm1.partition_by != tfm2.partition_by:
             raise ValueError(
                 "Can't combine transforms with different partition_by settings."
             )
-        self.partition_by = partition_by_1
+        self.partition_by = tfm1.partition_by
         # time_agg needs no reconciliation: it doesn't affect the pooled mode key,
         # and each inner transform applies its own re-aggregation at hook entry, so
         # mixing (e.g. rolling mean of sums / rolling mean of means) is intentional.

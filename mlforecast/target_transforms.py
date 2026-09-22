@@ -14,7 +14,7 @@ __all__ = [
 
 import abc
 import copy
-from typing import Iterable, List, Optional, Sequence, TypeVar
+from typing import Iterable, List, Optional, Sequence, Tuple, TypeVar
 
 import coreforecast.scalers as core_scalers
 import numpy as np
@@ -116,10 +116,34 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
         return out
 
 
-class Differences(_BaseGroupedArrayTargetTransform):
-    """Subtracts previous values of the serie. Can be used to remove trend or seasonalities."""
+class _BaseDifferences(_BaseGroupedArrayTargetTransform):
+    """Differencing transform that can keep what each step differenced away.
+
+    Under ``store_fitted`` the input of every differencing step is kept in
+    ``fitted_`` with its offsets in ``fitted_indptr_``, which is what
+    ``inverse_transform_fitted`` adds back.
+    """
 
     store_fitted = False
+    fitted_: List[np.ndarray]
+    fitted_indptr_: Optional[np.ndarray]
+
+    def _take_fitted(
+        self, idxs: np.ndarray
+    ) -> Tuple[List[np.ndarray], Optional[np.ndarray]]:
+        """The stored fitted values of the series ``idxs``, with their offsets."""
+        if self.fitted_indptr_ is None:
+            return [], None
+        indptr = np.append(0, np.diff(self.fitted_indptr_)[idxs].cumsum())
+        fitted = [
+            GroupedArray(arr, self.fitted_indptr_).take(idxs).data
+            for arr in self.fitted_
+        ]
+        return fitted, indptr
+
+
+class Differences(_BaseDifferences):
+    """Subtracts previous values of the serie. Can be used to remove trend or seasonalities."""
 
     def __init__(self, differences: Iterable[int]):
         self.differences = list(differences)
@@ -130,8 +154,8 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return out
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        self.fitted_: List[np.ndarray] = []
-        self.fitted_indptr_: Optional[np.ndarray] = None
+        self.fitted_ = []
+        self.fitted_indptr_ = None
         original_sizes = np.diff(ga.indptr)
         total_diffs = sum(self.differences)
         small_series = original_sizes < total_diffs
@@ -180,21 +204,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
 
     def take(self, idxs: np.ndarray) -> "Differences":
         out = self.clone()
-        if self.fitted_indptr_ is None:
-            out.fitted_ = []
-            out.fitted_indptr_ = None
-        else:
-            out.fitted_ = [
-                np.hstack(
-                    [
-                        data[self.fitted_indptr_[i] : self.fitted_indptr_[i + 1]]
-                        for i in idxs
-                    ]
-                )
-                for data in self.fitted_
-            ]
-            sizes = np.diff(self.fitted_indptr_)[idxs]
-            out.fitted_indptr_ = np.append(0, sizes.cumsum())
+        out.fitted_, out.fitted_indptr_ = self._take_fitted(idxs)
         out.scalers_ = [scaler.take(idxs) for scaler in self.scalers_]
         return out
 
@@ -219,14 +229,12 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return out
 
 
-class AutoDifferences(_BaseGroupedArrayTargetTransform):
+class AutoDifferences(_BaseDifferences):
     """Find and apply the optimal number of differences to each serie.
 
     Args:
         max_diffs (int): Maximum number of differences to apply.
     """
-
-    store_fitted = False
 
     def __init__(self, max_diffs: int):
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
@@ -265,8 +273,8 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         transformed = self.scaler_.fit_transform(core_ga)
-        self.fitted_: List[np.ndarray] = []
-        self.fitted_indptr_: Optional[np.ndarray] = None
+        self.fitted_ = []
+        self.fitted_indptr_ = None
         if self.store_fitted:
             self.fitted_indptr_ = core_ga.indptr.copy()
             fitted = core_ga.data.copy()
@@ -329,21 +337,7 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
     def take(self, idxs: np.ndarray) -> "AutoDifferences":
         out = self.clone()
         out.scaler_ = self.scaler_.take(idxs)
-        if self.fitted_indptr_ is None:
-            out.fitted_ = []
-            out.fitted_indptr_ = None
-        else:
-            out.fitted_ = [
-                np.hstack(
-                    [
-                        data[self.fitted_indptr_[i] : self.fitted_indptr_[i + 1]]
-                        for i in idxs
-                    ]
-                )
-                for data in self.fitted_
-            ]
-            sizes = np.diff(self.fitted_indptr_)[idxs]
-            out.fitted_indptr_ = np.append(0, sizes.cumsum())
+        out.fitted_, out.fitted_indptr_ = self._take_fitted(idxs)
         return out
 
 
@@ -395,7 +389,6 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
-        self.max_diffs = max_diffs
         self.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=max_season_length,
             max_diffs=max_diffs,
@@ -404,7 +397,6 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
     def _clone(self) -> "AutoSeasonalityAndDifferences":
         out = _bare_instance(self)
-        out.max_diffs = self.max_diffs
         out.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=self.scaler_.max_season_length,
             max_diffs=self.scaler_.max_diffs,
@@ -417,7 +409,8 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         # STL requires at least 2 periods of the detected seasonal period after differencing.
         # Since the minimum detectable period is 2, we need at least 4 observations after differencing.
         series_lengths = np.diff(ga.indptr)
-        min_required = self.max_diffs + 4
+        max_diffs = self.scaler_.max_diffs
+        min_required = max_diffs + 4
         short_series = series_lengths < min_required
 
         if short_series.any():
@@ -425,7 +418,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
             short_lengths = series_lengths[short_series]
             raise ValueError(
                 f"Insufficient data in {len(short_indices)} series for seasonality detection. "
-                f"With max_diffs={self.max_diffs}, each series requires at least {min_required} observations "
+                f"With max_diffs={max_diffs}, each series requires at least {min_required} observations "
                 f"to ensure STL decomposition can run (need 4+ observations after differencing). "
                 f"Found series with lengths: {short_lengths[:5].tolist()}"
                 f"{'...' if len(short_lengths) > 5 else ''}. "
