@@ -391,6 +391,42 @@ def test_forecast_fitted_values_positional_level_compat():
     pd.testing.assert_frame_equal(positional, keyword)
 
 
+def test_fit_without_fitted_drops_previous_in_sample_state():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[])
+    assert hasattr(fcst, "_fitted_train_df_")
+    fcst.forecast_fitted_values()
+
+    fcst.fit(df, fitted=False, static_features=[])
+    assert not hasattr(fcst, "_fitted_train_df_")
+    with pytest.raises(ValueError, match="fitted=True"):
+        fcst.forecast_fitted_values()
+
+
+def test_direct_fit_after_recursive_drops_cached_train_df():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[])
+    assert hasattr(fcst, "_fitted_train_df_")
+
+    fcst.fit(df, fitted=True, static_features=[], max_horizon=2)
+    # direct fitted values carry every horizon, nothing is computed on demand
+    assert not hasattr(fcst, "_fitted_train_df_")
+    fitted = fcst.forecast_fitted_values(h=2)
+    assert fitted["h"].eq(2).all()
+
+
+def test_cross_validation_drops_fold_in_sample_state():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.cross_validation(df, n_windows=2, h=3, fitted=True, static_features=[])
+    assert fcst.cross_validation_fitted_values()["fold"].nunique() == 2
+    assert not hasattr(fcst, "_fitted_train_df_")
+    with pytest.raises(ValueError, match="fitted=True"):
+        fcst.forecast_fitted_values()
+
+
 def test_new_df_argument(fitted_fcst, setup_forecast_data, predictions):
     """Test that predictions with new_df argument work correctly."""
     df, train, _ = setup_forecast_data

@@ -789,6 +789,14 @@ class TimeSeries:
             f"num_threads={self.num_threads})"
         )
 
+    def _set_store_fitted(self, flag: bool) -> None:
+        """Have the target transforms keep, or drop, what their fitted inverse needs."""
+        for tfm in self.target_transforms or []:
+            if hasattr(tfm, "store_fitted"):
+                tfm.store_fitted = flag
+            if not flag and hasattr(tfm, "fitted_"):
+                tfm.fitted_ = []
+
     def _fit(
         self,
         df: DataFrame,

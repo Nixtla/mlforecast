@@ -78,6 +78,27 @@ def _ensure_h_int64(res):
     return ufp.copy_if_pandas(res, deep=True)
 
 
+def _merge_window_preds(
+    valid: DFType,
+    preds: DFType,
+    cutoffs: DFType,
+    id_col: str,
+    time_col: str,
+    target_col: str,
+) -> DFType:
+    """Join a window's predictions to its actuals, sorted by id and time."""
+    preds = ufp.join(preds, cutoffs, on=id_col, how="left")
+    joined = ufp.join(
+        valid[[id_col, time_col, target_col]],
+        preds,
+        on=[id_col, time_col],
+    )
+    sort_idxs = ufp.maybe_compute_sort_indices(joined, id_col, time_col)
+    if sort_idxs is not None:
+        joined = ufp.take_rows(joined, sort_idxs)
+    return joined
+
+
 def _frozen_backtest(
     fcst: "MLForecast",
     new_df: DFType,
@@ -127,11 +148,8 @@ def _frozen_backtest(
     )
     for cutoffs, train, valid in splits:
         preds = fcst.predict(h=h, new_df=train)
-        preds = ufp.join(preds, cutoffs, on=id_col, how="left")
-        joined = ufp.join(
-            valid[[id_col, time_col, target_col]],
-            preds,
-            on=[id_col, time_col],
+        joined = _merge_window_preds(
+            valid, preds, cutoffs, id_col, time_col, target_col
         )
         expected_rows = h * len(nw.from_native(cutoffs))
         if len(nw.from_native(joined)) != expected_rows:
@@ -140,9 +158,6 @@ def _frozen_backtest(
                 "validation windows. This usually means some series in `new_df` "
                 "have gaps in their time index; please fill the gaps and retry."
             )
-        sort_idxs = ufp.maybe_compute_sort_indices(joined, id_col, time_col)
-        if sort_idxs is not None:
-            joined = ufp.take_rows(joined, sort_idxs)
         all_results.append(joined)
 
     return nw.to_native(nw.concat([nw.from_native(r) for r in all_results]))
@@ -830,6 +845,36 @@ class MLForecast:
         y = prep[targets].to_numpy()
         return X, y
 
+    def _fitted_values_from_prep(
+        self,
+        prep: DFType,
+        id_col: str,
+        time_col: str,
+        target_col: str,
+        weight_col: Optional[str],
+        as_numpy: bool,
+        original_df: DFType,
+    ) -> DFType:
+        """In-sample predictions of ``models_`` on a ``preprocess`` frame."""
+        direct = self.ts.max_horizon is not None
+        base = prep[[id_col, time_col]]
+        X, y = self._extract_X_y(prep, target_col, weight_col)
+        # direct models pick their exog columns by name, so X stays a frame
+        if as_numpy and not direct:
+            X = ufp.to_numpy(X)
+        fitted_values = self._compute_fitted_values(
+            base=base,
+            X=X,
+            y=y,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            max_horizon=self.ts.max_horizon,
+            weight_col=weight_col,
+            original_df=original_df if direct else None,
+        )
+        return ufp.drop_index_if_pandas(fitted_values)
+
     def _compute_fitted_values(
         self,
         base: DFType,
@@ -995,12 +1040,7 @@ class MLForecast:
             fitted_values = ufp.vertical_concat(
                 list(horizon_fitted_values.values()), match_categories=False
             )
-        if self.ts.target_transforms is not None:
-            for tfm in self.ts.target_transforms[::-1]:
-                if hasattr(tfm, "store_fitted"):
-                    tfm.store_fitted = False
-                if hasattr(tfm, "fitted_"):
-                    tfm.fitted_ = []
+        self.ts._set_store_fitted(False)
         return fitted_values
 
     def _compute_recursive_fitted_values_on_demand(
@@ -1176,10 +1216,9 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with series values and trained models.
         """
-        if fitted and self.ts.target_transforms is not None:
-            for tfm in self.ts.target_transforms:
-                if hasattr(tfm, "store_fitted"):
-                    tfm.store_fitted = True
+        self.__dict__.pop("fcst_fitted_values_", None)
+        self.__dict__.pop("_fitted_train_df_", None)
+        self.ts._set_store_fitted(fitted)
         self._cs_df = None
         self._cs_source_scales_ = None
         if prediction_intervals is not None:
@@ -1210,112 +1249,51 @@ class MLForecast:
                     target_col=target_col,
                     method=prediction_intervals.scale_estimator,
                 )
-        # When max_horizon or horizons is set, use generator factory approach
-        if max_horizon is not None or horizons is not None:
-            # Preprocess to get DataFrame with expanded targets
-            prep = self.preprocess(
-                df=df,
-                id_col=id_col,
-                time_col=time_col,
-                target_col=target_col,
-                static_features=static_features,
-                dropna=dropna,
-                keep_last_n=keep_last_n,
-                max_horizon=max_horizon,
-                horizons=horizons,
-                horizon_features=horizon_features,
-                horizon_feature_templates=horizon_feature_templates,
-                return_X_y=False,
-                as_numpy=as_numpy,
-                weight_col=weight_col,
-                validate_data=validate_data,
-            )
-
-            # Get the effective max horizon and internal horizons from preprocessing
-            effective_max_horizon = self.ts.max_horizon
+        direct = max_horizon is not None or horizons is not None
+        prep = self.preprocess(
+            df=df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            dropna=dropna,
+            keep_last_n=keep_last_n,
+            max_horizon=max_horizon,
+            horizons=horizons,
+            horizon_features=horizon_features,
+            horizon_feature_templates=horizon_feature_templates,
+            return_X_y=not fitted and not direct,
+            as_numpy=as_numpy,
+            weight_col=weight_col,
+            validate_data=validate_data,
+        )
+        if direct:
             internal_horizons = self.ts._horizons
 
-            # Store original df for exog lookup in generator
-            original_df = df
-
-            # Factory function - creates fresh generator for each model
             def generator_factory():
+                # one model per horizon, each seeing `df`'s exog shifted to it
                 return self.ts._transform_per_horizon(
-                    prep, original_df, internal_horizons, target_col, as_numpy
+                    prep, df, internal_horizons, target_col, as_numpy
                 )
 
-            # Train models using generator factory
             self.fit_models(
                 generator_factory=generator_factory, models_fit_kwargs=models_fit_kwargs
             )
-
-            if fitted:
-                assert not isinstance(
-                    prep, tuple
-                )  # return_X_y=False ensures prep is a DataFrame
-                base = prep[[id_col, time_col]]
-                X, y = self._extract_X_y(prep, target_col, weight_col)
-                # Keep X as DataFrame for exog alignment in _compute_fitted_values
-                # (don't convert to numpy even if as_numpy=True)
-                fitted_values = self._compute_fitted_values(
-                    base=base,
-                    X=X,
-                    y=y,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    max_horizon=effective_max_horizon,
-                    weight_col=self.ts.weight_col,
-                    original_df=original_df,
-                )
-                fitted_values = ufp.drop_index_if_pandas(fitted_values)
-                self.fcst_fitted_values_ = fitted_values
-                if hasattr(self, "_fitted_train_df_"):
-                    delattr(self, "_fitted_train_df_")
         else:
-            # Standard recursive path (unchanged)
-            prep = self.preprocess(
-                df=df,
-                id_col=id_col,
-                time_col=time_col,
-                target_col=target_col,
-                static_features=static_features,
-                dropna=dropna,
-                keep_last_n=keep_last_n,
-                max_horizon=max_horizon,
-                horizon_features=horizon_features,
-                horizon_feature_templates=horizon_feature_templates,
-                return_X_y=not fitted,
-                as_numpy=as_numpy,
-                weight_col=weight_col,
-                validate_data=validate_data,
-            )
             if isinstance(prep, tuple):
                 X, y = prep
             else:
-                base = prep[[id_col, time_col]]
                 X, y = self._extract_X_y(prep, target_col, weight_col)
                 if as_numpy:
                     X = ufp.to_numpy(X)
-                del prep
             self.fit_models(X, y, models_fit_kwargs)
-            if fitted:
-                fitted_values = self._compute_fitted_values(
-                    base=base,
-                    X=X,
-                    y=y,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    max_horizon=max_horizon,
-                    weight_col=self.ts.weight_col,
-                )
-                fitted_values = ufp.drop_index_if_pandas(fitted_values)
-                self.fcst_fitted_values_ = fitted_values
-                if cache_train_df:
-                    self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
-                elif hasattr(self, "_fitted_train_df_"):
-                    delattr(self, "_fitted_train_df_")
+        if fitted:
+            assert not isinstance(prep, tuple)
+            self.fcst_fitted_values_ = self._fitted_values_from_prep(
+                prep, id_col, time_col, target_col, weight_col, as_numpy, original_df=df
+            )
+            if cache_train_df and not direct:
+                self._fitted_train_df_ = ufp.copy_if_pandas(df, deep=True)
         return self
 
     def forecast_fitted_values(
@@ -1351,7 +1329,7 @@ class MLForecast:
               bounds of the prediction intervals for each model and confidence level.
         """
         if not hasattr(self, "fcst_fitted_values_"):
-            raise Exception("Please run the `fit` method using `fitted=True`")
+            raise ValueError("Please run the `fit` method using `fitted=True`")
         if not isinstance(h, int) or h < 1:
             raise ValueError("`h` must be a positive integer.")
         if not self.models_:
@@ -1913,10 +1891,7 @@ class MLForecast:
                         ufp.assign_columns(self.fcst_fitted_values_, "fold", i_window)
                     )
             if fitted and not should_fit:
-                if self.ts.target_transforms is not None:
-                    for tfm in self.ts.target_transforms:
-                        if hasattr(tfm, "store_fitted"):
-                            tfm.store_fitted = True
+                self.ts._set_store_fitted(True)
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
                         "ignore",
@@ -1940,22 +1915,14 @@ class MLForecast:
                         validate_data=False,
                     )
                 assert not isinstance(prep, tuple)
-                effective_max_horizon = self.ts.max_horizon
-                base = prep[[id_col, time_col]]
-                train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
-                if as_numpy:
-                    train_X = ufp.to_numpy(train_X)
-                del prep
-                fitted_values = self._compute_fitted_values(
-                    base=base,
-                    X=train_X,
-                    y=train_y,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    max_horizon=effective_max_horizon,
-                    weight_col=weight_col,
-                    original_df=train if effective_max_horizon is not None else None,
+                fitted_values = self._fitted_values_from_prep(
+                    prep,
+                    id_col,
+                    time_col,
+                    target_col,
+                    weight_col,
+                    as_numpy,
+                    original_df=train,
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
@@ -1979,15 +1946,9 @@ class MLForecast:
                 level=level,
                 X_df=X_df,
             )
-            y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
-            result = ufp.join(
-                valid[[id_col, time_col, target_col]],
-                y_pred,
-                on=[id_col, time_col],
+            result = _merge_window_preds(
+                valid, y_pred, cutoffs, id_col, time_col, target_col
             )
-            sort_idxs = ufp.maybe_compute_sort_indices(result, id_col, time_col)
-            if sort_idxs is not None:
-                result = ufp.take_rows(result, sort_idxs)
             # Calculate expected rows accounting for sparse horizons
             internal_horizons = self.ts._horizons
             full_range = (
@@ -2012,6 +1973,9 @@ class MLForecast:
                 )
             results.append(result)
         del self.models_
+        # every fold's fit stored its in-sample state on this instance
+        self.__dict__.pop("fcst_fitted_values_", None)
+        self.__dict__.pop("_fitted_train_df_", None)
         self.cv_models_ = cv_models
         self.cv_fitted_values_ = cv_fitted_values
         out = ufp.vertical_concat(results, match_categories=False)
