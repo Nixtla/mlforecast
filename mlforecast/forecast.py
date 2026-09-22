@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -61,6 +62,16 @@ from .conformal_prediction import (
 
 _get_conformal_method = get_conformal_method  # backward compat
 _get_transfer_method_spec = get_transfer_method_spec
+
+
+@contextmanager
+def _suppress_pooled_validation_warning() -> Iterator[None]:
+    """Silence the pooled-transform warning on sub-steps of a validated frame."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Pooled.*validate_data", category=UserWarning
+        )
+        yield
 
 
 def _ensure_h_int64(res):
@@ -734,6 +745,7 @@ class MLForecast:
         n_windows: int = 2,
         h: int = 1,
         as_numpy: bool = False,
+        weight_col: Optional[str] = None,
     ) -> DFType:
         """Compute conformity scores.
 
@@ -744,6 +756,8 @@ class MLForecast:
 
         In this simplest case, we assume the width of the interval
         is the same for all the forecasting horizon (`h=1`).
+
+        `df` was validated by the caller, so the sub-steps here take it as is.
         """
         min_size = ufp.counts_by_id(df, id_col)["counts"].min()
         min_samples = h * n_windows + 1
@@ -774,24 +788,28 @@ class MLForecast:
             horizon_feature_templates=horizon_feature_templates,
             prediction_intervals=None,
             as_numpy=as_numpy,
+            weight_col=weight_col,
+            validate_data=False,
         )
         # For weighted conformal methods, also store full model covariates so
         # that the DRE can use all lag/rolling/date/exogenous features.
         feature_cols = None
         _pi = self.prediction_intervals
         if _pi is not None and _pi.method.startswith("weighted_conformal"):
-            preprocessed_result = scratch.preprocess(
-                df,
-                id_col=id_col,
-                time_col=time_col,
-                target_col=target_col,
-                static_features=static_features,
-                dropna=dropna,
-                keep_last_n=keep_last_n,
-                validate_data=False,
-            )
+            with _suppress_pooled_validation_warning():
+                preprocessed_result = scratch.preprocess(
+                    df,
+                    id_col=id_col,
+                    time_col=time_col,
+                    target_col=target_col,
+                    static_features=static_features,
+                    dropna=dropna,
+                    keep_last_n=keep_last_n,
+                    weight_col=weight_col,
+                    validate_data=False,
+                )
             assert not isinstance(preprocessed_result, tuple)
-            non_feat = {id_col, time_col, target_col}
+            non_feat = {id_col, time_col, target_col, weight_col}
             feature_cols = [c for c in preprocessed_result.columns if c not in non_feat]
             feat_df = preprocessed_result[[id_col, time_col] + feature_cols]
             cv_results = ufp.join(
@@ -1216,6 +1234,7 @@ class MLForecast:
         Returns:
             MLForecast: Forecast object with series values and trained models.
         """
+        self._validate_data_or_warn(df, id_col, time_col, validate_data)
         self.__dict__.pop("fcst_fitted_values_", None)
         self.__dict__.pop("_fitted_train_df_", None)
         self.ts._set_store_fitted(fitted)
@@ -1238,6 +1257,7 @@ class MLForecast:
                 n_windows=prediction_intervals.n_windows,
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
+                weight_col=weight_col,
             )
             if prediction_intervals.scale_estimator is not None:
                 from .conformal_prediction import _compute_series_scales
@@ -1250,23 +1270,24 @@ class MLForecast:
                     method=prediction_intervals.scale_estimator,
                 )
         direct = max_horizon is not None or horizons is not None
-        prep = self.preprocess(
-            df=df,
-            id_col=id_col,
-            time_col=time_col,
-            target_col=target_col,
-            static_features=static_features,
-            dropna=dropna,
-            keep_last_n=keep_last_n,
-            max_horizon=max_horizon,
-            horizons=horizons,
-            horizon_features=horizon_features,
-            horizon_feature_templates=horizon_feature_templates,
-            return_X_y=not fitted and not direct,
-            as_numpy=as_numpy,
-            weight_col=weight_col,
-            validate_data=validate_data,
-        )
+        with _suppress_pooled_validation_warning():
+            prep = self.preprocess(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                static_features=static_features,
+                dropna=dropna,
+                keep_last_n=keep_last_n,
+                max_horizon=max_horizon,
+                horizons=horizons,
+                horizon_features=horizon_features,
+                horizon_feature_templates=horizon_feature_templates,
+                return_X_y=not fitted and not direct,
+                as_numpy=as_numpy,
+                weight_col=weight_col,
+                validate_data=False,
+            )
         if direct:
             internal_horizons = self.ts._horizons
 
@@ -1861,12 +1882,7 @@ class MLForecast:
         for i_window, (cutoffs, train, valid) in enumerate(splits):
             should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
             if should_fit:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pooled.*validate_data",
-                        category=UserWarning,
-                    )
+                with _suppress_pooled_validation_warning():
                     self.fit(
                         train,
                         id_col=id_col,
@@ -1892,12 +1908,7 @@ class MLForecast:
                     )
             if fitted and not should_fit:
                 self.ts._set_store_fitted(True)
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pooled.*validate_data",
-                        category=UserWarning,
-                    )
+                with _suppress_pooled_validation_warning():
                     prep = self.preprocess(
                         train,
                         id_col=id_col,
@@ -1926,25 +1937,13 @@ class MLForecast:
                 )
                 fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                 cv_fitted_values.append(fitted_values)
-            static = [c for c in self.ts.static_features_.columns if c != id_col]
-            dynamic = [
-                c
-                for c in valid.columns
-                if c not in static + [id_col, time_col, target_col]
-            ]
-            if dynamic:
-                X_df: Optional[DataFrame] = ufp.drop_columns(
-                    valid, static + [target_col]
-                )
-            else:
-                X_df = None
             y_pred = self.predict(
                 h=h,
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
                 new_df=train if not should_fit else None,
                 level=level,
-                X_df=X_df,
+                X_df=self.ts._cv_X_df(valid, weight_col),
             )
             result = _merge_window_preds(
                 valid, y_pred, cutoffs, id_col, time_col, target_col

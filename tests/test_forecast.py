@@ -693,6 +693,34 @@ def test_cv_weight_col(refit):
     assert not np.allclose(result_uniform["lr"].values, result_skewed["lr"].values)
 
 
+@pytest.mark.parametrize("with_exog", [True, False])
+def test_cv_weight_col_is_not_a_future_exog(monkeypatch, with_exog):
+    """The weights are a fit-time input; the windows' X_df must not carry them."""
+    from mlforecast.core import TimeSeries
+
+    series = generate_daily_series(2, min_length=60, max_length=60)
+    series["weight"] = np.arange(len(series), dtype=float)
+    if with_exog:
+        series["exog"] = np.sin(np.arange(len(series)))
+    seen = []
+    ts_predict = TimeSeries.predict
+
+    def recording_predict(self, *args, **kwargs):
+        seen.append(kwargs["X_df"])
+        return ts_predict(self, *args, **kwargs)
+
+    monkeypatch.setattr(TimeSeries, "predict", recording_predict)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.cross_validation(
+        series, n_windows=2, h=3, weight_col="weight", static_features=[]
+    )
+    assert len(seen) == 2
+    if with_exog:
+        assert all(list(x.columns) == ["unique_id", "ds", "exog"] for x in seen)
+    else:
+        assert all(x is None for x in seen)
+
+
 @pytest.mark.parametrize("max_horizon", [None, 2])
 def test_cv_refit_false_with_grouped_expanding_mean(
     max_horizon, grouped_expanding_mean_df

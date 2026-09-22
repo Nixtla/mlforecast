@@ -143,17 +143,10 @@ def mlforecast_objective(
                     weight_col=weight_col,
                     **config["mlf_fit_params"],
                 )
-            static_cols = [c for c in mlf.ts.static_features_.columns if c != id_col]
             id_cols = [id_col, time_col, target_col]
             if weight_col is not None:
                 id_cols.append(weight_col)
-            dynamic = [c for c in valid.columns if c not in static_cols + id_cols]
-            if dynamic:
-                X_df: Optional[DataFrame] = ufp.drop_columns(
-                    valid, static_cols + [target_col]
-                )
-            else:
-                X_df = None
+            X_df = mlf.ts._cv_X_df(valid, weight_col)
             if should_fit:
                 new_df = None
             else:

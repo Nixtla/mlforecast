@@ -745,6 +745,15 @@ class TimeSeries:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
 
+    def _cv_X_df(self, valid: DFType, weight_col: Optional[str]) -> Optional[DFType]:
+        """A validation window's future exogenous frame, or ``None`` without any."""
+        keys = [self.id_col, self.time_col]
+        not_exog = {self.target_col, weight_col, *self.static_features_.columns}
+        exog = [c for c in valid.columns if c not in keys and c not in not_exog]
+        if not exog:
+            return None
+        return valid[keys + exog]
+
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
