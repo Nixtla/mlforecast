@@ -927,9 +927,7 @@ class MLForecast:
             # Use the passed y array which has shape (n_rows, max_horizon)
             # y was already extracted from prep by _extract_X_y and contains expanded targets
             exog_cols = self.ts._get_dynamic_exog_cols(self.ts.features_order_)
-            common_exog_cols, horizon_exog_map = self.ts._split_horizon_exog_cols(
-                exog_cols, self.horizon_features_
-            )
+            common_exog_cols = self.ts._common_exog_cols(exog_cols)
 
             # Only allocate entries for trained horizons (sparse or dense).
             trained_horizons = sorted({h for hm in self.models_.values() for h in hm})
@@ -956,7 +954,7 @@ class MLForecast:
                 x_cols_h: Optional[List[str]]
                 if self.horizon_features_:
                     x_cols_h = self.ts._get_cols_for_horizon(
-                        h, common_exog_cols, horizon_exog_map, exog_cols
+                        h, common_exog_cols, exog_cols
                     )
                 else:
                     x_cols_h = x_cols

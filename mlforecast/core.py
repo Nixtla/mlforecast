@@ -277,8 +277,9 @@ class TimeSeries:
     as_numpy: bool = False
     max_horizon: Optional[int] = None
     _horizons: Optional[List[int]] = None
-    # shared dict is safe: every writer rebinds the attribute
+    # shared dicts are safe: every writer rebinds the attribute
     horizon_features_: Dict[int, List[str]] = {}
+    _pooled_states: Dict[Tuple, PooledState] = {}
 
     def __init__(
         self,
@@ -468,18 +469,14 @@ class TimeSeries:
         timestamp; the same call is made here for every appended timestamp,
         otherwise the next predict would skip straight to the newest one.
         """
-        states = getattr(self, "_pooled_states", {})
+        states = self._pooled_states
         if not states:
             return
         counts = np.asarray(sizes["counts"].to_numpy())
         if not counts.any():
             return  # nothing appended
+        # `update` checked that every appended timestamp carries every series
         n_new = int(counts[0])
-        if not bool((counts == n_new).all()):
-            raise ValueError(
-                "Pooled lag transforms require updates to include all series for "
-                "each timestamp."
-            )
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
@@ -573,7 +570,7 @@ class TimeSeries:
             self.keep_last_n = max(self.keep_last_n, min_kept)
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
-        for state in getattr(self, "_pooled_states", {}).values():
+        for state in self._pooled_states.values():
             state.finish_fit()
 
     def _initialize_lag_transform_states(self) -> None:
@@ -754,38 +751,19 @@ class TimeSeries:
             return None
         return valid[keys + exog]
 
-    def _split_horizon_exog_cols(
-        self,
-        exog_cols: List[str],
-        horizon_features: Dict[int, List[str]],
-    ) -> Tuple[List[str], Dict[int, List[str]]]:
-        """Split exogenous columns into common and horizon-specific sets."""
-        if not horizon_features:
-            return exog_cols, {}
-        matched_cols = {
-            col
-            for cols in horizon_features.values()
-            for col in cols
-            if col in exog_cols
-        }
-        common_exog = [c for c in exog_cols if c not in matched_cols]
-        return common_exog, horizon_features
+    def _common_exog_cols(self, exog_cols: List[str]) -> List[str]:
+        """The exogenous columns every horizon's model uses."""
+        matched = {c for cols in self.horizon_features_.values() for c in cols}
+        return [c for c in exog_cols if c not in matched]
 
     def _get_cols_for_horizon(
-        self,
-        h: int,
-        common_exog: List[str],
-        horizon_exog_map: Dict[int, List[str]],
-        exog_cols: List[str],
+        self, h: int, common_exog: List[str], exog_cols: List[str]
     ) -> List[str]:
-        """Return the ordered feature columns to use for 0-indexed horizon h.
+        """The ordered feature columns for the 0-indexed horizon ``h``.
 
-        ``horizon_exog_map`` uses 1-indexed keys (matching the user-facing
-        ``horizon_features`` dict), so we convert with ``h + 1``.
+        ``horizon_features_`` is keyed by the user-facing 1-indexed horizon.
         """
-        # Internal horizons are 0-indexed; user-facing horizon_features keys are
-        # 1-indexed, hence the +1 conversion here.
-        allowed_exog = common_exog + horizon_exog_map.get(h + 1, [])
+        allowed_exog = common_exog + self.horizon_features_.get(h + 1, [])
         return [
             c for c in self.features_order_ if c not in exog_cols or c in allowed_exog
         ]
@@ -840,7 +818,6 @@ class TimeSeries:
         ga = GroupedArray(data, indptr)
         self.uids = _to_native_index(uids, df=df)
         self.last_dates = _to_native_index(times, df=df)
-        self._check_aligned_ends()
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
                 df.shape[0], dtype=np.int32
@@ -943,7 +920,7 @@ class TimeSeries:
         Runs after the target transforms so the channels see the transformed
         target, and after ``static_features_`` so ``groupby`` keys resolve.
         """
-        self._pooled_states: Dict[Tuple, PooledState] = {}
+        self._pooled_states = {}
         pooled = self._get_pooled_tfms()
         if not pooled:
             return
@@ -1130,8 +1107,7 @@ class TimeSeries:
             return_X_y: Return tuple of (X, y) instead of dataframe
             as_numpy: Convert X to numpy array
         """
-        # Validate and normalize horizon parameters
-        self._horizons, effective_max_horizon = _validate_horizon_params(
+        self._horizons, self.max_horizon = _validate_horizon_params(
             max_horizon, horizons
         )
 
@@ -1150,11 +1126,10 @@ class TimeSeries:
                 features[k] = v[self._restore_idxs]
 
         # target
-        self.max_horizon = effective_max_horizon
-        if effective_max_horizon is None:
+        if self.max_horizon is None:
             target = self.ga.data
         else:
-            target = self.ga.expand_target(effective_max_horizon)
+            target = self.ga.expand_target(self.max_horizon)
         if self._restore_idxs is not None:
             target = target[self._restore_idxs]
 
@@ -1270,13 +1245,11 @@ class TimeSeries:
             if as_numpy:
                 X = ufp.to_numpy(X)
             return X, target
-        if effective_max_horizon is not None:
+        if self.max_horizon is not None:
             # remove original target
             out_cols = [c for c in df.columns if c != self.target_col]
             df = df[out_cols]
-            target_names = [
-                f"{self.target_col}{i}" for i in range(effective_max_horizon)
-            ]
+            target_names = [f"{self.target_col}{i}" for i in range(self.max_horizon)]
             df = ufp.assign_columns(df, target_names, target)
         else:
             df = ufp.copy_if_pandas(df, deep=False)
@@ -1310,9 +1283,7 @@ class TimeSeries:
         """
         exog_cols = self._get_dynamic_exog_cols(self.features_order_)
         exog_cols_set = set(exog_cols)
-        common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
-            exog_cols, self.horizon_features_
-        )
+        common_exog_cols = self._common_exog_cols(exog_cols)
 
         # Get feature columns (excluding target columns)
         if self.weight_col is not None:
@@ -1329,9 +1300,7 @@ class TimeSeries:
             exog_lookup = original_df[[self.id_col, self.time_col] + exog_cols]
 
         for h in horizons:
-            h_cols = self._get_cols_for_horizon(
-                h, common_exog_cols, horizon_exog_map, exog_cols
-            )
+            h_cols = self._get_cols_for_horizon(h, common_exog_cols, exog_cols)
             h_cols_set = set(h_cols)
             # exog subset for this horizon — used for time-aligned joining and NaN filtering
             horizon_exog = [c for c in h_cols if c in exog_cols_set]
@@ -1820,8 +1789,9 @@ class TimeSeries:
         # Pooled states are only appended to during prediction, so a cheap
         # structural snapshot (references + shallow container copies) restores
         # them faithfully without deep-copying every aggregate array per model.
-        pooled_states = getattr(self, "_pooled_states", {})
-        pooled_snaps = {key: state.snapshot() for key, state in pooled_states.items()}
+        pooled_snaps = {
+            key: state.snapshot() for key, state in self._pooled_states.items()
+        }
         try:
             yield
         finally:
@@ -1831,7 +1801,6 @@ class TimeSeries:
                 self._pooled_states[key].restore(snap)
 
     def _predict_setup(self) -> None:
-        # TODO: move to utils
         # native-container boundary — clone/copy method selected per backend
         if isinstance(self.last_dates, pl_Series):
             self.curr_dates = self.last_dates.clone()
@@ -1993,16 +1962,12 @@ class TimeSeries:
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
         exog_cols = self._get_dynamic_exog_cols(self.features_order_)
-        common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
-            exog_cols, self.horizon_features_
-        )
+        common_exog_cols = self._common_exog_cols(exog_cols)
         feature_idx = {c: i for i, c in enumerate(self.features_order_)}
         horizon_feature_indices = {}
         if self.horizon_features_:
             for h in horizons_to_predict:
-                h_cols = self._get_cols_for_horizon(
-                    h, common_exog_cols, horizon_exog_map, exog_cols
-                )
+                h_cols = self._get_cols_for_horizon(h, common_exog_cols, exog_cols)
                 horizon_feature_indices[h] = np.array(
                     [feature_idx[c] for c in h_cols], dtype=np.int32
                 )
@@ -2029,7 +1994,7 @@ class TimeSeries:
                                 model_x = new_x[:, col_idx]
                         else:
                             h_cols = self._get_cols_for_horizon(
-                                h, common_exog_cols, horizon_exog_map, exog_cols
+                                h, common_exog_cols, exog_cols
                             )
                             model_x = new_x[h_cols]
                     horizon_model = model[h]
@@ -2301,8 +2266,7 @@ class TimeSeries:
         last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
         last_dates = ufp.sort(last_dates, by=self.id_col)
         self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
-        self.uids = ufp.sort(sizes[self.id_col])
-        self.uids = _to_native_index(self.uids, df=df)
+        self.uids = _to_native_index(sizes[self.id_col], df=df)
         self.last_dates = _to_native_index(self.last_dates, df=df)
         if new_groups.any():
             if self.target_transforms is not None:

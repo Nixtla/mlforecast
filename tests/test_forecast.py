@@ -2591,8 +2591,7 @@ def test_horizon_features_all_horizon_specific():
     from mlforecast.core import TimeSeries  # noqa: F401 — verifying internal state
 
     exog_cols_all = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
-    common, _ = fcst.ts._split_horizon_exog_cols(exog_cols_all, fcst.horizon_features_)
-    assert common == []
+    assert fcst.ts._common_exog_cols(exog_cols_all) == []
     preds = fcst.predict(h=H, X_df=future)
     assert _to_pandas(preds).shape[0] == H
     assert _to_pandas(preds)["LinearRegression"].notna().all()
