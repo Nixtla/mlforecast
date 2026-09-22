@@ -303,6 +303,46 @@ def test_autoseasonality_and_differences():
     )
 
 
+@pytest.mark.parametrize(
+    "tfm",
+    [
+        Differences([1, 2]),
+        AutoDifferences(max_diffs=2),
+        AutoSeasonalDifferences(season_length=3, max_diffs=1),
+    ],
+)
+def test_take_keeps_the_fitted_values_of_the_taken_series(tfm):
+    """`take` on a ragged `fitted_` selects each stored array per series."""
+    rng = np.random.default_rng(0)
+    sizes = np.array([30, 45, 25, 60])
+    indptr = np.append(0, sizes.cumsum())
+    ga = GroupedArray(rng.normal(size=indptr[-1]).cumsum(), indptr)
+    idxs = np.array([3, 0, 2])
+
+    unstored = tfm.clone()
+    unstored.fit_transform(ga)
+    assert (unstored.take(idxs).fitted_, unstored.take(idxs).fitted_indptr_) == (
+        [],
+        None,
+    )
+
+    tfm.store_fitted = True
+    transformed = tfm.fit_transform(ga)
+    sub = tfm.take(idxs)
+    np.testing.assert_array_equal(
+        sub.fitted_indptr_, np.append(0, sizes[idxs].cumsum())
+    )
+    assert len(sub.fitted_) == len(tfm.fitted_)
+    for got, full in zip(sub.fitted_, tfm.fitted_):
+        ref = np.concatenate([full[indptr[i] : indptr[i + 1]] for i in idxs])
+        np.testing.assert_array_equal(got, ref)
+    np.testing.assert_allclose(
+        sub.inverse_transform_fitted(transformed.take(idxs)).data,
+        tfm.inverse_transform_fitted(transformed).take(idxs).data,
+        equal_nan=True,
+    )
+
+
 @pytest.mark.parametrize("scaler", [
     LocalStandardScaler(),
     LocalMinMaxScaler(),
