@@ -225,7 +225,9 @@ def test_snapshot_restore_reverts_every_captured_attribute():
         lags=[1],
         lag_transforms={
             1: [
-                RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"]),
+                RollingMean(
+                    2, min_samples=1, groupby=["brand"], partition_by=["promo"]
+                ),
                 RollingQuantile(
                     0.5, 2, min_samples=1, groupby=["brand"], partition_by=["promo"]
                 ),
