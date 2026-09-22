@@ -23,6 +23,7 @@ from mlforecast.lag_transforms import (
     RollingMax,
     RollingMean,
     RollingMin,
+    RollingQuantile,
     RollingStd,
 )
 
@@ -203,6 +204,76 @@ def test_snapshot_restore_after_dynamic_new_bucket():
     assert state.n_buckets > ref.n_buckets  # new buckets really appeared
     state.restore(snap)
     _assert_state_equal(state, ref)
+
+
+def test_snapshot_restore_reverts_every_captured_attribute():
+    """`restore` puts back each attribute `snapshot` captures, and the rest.
+
+    The state is advanced by a predict step and a vocabulary growth, which
+    touch the channels, the shift, the row store and every entry of
+    `_SNAPSHOT_ATTRS`; each of those entries is then overwritten outright, so a
+    restore that skipped one would leave the sentinel behind.
+    """
+    import copy
+
+    from mlforecast.pooled import _SNAPSHOT_ATTRS, encode_keys
+
+    df = _make_panel()
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lags=[1],
+        lag_transforms={
+            1: [
+                RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"]),
+                RollingQuantile(
+                    0.5, 2, min_samples=1, groupby=["brand"], partition_by=["promo"]
+                ),
+            ]
+        },
+    )
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["brand"],
+    )
+    state = fcst.ts._pooled_states[("nonlocal", ("brand",), ("promo",))]
+    assert state._rows is not None  # the quantile keeps the raw rows
+    ref = copy.deepcopy(state)
+    originals = {name: getattr(state, name) for name in _SNAPSHOT_ATTRS}
+    snap = state.snapshot()
+
+    state.append(np.full(state.series_bucket_id.size, 1.0))
+    state.grow_buckets(
+        encode_keys([np.array(["x", "y"], dtype=object), np.array([9, 9])])
+    )
+    for name, value in originals.items():
+        if isinstance(value, np.ndarray):
+            setattr(state, name, np.append(value, value[-1:]))
+        else:
+            setattr(state, name, value + 1)
+    for name, value in originals.items():
+        moved = getattr(state, name)
+        if isinstance(value, np.ndarray):
+            assert moved.shape != value.shape, name
+        else:
+            assert moved != value, name
+
+    state.restore(snap)
+    for name, value in originals.items():
+        got = getattr(state, name)
+        if isinstance(value, np.ndarray):
+            np.testing.assert_array_equal(got, value, err_msg=name)
+        else:
+            assert got == value, name
+    _assert_state_equal(state, ref)
+    assert state.shift.keys() == ref.shift.keys()
+    for view, shift in ref.shift.items():
+        np.testing.assert_array_equal(state.shift[view], shift, err_msg=str(view))
+    assert state.width == ref.width
+    assert state._views == {}
 
 
 def test_g1_pooled_predictions_byte_identical():
