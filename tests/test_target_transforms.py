@@ -321,12 +321,17 @@ def test_take_keeps_the_fitted_values_of_the_taken_series(tfm):
 
     unstored = tfm.clone()
     unstored.fit_transform(ga)
-    assert (unstored.take(idxs).fitted_, unstored.take(idxs).fitted_indptr_) == ([], None)
+    assert (unstored.take(idxs).fitted_, unstored.take(idxs).fitted_indptr_) == (
+        [],
+        None,
+    )
 
     tfm.store_fitted = True
     transformed = tfm.fit_transform(ga)
     sub = tfm.take(idxs)
-    np.testing.assert_array_equal(sub.fitted_indptr_, np.append(0, sizes[idxs].cumsum()))
+    np.testing.assert_array_equal(
+        sub.fitted_indptr_, np.append(0, sizes[idxs].cumsum())
+    )
     assert len(sub.fitted_) == len(tfm.fitted_)
     for got, full in zip(sub.fitted_, tfm.fitted_):
         ref = np.concatenate([full[indptr[i] : indptr[i + 1]] for i in idxs])

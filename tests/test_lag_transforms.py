@@ -308,13 +308,21 @@ def test_wrappers_mirror_the_leaf_scope():
     off = Offset(RollingMean(7, groupby=["brand"], partition_by=["promo"]), 2)
     assert (off.global_, off.groupby, off.partition_by) == (False, ["brand"], ["promo"])
     assert (Offset(Lag(1), 1).global_, Offset(Lag(1), 1).groupby) == (False, None)
-    comb = Combine(RollingMean(7, global_=True), ExpandingMean(global_=True), operator.add)
+    comb = Combine(
+        RollingMean(7, global_=True), ExpandingMean(global_=True), operator.add
+    )
     assert (comb.global_, comb.groupby, comb.partition_by) == (True, None, None)
-    comb = Combine(RollingMean(7, partition_by=["p"]), RollingMean(5, partition_by=["p"]), operator.sub)
+    comb = Combine(
+        RollingMean(7, partition_by=["p"]),
+        RollingMean(5, partition_by=["p"]),
+        operator.sub,
+    )
     assert (comb.global_, comb.groupby, comb.partition_by) == (False, None, ["p"])
     with pytest.raises(ValueError, match="different global_"):
         Combine(RollingMean(7, global_=True), Lag(1), operator.add)
     with pytest.raises(ValueError, match="different groupby"):
-        Combine(RollingMean(7, groupby=["a"]), RollingMean(7, groupby=["b"]), operator.add)
+        Combine(
+            RollingMean(7, groupby=["a"]), RollingMean(7, groupby=["b"]), operator.add
+        )
     with pytest.raises(ValueError, match="different partition_by"):
         Combine(RollingMean(7, partition_by=["a"]), RollingMean(7), operator.add)
