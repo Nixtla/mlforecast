@@ -123,6 +123,23 @@ def test_fit_only_instance_uses_class_defaults():
     pd.testing.assert_frame_equal(warm.predict({"m": model}, horizon=3), expected)
 
 
+def test_instance_without_pooled_states_predicts_and_updates():
+    # pickles from before pooled lag transforms existed carry no `_pooled_states`
+    series = generate_daily_series(3, min_length=20, max_length=20)
+    ts = TimeSeries(freq="D", lags=[1, 2])
+    X, y = ts.fit_transform(
+        series, id_col="unique_id", time_col="ds", target_col="y", return_X_y=True
+    )
+    model = LinearRegression().fit(X, y)
+    expected = ts.predict({"m": model}, horizon=2)
+    del ts._pooled_states
+    pd.testing.assert_frame_equal(ts.predict({"m": model}, horizon=2), expected)
+    new_rows = series.groupby("unique_id", observed=True).tail(1).copy()
+    new_rows["ds"] += pd.Timedelta(days=1)
+    ts.update(new_rows)
+    pd.testing.assert_index_equal(ts.last_dates, pd.Index(new_rows["ds"]))
+
+
 def test_clone_warm_keeps_max_horizon_without_horizons():
     # instances fit before sparse horizons existed (v0.10 to v1.0.2 pickles)
     # carry max_horizon but no _horizons; the warm clone must stay direct
@@ -899,6 +916,42 @@ def test_global_update_requires_complete_timestamps(engine):
                 "y": [3],
             }
         )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, global_=True)]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+    )
+    with pytest.raises(
+        ValueError,
+        match="Pooled lag transforms require updates to include all series for each timestamp.",
+    ):
+        ts.update(update_df)
+
+
+@pytest.mark.parametrize(
+    "update_ids",
+    [
+        # counts 3/4/2 sum to 3 x 3, which a reshape would silently accept
+        (["a", "a", "a", "b", "b", "b", "b", "c", "c"], [3, 4, 3, 3, 3, 4, 4, 3, 4]),
+        # every timestamp has 3 rows but one misses a series
+        (["a", "a", "b", "b", "c", "c"], [3, 3, 3, 4, 4, 4]),
+    ],
+)
+def test_pooled_update_rejects_duplicate_rows(update_ids):
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a", "a", "b", "b", "c", "c"],
+            "ds": [1, 2, 1, 2, 1, 2],
+            "y": [1.0, 2.0, 10.0, 20.0, 100.0, 200.0],
+        }
+    )
+    ids, times = update_ids
+    update_df = pd.DataFrame(
+        {"unique_id": ids, "ds": times, "y": np.arange(len(ids), dtype=float)}
+    )
     ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, global_=True)]})
     ts.fit_transform(
         df,

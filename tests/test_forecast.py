@@ -391,6 +391,42 @@ def test_forecast_fitted_values_positional_level_compat():
     pd.testing.assert_frame_equal(positional, keyword)
 
 
+def test_fit_without_fitted_drops_previous_in_sample_state():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[])
+    assert hasattr(fcst, "_fitted_train_df_")
+    fcst.forecast_fitted_values()
+
+    fcst.fit(df, fitted=False, static_features=[])
+    assert not hasattr(fcst, "_fitted_train_df_")
+    with pytest.raises(ValueError, match="fitted=True"):
+        fcst.forecast_fitted_values()
+
+
+def test_direct_fit_after_recursive_drops_cached_train_df():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[])
+    assert hasattr(fcst, "_fitted_train_df_")
+
+    fcst.fit(df, fitted=True, static_features=[], max_horizon=2)
+    # direct fitted values carry every horizon, nothing is computed on demand
+    assert not hasattr(fcst, "_fitted_train_df_")
+    fitted = fcst.forecast_fitted_values(h=2)
+    assert fitted["h"].eq(2).all()
+
+
+def test_cross_validation_drops_fold_in_sample_state():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.cross_validation(df, n_windows=2, h=3, fitted=True, static_features=[])
+    assert fcst.cross_validation_fitted_values()["fold"].nunique() == 2
+    assert not hasattr(fcst, "_fitted_train_df_")
+    with pytest.raises(ValueError, match="fitted=True"):
+        fcst.forecast_fitted_values()
+
+
 def test_new_df_argument(fitted_fcst, setup_forecast_data, predictions):
     """Test that predictions with new_df argument work correctly."""
     df, train, _ = setup_forecast_data
@@ -655,6 +691,34 @@ def test_cv_weight_col(refit):
     assert result_skewed.shape[0] == 2 * 2 * 7
     # Predictions should differ when weights change, proving weights are used
     assert not np.allclose(result_uniform["lr"].values, result_skewed["lr"].values)
+
+
+@pytest.mark.parametrize("with_exog", [True, False])
+def test_cv_weight_col_is_not_a_future_exog(monkeypatch, with_exog):
+    """The weights are a fit-time input; the windows' X_df must not carry them."""
+    from mlforecast.core import TimeSeries
+
+    series = generate_daily_series(2, min_length=60, max_length=60)
+    series["weight"] = np.arange(len(series), dtype=float)
+    if with_exog:
+        series["exog"] = np.sin(np.arange(len(series)))
+    seen = []
+    ts_predict = TimeSeries.predict
+
+    def recording_predict(self, *args, **kwargs):
+        seen.append(kwargs["X_df"])
+        return ts_predict(self, *args, **kwargs)
+
+    monkeypatch.setattr(TimeSeries, "predict", recording_predict)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.cross_validation(
+        series, n_windows=2, h=3, weight_col="weight", static_features=[]
+    )
+    assert len(seen) == 2
+    if with_exog:
+        assert all(list(x.columns) == ["unique_id", "ds", "exog"] for x in seen)
+    else:
+        assert all(x is None for x in seen)
 
 
 @pytest.mark.parametrize("max_horizon", [None, 2])
@@ -2527,8 +2591,7 @@ def test_horizon_features_all_horizon_specific():
     from mlforecast.core import TimeSeries  # noqa: F401 — verifying internal state
 
     exog_cols_all = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
-    common, _ = fcst.ts._split_horizon_exog_cols(exog_cols_all, fcst.horizon_features_)
-    assert common == []
+    assert fcst.ts._common_exog_cols(exog_cols_all) == []
     preds = fcst.predict(h=H, X_df=future)
     assert _to_pandas(preds).shape[0] == H
     assert _to_pandas(preds)["LinearRegression"].notna().all()
