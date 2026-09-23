@@ -931,6 +931,42 @@ def test_global_update_requires_complete_timestamps(engine):
         ts.update(update_df)
 
 
+@pytest.mark.parametrize(
+    "update_ids",
+    [
+        # counts 3/4/2 sum to 3 x 3, which a reshape would silently accept
+        (["a", "a", "a", "b", "b", "b", "b", "c", "c"], [3, 4, 3, 3, 3, 4, 4, 3, 4]),
+        # every timestamp has 3 rows but one misses a series
+        (["a", "a", "b", "b", "c", "c"], [3, 3, 3, 4, 4, 4]),
+    ],
+)
+def test_pooled_update_rejects_duplicate_rows(update_ids):
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a", "a", "b", "b", "c", "c"],
+            "ds": [1, 2, 1, 2, 1, 2],
+            "y": [1.0, 2.0, 10.0, 20.0, 100.0, 200.0],
+        }
+    )
+    ids, times = update_ids
+    update_df = pd.DataFrame(
+        {"unique_id": ids, "ds": times, "y": np.arange(len(ids), dtype=float)}
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, global_=True)]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+    )
+    with pytest.raises(
+        ValueError,
+        match="Pooled lag transforms require updates to include all series for each timestamp.",
+    ):
+        ts.update(update_df)
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_pooled_update_with_no_new_rows_is_a_noop(engine):
     """An update carrying no rows appends nothing; only a partial one is an error."""

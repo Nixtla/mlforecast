@@ -475,7 +475,7 @@ class TimeSeries:
         counts = np.asarray(sizes["counts"].to_numpy())
         if not counts.any():
             return  # nothing appended
-        # `update` checked that every appended timestamp carries every series
+        # `update` rejected missing series and duplicate rows for every timestamp
         n_new = int(counts[0])
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
@@ -2242,9 +2242,15 @@ class TimeSeries:
             counts = (
                 nw.from_native(df, eager_only=True)
                 .group_by(self.time_col)
-                .agg(nw.col(self.id_col).n_unique().alias("_n_ids"))
+                .agg(
+                    nw.col(self.id_col).n_unique().alias("_n_ids"),
+                    nw.len().alias("_n_rows"),
+                )
             )
-            if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
+            incomplete = (nw.col("_n_ids") != expected_count) | (
+                nw.col("_n_rows") != expected_count
+            )
+            if counts.filter(incomplete).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
                 )
