@@ -63,9 +63,9 @@ def test_same_features_for_pandas_and_polars():
     pd_res = MLForecast(models=[], freq="D", date_features=dtf.available()).preprocess(
         series
     )
-    pl_res = MLForecast(
-        models=[], freq="1d", date_features=dtf.available()
-    ).preprocess(pl.from_pandas(series))
+    pl_res = MLForecast(models=[], freq="1d", date_features=dtf.available()).preprocess(
+        pl.from_pandas(series)
+    )
     for feature in dtf.available():
         pd_vals = pd_res[feature.name].to_numpy()
         pl_vals = pl_res[feature.name].to_numpy()
