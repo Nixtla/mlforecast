@@ -89,14 +89,6 @@ date_features_dtypes = {
 }
 
 
-def _date_feature_name(feature: DateFeature) -> str:
-    if isinstance(feature, CalendarFeature):
-        return feature.name
-    if callable(feature):
-        return feature.__name__
-    return feature
-
-
 def _build_function_transform_name(tfm: Callable, lag: int, *args) -> str:
     """Creates a name for a transformation based on `lag`, the name of the function and its arguments."""
     tfm_name = f"{tfm.__name__}_lag{lag}"
@@ -169,6 +161,14 @@ DateFeature = Union[str, Callable, CalendarFeature]
 Models = Union[BaseEstimator, List[BaseEstimator], Dict[str, BaseEstimator]]
 TargetTransform = Union[BaseTargetTransform, _BaseGroupedArrayTargetTransform]
 Transforms = Dict[str, Union[Tuple[Any, ...], _BaseLagTransform]]
+
+
+def _date_feature_name(feature: DateFeature) -> str:
+    if isinstance(feature, CalendarFeature):
+        return feature.name
+    if callable(feature):
+        return feature.__name__
+    return feature
 
 
 def _validate_horizon_params(
