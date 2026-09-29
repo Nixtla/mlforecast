@@ -1601,11 +1601,11 @@ class MLForecast:
                     target_col=self.ts.target_col,
                 )
 
-            # preprocessing `new_df` fits the TimeSeries it runs on; hand the
-            # method a copy so this instance keeps its source state
-            scratch = self._with_ts(self.ts._clone_cold())
             transfer_preprocess = None
             if spec.needs_preprocess:
+                # The rebase's cold clone carries the fitted configuration
+                # without copying the source panel or its fitted buffers.
+                scratch = self._with_ts(self.ts._clone_cold())
                 # Mirror the fit-time column configuration so the DRE classifier
                 # matches the stored source calibration features by name.
                 # ``dropna`` and ``horizons`` are deliberately left at their

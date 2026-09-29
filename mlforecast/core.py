@@ -772,24 +772,6 @@ class TimeSeries:
         """
         return [c for c in self.static_features_.columns if c != self.id_col]
 
-    def _new_from_config(self) -> "TimeSeries":
-        """A fresh, unfitted TimeSeries carrying this one's configuration."""
-        return TimeSeries(
-            freq=self.freq,
-            lags=self.lags,
-            lag_transforms=self.lag_transforms,
-            date_features=self.date_features,
-            num_threads=self.num_threads,
-            # Deep copy: target transforms store fitted state (e.g. last values
-            # for Differences) inside the objects. Sharing them with the source
-            # lets nested predict calls (e.g. _frozen_backtest windows) clobber
-            # the state this prediction's inverse transform relies on.
-            target_transforms=copy.deepcopy(self.target_transforms),
-            lag_transforms_namer=self.lag_transforms_namer,
-            date_features_as_dummies=self.date_features_as_dummies,
-            drop_auxiliary_columns=self.drop_auxiliary_columns,
-        )
-
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
