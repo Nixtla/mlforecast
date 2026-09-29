@@ -48,7 +48,7 @@ from mlforecast.target_transforms import (
 
 from .compat import CatBoostRegressor
 from .data_validation import _index_to_series
-from .grouped_array import GroupedArray
+from .grouped_array import GroupedArray, _gather_idxs
 from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
     PooledState,
@@ -649,13 +649,16 @@ class TimeSeries:
             # appended ones. A series with less than max_lag stored values is
             # padded with nans, which is what the reads past the start of a
             # group return during prediction as well.
-            context = np.full((n_prev, max_lag + k_max), np.nan, dtype=dtype)
-            for group, i in enumerate(np.flatnonzero(existing)):
-                stored = prev_ga[group][-max_lag:]
-                context[group, max_lag - stored.size : max_lag] = stored
-                context[group, max_lag : max_lag + counts[i]] = values[
-                    offsets[i] : offsets[i + 1]
-                ]
+            width = max_lag + k_max
+            context = np.full((n_prev, width), np.nan, dtype=dtype)
+            flat = context.reshape(-1)
+            row_mids = np.arange(n_prev, dtype=np.int64) * width + max_lag
+            stored = prev_ga.take_from_groups(slice(-max_lag, None))
+            stored_sizes = np.diff(stored.indptr)
+            flat[_gather_idxs(row_mids - stored_sizes, stored_sizes)] = stored.data
+            flat[_gather_idxs(row_mids, existing_counts)] = values[
+                _gather_idxs(offsets[:-1][existing], existing_counts)
+            ]
             indptr = np.arange(0, (n_prev + 1) * max_lag, max_lag, dtype=np.int32)
             for j in range(k_max):
                 # groups of max_lag values ending on the j-th appended value, so
