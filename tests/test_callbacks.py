@@ -4,11 +4,11 @@ from sklearn.linear_model import LinearRegression
 from utilsforecast.losses import smape
 
 from mlforecast import MLForecast
-from mlforecast.callbacks import Callback, Profiler
+from mlforecast.hooks import Hook, Profiler
 from mlforecast.utils import PredictionIntervals, generate_daily_series
 
 
-class Recorder(Callback):
+class Recorder(Hook):
     def __init__(self):
         self.events = []
 
@@ -43,18 +43,40 @@ def _count(span, stage):
     return (span.stage == stage) + sum(_count(child, stage) for child in span.children)
 
 
-def test_callbacks_are_off_by_default_and_methods_keep_their_identity():
+def test_hooks_are_off_by_default_and_methods_keep_their_identity():
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
-    assert fcst.callbacks == []
+    assert fcst.hooks == []
     assert MLForecast.fit.__name__ == "fit"
     assert MLForecast.predict.__doc__.startswith("Compute the predictions")
 
 
+def test_hooks_validate_type_and_old_pickle_state(series):
+    with pytest.raises(TypeError, match="list of Hook"):
+        MLForecast(models=LinearRegression(), freq="D", hooks=[object()])
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(series)
+    del fcst.hooks  # direct pickles from before the hooks argument lack this field
+    assert not fcst.predict(2).empty
+
+
+def test_empty_profiler_has_queryable_columns():
+    assert Profiler().to_df().query("stage == 'fit_model'").empty
+
+
+def test_direct_conformal_warning_points_to_caller(series):
+    from mlforecast.conformal_prediction import _compute_series_scales
+
+    frame = series.copy()
+    first_id = frame["unique_id"].iloc[0]
+    frame.loc[frame["unique_id"] == first_id, "y"] = 5.0
+    with pytest.warns(UserWarning, match="near-zero scale") as caught:
+        _compute_series_scales(frame, "unique_id", "ds", "y", method="mad")
+    assert caught[0].filename == __file__
+
+
 def test_stages_receive_bound_arguments(series):
     recorder = Recorder()
-    fcst = MLForecast(
-        models=LinearRegression(), freq="D", lags=[1], callbacks=[recorder]
-    )
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[recorder])
     fcst.fit(series).predict(3)
 
     assert recorder.stages("start") == [
@@ -82,6 +104,10 @@ def test_stages_receive_bound_arguments(series):
     (fit,) = [kw for h, s, kw in recorder.events if s == "fit"][:1]
     assert fit["df"] is series
     assert fit["id_col"] == "unique_id"
+    (preprocess,) = [
+        kw for h, s, kw in recorder.events if h == "start" and s == "preprocess"
+    ]
+    assert preprocess["df"] is series
 
 
 def test_direct_models_emit_one_fit_model_per_horizon(series):
@@ -90,7 +116,7 @@ def test_direct_models_emit_one_fit_model_per_horizon(series):
         models=[LinearRegression(), LinearRegression()],
         freq="D",
         lags=[1],
-        callbacks=[recorder],
+        hooks=[recorder],
     )
     fcst.fit(series, max_horizon=2)
 
@@ -105,9 +131,7 @@ def test_direct_models_emit_one_fit_model_per_horizon(series):
 
 def test_profiler_nests_calibration_inside_fit(series):
     profiler = Profiler()
-    fcst = MLForecast(
-        models=LinearRegression(), freq="D", lags=[1], callbacks=[profiler]
-    )
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[profiler])
     fcst.fit(series, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
 
     assert [span.stage for span in profiler.spans] == ["fit"]
@@ -129,7 +153,7 @@ def test_profiler_keeps_every_cross_validation_window(series):
         models=[LinearRegression(), LinearRegression()],
         freq="D",
         lags=[1],
-        callbacks=[profiler],
+        hooks=[profiler],
     )
     fcst.cross_validation(series, n_windows=3, h=2, refit=True)
     df = profiler.to_df()
@@ -145,12 +169,30 @@ def test_profiler_keeps_every_cross_validation_window(series):
     assert (per_model > 0).all()
 
 
+def test_cv_window_receives_bound_arguments(series):
+    recorder = Recorder()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[recorder])
+    fcst.cross_validation(series, n_windows=2, h=2)
+    (cv_start,) = [
+        kw
+        for hook, stage, kw in recorder.events
+        if hook == "start" and stage == "cross_validation"
+    ]
+    assert cv_start["n_windows"] == 2
+    assert cv_start["h"] == 2
+    windows = [
+        kw
+        for hook, stage, kw in recorder.events
+        if hook == "start" and stage == "cv_window"
+    ]
+    assert [window["i_window"] for window in windows] == [0, 1]
+    assert all("cutoffs" in window for window in windows)
+
+
 def test_profiler_can_record_memory(series):
     pytest.importorskip("psutil")
     profiler = Profiler(memory=True)
-    fcst = MLForecast(
-        models=LinearRegression(), freq="D", lags=[1], callbacks=[profiler]
-    )
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[profiler])
     fcst.fit(series)
 
     assert isinstance(profiler.spans[0].rss_delta_bytes, int)
@@ -160,27 +202,60 @@ def test_profiler_can_record_memory(series):
 def test_errors_are_reported_and_profiler_recovers(series):
     recorder = Recorder()
     profiler = Profiler()
-    fcst = MLForecast(models=Boom(), freq="D", lags=[1], callbacks=[recorder, profiler])
+    fcst = MLForecast(models=Boom(), freq="D", lags=[1], hooks=[recorder, profiler])
     with pytest.raises(RuntimeError, match="boom"):
         fcst.cross_validation(series, n_windows=2, h=1)
 
-    # cv_window has no error hook, the profiler unwinds past it
     assert recorder.stages("error") == [
         "fit_model",
         "fit_models",
         "fit",
+        "cv_window",
         "cross_validation",
     ]
     assert profiler._stack == []
-    assert profiler.spans == []
+    assert profiler.spans[0].error.startswith("RuntimeError: boom")
+    assert profiler.spans[0].children[0].error.startswith("RuntimeError: boom")
 
     fcst.models = {"LinearRegression": LinearRegression()}
     fcst.fit(series)
-    assert [span.stage for span in profiler.spans] == ["fit"]
+    assert [span.stage for span in profiler.spans] == ["cross_validation", "fit"]
+
+
+def test_start_hook_failure_unwinds_profiler(series):
+    class FailOnFit(Hook):
+        def on_start(self, stage, fcst, **kwargs):  # noqa: ARG002
+            if stage == "fit":
+                raise RuntimeError("start failed")
+
+    profiler = Profiler()
+    fcst = MLForecast(
+        models=LinearRegression(), freq="D", lags=[1], hooks=[profiler, FailOnFit()]
+    )
+    with pytest.raises(RuntimeError, match="start failed"):
+        fcst.fit(series)
+    assert profiler._stack == []
+    assert profiler.spans[0].error == "RuntimeError: start failed"
+
+
+def test_cv_window_start_failure_unwinds_profiler(series):
+    class FailWindow(Hook):
+        def on_start(self, stage, fcst, **kwargs):  # noqa: ARG002
+            if stage == "cv_window":
+                raise RuntimeError("window start failed")
+
+    profiler = Profiler()
+    fcst = MLForecast(
+        models=LinearRegression(), freq="D", lags=[1], hooks=[profiler, FailWindow()]
+    )
+    with pytest.raises(RuntimeError, match="window start failed"):
+        fcst.cross_validation(series, n_windows=2, h=1)
+    assert profiler._stack == []
+    assert profiler.spans[0].children[0].error == "RuntimeError: window start failed"
 
 
 def test_custom_callback_scores_every_window(series):
-    class WindowScores(Callback):
+    class WindowScores(Hook):
         def __init__(self):
             self.scores = []
 
@@ -190,7 +265,7 @@ def test_custom_callback_scores_every_window(series):
                 self.scores.append((kwargs["i_window"], score))
 
     scores = WindowScores()
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], callbacks=[scores])
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[scores])
     fcst.cross_validation(series, n_windows=3, h=2)
 
     assert [i for i, _ in scores.scores] == [0, 1, 2]

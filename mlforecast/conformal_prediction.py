@@ -10,6 +10,8 @@ import pandas as pd
 import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
 
+from ._warnings import _user_warning_stacklevel
+
 
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
@@ -190,7 +192,7 @@ def _compute_series_scales(
                 f"Series '{uid}' has near-zero scale estimate ({v:.2e}); "
                 f"applying floor {floor:.2e}. Check for flat or constant series.",
                 UserWarning,
-                stacklevel=4,
+                stacklevel=_user_warning_stacklevel(),
             )
         floored[uid] = effective
     return floored
@@ -406,7 +408,7 @@ def _add_signed_transfer_intervals(
                     "all horizon steps — interval lies entirely below point forecasts. "
                     "The transferred model systematically over-predicts on the target domain.",
                     UserWarning,
-                    stacklevel=3,
+                    stacklevel=_user_warning_stacklevel(),
                 )
             elif np.all(q_lo_lv > 0):
                 warnings.warn(
@@ -414,7 +416,7 @@ def _add_signed_transfer_intervals(
                     "all horizon steps — interval lies entirely above point forecasts. "
                     "The transferred model systematically under-predicts on the target domain.",
                     UserWarning,
-                    stacklevel=3,
+                    stacklevel=_user_warning_stacklevel(),
                 )
 
         # Apply: lo = pred + q_lo, hi = pred + q_hi, broadcast per horizon step
@@ -827,14 +829,14 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
         warnings.warn(
             "IQR of residuals near zero; falling back to std ratio for scale estimation.",
             UserWarning,
-            stacklevel=4,
+            stacklevel=_user_warning_stacklevel(),
         )
         return std_tgt / max(std_src, 1e-10)
     # Fallback 2: constant
     warnings.warn(
         "Both IQR and std of residuals near zero; scale ratio defaulting to 1.0.",
         UserWarning,
-        stacklevel=4,
+        stacklevel=_user_warning_stacklevel(),
     )
     return 1.0
 
@@ -924,7 +926,7 @@ def _weighted_conformal_transfer(
             f"Target data is missing {len(dropped)} feature column(s) used during source fit "
             f"({sorted(dropped)}). Density ratio estimation will use the common subset only.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=_user_warning_stacklevel(),
         )
 
     src_np = np.column_stack(
