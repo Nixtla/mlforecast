@@ -41,7 +41,7 @@ subclass; override it when that state is large.
 Differences(differences)
 ```
 
-Bases: <code>[_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
+Bases: <code>[_BaseDifferences](#mlforecast.target_transforms._BaseDifferences)</code>
 
 Subtracts previous values of the serie. Can be used to remove trend or seasonalities.
 
@@ -118,7 +118,7 @@ for i in range(len(diffs.differences)):
 AutoDifferences(max_diffs)
 ```
 
-Bases: <code>[_BaseGroupedArrayTargetTransform](#mlforecast.target_transforms._BaseGroupedArrayTargetTransform)</code>
+Bases: <code>[_BaseDifferences](#mlforecast.target_transforms._BaseDifferences)</code>
 
 Find and apply the optimal number of differences to each serie.
 

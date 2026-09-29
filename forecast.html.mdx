@@ -22,11 +22,11 @@ Name | Type | Description | Default
 `freq` | <code>[str](#str) or [int](#int) or [BaseOffset](#pandas.offsets.BaseOffset)</code> | Pandas offset, pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. | *required*
 `lags` | <code>list of int</code> | Lags of the target to use as features. Defaults to None. | <code>None</code>
 `lag_transforms` | <code>dict of int to list of functions</code> | Mapping of target lags to their transformations. Defaults to None. | <code>None</code>
-`date_features` | <code>list of str, callable or CalendarFeature</code> | Features computed from the dates. Can be calendar features from `mlforecast.date_features` (listed by `mlforecast.date_features.available()`), date attributes of the dataframe backend or functions that will take the dates as input. Defaults to None. | <code>None</code>
+`date_features` | <code>list of str or callable</code> | Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input. Defaults to None. | <code>None</code>
 `num_threads` | <code>[int](#int)</code> | Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1. | <code>1</code>
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
-`date_features_as_dummies` | <code>[bool](#bool)</code> | If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
+`date_features_as_dummies` | <code>[bool](#bool)</code> | If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
 `drop_auxiliary_columns` | <code>bool or list of str</code> | Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns). | <code>True</code>
 
 #### `MLForecast.fit`
