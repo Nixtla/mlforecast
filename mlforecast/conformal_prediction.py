@@ -873,6 +873,28 @@ def _recalibrate_transfer(
     )
 
 
+def _resolve_user_weights(weights, cs_df, feature_cols: List[str]) -> np.ndarray:
+    """Evaluate ``TransferConformal.weights`` against the calibration rows.
+
+    A callable receives the stacked ``feature_cols`` (``None`` when there are
+    none); either way the result needs one entry per row of ``cs_df``.
+    """
+    if callable(weights):
+        src = (
+            np.column_stack([cs_df[c].to_numpy() for c in feature_cols]).astype(float)
+            if feature_cols
+            else None
+        )
+        weights = weights(src)
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape != (len(cs_df),):
+        raise ValueError(
+            "TransferConformal.weights must have one entry per source "
+            f"calibration row ({len(cs_df)},), got {weights.shape}."
+        )
+    return weights
+
+
 def _weighted_conformal_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
@@ -908,29 +930,18 @@ def _weighted_conformal_transfer(
     non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
     feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
 
+    if tc.weights is not None:
+        # User-supplied weights replace the fitted density ratio. They align with
+        # the full source calibration set, which the transfer path never filters.
+        weights = _resolve_user_weights(tc.weights, source_cs_df, feature_cols)
+        return TransferResult(cs_df=source_cs_df, weights=weights)
+
     if not feature_cols:
         raise ValueError(
             "No feature columns found in source conformity scores. "
             "Refit the model with PredictionIntervals(method='weighted_conformal_error') "
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
-
-    if tc.weights is not None:
-        # User-supplied weights replace the fitted density ratio. They align with
-        # the full source calibration set, which the transfer path never filters.
-        if callable(tc.weights):
-            src_all = np.column_stack(
-                [source_cs_df[c].to_numpy() for c in feature_cols]
-            ).astype(float)
-            weights = np.asarray(tc.weights(src_all), dtype=float)
-        else:
-            weights = np.asarray(tc.weights, dtype=float)
-        if weights.shape != (len(source_cs_df),):
-            raise ValueError(
-                "TransferConformal.weights must have one entry per source "
-                f"calibration row ({len(source_cs_df)},), got {weights.shape}."
-            )
-        return TransferResult(cs_df=source_cs_df, weights=weights)
 
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]

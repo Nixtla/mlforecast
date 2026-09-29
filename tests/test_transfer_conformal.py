@@ -1133,6 +1133,22 @@ def test_user_supplied_weights_are_honored(method):
     )
 
 
+@pytest.mark.parametrize("transfer", [False, True])
+def test_user_supplied_weights_length_is_checked(transfer):
+    """Same-domain and transfer paths share one length check."""
+    mlf, tgt = _weights_setup()
+    bad = np.ones(len(mlf._cs_df) - 1)
+    with pytest.raises(ValueError, match="one entry per source calibration row"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt if transfer else None,
+            transfer_conformal=TransferConformal(
+                method="weighted_conformal", weights=bad
+            ),
+        )
+
+
 def test_user_supplied_callable_weights_receive_source_features():
     """The callable form is passed the source calibration feature matrix."""
     mlf, tgt = _weights_setup(seed=74)
