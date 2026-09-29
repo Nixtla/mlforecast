@@ -64,8 +64,10 @@ class CalendarFeature:
             dates = dates.dt.replace_time_zone(None)
         return self._compute(dates).astype(self.dtype)
 
-    def __reduce__(self):
-        return _from_name, (self.name,)
+    def __reduce_ex__(self, protocol):
+        if _FEATURES.get(self.name) is self:
+            return _from_name, (self.name,)
+        return super().__reduce_ex__(protocol)
 
 
 def _dt(dates: nw.Series, attr: str) -> np.ndarray:
@@ -135,7 +137,7 @@ days_in_month = CalendarFeature(
     "days_in_month",
     "Number of days in the month, from 28 to 31.",
     np.uint8,
-    None,
+    range(28, 32),
     _days_in_month,
 )
 hour = CalendarFeature(

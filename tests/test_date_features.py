@@ -1,6 +1,7 @@
 import copy
 import pickle
 
+import cloudpickle
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -12,6 +13,10 @@ import mlforecast.date_features as dtf
 from mlforecast import MLForecast
 from mlforecast.callbacks import SaveFeatures
 from mlforecast.utils import generate_daily_series
+
+
+def _is_weekend(dates):
+    return dates.dt.weekday().to_numpy() >= 6
 
 
 def _pandas_reference(dates: pd.Series, name: str) -> np.ndarray:
@@ -128,12 +133,23 @@ def test_dummies(engine):
         models=[LinearRegression()],
         freq=freq,
         lags=[1],
-        date_features=[dtf.day_of_week, dtf.year, dtf.is_month_end],
+        date_features=[dtf.day_of_week, dtf.days_in_month, dtf.year, dtf.is_month_end],
         date_features_as_dummies=True,
     )
     res = fcst.preprocess(series)
     dummy_cols = [f"day_of_week_{i}" for i in range(7)]
-    assert fcst.ts.features == ["lag1", *dummy_cols, "year", "is_month_end"]
+    days_cols = [f"days_in_month_{d}" for d in range(28, 32)]
+    assert fcst.ts.features == [
+        "lag1",
+        *dummy_cols,
+        *days_cols,
+        "year",
+        "is_month_end",
+    ]
+    np.testing.assert_array_equal(
+        np.asarray(res[days_cols]).argmax(axis=1) + 28,
+        dtf.days_in_month.compute(res["ds"]),
+    )
     assert "day_of_week" not in res.columns
     dummies = np.asarray(res[dummy_cols])
     assert dummies.dtype == np.uint8
@@ -160,3 +176,29 @@ def test_pickling_keeps_identity():
     loaded = pickle.loads(pickle.dumps(fcst))
     assert loaded.ts.date_features == [dtf.day_of_week, dtf.month]
     pd.testing.assert_frame_equal(loaded.predict(3), fcst.predict(3))
+
+
+def test_pickling_custom_features():
+    is_weekend = dtf.CalendarFeature("is_weekend", "", np.uint8, None, _is_weekend)
+    loaded = pickle.loads(pickle.dumps(is_weekend))
+    assert loaded == is_weekend
+    dates = pd.Series(pd.date_range("2000-01-01", periods=14, freq="D"))
+    np.testing.assert_array_equal(loaded.compute(dates), is_weekend.compute(dates))
+
+    # custom feature with a built-in name isn't replaced by the built-in
+    custom_month = dtf.CalendarFeature(
+        "month", "", np.uint8, None, lambda d: d.dt.month().to_numpy() * 0
+    )
+    copied = copy.deepcopy(custom_month)
+    assert copied is not dtf.month
+    np.testing.assert_array_equal(copied.compute(dates), 0)
+
+    series = generate_daily_series(2, min_length=40, max_length=40)
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        date_features=[is_weekend, custom_month],
+    ).fit(series)
+    loaded_fcst = cloudpickle.loads(cloudpickle.dumps(fcst))
+    pd.testing.assert_frame_equal(loaded_fcst.predict(3), fcst.predict(3))

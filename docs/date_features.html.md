@@ -33,7 +33,7 @@ fcst = MLForecast(
 | `day` | Day of the month, from 1 to 31. | `uint8` | yes |
 | `day_of_week` | Day of the week, from 0 (Monday) to 6 (Sunday). | `uint8` | yes |
 | `day_of_year` | Day of the year, from 1 to 366. | `uint16` | yes |
-| `days_in_month` | Number of days in the month, from 28 to 31. | `uint8` | no |
+| `days_in_month` | Number of days in the month, from 28 to 31. | `uint8` | yes |
 | `hour` | Hour of the day, from 0 to 23. | `uint8` | yes |
 | `minute` | Minute of the hour, from 0 to 59. | `uint8` | yes |
 | `second` | Second of the minute, from 0 to 59. | `uint8` | yes |
