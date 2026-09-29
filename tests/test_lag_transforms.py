@@ -294,6 +294,20 @@ def test_min_samples_zero_warns_only_under_a_pooled_scope(make):
         make(min_samples=1, global_=True)
 
 
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: RollingMean(7, min_samples=0, global_=True),
+        lambda: SeasonalRollingMean(7, 2, min_samples=0, global_=True),
+    ],
+    ids=["rolling", "seasonal"],
+)
+def test_min_samples_zero_warning_points_at_the_caller(make):
+    with pytest.warns(UserWarning, match="min_samples=0") as record:
+        make()
+    assert record[0].filename == __file__
+
+
 def test_rolling_quantile_core_transform(grouped_array):
     tfm = RollingQuantile(0.5, 7, min_samples=3)._set_core_tfm(2)
     core = tfm._core_tfm
