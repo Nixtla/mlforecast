@@ -887,12 +887,13 @@ def _resolve_user_weights(weights, cs_df, feature_cols: List[str]) -> np.ndarray
         )
         weights = weights(src)
     weights = np.asarray(weights, dtype=float)
-    if weights.shape != (len(cs_df),):
+    if weights.size != len(cs_df):
         raise ValueError(
             "TransferConformal.weights must have one entry per source "
             f"calibration row ({len(cs_df)},), got {weights.shape}."
         )
-    return weights
+    # accept column vectors such as ``predict_proba(X)[:, 1:]``
+    return weights.ravel()
 
 
 def _weighted_conformal_transfer(

@@ -1082,11 +1082,11 @@ def test_transfer_with_fit_inferred_static_features(method):
     fcst.fit(
         src,
         prediction_intervals=PredictionIntervals(
-            method="weighted_conformal_error", n_windows=3, h=5
+            method="weighted_conformal_error", n_windows=10, h=5
         ),
     )
     preds = fcst.predict(h=5, new_df=tgt, transfer_conformal=method, level=[90])
-    assert preds["LGBMRegressor-lo-90"].notna().all()
+    assert np.isfinite(preds["LGBMRegressor-lo-90"]).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
 
 
@@ -1147,6 +1147,16 @@ def test_user_supplied_weights_length_is_checked(transfer):
                 method="weighted_conformal", weights=bad
             ),
         )
+    column = np.ones((len(mlf._cs_df), 1))
+    preds = mlf.predict(
+        h=3,
+        level=[90],
+        new_df=tgt if transfer else None,
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=column
+        ),
+    )
+    assert preds["LGBMRegressor-lo-90"].notna().all()
 
 
 def test_user_supplied_callable_weights_receive_source_features():
