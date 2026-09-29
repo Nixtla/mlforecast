@@ -31,18 +31,13 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class CalendarFeature:
-    """Date feature computed the same way for pandas and polars inputs.
-
-    Values follow the pandas conventions (e.g. ``day_of_week`` is 0 for Monday)
-    regardless of the dataframe backend. Use the instances exported by this
-    module (see `available`) instead of creating new ones.
+    """Feature computed from the dates.
 
     Args:
         name (str): Name of the feature, used as the column name.
         description (str): Description of the values.
         dtype (type): numpy dtype of the computed values.
-        values (range, optional): Possible values of the feature. Features that
-            define them are one-hot encoded when `date_features_as_dummies=True`.
+        values (range, optional): Possible values of the feature, used for one-hot encoding.
     """
 
     name: str
