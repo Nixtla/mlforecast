@@ -1599,13 +1599,7 @@ class MLForecast:
                 # preprocessing `new_df` fits the TimeSeries it runs on; hand the
                 # method a copy so this instance keeps its source state
                 scratch = self._with_ts(self.ts._clone_cold())
-                # Mirror the fit-time column configuration so the DRE classifier
-                # matches the stored source calibration features by name.
-                # ``dropna`` and ``horizons`` are deliberately left at their
-                # defaults: the source calibration rows are model predictions and
-                # so are always fully lagged, whereas forwarding ``dropna=False``
-                # would hand the classifier NaN target rows, and a per-horizon
-                # frame only drops rows without changing the feature columns.
+                # dropna/horizons stay default: source calibration rows are fully lagged
                 transfer_preprocess = partial(
                     scratch.preprocess,
                     id_col=self.ts.id_col,
@@ -2094,7 +2088,7 @@ class MLForecast:
             with fsspec.open(f"{path}/intervals.pkl", "rb") as f:
                 intervals = cloudpickle.load(f)
         except FileNotFoundError:
-            intervals = {"settings": None, "scores": None, "source_scales": None}
+            intervals = {"settings": None, "scores": None}
         return MLForecast._from_ts(
             ts,
             models=models,

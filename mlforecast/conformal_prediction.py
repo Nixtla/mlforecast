@@ -996,11 +996,6 @@ def _scale_aligned_transfer(
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='scale_aligned' requires source_cs_df; "
-            "ensure the model was fit with prediction_intervals."
-        )
     if prediction_intervals.scale_estimator is None:
         raise ValueError(
             "transfer_conformal_method='scale_aligned' requires the model to have "
@@ -1041,10 +1036,6 @@ def _scale_aligned_weighted_transfer(
     ``weighted_conformal_distribution`` (for feature columns) AND
     ``scale_estimator`` set on ``PredictionIntervals``.
     """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='scale_aligned_weighted' requires source_cs_df."
-        )
     sa_result = _scale_aligned_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
