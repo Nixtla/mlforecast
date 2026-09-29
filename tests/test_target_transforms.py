@@ -303,6 +303,12 @@ def test_autoseasonality_and_differences():
     )
 
 
+def test_autoseasonality_and_differences_max_diffs_attribute():
+    sc = AutoSeasonalityAndDifferences(max_season_length=5, max_diffs=2)
+    assert sc.max_diffs == 2
+    assert sc.clone().max_diffs == 2
+
+
 @pytest.mark.parametrize(
     "tfm",
     [

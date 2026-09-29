@@ -389,6 +389,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
     def __init__(
         self, max_season_length: int, max_diffs: int, n_seasons: Optional[int] = 10
     ):
+        self.max_diffs = max_diffs
         self.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=max_season_length,
             max_diffs=max_diffs,
@@ -397,6 +398,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
     def _clone(self) -> "AutoSeasonalityAndDifferences":
         out = _bare_instance(self)
+        out.max_diffs = self.max_diffs
         out.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
             max_season_length=self.scaler_.max_season_length,
             max_diffs=self.scaler_.max_diffs,
@@ -409,8 +411,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
         # STL requires at least 2 periods of the detected seasonal period after differencing.
         # Since the minimum detectable period is 2, we need at least 4 observations after differencing.
         series_lengths = np.diff(ga.indptr)
-        max_diffs = self.scaler_.max_diffs
-        min_required = max_diffs + 4
+        min_required = self.max_diffs + 4
         short_series = series_lengths < min_required
 
         if short_series.any():
@@ -418,7 +419,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
             short_lengths = series_lengths[short_series]
             raise ValueError(
                 f"Insufficient data in {len(short_indices)} series for seasonality detection. "
-                f"With max_diffs={max_diffs}, each series requires at least {min_required} observations "
+                f"With max_diffs={self.max_diffs}, each series requires at least {min_required} observations "
                 f"to ensure STL decomposition can run (need 4+ observations after differencing). "
                 f"Found series with lengths: {short_lengths[:5].tolist()}"
                 f"{'...' if len(short_lengths) > 5 else ''}. "
