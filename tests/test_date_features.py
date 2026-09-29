@@ -39,18 +39,29 @@ def test_available_lists_every_exported_feature():
         pd.Series(
             pd.date_range("1999-12-01", "2031-01-01", freq="7h", tz="America/New_York")
         ),
+        pd.Series(
+            pd.date_range("1999-12-01", "2031-01-01", freq="7h", tz="Asia/Tokyo")
+        ),
     ],
-    ids=["naive", "tz-aware"],
+    ids=["naive", "tz-behind-utc", "tz-ahead-of-utc"],
 )
-@pytest.mark.parametrize("container", ["pandas_series", "pandas_index", "polars"])
+@pytest.mark.parametrize(
+    "container", ["pandas_series", "pandas_index", "polars", "polars_date"]
+)
 def test_compute_matches_pandas_attributes(dates, container):
     if container == "pandas_index":
         inp = pd.DatetimeIndex(dates)
     elif container == "polars":
         inp = pl.from_pandas(dates)
+    elif container == "polars_date":
+        if dates.dt.tz is not None or (dates.dt.hour != 0).any():
+            pytest.skip("polars Date has no time or time zone")
+        inp = pl.from_pandas(dates).cast(pl.Date)
     else:
         inp = dates
     for feature in dtf.available():
+        if container == "polars_date" and feature in (dtf.hour, dtf.minute, dtf.second):
+            continue
         vals = feature.compute(inp)
         assert vals.dtype == feature.dtype
         np.testing.assert_array_equal(

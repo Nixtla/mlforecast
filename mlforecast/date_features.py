@@ -57,7 +57,12 @@ class CalendarFeature:
         """
         if isinstance(dates, pd.Index):
             dates = pd.Series(dates)
-        return self._compute(nw.from_native(dates, series_only=True)).astype(self.dtype)
+        dates = nw.from_native(dates, series_only=True)
+        if dates.dtype != nw.Date:
+            # ordinal_day uses UTC for tz-aware pandas dates. Not checking the dtype's time
+            # zone because narwhals reports some (e.g. America/New_York) as Unknown
+            dates = dates.dt.replace_time_zone(None)
+        return self._compute(dates).astype(self.dtype)
 
     def __reduce__(self):
         return _from_name, (self.name,)
@@ -67,45 +72,20 @@ def _dt(dates: nw.Series, attr: str) -> np.ndarray:
     return getattr(dates.dt, attr)().to_numpy().astype(np.int64)
 
 
-def _is_leap(year: np.ndarray) -> np.ndarray:
-    return (year % 4 == 0) & ((year % 100 != 0) | (year % 400 == 0))
-
-
-_DAYS_IN_MONTH = np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
-_DAYS_BEFORE_MONTH = np.concatenate([[0], np.cumsum(_DAYS_IN_MONTH)[:-1]])
-
-
 def _days_in_month(dates: nw.Series) -> np.ndarray:
-    month = _dt(dates, "month")
-    return _DAYS_IN_MONTH[month - 1] + ((month == 2) & _is_leap(_dt(dates, "year")))
-
-
-def _day_of_year(dates: nw.Series) -> np.ndarray:
-    # narwhals' ordinal_day converts tz-aware pandas dates to UTC first
-    month = _dt(dates, "month")
-    leap_day = (month > 2) & _is_leap(_dt(dates, "year"))
-    return _DAYS_BEFORE_MONTH[month - 1] + _dt(dates, "day") + leap_day
-
-
-def _iso_weeks_in_year(year: np.ndarray) -> np.ndarray:
-    def jan1_offset(y):
-        return (y + y // 4 - y // 100 + y // 400) % 7
-
-    return 52 + ((jan1_offset(year) == 4) | (jan1_offset(year - 1) == 3))
+    last_day = dates.dt.truncate("1mo").dt.offset_by("1mo").dt.offset_by("-1d")
+    return _dt(last_day, "day")
 
 
 def _week_of_year(dates: nw.Series) -> np.ndarray:
-    year = _dt(dates, "year")
-    week = (_day_of_year(dates) - _dt(dates, "weekday") + 10) // 7
-    return np.where(
-        week < 1,
-        _iso_weeks_in_year(year - 1),
-        np.where(week > _iso_weeks_in_year(year), 1, week),
-    )
+    # the ISO week is the week of the year of the thursday of that week
+    days = dates.to_numpy().astype("datetime64[D]")
+    thursday = days + (4 - _dt(dates, "weekday")).astype("timedelta64[D]")
+    return (thursday - thursday.astype("datetime64[Y]")).astype(np.int64) // 7 + 1
 
 
 def _is_month_end(dates: nw.Series) -> np.ndarray:
-    return _dt(dates, "day") == _days_in_month(dates)
+    return _dt(dates.dt.offset_by("1d"), "day") == 1
 
 
 year = CalendarFeature("year", "Year.", np.uint16, None, lambda d: _dt(d, "year"))
@@ -149,7 +129,7 @@ day_of_year = CalendarFeature(
     "Day of the year, from 1 to 366.",
     np.uint16,
     range(1, 367),
-    _day_of_year,
+    lambda d: _dt(d, "ordinal_day"),
 )
 days_in_month = CalendarFeature(
     "days_in_month",
