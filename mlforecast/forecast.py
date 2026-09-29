@@ -1618,7 +1618,7 @@ class MLForecast:
                     id_col=self.ts.id_col,
                     time_col=self.ts.time_col,
                     target_col=self.ts.target_col,
-                    static_features=self.ts._fitted_static_features,
+                    static_features=self.ts.static_features,
                     weight_col=self.ts.weight_col,
                     keep_last_n=self.ts.keep_last_n,
                 )

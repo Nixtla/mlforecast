@@ -763,15 +763,6 @@ class TimeSeries:
             )
         )
 
-    @property
-    def _fitted_static_features(self) -> List[str]:
-        """The static split resolved at fit time, as an explicit list.
-
-        ``self.static_features`` is ``None`` when fit inferred the split, which
-        would let a different dataframe re-infer a different one.
-        """
-        return [c for c in self.static_features_.columns if c != self.id_col]
-
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],

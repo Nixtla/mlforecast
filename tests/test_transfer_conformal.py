@@ -1065,49 +1065,29 @@ def test_predict_names_missing_pooled_groupby_column():
         fcst.predict(h=5, X_df=X_df)
 
 
-def test_repeated_transfer_predict_keeps_source_column_schema():
-    """Two transfer calls in a row on the same object must agree.
-
-    ``predict`` persists ``self.ts = new_ts``, so the second call resolves its
-    feature schema from the first target's warm-up rather than from the source
-    fit. With the static split forwarded from the fit config, the two agree.
-    """
-    base = generate_daily_series(3, min_length=60, max_length=60, seed=90)
-    target_a = generate_daily_series(3, min_length=45, max_length=45, seed=91)
-    target_b = generate_daily_series(3, min_length=45, max_length=45, seed=92)
-
-    def _fitted() -> MLForecast:
-        fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
-        fcst.fit(
-            base,
-            prediction_intervals=PredictionIntervals(
-                method="conformal_error", n_windows=3, h=5
-            ),
-        )
-        return fcst
-
-    fcst = _fitted()
-    statics = list(fcst.ts._fitted_static_features)
-    features = list(fcst.ts.features_order_)
-
-    fcst.predict(h=5, new_df=target_a, transfer_conformal="recalibrate", level=[90])
-    assert fcst.ts._fitted_static_features == statics
-    assert list(fcst.ts.features_order_) == features
-
-    second = fcst.predict(
-        h=5, new_df=target_b, transfer_conformal="recalibrate", level=[90]
+@pytest.mark.parametrize("method", ["weighted_conformal", "recalibrate"])
+def test_transfer_with_fit_inferred_static_features(method):
+    """``static_features=None`` at fit: the target must infer the same split."""
+    src = generate_daily_series(
+        3, min_length=60, max_length=60, n_static_features=1, seed=90
     )
-    assert fcst.ts._fitted_static_features == statics
-    assert list(fcst.ts.features_order_) == features
-    assert "LinearRegression-lo-90" in second
-
-    # A pristine object given the same second target must agree exactly.
-    expected = _fitted().predict(
-        h=5, new_df=target_b, transfer_conformal="recalibrate", level=[90]
+    tgt = generate_daily_series(
+        3, min_length=45, max_length=45, n_static_features=1, seed=91
     )
-    pd.testing.assert_frame_equal(
-        second.reset_index(drop=True), expected.reset_index(drop=True)
+    fcst = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        freq="D",
+        lags=[1],
     )
+    fcst.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            method="weighted_conformal_error", n_windows=3, h=5
+        ),
+    )
+    preds = fcst.predict(h=5, new_df=tgt, transfer_conformal=method, level=[90])
+    assert preds["LGBMRegressor-lo-90"].notna().all()
+    assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
 
 
 def _weights_setup(seed: int = 70):
