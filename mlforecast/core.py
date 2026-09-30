@@ -461,6 +461,7 @@ class TimeSeries:
         counts = np.asarray(sizes["counts"].to_numpy())
         if not counts.any():
             return
+        # the per-timestamp check upstream can't see duplicate (id, ds) rows
         if not bool((counts == counts[0]).all()):
             raise ValueError(
                 "Pooled lag transforms require updates to include all series for "
