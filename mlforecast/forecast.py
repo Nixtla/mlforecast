@@ -1595,7 +1595,7 @@ class MLForecast:
                 )
 
             transfer_preprocess = None
-            if spec.needs_preprocess:
+            if spec.needs_preprocess and transfer_conformal.weights is None:
                 # preprocessing `new_df` fits the TimeSeries it runs on; hand the
                 # method a copy so this instance keeps its source state
                 scratch = self._with_ts(self.ts._clone_cold())

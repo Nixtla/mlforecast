@@ -917,23 +917,13 @@ def _weighted_conformal_transfer(
     source calibration point, and returns them in a ``TransferResult``.  The
     original ``source_cs_df`` is returned unchanged so the caller can continue
     using source residuals with weighted quantiles.
-
-    Requires ``preprocess_fn`` (``MLForecast.preprocess``) and
-    ``source_cs_df`` (the existing ``_cs_df``) to be provided.
     """
-    if preprocess_fn is None or source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='weighted_conformal' requires the model "
-            "to have been fit with a weighted_conformal method so that source "
-            "features are stored, and preprocess_fn must be supplied."
-        )
-
+    assert source_cs_df is not None
     non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
     feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
 
     if tc.weights is not None:
-        # User-supplied weights replace the fitted density ratio. They align with
-        # the full source calibration set, which the transfer path never filters.
+        # user weights replace the density ratio and align with the full source set
         weights = _resolve_user_weights(tc.weights, source_cs_df, feature_cols)
         return TransferResult(cs_df=source_cs_df, weights=weights)
 
@@ -944,6 +934,7 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
+    assert preprocess_fn is not None
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
 
@@ -1088,11 +1079,7 @@ def _error_scaled_transfer(
     target but does not account for series-level heterogeneity within the target domain.
     For per-series scale correction use ``scale_aligned`` instead.
     """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='error_scaled' requires source_cs_df; "
-            "ensure the model was fit with prediction_intervals."
-        )
+    assert source_cs_df is not None
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
     scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
