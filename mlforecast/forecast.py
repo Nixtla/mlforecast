@@ -117,6 +117,7 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
+    # the per-fold clone rebuilds its schema from `train`, so it can't catch these
     future_cols = fcst.ts._required_future_cols()
     missing_future = [col for col in future_cols if col not in new_df.columns]
     if missing_future:
@@ -1596,8 +1597,7 @@ class MLForecast:
 
             transfer_preprocess: Optional[Callable] = None
             if spec.needs_preprocess and transfer_conformal.weights is None:
-                # preprocessing `new_df` fits the TimeSeries it runs on; hand the
-                # method a copy so this instance keeps its source state
+                # preprocess refits its TimeSeries; a cold copy keeps the source state
                 scratch = self._with_ts(self.ts._clone_cold())
                 settings = {
                     k: v
@@ -1656,15 +1656,6 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                # Full scan over `conformity_scores` (n_windows x n_series x h
-                # rows), so only run it on the two paths that consume it.
-                def cs_ids() -> set:
-                    return set(
-                        nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
-                        .unique()
-                        .to_list()
-                    )
-
                 is_transfer = (
                     new_df is not None
                     and transfer_conformal is not None
@@ -1672,18 +1663,23 @@ class MLForecast:
                 )
                 if ids is None:
                     active_ids = set(ts.uids)
-                    if new_df is None and cs_ids() != active_ids:
+                    if new_df is None and active_ids != set(
+                        nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
+                        .unique()
+                        .to_list()
+                    ):
                         raise ValueError(
                             "Prediction intervals were calibrated on a different set of series "
                             "than the current forecasting state. Please rerun `fit` before "
                             "requesting intervals."
                         )
                 elif not is_transfer:
-                    # Source-score transfer methods pool calibration rows from
-                    # the source domain, whose IDs need not exist in ``new_df``.
-                    # ``ts.predict`` above has already validated any requested
-                    # target IDs against the target forecasting state.
-                    missing_ids = set(ids) - cs_ids()
+                    # transfer scores come from source ids, absent from new_df
+                    missing_ids = set(ids) - set(
+                        nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
+                        .unique()
+                        .to_list()
+                    )
                     if missing_ids:
                         raise ValueError(
                             "Prediction intervals are only available for series seen during "
@@ -1751,8 +1747,7 @@ class MLForecast:
                         "'weighted_conformal_distribution'."
                     )
                 if is_transfer:
-                    # Keep all pooled source calibration scores. Filtering
-                    # them by target IDs would discard every source row.
+                    # pooled source scores: filtering by target ids would drop every row
                     cs_df = conformity_scores
                     n_series = len(cs_df) // (
                         self.prediction_intervals.n_windows

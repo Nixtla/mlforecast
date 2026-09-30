@@ -749,13 +749,7 @@ class TimeSeries:
         return [c for c in df_columns if c not in exclude]
 
     def _required_future_cols(self) -> List[str]:
-        """Columns whose future values must be supplied at predict time.
-
-        Pooled groupby/partition keys count even when ``drop_auxiliary_columns``
-        removed them from ``features_order_``: the pooled state still needs them
-        to assign each row to a leaf. Static ones are excluded — the assignment
-        reads those from ``static_features_`` instead.
-        """
+        """Future columns predict needs: dynamic exog plus non-static pooled keys."""
         statics = set(self.static_features_.columns)
         return list(
             dict.fromkeys(
