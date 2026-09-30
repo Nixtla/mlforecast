@@ -1594,6 +1594,11 @@ class MLForecast:
                     time_col=self.ts.time_col,
                     target_col=self.ts.target_col,
                 )
+                if ids is not None:
+                    _backtest_results = ufp.filter_with_mask(
+                        _backtest_results,
+                        ufp.is_in(_backtest_results[self.ts.id_col], ids),
+                    )
 
             transfer_preprocess: Optional[Callable] = None
             if spec.needs_preprocess and transfer_conformal.weights is None:

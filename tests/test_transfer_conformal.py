@@ -421,7 +421,7 @@ def _predict_transfer(
     return _PREDICTION_CACHE[cache_key].copy()
 
 
-@pytest.mark.parametrize("method", ["error_scaled", "scale_aligned"])
+@pytest.mark.parametrize("method", ["scale_aligned"])
 def test_source_score_transfer_supports_target_id_subset(transfer_cp_isolated, method):
     """Source scores are pooled even when forecasting a subset of target IDs."""
     mlf, target_train, _ = transfer_cp_isolated
@@ -467,7 +467,9 @@ def _dre_ids_setup():
     return mlf, tgt
 
 
-@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
+@pytest.mark.parametrize(
+    "method", ["weighted_conformal", "scale_aligned_weighted", "error_scaled"]
+)
 def test_dre_with_ids_ignores_other_target_series(method):
     """Intervals for the requested ids must not depend on the other target series."""
     mlf, tgt = _dre_ids_setup()
