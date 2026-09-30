@@ -167,13 +167,28 @@ def test_transfer_conformal_missing_exog_in_new_df_raises():
         prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
     )
 
-    with pytest.raises(ValueError, match=r"`new_df` is missing future values"):
+    with pytest.raises(
+        ValueError, match=r"`new_df` is missing columns required.*\['u'\]"
+    ):
         fcst.predict(
             h=5,
             new_df=new_df,
             X_df=X_df,
             transfer_conformal="recalibrate",
             level=[90],
+        )
+
+
+def test_predict_new_df_missing_exog_raises_without_level():
+    df = _dynamic_exog_system()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df.iloc[:30], static_features=[])
+
+    with pytest.raises(ValueError, match=r"`new_df` is missing .*\['u'\]"):
+        fcst.predict(
+            h=5,
+            new_df=df.iloc[:45].drop(columns="u"),
+            X_df=df[["unique_id", "ds", "u"]].iloc[45:50],
         )
 
 
