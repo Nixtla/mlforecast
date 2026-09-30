@@ -1594,7 +1594,7 @@ class MLForecast:
                     target_col=self.ts.target_col,
                 )
 
-            transfer_preprocess = None
+            transfer_preprocess: Optional[Callable] = None
             if spec.needs_preprocess and transfer_conformal.weights is None:
                 # preprocessing `new_df` fits the TimeSeries it runs on; hand the
                 # method a copy so this instance keeps its source state
@@ -1606,6 +1606,16 @@ class MLForecast:
                     not in ("as_numpy", "horizons", "max_horizon", "horizon_features")
                 }
                 transfer_preprocess = partial(scratch.preprocess, **settings)
+            if transfer_preprocess is not None and ids is not None:
+                ts._validate_ids(ids)  # an empty target would fail inside the DRE
+                preprocess_all = transfer_preprocess
+
+                def _ids_preprocess(df, **kwargs):
+                    out = preprocess_all(df, **kwargs)
+                    return ufp.filter_with_mask(out, ufp.is_in(out[ts.id_col], ids))
+
+                transfer_preprocess = _ids_preprocess
+
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,

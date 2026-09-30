@@ -421,15 +421,7 @@ def _predict_transfer(
     return _PREDICTION_CACHE[cache_key].copy()
 
 
-@pytest.mark.parametrize(
-    "method",
-    [
-        "error_scaled",
-        "scale_aligned",
-        "weighted_conformal",
-        "scale_aligned_weighted",
-    ],
-)
+@pytest.mark.parametrize("method", ["error_scaled", "scale_aligned"])
 def test_source_score_transfer_supports_target_id_subset(transfer_cp_isolated, method):
     """Source scores are pooled even when forecasting a subset of target IDs."""
     mlf, target_train, _ = transfer_cp_isolated
@@ -453,6 +445,52 @@ def test_source_score_transfer_supports_target_id_subset(transfer_cp_isolated, m
     pd.testing.assert_frame_equal(
         result.reset_index(drop=True), expected.reset_index(drop=True)
     )
+
+
+def _dre_ids_setup():
+    src = generate_daily_series(8, min_length=120, max_length=120, seed=70)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+    tgt = generate_daily_series(6, min_length=80, max_length=80, seed=71)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1, 2],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=10, h=3, method="weighted_conformal_error", scale_estimator="mad"
+        ),
+    )
+    return mlf, tgt
+
+
+@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
+def test_dre_with_ids_ignores_other_target_series(method):
+    """Intervals for the requested ids must not depend on the other target series."""
+    mlf, tgt = _dre_ids_setup()
+    keep = tgt["unique_id"].iloc[0]
+    shifted = tgt.copy()
+    shifted.loc[shifted["unique_id"] != keep, "y"] *= 10
+
+    kwargs = dict(h=3, level=[50, 80], ids=[keep], transfer_conformal=method)
+    base = mlf.predict(new_df=tgt, **kwargs)
+    other = mlf.predict(new_df=shifted, **kwargs)
+    pd.testing.assert_frame_equal(base, other)
+
+
+def test_dre_with_unknown_ids_names_them():
+    mlf, tgt = _dre_ids_setup()
+    with pytest.raises(ValueError, match="weren't seen during training"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt,
+            ids=["nope"],
+            transfer_conformal="weighted_conformal",
+        )
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)

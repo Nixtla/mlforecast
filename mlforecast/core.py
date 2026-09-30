@@ -766,6 +766,13 @@ class TimeSeries:
             )
         )
 
+    def _validate_ids(self, ids: List[str]) -> None:
+        unseen = set(ids) - set(self.uids)
+        if unseen:
+            raise ValueError(
+                f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
+            )
+
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
@@ -2115,11 +2122,7 @@ class TimeSeries:
                 )
         self._check_aligned_ends()
         if ids is not None:
-            unseen = set(ids) - set(self.uids)
-            if unseen:
-                raise ValueError(
-                    f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
-                )
+            self._validate_ids(ids)
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
