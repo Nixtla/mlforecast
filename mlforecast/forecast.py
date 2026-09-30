@@ -1611,16 +1611,16 @@ class MLForecast:
                     if k
                     not in ("as_numpy", "horizons", "max_horizon", "horizon_features")
                 }
-                transfer_preprocess = partial(scratch.preprocess, **settings)
-            if transfer_preprocess is not None and ids is not None:
-                ts._validate_ids(ids)  # an empty target would fail inside the DRE
-                preprocess_all = transfer_preprocess
+                pre = partial(scratch.preprocess, **settings)
+                if ids is not None:
+                    ts._validate_ids(ids)  # an empty target would fail inside the DRE
 
-                def _ids_preprocess(df, **kwargs):
-                    out = preprocess_all(df, **kwargs)
-                    return ufp.filter_with_mask(out, ufp.is_in(out[ts.id_col], ids))
+                    # pooled features span series: preprocess everything, then keep `ids`
+                    def pre_ids(df, **kw):
+                        out = pre(df, **kw)
+                        return ufp.filter_with_mask(out, ufp.is_in(out[ts.id_col], ids))
 
-                transfer_preprocess = _ids_preprocess
+                transfer_preprocess = pre if ids is None else pre_ids
 
             _transfer_result = spec.fn(
                 new_df=new_df,
