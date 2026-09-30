@@ -6,6 +6,7 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.conformal_prediction import get_transfer_method_spec
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import (
     PredictionIntervals,
@@ -496,6 +497,27 @@ def test_dre_with_ids_ignores_other_target_series(method):
     base = mlf.predict(new_df=tgt, **kwargs)
     other = mlf.predict(new_df=shifted, **kwargs)
     pd.testing.assert_frame_equal(base, other)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["weighted_conformal", "scale_aligned", "scale_aligned_weighted", "error_scaled"],
+)
+def test_source_score_transfers_require_source_cs_df(method):
+    df = generate_daily_series(1, min_length=20, max_length=20)
+    with pytest.raises(ValueError, match="requires source conformity scores"):
+        get_transfer_method_spec(method).fn(
+            new_df=df,
+            prediction_intervals=PredictionIntervals(
+                method="weighted_conformal_error", scale_estimator="std"
+            ),
+            tc=TransferConformal(method=method),
+            model_names=["m"],
+            target_col="y",
+            backtest_results=df.assign(m=0.0),
+            source_cs_df=None,
+            source_scales={},
+        )
 
 
 def test_dre_with_unknown_ids_names_them():

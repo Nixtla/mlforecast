@@ -918,7 +918,10 @@ def _weighted_conformal_transfer(
     original ``source_cs_df`` is returned unchanged so the caller can continue
     using source residuals with weighted quantiles.
     """
-    assert source_cs_df is not None
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal='weighted_conformal' requires source conformity scores (source_cs_df)."
+        )
     non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
     feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
 
@@ -987,6 +990,10 @@ def _scale_aligned_transfer(
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal='scale_aligned' requires source conformity scores (source_cs_df)."
+        )
     if prediction_intervals.scale_estimator is None:
         raise ValueError(
             "transfer_conformal_method='scale_aligned' requires the model to have "
@@ -1079,7 +1086,10 @@ def _error_scaled_transfer(
     target but does not account for series-level heterogeneity within the target domain.
     For per-series scale correction use ``scale_aligned`` instead.
     """
-    assert source_cs_df is not None
+    if source_cs_df is None:
+        raise ValueError(
+            "transfer_conformal='error_scaled' requires source conformity scores (source_cs_df)."
+        )
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
     scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
