@@ -1297,6 +1297,16 @@ def test_transfer_preprocess_forwards_fit_time_knobs(monkeypatch):
     monkeypatch.setattr(MLForecast, "preprocess", spy)
     mlf.predict(h=3, level=[90], new_df=tgt, transfer_conformal="weighted_conformal")
 
+    # a new `_fit_settings` key must be triaged into or out of the exclusion tuple
+    assert set(recorded) == {
+        "id_col",
+        "time_col",
+        "target_col",
+        "static_features",
+        "keep_last_n",
+        "weight_col",
+        "validate_data",
+    }
     assert recorded["weight_col"] == "w"
     assert recorded["keep_last_n"] == 10
     assert recorded["static_features"] == []
