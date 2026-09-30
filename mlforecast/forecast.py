@@ -1599,16 +1599,13 @@ class MLForecast:
                 # preprocessing `new_df` fits the TimeSeries it runs on; hand the
                 # method a copy so this instance keeps its source state
                 scratch = self._with_ts(self.ts._clone_cold())
-                # dropna/horizons stay default: source calibration rows are fully lagged
-                transfer_preprocess = partial(
-                    scratch.preprocess,
-                    id_col=self.ts.id_col,
-                    time_col=self.ts.time_col,
-                    target_col=self.ts.target_col,
-                    static_features=self.ts.static_features,
-                    weight_col=self.ts.weight_col,
-                    keep_last_n=self.ts.keep_last_n,
-                )
+                settings = {
+                    k: v
+                    for k, v in self.ts._fit_settings().items()
+                    if k
+                    not in ("as_numpy", "horizons", "max_horizon", "horizon_features")
+                }
+                transfer_preprocess = partial(scratch.preprocess, **settings)
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
