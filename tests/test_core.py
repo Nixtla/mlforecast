@@ -12,6 +12,7 @@ import utilsforecast.processing as ufp
 
 from sklearn.linear_model import LinearRegression
 
+from mlforecast import MLForecast
 from mlforecast.callbacks import SaveFeatures
 from mlforecast.core import (
     TimeSeries,
@@ -2543,3 +2544,35 @@ def test_update_validation_polars_ns_timestamps():
         }
     )
     ts.update(update, validate_new_data=True)
+
+
+def test_failed_update_without_new_series_statics_keeps_state():
+    """A rejected update for a new series must leave the fitted state intact."""
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float),
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+
+    def make_fcst():
+        fcst = MLForecast(
+            models=LinearRegression(),
+            freq=1,
+            lag_transforms={1: [RollingMean(2, partition_by=["promo"])]},
+        )
+        return fcst.fit(df, static_features=["promo"])
+
+    fcst = make_fcst()
+    new = pd.DataFrame(
+        {"unique_id": ["a", "b", "c"], "ds": [n + 1] * 3, "y": [1.0, 2.0, 3.0]}
+    )
+    with pytest.raises(ValueError, match="static features"):
+        fcst.update(new)
+    X_df = pd.DataFrame({"unique_id": ["a", "b"], "ds": [n + 1] * 2, "promo": [0, 1]})
+    preds = fcst.predict(1, X_df=X_df)
+    assert preds.shape[0] == 2
+    pd.testing.assert_frame_equal(preds, make_fcst().predict(1, X_df=X_df))

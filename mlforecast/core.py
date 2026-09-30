@@ -2283,6 +2283,12 @@ class TimeSeries:
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
+        if new_groups.any():
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series in the update frame must provide their static features: {missing}."
+                )
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
@@ -2302,11 +2308,6 @@ class TimeSeries:
             new_statics = ufp.take_rows(
                 new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
             )
-            missing = [c for c in self.static_features_.columns if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"New series in the update frame must provide their static features: {missing}."
-                )
             new_statics = new_statics[self.static_features_.columns]
             self.static_features_ = ufp.vertical_concat(
                 [self.static_features_, new_statics]
