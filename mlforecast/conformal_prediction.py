@@ -920,7 +920,7 @@ def _weighted_conformal_transfer(
     """
     if source_cs_df is None:
         raise ValueError(
-            "transfer_conformal='weighted_conformal' requires source conformity scores (source_cs_df)."
+            "Source-score transfer requires source conformity scores (source_cs_df)."
         )
     non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
     feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
@@ -992,7 +992,7 @@ def _scale_aligned_transfer(
     """
     if source_cs_df is None:
         raise ValueError(
-            "transfer_conformal='scale_aligned' requires source conformity scores (source_cs_df)."
+            "Source-score transfer requires source conformity scores (source_cs_df)."
         )
     if prediction_intervals.scale_estimator is None:
         raise ValueError(
@@ -1088,7 +1088,7 @@ def _error_scaled_transfer(
     """
     if source_cs_df is None:
         raise ValueError(
-            "transfer_conformal='error_scaled' requires source conformity scores (source_cs_df)."
+            "Source-score transfer requires source conformity scores (source_cs_df)."
         )
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
