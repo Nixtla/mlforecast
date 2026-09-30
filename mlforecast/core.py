@@ -2302,6 +2302,11 @@ class TimeSeries:
             new_statics = ufp.take_rows(
                 new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
             )
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series in the update frame must provide their static features: {missing}."
+                )
             new_statics = new_statics[self.static_features_.columns]
             self.static_features_ = ufp.vertical_concat(
                 [self.static_features_, new_statics]
