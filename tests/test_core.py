@@ -2576,3 +2576,59 @@ def test_failed_update_without_new_series_statics_keeps_state():
     preds = fcst.predict(1, X_df=X_df)
     assert preds.shape[0] == 2
     pd.testing.assert_frame_equal(preds, make_fcst().predict(1, X_df=X_df))
+
+
+@pytest.mark.parametrize(
+    "fcst_kwargs, static_features, extra, match",
+    [
+        (
+            {"lags": [1], "target_transforms": [Differences([1])]},
+            ["promo"],
+            {"unique_id": "c", "promo": 1},
+            "Can not update target_transforms",
+        ),
+        (
+            {"lags": [1], "target_transforms": [Differences([1])]},
+            ["promo"],
+            {"unique_id": "c"},
+            "Can not update target_transforms",
+        ),
+        (
+            {"lag_transforms": {1: [RollingMean(2, partition_by=["promo"])]}},
+            [],
+            None,
+            r"`partition_by` column\(s\)",
+        ),
+    ],
+)
+def test_rejected_update_leaves_state_unchanged(
+    fcst_kwargs, static_features, extra, match
+):
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float) ** 1.3,
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+    fcst = MLForecast(models=LinearRegression(), freq=1, **fcst_kwargs)
+    fcst.fit(df, static_features=static_features)
+    ts = fcst.ts
+    before = (
+        list(ts.uids),
+        list(ts.last_dates),
+        ts.ga.data.copy(),
+        ts.ga.indptr.copy(),
+    )
+    rows = [{"unique_id": "a"}, {"unique_id": "b"}] + ([extra] if extra else [])
+    new = pd.DataFrame(rows).assign(ds=n + 1, y=1.0)
+    if extra is not None and "promo" in extra:
+        new["promo"] = [0, 1, extra["promo"]]
+    with pytest.raises(ValueError, match=match):
+        fcst.update(new)
+    assert list(ts.uids) == before[0]
+    assert list(ts.last_dates) == before[1]
+    np.testing.assert_array_equal(ts.ga.data, before[2])
+    np.testing.assert_array_equal(ts.ga.indptr, before[3])
