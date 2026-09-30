@@ -520,6 +520,41 @@ def test_source_score_transfers_require_source_cs_df(method):
         )
 
 
+def test_transfer_ids_with_pooled_transforms_fails_before_work(monkeypatch):
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=90)
+    tgt = generate_daily_series(4, min_length=40, max_length=40, seed=91)
+    mlf = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(2, global_=True)]},
+    )
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=3, method="weighted_conformal_error"
+        ),
+    )
+    calls = []
+    original = MLForecast.preprocess
+
+    def spy(self, df, **kwargs):
+        calls.append(1)
+        return original(self, df, **kwargs)
+
+    monkeypatch.setattr(MLForecast, "preprocess", spy)
+
+    with pytest.raises(ValueError, match="Cannot use `ids` with global"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt,
+            ids=[tgt["unique_id"].iloc[0]],
+            transfer_conformal="weighted_conformal",
+        )
+    assert calls == []
+
+
 def test_dre_with_unknown_ids_names_them():
     mlf, tgt = _dre_ids_setup()
     with pytest.raises(ValueError, match="weren't seen during training"):

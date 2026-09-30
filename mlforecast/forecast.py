@@ -1566,6 +1566,8 @@ class MLForecast:
             transfer_conformal.validate(self.prediction_intervals)
 
             spec = get_transfer_method_spec(transfer_conformal.method)
+            if ids is not None:
+                ts._validate_ids(ids)  # fail before the backtest and DRE preprocessing
 
             # Run frozen-model backtest on new_df for methods that need target-domain
             # conformity scores (recalibrate, error_scaled). Uses source-trained models
@@ -1613,8 +1615,6 @@ class MLForecast:
                 }
                 pre = partial(scratch.preprocess, **settings)
                 if ids is not None:
-                    ts._validate_ids(ids)  # an empty target would fail inside the DRE
-
                     # pooled features span series: preprocess everything, then keep `ids`
                     def pre_ids(df, **kw):
                         out = pre(df, **kw)

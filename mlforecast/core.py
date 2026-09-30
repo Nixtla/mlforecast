@@ -761,6 +761,11 @@ class TimeSeries:
         )
 
     def _validate_ids(self, ids: List[str]) -> None:
+        if any(mode != "local" for mode, _, _ in self._pooled_states):
+            raise ValueError(
+                "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
+                "These transforms require forecasting all series together."
+            )
         unseen = set(ids) - set(self.uids)
         if unseen:
             raise ValueError(
@@ -2107,13 +2112,6 @@ class TimeSeries:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
     ) -> DFType:
-        if ids is not None:
-            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
-            if has_nonlocal:
-                raise ValueError(
-                    "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
-                    "These transforms require forecasting all series together."
-                )
         self._check_aligned_ends()
         if ids is not None:
             self._validate_ids(ids)
