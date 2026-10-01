@@ -2395,6 +2395,75 @@ def test_date_feature_dummies_all_supported(series):
             assert col in result.columns, f"feature={feature}: missing {col}"
 
 
+@pytest.mark.parametrize(
+    "feature,expected",
+    [
+        ("dayofweek", [0, 1, 2, 3, 4, 5, 6]),
+        ("day_of_week", [0, 1, 2, 3, 4, 5, 6]),
+        ("weekday", [0, 1, 2, 3, 4, 5, 6]),
+        ("dayofyear", [1, 2, 3, 4, 5, 6, 7]),
+        ("day_of_year", [1, 2, 3, 4, 5, 6, 7]),
+        ("weekofyear", [1, 1, 1, 1, 1, 1, 1]),
+    ],
+)
+def test_polars_date_feature_aliases(feature, expected):
+    """Test that Polars date feature aliases use pandas-compatible values."""
+    series = pl.DataFrame(
+        {
+            "unique_id": ["0"] * 8,
+            "ds": pd.date_range("2023-12-31", periods=8, freq="D"),
+            "y": range(8),
+        }
+    )
+    ts = TimeSeries(
+        freq="1d",
+        lags=[1],
+        date_features=[feature],
+    )
+
+    result = ts.fit_transform(
+        series,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+    )
+    assert result[feature].to_list() == expected
+
+
+@pytest.mark.parametrize(
+    "feature",
+    [
+        "dayofweek",
+        "day_of_week",
+        "weekday",
+    ],
+)
+def test_polars_weekday_offset(feature):
+    """Test that Polars weekday features use the pandas 0-6 convention."""
+    series = pl.DataFrame(
+        {
+            "unique_id": ["0"] * 8,
+            "ds": pd.date_range("2023-12-31", periods=8, freq="D"),
+            "y": range(8),
+        }
+    )
+
+    ts = TimeSeries(
+        freq="1d",
+        lags=[1],
+        date_features=[feature],
+    )
+
+    result = ts.fit_transform(
+        series,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+    )
+
+    assert result[feature].to_list() == [0, 1, 2, 3, 4, 5, 6]
+
+
 def test_non_jitted_tfms(series):
     lags = [1, 2]
 
