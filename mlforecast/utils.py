@@ -40,6 +40,13 @@ _DUMMY_FEATURE_VALUES: Dict[str, List[int]] = {
     "weekofyear": list(range(1, 54)),
 }
 
+# additive offset applied after the narwhals call so values match the pandas convention
+_ONE_BASED_OFFSET: Dict[str, int] = {
+    "dayofweek": -1,  # narwhals weekday is 1-7; pandas dayofweek is 0-6
+    "day_of_week": -1,
+    "weekday": -1,
+}
+
 # narwhals dt method name when it differs from the mlforecast feature name
 _NW_DT_ATTR: Dict[str, str] = {
     "dayofweek": "weekday",
@@ -51,15 +58,21 @@ _NW_DT_ATTR: Dict[str, str] = {
     # "week" / "weekofyear" intentionally absent — handled via backend fallback
 }
 
-# additive offset applied after the narwhals call so values match the pandas convention
-_NW_OFFSET: Dict[str, int] = {
-    "dayofweek": -1,  # narwhals weekday is 1-7; pandas dayofweek is 0-6
-    "day_of_week": -1,
-    "weekday": -1,
-}
+_NW_OFFSET = _ONE_BASED_OFFSET
 
 # Features that narwhals does not expose and require a backend-specific path
 _NW_MISSING = frozenset({"week", "weekofyear"})
+
+_POLARS_OFFSET = _ONE_BASED_OFFSET
+
+# Features, maps polars name to pandas name
+_POLARS_DT_ATTR: Dict[str, str] = {
+    "dayofweek": "weekday",
+    "day_of_week": "weekday",
+    "dayofyear": "ordinal_day",
+    "day_of_year": "ordinal_day",
+    "weekofyear": "week",
+}
 
 
 def _extract_week(dates) -> np.ndarray:

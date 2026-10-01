@@ -60,9 +60,11 @@ from .pooled import (
 )
 from .utils import (
     _DUMMY_FEATURE_VALUES,
+    _POLARS_OFFSET,
     _ShortSeriesException,
     _compute_date_dummies,
     _resolve_num_threads,
+    _POLARS_DT_ATTR,
 )
 
 date_features_dtypes = {
@@ -1091,6 +1093,11 @@ class TimeSeries:
                 feat_dtype = date_features_dtypes.get(feature)
                 if feat_dtype is not None:
                     feat_vals = feat_vals.astype(feat_dtype)
+
+        # Polars uses a differnt naming convention for date features, and a 1-based indexing
+        elif isinstance(dates, (pl.Series, pl.Expr)):
+            feature = _POLARS_DT_ATTR.get(feature, feature)
+            feat_vals = _POLARS_OFFSET.get(feat_name, 0) + getattr(dates.dt, feature)()
         else:
             feat_vals = getattr(dates.dt, feature)()
         return {feat_name: feat_vals}
