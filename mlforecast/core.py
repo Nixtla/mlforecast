@@ -47,7 +47,7 @@ from mlforecast.target_transforms import (
 )
 
 from .compat import CatBoostRegressor
-from .data_validation import _index_to_series
+from .data_validation import _index_to_series, _validate_no_null_times
 from .date_features import _DUMMY_ALIASES, CalendarFeature
 from .grouped_array import GroupedArray, _gather_idxs
 from .lag_transforms import Lag, _BaseLagTransform
@@ -823,6 +823,7 @@ class TimeSeries:
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
         validate_format(df, id_col, time_col, target_col)
+        _validate_no_null_times(df, time_col)
         validate_freq(df[time_col], self.freq)
         if ufp.is_nan_or_none(df[target_col]).any():
             raise ValueError(f"{target_col} column contains null values.")
@@ -2256,6 +2257,7 @@ class TimeSeries:
             validate_new_data: If True, validate continuity, start dates, and frequency.
         """
         validate_format(df, self.id_col, self.time_col, self.target_col)
+        _validate_no_null_times(df, self.time_col)
         uids = _index_to_series(self.uids)
         uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
         df = ufp.copy_if_pandas(df, deep=False)

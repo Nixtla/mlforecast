@@ -45,7 +45,7 @@ from .grouped_array import GroupedArray
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
-from .data_validation import validate_df
+from .data_validation import _validate_no_null_times, validate_df
 from .compat import CatBoostRegressor
 from .target_transforms import _BaseGroupedArrayTargetTransform
 from .utils import _resolve_num_threads
@@ -275,6 +275,7 @@ class MLForecast:
         time_col: str,
         validate_data: bool,
     ) -> None:
+        _validate_no_null_times(df, time_col)
         if validate_data:
             self._validate_data(df, id_col, time_col)
         else:
@@ -1863,6 +1864,7 @@ class MLForecast:
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
         """
+        _validate_no_null_times(df, time_col)
         # Run data validations once on full dataset if requested
         if validate_data:
             self._validate_data(df, id_col, time_col)

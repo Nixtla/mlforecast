@@ -21,6 +21,7 @@ from mlforecast.core import (
     TargetTransform,
     TimeSeries,
 )
+from mlforecast.data_validation import _validate_no_null_times
 from mlforecast.utils import _resolve_num_threads
 
 
@@ -202,6 +203,7 @@ class LightGBMCV:
         Returns:
             (LightGBMCV): CV object with internal data structures for partial_fit.
         """
+        _validate_no_null_times(df, time_col)
         if weights is None:
             self.weights = np.full(n_windows, 1 / n_windows)
         elif len(weights) != n_windows:

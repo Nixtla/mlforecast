@@ -54,10 +54,18 @@ class CalendarFeature:
 
         Returns:
             numpy.ndarray: Feature values, one per date.
+
+        Raises:
+            ValueError: If there are null dates.
         """
         if isinstance(dates, pd.Index):
             dates = pd.Series(dates)
         dates = nw.from_native(dates, series_only=True)
+        n_nulls = dates.null_count()
+        if n_nulls:
+            raise ValueError(
+                f"Can't compute {self.name!r}, found {n_nulls} null dates."
+            )
         if dates.dtype != nw.Date:
             # ordinal_day uses UTC for tz-aware pandas dates. Not checking the dtype's time
             # zone because narwhals reports some (e.g. America/New_York) as Unknown

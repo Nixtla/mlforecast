@@ -163,6 +163,15 @@ def test_dummies(engine):
     assert list(save_feats.get_features().columns) == fcst.ts.features
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_null_dates_raise(engine):
+    dates = pd.Series(pd.to_datetime(["2020-01-01", None, "2020-03-01"]))
+    if engine == "polars":
+        dates = pl.from_pandas(dates)
+    with pytest.raises(ValueError, match="'month', found 1 null dates"):
+        dtf.month.compute(dates)
+
+
 def test_pickling_keeps_identity():
     assert pickle.loads(pickle.dumps(dtf.month)) is dtf.month
     assert copy.deepcopy(dtf.day_of_week) is dtf.day_of_week
