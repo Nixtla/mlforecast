@@ -46,13 +46,15 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         h=horizon,
         params={"verbose": -1},
         compute_cv_preds=True,
-        metric=metric
+        metric=metric,
     )
     cv = LightGBMCV(
         freq=1,
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist = cv.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
+    hist = cv.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
     preds = cv.predict(horizon)
     eval1 = evaluate_on_valid(preds, valid)
     cv2 = LightGBMCV(
@@ -60,23 +62,28 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
     )
-    hist2 = cv2.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
-    if metric=='mape':
+    hist2 = cv2.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
+    if metric == "mape":
         assert hist2[-1][1] < hist[-1][1]
     else:
         assert hist2[-1][1] > hist[-1][1]
     preds2 = cv2.predict(horizon)
     eval2 = evaluate_on_valid(preds2, valid)
     assert eval2 < eval1
-    
+
     cv3 = LightGBMCV(
         freq=1,
         target_transforms=[Differences([24 * 7])],
         lags=[24 * (i + 1) for i in range(7)],
-        lag_transforms={48: [SeasonalRollingMean(season_length=24, window_size=7)],
-        }
+        lag_transforms={
+            48: [SeasonalRollingMean(season_length=24, window_size=7)],
+        },
     )
-    hist3 = cv3.fit(train, **static_fit_config, weight_col='weight_col' if use_weight_col else None)
+    hist3 = cv3.fit(
+        train, **static_fit_config, weight_col="weight_col" if use_weight_col else None
+    )
     assert hist3[-1][1] < hist2[-1][1]
     # preds3 = cv3.predict(horizon)
     # eval3 = evaluate_on_valid(preds3, valid)
@@ -89,13 +96,7 @@ def test_lightgbm_cv_pipeline(m4_data, use_weight_col, metric):
         freq=1,
         lags=[24 * (i + 1) for i in range(7)],
     )
-    cv4.setup(
-        train,
-        n_windows=2,
-        h=horizon,
-        params={"verbose": -1},
-        metric=metric
-    )
+    cv4.setup(train, n_windows=2, h=horizon, params={"verbose": -1}, metric=metric)
     score = cv4.partial_fit(10)
     assert np.isclose(hist[0][1], score, atol=1e-7)
     score2 = cv4.partial_fit(20)
@@ -128,7 +129,7 @@ def test_lightgbmcv_callback():
 def test_lightgbmcv_custom_metric(m4_data):
     train, _, horizon = m4_data
 
-    def weighted_mape(y_true, y_pred, ids, dates):
+    def weighted_mape(y_true, y_pred, ids, _dates):
         abs_pct_err = abs(y_true - y_pred) / abs(y_true)
         mape_by_serie = abs_pct_err.groupby(ids).mean()
         totals_per_serie = y_pred.groupby(ids).sum()
@@ -156,7 +157,7 @@ def test_lightgbmcv_num_threads_minus_one():
     series = generate_daily_series(5, min_length=50, max_length=100, equal_ends=True)
 
     lgb_cv_multi = LightGBMCV(
-        freq='D',
+        freq="D",
         lags=[1, 2, 3],
         num_threads=-1,
     )
@@ -175,7 +176,7 @@ def test_lightgbmcv_num_threads_minus_one():
 
     # Compare with num_threads=1 (same seed for reproducibility)
     lgb_cv_single = LightGBMCV(
-        freq='D',
+        freq="D",
         lags=[1, 2, 3],
         num_threads=1,
     )
@@ -189,3 +190,84 @@ def test_lightgbmcv_num_threads_minus_one():
     assert lgb_cv_single.best_iteration_ is not None
     # With same seed, best_iteration should be the same
     assert lgb_cv_multi.best_iteration_ == lgb_cv_single.best_iteration_
+
+
+def test_categorical_feature_reaches_dataset():
+    # https://github.com/Nixtla/mlforecast/issues/691
+    series = generate_daily_series(4, min_length=100, max_length=100)
+    cv = LightGBMCV(freq="D", lags=[1], date_features=["dayofweek"])
+    cv.fit(
+        series,
+        n_windows=2,
+        h=7,
+        params={"verbosity": -1},
+        verbose_eval=False,
+        static_features=[],
+        categorical_feature=["dayofweek"],
+    )
+    # dayofweek is the 2nd feature (lag1, dayofweek) -> index 1
+    assert "[categorical_feature: 1]" in cv.items[0][1].model_to_string()
+
+
+def test_categorical_feature_empty_list_means_none():
+    # an explicit [] must not fall through to LightGBM's dtype inference
+    series = generate_daily_series(4, n_static_features=1, min_length=60, max_length=60)
+    assert series["static_0"].dtype == "category"
+
+    def cat_features(categorical_feature):
+        cv = LightGBMCV(freq="D", lags=[1])
+        cv.fit(
+            series,
+            n_windows=1,
+            h=7,
+            params={"verbosity": -1},
+            verbose_eval=False,
+            categorical_feature=categorical_feature,
+        )
+        model = cv.items[0][1].model_to_string()
+        return next(
+            line
+            for line in model.split("\n")
+            if line.startswith("[categorical_feature")
+        )
+
+    # static_0 is feature 0; None infers it from the dtype, [] must not
+    assert cat_features(None) == "[categorical_feature: 0]"
+    assert cat_features([]) == "[categorical_feature: ]"
+
+
+def test_date_features_as_categorical_survives_from_cv():
+    # unlike the categorical_feature argument, this is carried over by from_cv
+    from mlforecast import MLForecast
+
+    series = generate_daily_series(4, min_length=80, max_length=80)
+    cv = LightGBMCV(
+        freq="D",
+        lags=[1],
+        date_features=["dayofweek"],
+        date_features_as_categorical=True,
+    )
+    cv.fit(series, n_windows=2, h=7, params={"verbosity": -1}, verbose_eval=False)
+    assert "[categorical_feature: 1]" in cv.items[0][1].model_to_string()
+
+    fcst = MLForecast.from_cv(cv)
+    fcst.fit(series)
+    booster = fcst.models_["LGBMRegressor"].booster_
+    assert "[categorical_feature: 1]" in booster.model_to_string()
+
+
+def test_dataset_params_reach_dataset():
+    # params documented as "passed to the LightGBM Boosters" were dropped
+    # before Dataset construction, silently ignoring max_bin and friends
+    series = generate_daily_series(4, min_length=100, max_length=100)
+    cv = LightGBMCV(freq="D", lags=[1, 2])
+    cv.fit(
+        series,
+        n_windows=1,
+        h=7,
+        params={"verbosity": -1, "max_bin": 17},
+        verbose_eval=False,
+    )
+    # the model string echoes booster config even when the Dataset ignored it,
+    # so check the binning the Dataset actually built
+    assert cv.items[0][1].train_set.feature_num_bin(0) <= 17
