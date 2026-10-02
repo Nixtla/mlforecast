@@ -101,16 +101,33 @@ def _compute_date_dummies(dates, feature: str) -> Dict[str, np.ndarray]:
     if isinstance(dates, (pd.DatetimeIndex, pd.Index)):
         dates = pd.Series(dates.to_numpy())
 
-    # Backend-specific path for features narwhals does not support
+    raw = _compute_date_feature_values(dates, feature)
+    values = _DUMMY_FEATURE_VALUES[feature]
+    return {f"{feature}_{v}": (raw == v).astype(np.uint8) for v in values}
+
+
+def _compute_date_feature_values(dates, feature: str):
+    """Compute a single string date feature, matching the pandas convention.
+
+    Polars names several accessors differently (``dayofweek``/``dayofyear``) and
+    uses a different value convention (``weekday`` is 1-7), so a raw
+    ``getattr(dates.dt, feature)()`` either raises ``AttributeError`` or returns
+    silently wrong values on polars. This resolves the feature through the shared
+    ``_NW_DT_ATTR`` name map and ``_NW_OFFSET`` value offset instead.
+
+    The return type mirrors the input: a ``polars.Expr`` for a polars expression
+    (kept lazy for the ``with_columns`` build in ``_transform``), otherwise a
+    numpy array for a materialized pandas/polars series.
+    """
+    if isinstance(dates, pl.Expr):
+        return _compute_date_feature_expr(dates, feature)
+
     if feature in _NW_MISSING:
-        raw = _extract_week(dates)
-        values = _DUMMY_FEATURE_VALUES[feature]
-        return {f"{feature}_{v}": (raw == v).astype(np.uint8) for v in values}
+        return _extract_week(dates)
 
     dates_nw = nw.from_native(dates, series_only=True)
     nw_attr = _NW_DT_ATTR.get(feature, feature)
-    raw_nw = getattr(dates_nw.dt, nw_attr)()
-    raw = raw_nw.to_numpy()
+    raw = getattr(dates_nw.dt, nw_attr)().to_numpy()
 
     if feature == "quarter":
         raw = ((raw - 1) // 3) + 1
@@ -118,9 +135,25 @@ def _compute_date_dummies(dates, feature: str) -> Dict[str, np.ndarray]:
         offset = _NW_OFFSET.get(feature, 0)
         if offset:
             raw = raw + offset
+    return raw
 
-    values = _DUMMY_FEATURE_VALUES[feature]
-    return {f"{feature}_{v}": (raw == v).astype(np.uint8) for v in values}
+
+def _compute_date_feature_expr(expr: "pl.Expr", feature: str) -> "pl.Expr":
+    """Build a polars expression for a string date feature (pandas convention)."""
+    if feature in _NW_MISSING:
+        # polars dt.week() is the ISO week, matching pandas isocalendar().week
+        return expr.dt.week()
+
+    nw_attr = _NW_DT_ATTR.get(feature, feature)
+    if feature == "quarter":
+        # narwhals maps quarter -> month then derives; polars has dt.quarter()
+        return expr.dt.quarter()
+
+    result = getattr(expr.dt, nw_attr)()
+    offset = _NW_OFFSET.get(feature, 0)
+    if offset:
+        result = result + offset
+    return result
 
 
 def _resolve_num_threads(num_threads: int) -> int:

@@ -62,6 +62,7 @@ from .utils import (
     _DUMMY_FEATURE_VALUES,
     _ShortSeriesException,
     _compute_date_dummies,
+    _compute_date_feature_values,
     _resolve_num_threads,
 )
 
@@ -1092,7 +1093,7 @@ class TimeSeries:
                 if feat_dtype is not None:
                     feat_vals = feat_vals.astype(feat_dtype)
         else:
-            feat_vals = getattr(dates.dt, feature)()
+            feat_vals = _compute_date_feature_values(dates, feature)
         return {feat_name: feat_vals}
 
     def _transform(

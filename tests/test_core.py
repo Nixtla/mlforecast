@@ -2543,3 +2543,29 @@ def test_update_validation_polars_ns_timestamps():
         }
     )
     ts.update(update, validate_new_data=True)
+
+
+# Regression for #738: string date_features on polars input must match pandas.
+# Several polars .dt accessors are named differently (dayofweek/dayofyear) or use
+# a different value convention (weekday is 1-7), so the old raw getattr path either
+# raised AttributeError or returned silently wrong values on polars.
+@pytest.mark.parametrize(
+    "feature",
+    ["dayofweek", "day_of_week", "weekday", "dayofyear", "day_of_year", "quarter", "week"],
+)
+def test_string_date_features_match_across_backends(feature):
+    dates = pd.date_range("2021-01-01", periods=40, freq="D")
+    pdf = pd.DataFrame({"unique_id": ["a"] * 40, "ds": dates, "y": np.arange(40.0)})
+    pldf = pl.from_pandas(pdf)
+
+    prep_pd = TimeSeries(freq="D", date_features=[feature]).fit_transform(
+        pdf, id_col="unique_id", time_col="ds", target_col="y"
+    )
+    prep_pl = TimeSeries(freq="1d", date_features=[feature]).fit_transform(
+        pldf, id_col="unique_id", time_col="ds", target_col="y"
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(prep_pd[feature]),
+        prep_pl[feature].to_numpy(),
+    )
