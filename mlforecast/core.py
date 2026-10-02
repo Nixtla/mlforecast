@@ -454,6 +454,26 @@ class TimeSeries:
             keep_rows = len(bounded) < len(block) + len(rows)
             state.trim_to_last(max(keep, *bounded), keep_rows=keep_rows)
 
+    def _check_pooled_update(self, df, sizes) -> None:
+        """Validate an update for the pooled states before anything is mutated."""
+        if not getattr(self, "_pooled_states", {}):
+            return
+        counts = np.asarray(sizes["counts"].to_numpy())
+        if not counts.any():
+            return
+        # the per-timestamp check upstream can't see duplicate (id, ds) rows
+        if not bool((counts == counts[0]).all()):
+            raise ValueError(
+                "Pooled lag transforms require updates to include all series for "
+                "each timestamp."
+            )
+        missing = [c for c in self._partition_cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"`partition_by` column(s) {missing} must be provided in the "
+                "update frame."
+            )
+
     def _update_pooled_states(self, df, sizes, values: np.ndarray) -> None:
         """Fold newly observed timestamps into the bucket aggregates.
 
@@ -475,11 +495,6 @@ class TimeSeries:
         if not counts.any():
             return  # nothing appended
         n_new = int(counts[0])
-        if not bool((counts == n_new).all()):
-            raise ValueError(
-                "Pooled lag transforms require updates to include all series for "
-                "each timestamp."
-            )
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
@@ -490,12 +505,6 @@ class TimeSeries:
         part_cols = self._partition_cols
         part: Dict[str, np.ndarray] = {}
         if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"`partition_by` column(s) {missing} must be provided in the "
-                    "update frame."
-                )
             pdf = df[part_cols]
             part = {
                 c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
@@ -2283,6 +2292,15 @@ class TimeSeries:
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
+        if new_groups.any():
+            if self.target_transforms is not None:
+                raise ValueError("Can not update target_transforms with new series.")
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series in the update frame must provide their static features: {missing}."
+                )
+        self._check_pooled_update(df, sizes)
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
@@ -2294,8 +2312,6 @@ class TimeSeries:
         self.uids = _to_native_index(self.uids, df=df)
         self.last_dates = _to_native_index(self.last_dates, df=df)
         if new_groups.any():
-            if self.target_transforms is not None:
-                raise ValueError("Can not update target_transforms with new series.")
             new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
             new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)

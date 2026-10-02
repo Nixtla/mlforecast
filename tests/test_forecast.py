@@ -2849,3 +2849,26 @@ def test_predict_new_df_keeps_state_when_intervals_fail():
     assert fcst.ts is original_ts
     fcst.predict(1, new_df=df, level=[80])
     assert fcst.ts is not original_ts
+
+
+def test_update_new_series_without_static_features_raises():
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float),
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1,
+        lag_transforms={1: [RollingMean(2, partition_by=["promo"])]},
+    )
+    fcst.fit(df, static_features=["promo"])
+    new = pd.DataFrame(
+        {"unique_id": ["a", "b", "c"], "ds": [n + 1] * 3, "y": [1.0, 2.0, 3.0]}
+    )
+    with pytest.raises(ValueError, match=r"static features: \['promo'\]"):
+        fcst.update(new)

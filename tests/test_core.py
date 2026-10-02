@@ -12,6 +12,7 @@ import utilsforecast.processing as ufp
 
 from sklearn.linear_model import LinearRegression
 
+from mlforecast import MLForecast
 from mlforecast.callbacks import SaveFeatures
 from mlforecast.core import (
     TimeSeries,
@@ -2543,3 +2544,97 @@ def test_update_validation_polars_ns_timestamps():
         }
     )
     ts.update(update, validate_new_data=True)
+
+
+def test_failed_update_without_new_series_statics_keeps_state():
+    """A rejected update for a new series must leave the fitted state intact."""
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float),
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+
+    def make_fcst():
+        fcst = MLForecast(
+            models=LinearRegression(),
+            freq=1,
+            lag_transforms={1: [RollingMean(2, partition_by=["promo"])]},
+        )
+        return fcst.fit(df, static_features=["promo"])
+
+    fcst = make_fcst()
+    new = pd.DataFrame(
+        {"unique_id": ["a", "b", "c"], "ds": [n + 1] * 3, "y": [1.0, 2.0, 3.0]}
+    )
+    with pytest.raises(ValueError, match="static features"):
+        fcst.update(new)
+    X_df = pd.DataFrame({"unique_id": ["a", "b"], "ds": [n + 1] * 2, "promo": [0, 1]})
+    preds = fcst.predict(1, X_df=X_df)
+    assert preds.shape[0] == 2
+    pd.testing.assert_frame_equal(preds, make_fcst().predict(1, X_df=X_df))
+
+
+def _update_rows(ids, **cols):
+    return pd.DataFrame({"unique_id": ids, "ds": 11, "y": 1.0, **cols})
+
+
+@pytest.mark.parametrize(
+    "fcst_kwargs, static_features, update_df, match",
+    [
+        (
+            {"lags": [1], "target_transforms": [Differences([1])]},
+            ["promo"],
+            _update_rows(["a", "b", "c"], promo=[0, 1, 1]),
+            "Can not update target_transforms",
+        ),
+        (
+            {"lags": [1], "target_transforms": [Differences([1])]},
+            ["promo"],
+            _update_rows(["a", "b", "c"]),
+            "Can not update target_transforms",
+        ),
+        (
+            {"lag_transforms": {1: [RollingMean(2, partition_by=["promo"])]}},
+            [],
+            _update_rows(["a", "b"]),
+            r"`partition_by` column\(s\)",
+        ),
+        (
+            {"lag_transforms": {1: [RollingMean(2, global_=True)]}},
+            ["promo"],
+            _update_rows(["a", "a", "b"]),
+            "include all series for each timestamp",
+        ),
+    ],
+)
+def test_rejected_update_leaves_state_unchanged(
+    fcst_kwargs, static_features, update_df, match
+):
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float) ** 1.3,
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+    fcst = MLForecast(models=LinearRegression(), freq=1, **fcst_kwargs)
+    fcst.fit(df, static_features=static_features)
+    ts = fcst.ts
+    before = (
+        list(ts.uids),
+        list(ts.last_dates),
+        ts.ga.data.copy(),
+        ts.ga.indptr.copy(),
+    )
+    with pytest.raises(ValueError, match=match):
+        fcst.update(update_df)
+    assert list(ts.uids) == before[0]
+    assert list(ts.last_dates) == before[1]
+    np.testing.assert_array_equal(ts.ga.data, before[2])
+    np.testing.assert_array_equal(ts.ga.indptr, before[3])
