@@ -1,6 +1,5 @@
 __all__ = ["SaveFeatures"]
 
-
 from utilsforecast.compat import DataFrame
 from utilsforecast.processing import (
     assign_columns,
