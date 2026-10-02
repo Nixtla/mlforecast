@@ -749,13 +749,18 @@ class TimeSeries:
         return [c for c in df_columns if c not in exclude]
 
     def _required_future_cols(self) -> List[str]:
-        """Future columns predict needs: dynamic exog plus non-static pooled keys."""
+        """Future columns predict needs: dynamic exog, partition keys and non-static groupby keys."""
         statics = set(self.static_features_.columns)
+        partition_cols = set(self._partition_cols)
         return list(
             dict.fromkeys(
                 [
                     *self._get_dynamic_exog_cols(self.features_order_),
-                    *(c for c in self._pooled_aux_cols if c not in statics),
+                    *(
+                        c
+                        for c in self._pooled_aux_cols
+                        if c not in statics or c in partition_cols
+                    ),
                 ]
             )
         )

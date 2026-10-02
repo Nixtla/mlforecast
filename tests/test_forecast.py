@@ -2802,7 +2802,9 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, groupby=[groupby_col])]},
     )
-    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
+    cv_result = fcst.cross_validation(
+        aux_cols_series, n_windows=2, h=7, static_features=statics
+    )
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
     for i in range(2):
@@ -2849,3 +2851,29 @@ def test_predict_new_df_keeps_state_when_intervals_fail():
     assert fcst.ts is original_ts
     fcst.predict(1, new_df=df, level=[80])
     assert fcst.ts is not original_ts
+
+
+def test_static_partition_keys_required_by_predict_and_update():
+    """predict and update agree: a static partition key must still be supplied."""
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], n),
+            "ds": np.tile(np.arange(1, n + 1), 2),
+            "y": np.arange(2 * n, dtype=float),
+            "promo": np.repeat([0, 1], n),
+        }
+    )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1,
+        lag_transforms={1: [RollingMean(2, partition_by=["promo"])]},
+    )
+    fcst.fit(df, static_features=["promo"])
+    with pytest.raises(ValueError, match=r"X_df is required.*promo"):
+        fcst.predict(1)
+    X_df = pd.DataFrame({"unique_id": ["a", "b"], "ds": [n + 1] * 2, "promo": [0, 1]})
+    assert fcst.predict(1, X_df=X_df).shape[0] == 2
+    new = pd.DataFrame({"unique_id": ["a", "b"], "ds": [n + 1] * 2, "y": [50.0, 60.0]})
+    with pytest.raises(ValueError, match="must be provided in the update frame"):
+        fcst.update(new)
