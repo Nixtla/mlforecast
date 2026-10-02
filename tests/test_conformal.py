@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
+from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.conformal_prediction import compute_conformity_scores
 from mlforecast.forecast import _get_conformal_method
 from mlforecast.lag_transforms import ExponentiallyWeightedMean
 from mlforecast.target_transforms import Differences
@@ -135,6 +137,32 @@ def test_prediction_intervals_monotonicity(predictions_w_intervals):
 # ---------------------------------------------------------------------------
 # Weighted conformal prediction tests
 # ---------------------------------------------------------------------------
+
+def test_weighted_fit_calibrates_with_the_weights():
+    """The calibration CV must fit with the same weights as the final models."""
+    series = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    series["weight"] = np.arange(len(series), dtype=float) + 1.0
+    h, n_windows = 3, 2
+    cfg = dict(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst = MLForecast(**cfg)
+    fcst.fit(
+        series,
+        static_features=[],
+        weight_col="weight",
+        prediction_intervals=PredictionIntervals(n_windows=n_windows, h=h),
+    )
+
+    def manual_scores(**cv_kwargs):
+        cv = MLForecast(**cfg).cross_validation(
+            series, n_windows=n_windows, h=h, refit=False, static_features=[], **cv_kwargs
+        )
+        return compute_conformity_scores(cv, ["LinearRegression"], "y")
+
+    weighted = manual_scores(weight_col="weight")
+    pd.testing.assert_frame_equal(fcst._cs_df, weighted)
+    unweighted = manual_scores()
+    assert not np.allclose(unweighted["LinearRegression"], weighted["LinearRegression"])
+
 
 def test_weighted_conformal_method_validation():
     """weighted_conformal_error and _distribution should be accepted; invalid names rejected."""

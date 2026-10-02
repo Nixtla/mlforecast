@@ -76,22 +76,12 @@ def _update(bst, n):
 def _predict(
     ts, bst, valid, h, before_predict_callback, after_predict_callback, weight_col
 ):
-    static = ts.static_features_.columns.drop(ts.id_col).tolist()
-    dynamic = valid.columns.drop(
-        static + [ts.id_col, ts.time_col, ts.target_col, weight_col], errors="ignore"
-    )  # drops weight_col if present amongst other cols
-    if not dynamic.empty:
-        X_df = valid.drop(
-            columns=static + [ts.target_col, weight_col], errors="ignore"
-        )  # drops weight_col if present amongst other cols)
-    else:
-        X_df = None
     preds = ts.predict(
         {"Booster": bst},
         horizon=h,
         before_predict_callback=before_predict_callback,
         after_predict_callback=after_predict_callback,
-        X_df=X_df,
+        X_df=ts._cv_X_df(valid, weight_col),
     )
     return valid.merge(preds, on=[ts.id_col, ts.time_col], how="left")
 

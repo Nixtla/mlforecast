@@ -276,6 +276,27 @@ def test_dask_distributed_forecast_with_new_df():
     assert set(preds["unique_id"]) == set(series["unique_id"])
 
 
+def test_dask_distributed_weighted_predict_with_new_df():
+    """predict(new_df=) must treat the weight column the way fit recorded it."""
+    series = generate_daily_series(5, equal_ends=True, min_length=50, max_length=50)
+    series["weight"] = np.arange(len(series), dtype=float)
+    partitioned = _make_partitioned_series(series, npartitions=2)
+
+    fcst = DistributedMLForecast(
+        models=[DaskLGBMForecast(verbosity=-1, random_state=0)],
+        freq="D",
+        lags=[1, 2, 7],
+    )
+    fcst.fit(partitioned, static_features=[], weight_col="weight")
+    expected = fcst.predict(5).compute()
+    preds = fcst.predict(5, new_df=partitioned).compute()
+
+    pd.testing.assert_frame_equal(
+        preds.sort_values(["unique_id", "ds"]).reset_index(drop=True),
+        expected.sort_values(["unique_id", "ds"]).reset_index(drop=True),
+    )
+
+
 @pytest.mark.parametrize(
     "pooled_kwargs",
     [
