@@ -873,6 +873,29 @@ def _recalibrate_transfer(
     )
 
 
+def _resolve_user_weights(weights, cs_df, feature_cols: List[str]) -> np.ndarray:
+    """Evaluate ``TransferConformal.weights`` against the calibration rows.
+
+    A callable receives the stacked ``feature_cols`` (``None`` when there are
+    none); either way the result needs one entry per row of ``cs_df``.
+    """
+    if callable(weights):
+        src = (
+            np.column_stack([cs_df[c].to_numpy() for c in feature_cols]).astype(float)
+            if feature_cols
+            else None
+        )
+        weights = weights(src)
+    weights = np.asarray(weights, dtype=float)
+    if weights.size != len(cs_df):
+        raise ValueError(
+            "TransferConformal.weights must have one entry per source "
+            f"calibration row ({len(cs_df)},), got {weights.shape}."
+        )
+    # accept column vectors such as ``predict_proba(X)[:, 1:]``
+    return weights.ravel()
+
+
 def _weighted_conformal_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
@@ -894,19 +917,18 @@ def _weighted_conformal_transfer(
     source calibration point, and returns them in a ``TransferResult``.  The
     original ``source_cs_df`` is returned unchanged so the caller can continue
     using source residuals with weighted quantiles.
-
-    Requires ``preprocess_fn`` (``MLForecast.preprocess``) and
-    ``source_cs_df`` (the existing ``_cs_df``) to be provided.
     """
-    if preprocess_fn is None or source_cs_df is None:
+    if source_cs_df is None:
         raise ValueError(
-            "transfer_conformal_method='weighted_conformal' requires the model "
-            "to have been fit with a weighted_conformal method so that source "
-            "features are stored, and preprocess_fn must be supplied."
+            "Source-score transfer requires source conformity scores (source_cs_df)."
         )
-
     non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
     feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
+
+    if tc.weights is not None:
+        # user weights replace the density ratio and align with the full source set
+        weights = _resolve_user_weights(tc.weights, source_cs_df, feature_cols)
+        return TransferResult(cs_df=source_cs_df, weights=weights)
 
     if not feature_cols:
         raise ValueError(
@@ -915,6 +937,7 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
+    assert preprocess_fn is not None
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
 
@@ -967,14 +990,20 @@ def _scale_aligned_transfer(
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
-    if (
-        source_scales is None
-        or prediction_intervals.scale_estimator is None
-        or source_cs_df is None
-    ):
+    if source_cs_df is None:
+        raise ValueError(
+            "Source-score transfer requires source conformity scores (source_cs_df)."
+        )
+    if prediction_intervals.scale_estimator is None:
         raise ValueError(
             "transfer_conformal_method='scale_aligned' requires the model to have "
             "been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
+        )
+    if source_scales is None:
+        raise ValueError(
+            "Scale-aligned transfer requires source scales, but this artifact "
+            "predates source-scale persistence. Refit the source model with "
+            "PredictionIntervals(scale_estimator='mad' or 'std') and save it again."
         )
     target_scale_dict = _compute_series_scales(
         new_df,
@@ -1005,11 +1034,7 @@ def _scale_aligned_weighted_transfer(
     ``weighted_conformal_distribution`` (for feature columns) AND
     ``scale_estimator`` set on ``PredictionIntervals``.
     """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='scale_aligned_weighted' requires source_cs_df."
-        )
-    wc_result = _weighted_conformal_transfer(
+    sa_result = _scale_aligned_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
@@ -1021,7 +1046,7 @@ def _scale_aligned_weighted_transfer(
         source_cs_df=source_cs_df,
         source_scales=source_scales,
     )
-    sa_result = _scale_aligned_transfer(
+    wc_result = _weighted_conformal_transfer(
         new_df=new_df,
         prediction_intervals=prediction_intervals,
         tc=tc,
@@ -1037,6 +1062,7 @@ def _scale_aligned_weighted_transfer(
         cs_df=source_cs_df,
         weights=wc_result.weights,
         target_scales=sa_result.target_scales,
+        target_weights=wc_result.target_weights,
     )
 
 
@@ -1062,8 +1088,7 @@ def _error_scaled_transfer(
     """
     if source_cs_df is None:
         raise ValueError(
-            "transfer_conformal_method='error_scaled' requires source_cs_df; "
-            "ensure the model was fit with prediction_intervals."
+            "Source-score transfer requires source conformity scores (source_cs_df)."
         )
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 

@@ -1,10 +1,13 @@
+import cloudpickle
 import lightgbm
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import ExpandingMean
+from mlforecast.conformal_prediction import get_transfer_method_spec
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import PredictionIntervals, TransferConformal, generate_daily_series
 
 
@@ -12,7 +15,7 @@ HORIZON = 14
 N_WINDOWS = 10
 N_SOURCE_SERIES = 45
 N_TARGET_SERIES = 35
-LEVELS = [80, 90, 95]
+LEVELS: list = [80, 90, 95]
 TRANSFER_METHODS = [
     "recalibrate",
     "scale_aligned",
@@ -22,6 +25,273 @@ TRANSFER_METHODS = [
 ]
 MODEL = "LGBMRegressor"
 _PREDICTION_CACHE: dict[tuple, pd.DataFrame] = {}
+
+
+def _dynamic_exog_system(n: int = 60) -> pd.DataFrame:
+    y = np.zeros(n)
+    u = np.arange(n, 0, -1)
+    for i in range(1, n):
+        y[i] = -y[i - 1] - 2 * u[i]
+    return pd.DataFrame(
+        {
+            "unique_id": "A",
+            "ds": pd.date_range("2000-01-01", periods=n, freq="D"),
+            "u": u,
+            "y": y,
+        }
+    )
+
+
+def _intervals_for_dynamic_exog_transfer(method: str) -> PredictionIntervals:
+    common: dict = {"n_windows": 3, "h": 5}
+    if method in {"recalibrate", "error_scaled"}:
+        return PredictionIntervals(method="conformal_error", **common)
+    if method == "scale_aligned":
+        return PredictionIntervals(
+            method="conformal_error", scale_estimator="std", **common
+        )
+    if method == "weighted_conformal":
+        return PredictionIntervals(method="weighted_conformal_error", **common)
+    return PredictionIntervals(
+        method="weighted_conformal_error", scale_estimator="std", **common
+    )
+
+
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_conformal_with_dynamic_exog(method):
+    df = _dynamic_exog_system()
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].copy()
+    new_df.loc[40:44, "y"] = -100
+    X_df = df[["unique_id", "ds", "u"]].iloc[45:50]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
+    )
+
+    baseline = fcst.predict(h=5, new_df=new_df, X_df=X_df)
+    result = fcst.predict(
+        h=5,
+        new_df=new_df,
+        X_df=X_df,
+        transfer_conformal=method,
+        level=[90],
+    )
+
+    np.testing.assert_allclose(
+        result["LinearRegression"],
+        baseline["LinearRegression"],
+        err_msg=f"{method} changed point forecasts",
+    )
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_transfer_conformal_with_dynamic_partition_columns(method):
+    df = _dynamic_exog_system()
+    df["promo"] = np.arange(len(df)) % 2
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].copy()
+    new_df.loc[40:44, "y"] = -100
+    X_df = df[["unique_id", "ds", "u", "promo"]].iloc[45:50]
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={
+            1: [RollingMean(window_size=2, min_samples=1, partition_by=["promo"])]
+        },
+    )
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
+    )
+
+    assert "promo" not in fcst.ts.features_order_
+    assert fcst.ts._partition_cols == ["promo"]
+    baseline = fcst.predict(h=5, new_df=new_df, X_df=X_df)
+    result = fcst.predict(
+        h=5,
+        new_df=new_df,
+        X_df=X_df,
+        transfer_conformal=method,
+        level=[90],
+    )
+
+    np.testing.assert_allclose(result["LinearRegression"], baseline["LinearRegression"])
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_frozen_backtest_ignores_raw_lag_feature_name():
+    """Raw columns sharing lag-feature names are not future exogenous data."""
+    df = _dynamic_exog_system().drop(columns="u")
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].copy()
+    new_df["lag1"] = 99
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+
+    result = fcst.predict(
+        h=3,
+        new_df=new_df,
+        level=[90],
+        transfer_conformal="recalibrate",
+    )
+
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_transfer_conformal_missing_exog_in_new_df_raises():
+    """A dynamic exog absent from `new_df` is named, not silently dropped."""
+    df = _dynamic_exog_system()
+    train = df.iloc[:30]
+    new_df = df.iloc[:45].drop(columns="u")
+    X_df = df[["unique_id", "ds", "u"]].iloc[45:50]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+    )
+
+    with pytest.raises(
+        ValueError, match=r"`new_df` is missing columns required.*\['u'\]"
+    ):
+        fcst.predict(
+            h=5,
+            new_df=new_df,
+            X_df=X_df,
+            transfer_conformal="recalibrate",
+            level=[90],
+        )
+
+
+def test_predict_new_df_missing_exog_raises_without_level():
+    df = _dynamic_exog_system()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df.iloc[:30], static_features=[])
+
+    with pytest.raises(ValueError, match=r"`new_df` is missing .*\['u'\]"):
+        fcst.predict(
+            h=5,
+            new_df=df.iloc[:45].drop(columns="u"),
+            X_df=df[["unique_id", "ds", "u"]].iloc[45:50],
+        )
+
+
+def test_transfer_recalibrate_supports_legacy_intervals_payload(tmp_path):
+    """An interval payload saved before source scales existed remains usable."""
+    df = _dynamic_exog_system().drop(columns="u")
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df.iloc[:30],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+    # Emulate the interval payload written before source scales were persisted.
+    intervals_path = savedir / "intervals.pkl"
+    with intervals_path.open("rb") as f:
+        intervals = cloudpickle.load(f)
+    del intervals["source_scales"]
+    with intervals_path.open("wb") as f:
+        cloudpickle.dump(intervals, f)
+
+    loaded = MLForecast.load(savedir)
+    result = loaded.predict(
+        h=3,
+        new_df=df.iloc[:45],
+        level=[90],
+        transfer_conformal="recalibrate",
+    )
+
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_transfer_scale_alignment_survives_save_load(tmp_path):
+    """Save/load preserves every source scale needed for scale-aligned transfer."""
+    df = generate_daily_series(2, min_length=45, max_length=45, seed=73)
+    ids = df["unique_id"].unique()
+    df.loc[df["unique_id"] == ids[1], "y"] *= 10.0
+    train = df.groupby("unique_id", observed=True).head(30).reset_index(drop=True)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        train,
+        prediction_intervals=PredictionIntervals(
+            n_windows=2,
+            h=3,
+            scale_estimator="std",
+        ),
+    )
+    savedir = tmp_path / "fcst"
+    savedir.mkdir()
+    fcst.save(savedir)
+
+    source_scales = fcst._cs_source_scales_
+    assert source_scales is not None
+    assert len(source_scales) == 2
+    assert not np.isclose(source_scales[ids[0]], source_scales[ids[1]])
+    expected = fcst.predict(
+        h=3,
+        new_df=df,
+        level=[90],
+        transfer_conformal="scale_aligned",
+    )
+    loaded = MLForecast.load(savedir)
+    assert loaded._cs_source_scales_ == pytest.approx(source_scales)
+    result = loaded.predict(
+        h=3,
+        new_df=df,
+        level=[90],
+        transfer_conformal="scale_aligned",
+    )
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_failed_weighted_transfer_preserves_source_forecasting_state():
+    """A failed target DRE calculation must not replace the source history."""
+    source = generate_daily_series(1, min_length=30, max_length=30, seed=71)
+    target = generate_daily_series(1, min_length=30, max_length=30, seed=72)
+    source["unique_id"] = "source"
+    target["unique_id"] = "target"
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        source,
+        prediction_intervals=PredictionIntervals(
+            n_windows=2,
+            h=3,
+            method="weighted_conformal_error",
+        ),
+    )
+    expected = fcst.predict(h=3, level=[90])
+
+    with pytest.raises(ValueError, match="cv=999"):
+        fcst.predict(
+            h=3,
+            new_df=target,
+            level=[90],
+            transfer_conformal=TransferConformal(
+                method="weighted_conformal",
+                cv=999,
+            ),
+        )
+
+    result = fcst.predict(h=3, level=[90])
+
+    pd.testing.assert_frame_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +376,17 @@ def transfer_cp_setup():
     )
 
 
+@pytest.fixture
+def transfer_cp_isolated(transfer_cp_setup):
+    """Per-test copy: ``predict(new_df=...)`` permanently replaces ``mlf.ts``,
+    so a test that leaves it in target-domain state would leak into the ones
+    that follow. The module fixture stays for the tests that only re-warm from
+    the same target (and so keep hitting ``_PREDICTION_CACHE``)."""
+    import copy as _copy
+
+    return _copy.deepcopy(transfer_cp_setup)
+
+
 def compute_coverage(
     preds: pd.DataFrame,
     actuals: pd.DataFrame,
@@ -146,6 +427,136 @@ def _predict_transfer(
             transfer_conformal=method,
         )
     return _PREDICTION_CACHE[cache_key].copy()
+
+
+@pytest.mark.parametrize("method", ["scale_aligned"])
+def test_source_score_transfer_supports_target_id_subset(transfer_cp_isolated, method):
+    """Source scores are pooled even when forecasting a subset of target IDs."""
+    mlf, target_train, _ = transfer_cp_isolated
+    target_id = target_train["unique_id"].iloc[0]
+
+    full_result = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        transfer_conformal=method,
+    )
+    result = mlf.predict(
+        h=HORIZON,
+        level=[90],
+        new_df=target_train,
+        ids=[target_id],
+        transfer_conformal=method,
+    )
+
+    expected = full_result.loc[full_result["unique_id"] == target_id]
+    pd.testing.assert_frame_equal(
+        result.reset_index(drop=True), expected.reset_index(drop=True)
+    )
+
+
+def _dre_ids_setup():
+    src = generate_daily_series(8, min_length=120, max_length=120, seed=70)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+    tgt = generate_daily_series(6, min_length=80, max_length=80, seed=71)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1, 2],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=10, h=3, method="weighted_conformal_error", scale_estimator="mad"
+        ),
+    )
+    return mlf, tgt
+
+
+@pytest.mark.parametrize(
+    "method", ["weighted_conformal", "scale_aligned_weighted", "error_scaled"]
+)
+def test_dre_with_ids_ignores_other_target_series(method):
+    """Intervals for the requested ids must not depend on the other target series."""
+    mlf, tgt = _dre_ids_setup()
+    keep = tgt["unique_id"].iloc[0]
+    shifted = tgt.copy()
+    shifted.loc[shifted["unique_id"] != keep, "y"] *= 10
+
+    kwargs = dict(h=3, level=[50, 80], ids=[keep], transfer_conformal=method)
+    base = mlf.predict(new_df=tgt, **kwargs)
+    other = mlf.predict(new_df=shifted, **kwargs)
+    pd.testing.assert_frame_equal(base, other)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["weighted_conformal", "scale_aligned", "scale_aligned_weighted", "error_scaled"],
+)
+def test_source_score_transfers_require_source_cs_df(method):
+    df = generate_daily_series(1, min_length=20, max_length=20)
+    with pytest.raises(ValueError, match="requires source conformity scores"):
+        get_transfer_method_spec(method).fn(
+            new_df=df,
+            prediction_intervals=PredictionIntervals(
+                method="weighted_conformal_error", scale_estimator="std"
+            ),
+            tc=TransferConformal(method=method),
+            model_names=["m"],
+            target_col="y",
+            backtest_results=df.assign(m=0.0),
+            source_cs_df=None,
+            source_scales={},
+        )
+
+
+def test_transfer_ids_with_pooled_transforms_fails_before_work(monkeypatch):
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=90)
+    tgt = generate_daily_series(4, min_length=40, max_length=40, seed=91)
+    mlf = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(2, global_=True)]},
+    )
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=3, method="weighted_conformal_error"
+        ),
+    )
+    calls = []
+    original = MLForecast.preprocess
+
+    def spy(self, df, **kwargs):
+        calls.append(1)
+        return original(self, df, **kwargs)
+
+    monkeypatch.setattr(MLForecast, "preprocess", spy)
+
+    with pytest.raises(ValueError, match="Cannot use `ids` with global"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt,
+            ids=[tgt["unique_id"].iloc[0]],
+            transfer_conformal="weighted_conformal",
+        )
+    assert calls == []
+
+
+def test_dre_with_unknown_ids_names_them():
+    mlf, tgt = _dre_ids_setup()
+    with pytest.raises(ValueError, match="weren't seen during training"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt,
+            ids=["nope"],
+            transfer_conformal="weighted_conformal",
+        )
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
@@ -623,3 +1034,295 @@ def test_recalibrate_step_size_param():
     assert "LGBMRegressor-lo-90" in preds.columns
     assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
+
+
+def _pooled_aux_system(n: int = 80, n_series: int = 4) -> pd.DataFrame:
+    """Series with a time-varying pooled groupby key and a partition key.
+
+    A groupby key may vary over time only when ``partition_by`` is also set:
+    a pure groupby bucket is broadcast from the statics at predict time and so
+    must be static, while with ``partition_by`` the key is read per row
+    (``core.py`` ``_build_pooled_states``).
+    """
+    frames = []
+    for s in range(n_series):
+        frames.append(
+            pd.DataFrame(
+                {
+                    "unique_id": f"S{s}",
+                    "ds": pd.date_range("2000-01-01", periods=n, freq="D"),
+                    "u": np.arange(n, 0, -1) + s,
+                    "promo": np.arange(n) % 2,
+                    "grp": (np.arange(n) + s) % 2,
+                    "y": np.cumsum(np.sin(np.arange(n) / 3.0)) * (s + 1),
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+def _pooled_aux_forecast() -> MLForecast:
+    return MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={
+            1: [
+                RollingMean(
+                    window_size=2,
+                    min_samples=1,
+                    groupby=["grp"],
+                    partition_by=["promo"],
+                )
+            ]
+        },
+    )
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_transfer_conformal_with_pooled_groupby_columns(method):
+    """A pooled ``groupby=`` key must reach the frozen backtest's X_df.
+
+    ``drop_auxiliary_columns`` strips it from ``features_order_``, so resolving
+    the required future columns from the dynamic exog set plus ``_partition_cols``
+    alone omitted it, and the pooled state then raised from deep inside the
+    backtest loop instead of being named up front.
+    """
+    df = _pooled_aux_system()
+    train = df.groupby("unique_id", observed=True).head(50).reset_index(drop=True)
+    new_df = df.groupby("unique_id", observed=True).head(70).reset_index(drop=True)
+    pos = df.groupby("unique_id", observed=True).cumcount()
+    X_df = df.loc[
+        pos.between(70, 74), ["unique_id", "ds", "u", "promo", "grp"]
+    ].reset_index(drop=True)
+    fcst = _pooled_aux_forecast()
+    fcst.fit(
+        train,
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
+    )
+
+    assert "grp" not in fcst.ts.features_order_
+    assert fcst.ts._pooled_aux_cols == ["grp", "promo"]
+
+    baseline = fcst.predict(h=5, new_df=new_df, X_df=X_df)
+    result = fcst.predict(
+        h=5, new_df=new_df, X_df=X_df, transfer_conformal=method, level=[90]
+    )
+
+    np.testing.assert_allclose(result["LinearRegression"], baseline["LinearRegression"])
+    assert "LinearRegression-lo-90" in result
+    assert "LinearRegression-hi-90" in result
+
+
+def test_predict_names_missing_pooled_groupby_column():
+    """Ordinary predict must name the missing group key, not fail inside pooling."""
+    df = _pooled_aux_system()
+    train = df.groupby("unique_id", observed=True).head(50).reset_index(drop=True)
+    fcst = _pooled_aux_forecast()
+    fcst.fit(train, static_features=[])
+
+    pos = df.groupby("unique_id", observed=True).cumcount()
+    X_df = df.loc[pos.between(50, 54), ["unique_id", "ds", "u", "promo"]].reset_index(
+        drop=True
+    )
+    with pytest.raises(ValueError, match=r"X_df is missing future values.*grp"):
+        fcst.predict(h=5, X_df=X_df)
+
+
+@pytest.mark.parametrize("method", ["weighted_conformal", "recalibrate"])
+def test_transfer_with_fit_inferred_static_features(method):
+    """``static_features=None`` at fit: the target must infer the same split."""
+    src = generate_daily_series(
+        3, min_length=60, max_length=60, n_static_features=1, seed=90
+    )
+    tgt = generate_daily_series(
+        3, min_length=45, max_length=45, n_static_features=1, seed=91
+    )
+    fcst = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        freq="D",
+        lags=[1],
+    )
+    fcst.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            method="weighted_conformal_error", n_windows=10, h=5
+        ),
+    )
+    preds = fcst.predict(h=5, new_df=tgt, transfer_conformal=method, level=[90])
+    assert np.isfinite(preds["LGBMRegressor-lo-90"]).all()
+    assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
+
+
+def _weights_setup(seed: int = 70):
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=seed)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+    tgt = generate_daily_series(4, min_length=40, max_length=40, seed=seed + 1)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=3, method="weighted_conformal_error", scale_estimator="mad"
+        ),
+    )
+    return mlf, tgt
+
+
+@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
+def test_user_supplied_weights_are_honored(method):
+    """A degenerate user weight vector must change the intervals, not be ignored."""
+    mlf, tgt = _weights_setup()
+    n_cal = len(mlf._cs_df)
+    degenerate = np.zeros(n_cal)
+    degenerate[0] = 1.0
+
+    auto = mlf.predict(
+        h=3, level=[90], new_df=tgt, transfer_conformal=TransferConformal(method=method)
+    )
+    supplied = mlf.predict(
+        h=3,
+        level=[90],
+        new_df=tgt,
+        transfer_conformal=TransferConformal(method=method, weights=degenerate),
+    )
+    assert not np.allclose(
+        auto["LGBMRegressor-lo-90"].to_numpy(),
+        supplied["LGBMRegressor-lo-90"].to_numpy(),
+    )
+
+
+@pytest.mark.parametrize("transfer", [False, True])
+def test_user_supplied_weights_length_is_checked(transfer):
+    """Same-domain and transfer paths share one length check."""
+    mlf, tgt = _weights_setup()
+    bad = np.ones(len(mlf._cs_df) - 1)
+    with pytest.raises(ValueError, match="one entry per source calibration row"):
+        mlf.predict(
+            h=3,
+            level=[90],
+            new_df=tgt if transfer else None,
+            transfer_conformal=TransferConformal(
+                method="weighted_conformal", weights=bad
+            ),
+        )
+    column = np.ones((len(mlf._cs_df), 1))
+    preds = mlf.predict(
+        h=3,
+        level=[90],
+        new_df=tgt if transfer else None,
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=column
+        ),
+    )
+    assert preds["LGBMRegressor-lo-90"].notna().all()
+
+
+def test_user_supplied_callable_weights_receive_source_features():
+    """The callable form is passed the source calibration feature matrix."""
+    mlf, tgt = _weights_setup(seed=74)
+    n_cal = len(mlf._cs_df)
+    seen = {}
+
+    def make_weights(src_features):
+        seen["shape"] = src_features.shape
+        w = np.zeros(len(src_features))
+        w[0] = 1.0
+        return w
+
+    preds = mlf.predict(
+        h=3,
+        level=[90],
+        new_df=tgt,
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=make_weights
+        ),
+    )
+    assert seen["shape"][0] == n_cal
+    assert "LGBMRegressor-lo-90" in preds
+
+
+def test_user_supplied_weights_skip_target_preprocessing(monkeypatch):
+    """With explicit weights there is no density ratio to fit, so no scratch clone."""
+    from mlforecast.core import TimeSeries
+
+    mlf, tgt = _weights_setup(seed=76)
+    calls = []
+    original = TimeSeries._clone_cold
+
+    def spy(self):
+        calls.append(1)
+        return original(self)
+
+    monkeypatch.setattr(TimeSeries, "_clone_cold", spy)
+    preds = mlf.predict(
+        h=3,
+        level=[90],
+        new_df=tgt,
+        ids=[tgt["unique_id"].iloc[0]],
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=np.ones(len(mlf._cs_df))
+        ),
+    )
+    assert np.isfinite(preds["LGBMRegressor-lo-90"]).all()
+    assert len(calls) == 1  # only `_clone_warm` for the target forecasting state
+
+
+def test_transfer_preprocess_forwards_fit_time_knobs(monkeypatch):
+    """weight_col / keep_last_n must mirror the source fit.
+
+    ``dropna`` and ``horizons`` stay at their defaults on purpose: the source
+    calibration rows are model predictions and always fully lagged, so handing
+    the density-ratio classifier ``dropna=False`` target rows would feed it NaNs.
+    """
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=80)
+    src["unique_id"] = "src_" + src["unique_id"].astype(str)
+    src["w"] = 1.0
+    tgt = generate_daily_series(4, min_length=40, max_length=40, seed=81)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    tgt["w"] = 1.0
+
+    mlf = MLForecast(
+        models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
+        lags=[1, 2],
+        freq="D",
+        num_threads=1,
+    )
+    mlf.fit(
+        src,
+        static_features=[],
+        weight_col="w",
+        keep_last_n=10,
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=3, method="weighted_conformal_error"
+        ),
+    )
+    recorded = {}
+    original = MLForecast.preprocess
+
+    def spy(self, df, **kwargs):
+        recorded.update(kwargs)
+        return original(self, df, **kwargs)
+
+    monkeypatch.setattr(MLForecast, "preprocess", spy)
+    mlf.predict(h=3, level=[90], new_df=tgt, transfer_conformal="weighted_conformal")
+
+    # a new `_fit_settings` key must be triaged into or out of the exclusion tuple
+    assert set(recorded) == {
+        "id_col",
+        "time_col",
+        "target_col",
+        "static_features",
+        "keep_last_n",
+        "weight_col",
+        "validate_data",
+    }
+    assert recorded["weight_col"] == "w"
+    assert recorded["keep_last_n"] == 10
+    assert recorded["static_features"] == []

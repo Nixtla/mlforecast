@@ -748,6 +748,35 @@ class TimeSeries:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
 
+    def _required_future_cols(self) -> List[str]:
+        """Future columns predict needs: dynamic exog, partition keys and non-static groupby keys."""
+        statics = set(self.static_features_.columns)
+        partition_cols = set(self._partition_cols)
+        return list(
+            dict.fromkeys(
+                [
+                    *self._get_dynamic_exog_cols(self.features_order_),
+                    *(
+                        c
+                        for c in self._pooled_aux_cols
+                        if c not in statics or c in partition_cols
+                    ),
+                ]
+            )
+        )
+
+    def _validate_ids(self, ids: List[str]) -> None:
+        if any(mode != "local" for mode, _, _ in self._pooled_states):
+            raise ValueError(
+                "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
+                "These transforms require forecasting all series together."
+            )
+        unseen = set(ids) - set(self.uids)
+        if unseen:
+            raise ValueError(
+                f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
+            )
+
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
@@ -2088,33 +2117,19 @@ class TimeSeries:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
     ) -> DFType:
-        if ids is not None:
-            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
-            if has_nonlocal:
-                raise ValueError(
-                    "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
-                    "These transforms require forecasting all series together."
-                )
         self._check_aligned_ends()
         if ids is not None:
-            unseen = set(ids) - set(self.uids)
-            if unseen:
-                raise ValueError(
-                    f"The following ids weren't seen during training and thus can't be forecasted: {unseen}"
-                )
+            self._validate_ids(ids)
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            required_future_cols = self._required_future_cols()
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
                     "for feature generation or model inputs used during training: "
-                    f"{sorted(required_future_cols)}."
+                    f"{required_future_cols}."
                 )
         with self._maybe_subset(idxs):
             # invalidate the per-predict statics cache in _predict_setup
@@ -2140,11 +2155,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = [c for c in self._required_future_cols() if c not in dynamics]
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
