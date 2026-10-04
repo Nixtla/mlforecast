@@ -116,12 +116,14 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    static_cols = set(fcst.ts.static_features_.columns)
-    dynamic_cols = [
-        col
-        for col in fcst.ts.features_order_
-        if col in new_df.columns and col not in static_cols
-    ]
+    future_cols = list(
+        dict.fromkeys(
+            [
+                *fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_),
+                *fcst.ts._pooled_aux_cols,
+            ]
+        )
+    )
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -133,9 +135,7 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for cutoffs, train, valid in splits:
-        X_df = None
-        if dynamic_cols:
-            X_df = valid[[id_col, time_col, *dynamic_cols]]
+        X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
         preds = fcst.predict(h=h, new_df=train, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
         joined = ufp.join(
