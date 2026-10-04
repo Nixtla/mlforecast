@@ -10,8 +10,8 @@ and reduced in bounded blocks; an accumulator kernel (``Expanding*``, ``EWM``)
 runs its inner transforms over each bucket's occupied cells, which are exactly
 the ragged series its recurrence walks, and primes its predict-time state off
 the same pass. Nothing scales with the calendar width or the bucket count
-beyond the store itself, which is ``O(n_rows)``. Only the row kernels still
-take the dense block.
+beyond the store itself, which is ``O(n_rows)``. The row kernels compute on
+the row store.
 
 That path is not bit-identical to the dense one for the averaging kernels:
 coreforecast's rolling mean carries a running accumulator, while the store sums
@@ -33,7 +33,8 @@ anything downstream depends on:
   coreforecast release that started caching inside a rolling ``transform`` has
   to fail here rather than silently unprime.
 * **G4.4 who takes the store path** -- every channel kernel does; the row
-  kernels return ``None`` and take the dense block, on a shared key too.
+  kernels have none (``fit_from_store`` raises) and compute on the row store,
+  on a shared key too.
 * **G4.5 boundaries** -- a window longer than the calendar, a lag past its end,
   buckets with one row and with none, and seasonal strides on every phase.
 * **G4.6 the transient is bounded** -- asserted against the block size, not
@@ -86,11 +87,16 @@ class _Constant(BaseEstimator):
 @contextmanager
 def _dense_path():
     """Send every kernel down the dense ``transform`` path, as the reference."""
+
+    def fit_values(self, kernel, inner):
+        store = self._fit_store()
+        return store.row_values(store.gather(self.transform(kernel, inner), 0))
+
     with ExitStack() as stack:
-        for cls in _STORE_KERNELS:
-            stack.enter_context(
-                mock.patch.object(cls, "fit_from_store", lambda *_: None)
-            )
+        stack.enter_context(mock.patch.object(PooledState, "fit_values", fit_values))
+        stack.enter_context(
+            mock.patch.object(PooledState, "prime", PooledState.transform)
+        )
         yield
 
 
@@ -450,14 +456,15 @@ def test_g4_3_store_priming_matches_dense_priming(name, tfm, shape):
 @pytest.mark.parametrize("name,tfm", _all_kernel_specs(), ids=_SPEC_IDS)
 def test_g4_4_store_path_membership(name, tfm):
     """Exactly the channel kernels compute on the store, and cell for cell
-    they agree with the dense block."""
+    they agree with the dense block; the row kernels have no store path."""
     tfm = tfm._set_core_tfm(2) if hasattr(tfm, "_set_core_tfm") else tfm
     kernel = get_kernel(tfm)
     state = _state_for(kernel, tfm)
-    values = kernel.fit_from_store(state._store)
-    assert (values is not None) == isinstance(kernel, _STORE_KERNELS), name
-    if values is None:
+    if not isinstance(kernel, _STORE_KERNELS):
+        with pytest.raises(NotImplementedError):
+            kernel.fit_from_store(state._store)
         return
+    values = kernel.fit_from_store(state._store)
     dense = state._store.gather(state.transform(kernel, kernel.make_inner()), 0)
     _assert_equivalent(dense, values, name.lower())
 

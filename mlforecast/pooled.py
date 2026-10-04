@@ -95,13 +95,9 @@ def _join_encoded(parts: Sequence[np.ndarray]) -> np.ndarray:
     return np.array(["\x1f".join(t) for t in zip(*parts)], dtype=object)
 
 
-def _join_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
-    return _join_encoded([_encode_column(a) for a in arrays])
-
-
 def encode_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
     """Encoded bucket key per row, in the same space as ``bucket_uniques``."""
-    return _join_keys(arrays)
+    return _join_encoded([_encode_column(a) for a in arrays])
 
 
 def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
@@ -149,7 +145,7 @@ def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
 
 def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
     """Map key columns onto an existing vocabulary; unseen keys get ``-1``."""
-    keys = _join_keys(arrays)
+    keys = encode_keys(arrays)
     if len(uniques) == 0:
         return np.full(len(keys), -1, dtype=np.int64)
     pos = np.clip(np.searchsorted(uniques, keys), 0, len(uniques) - 1)
@@ -160,6 +156,37 @@ def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
 #: what an unoccupied cell holds per channel, so coreforecast never sees a null;
 #: cells with no data are masked out later using the observation count
 _FILL = {"min": np.inf, "max": -np.inf}
+
+
+def _fill(name: str) -> float:
+    """What an unoccupied cell holds in channel ``name``."""
+    return _FILL.get(name, 0.0)
+
+
+def _ensure_view(
+    views: Dict[str, Dict[str, np.ndarray]],
+    shift: Dict[Optional[str], np.ndarray],
+    source: Dict[str, np.ndarray],
+    time_agg: str,
+    names: Collection[str],
+    n_buckets: int,
+    bucket: Optional[np.ndarray] = None,
+) -> Dict[str, np.ndarray]:
+    """The cached view of ``source`` collapsed by ``time_agg``, holding ``names``.
+
+    A view holding fewer channels than asked for is widened in place, and the
+    view's entry in ``shift`` is filled for the buckets it sees for the first
+    time (see `_collapsed`).
+    """
+    want = set(names) | {"count"}
+    view = views.setdefault(time_agg, {})
+    build = want - view.keys()
+    if build:
+        new, shift[time_agg] = _collapsed(
+            source, time_agg, build, shift.get(time_agg), n_buckets, bucket
+        )
+        view.update(new)
+    return view
 
 
 class _CellStore:
@@ -222,19 +249,15 @@ class _CellStore:
         """Per-cell channels, collapsed by ``time_agg`` if given (cached)."""
         if time_agg is None:
             return {name: self.chan[name] for name in names}
-        want = set(names) | {"count"}
-        view = self._views.setdefault(time_agg, {})
-        build = want - view.keys()
-        if build:
-            new, self.shift[time_agg] = _collapsed(
-                self.chan,
-                time_agg,
-                build,
-                self.shift.get(time_agg),
-                self.n_buckets,
-                self.bucket,
-            )
-            view.update(new)
+        view = _ensure_view(
+            self._views,
+            self.shift,
+            self.chan,
+            time_agg,
+            names,
+            self.n_buckets,
+            self.bucket,
+        )
         return {name: view[name] for name in names}
 
     def cell_shift(self, time_agg: Optional[str]) -> Optional[np.ndarray]:
@@ -328,7 +351,7 @@ class _CellStore:
         masked with the channel's fill, which every reduction ignores.
         """
         n = lo.size
-        out = {name: np.full(n, _FILL.get(name, 0.0)) for name in arrays}
+        out = {name: np.full(n, _fill(name)) for name in arrays}
         offsets = np.arange(window)
         step = max(1, _MAX_GATHER // window)
         last = max(self.size - 1, 0)
@@ -340,7 +363,7 @@ class _CellStore:
             if perm is not None:
                 idx = perm[idx]
             for name, arr in arrays.items():
-                vals = np.where(ok, arr[idx], _FILL.get(name, 0.0))
+                vals = np.where(ok, arr[idx], _fill(name))
                 if name == "min":
                     out[name][z] = vals.min(axis=1)
                 elif name == "max":
@@ -376,7 +399,7 @@ class _CellStore:
         o = self.ordinal[cells] - lo
         out: Dict[str, np.ndarray] = {}
         for name in names or self.chan:
-            block = np.full((self.n_buckets, hi - lo), _FILL.get(name, 0.0))
+            block = np.full((self.n_buckets, hi - lo), _fill(name))
             block[b, o] = self.chan[name][cells]
             out[name] = block
         return out
@@ -391,18 +414,6 @@ class _CellStore:
 
     def row_values(self, cell_values: np.ndarray) -> np.ndarray:
         return cell_values[self.cell_of_row]
-
-
-def _build_cells(
-    bucket_id: np.ndarray,
-    ordinal: np.ndarray,
-    y: np.ndarray,
-    n_buckets: int,
-    width: int,
-    names: Sequence[str],
-) -> Dict[str, np.ndarray]:
-    """Aggregate rows into a dense ``(n_buckets, width)`` array per requested channel."""
-    return _CellStore(bucket_id, ordinal, y, n_buckets, width, names).dense(0, width)
 
 
 _ALL_CHANNELS = ("count", "sum", "sumsq", "min", "max")
@@ -492,11 +503,11 @@ def _cell_aggregates(
         dev = y - centre(mean, obs)
         out["sumsq"] = np.bincount(idx, weights=dev * dev, minlength=n)
     if "min" in names:
-        buf = np.full(n, np.inf)
+        buf = np.full(n, _fill("min"))
         np.minimum.at(buf, idx, y)
         out["min"] = buf
     if "max" in names:
-        buf = np.full(n, -np.inf)
+        buf = np.full(n, _fill("max"))
         np.maximum.at(buf, idx, y)
         out["max"] = buf
     return out
@@ -544,8 +555,8 @@ def _collapse(
         "count": lambda: obs.astype(np.float64),
         "sum": lambda: np.where(obs, v, zero),
         "sumsq": lambda: np.where(obs, (v - shift) ** 2, zero),
-        "min": lambda: np.where(obs, v, np.inf),
-        "max": lambda: np.where(obs, v, -np.inf),
+        "min": lambda: np.where(obs, v, _fill("min")),
+        "max": lambda: np.where(obs, v, _fill("max")),
     }
     return {name: builders[name]() for name in (names or _ALL_CHANNELS)}
 
@@ -811,8 +822,8 @@ class _PooledKernel:
         raise NotImplementedError
 
     def fit_from_store(
-        self, _store: "_CellStore", _inner: Optional[Dict[str, Any]] = None
-    ) -> Optional[np.ndarray]:
+        self, store: "_CellStore", inner: Optional[Dict[str, Any]] = None
+    ) -> np.ndarray:
         """Fit-time value per occupied cell, computed on the cell store.
 
         Every channel kernel defines it, two ways. A bounded window is a run of
@@ -821,11 +832,10 @@ class _PooledKernel:
         so the count needs no ``k * mean`` round trip and is exact. An
         accumulator kernel runs its inner transforms over each bucket's
         occupied cells instead, and when ``inner`` is given primes it off the
-        same pass. ``None`` (the default) sends the kernel down the dense
-        ``transform`` path, which no built-in kernel takes any more; the row
-        kernels compute on the row store through ``fit_rows`` instead.
+        same pass. The row kernels compute on the row store through
+        ``fit_rows`` instead.
         """
-        return None
+        raise NotImplementedError
 
     def min_samples(self) -> float:
         ms = getattr(self.tfm, "min_samples", None)
@@ -1049,7 +1059,7 @@ class _ExpandingMixin:
         at = (hi - 1 - (first - kept_before[first]))[has]
         res = {}
         for name, vals in running.items():
-            out = np.full(store.size, _FILL.get(name, 0.0))
+            out = np.full(store.size, _fill(name))
             out[has] = vals[at]
             res[name] = out
         k = np.where(has, hi - first, 0).astype(np.float64)
@@ -1279,9 +1289,6 @@ class _RowKernel(_PooledKernel):
     needs_rows = True
     #: the gather reads the raw observations, never a primed inner
     primes_state = False
-    #: cap on a temporary gather block, so a long expanding window is processed
-    #: in chunks instead of being materialised all at once
-    _max_gather = _MAX_GATHER
 
     def make_inner(self):
         return {"_state": {}}
@@ -1315,7 +1322,8 @@ class _RowKernel(_PooledKernel):
         for a, b in zip(starts, np.r_[starts[1:], order.size]):
             grp = order[a:b]
             width = int(sorted_len[a])
-            step = max(1, self._max_gather // width)
+            # chunked so a long expanding window is never gathered all at once
+            step = max(1, _MAX_GATHER // width)
             offsets = np.arange(width)
             for c in range(0, grp.size, step):
                 sel = grp[c : c + step]
@@ -1463,6 +1471,17 @@ def get_kernel(tfm) -> _PooledKernel:
 
 
 # %% state
+#: what `PooledState.snapshot` captures by reference, beside the channel dicts
+#: and the row store: the scalars and per-bucket arrays predict replaces whole
+_SNAPSHOT_ATTRS = (
+    "_width",
+    "n_ordinals",
+    "series_bucket_id",
+    "n_buckets",
+    "bucket_uniques",
+)
+
+
 class PooledState:
     """Per-bucket aggregate store shared by every leaf with the same bucket key.
 
@@ -1585,8 +1604,7 @@ class PooledState:
 
     def finish_fit(self) -> None:
         """Materialise the predict-time block and drop the fit-time store."""
-        if self._base is None and self._store is not None:
-            self._base = self._store.dense(0, self._width)
+        self._base = self.base
         self._store = None
 
     @property
@@ -1610,15 +1628,14 @@ class PooledState:
         """
         if time_agg is None:
             return self.base
-        want = set(names or _ALL_CHANNELS) | {"count"}
-        view = self._views.setdefault(time_agg, {})
-        build = want - view.keys()
-        if build:
-            new, self.shift[time_agg] = _collapsed(
-                self.base, time_agg, build, self.shift.get(time_agg), self.n_buckets
-            )
-            view.update(new)
-        return view
+        return _ensure_view(
+            self._views,
+            self.shift,
+            self.base,
+            time_agg,
+            names or _ALL_CHANNELS,
+            self.n_buckets,
+        )
 
     def cell_shift(self, time_agg: Optional[str]) -> Optional[np.ndarray]:
         """The ``sumsq`` centre of a view as a ``(n_buckets, 1)`` column, if built."""
@@ -1651,8 +1668,7 @@ class PooledState:
         """Per-row feature values at fit, priming ``inner`` where it needs it.
 
         The channel kernels compute on the cell store and the row kernels on
-        the row store, so nothing full-width is built; the dense ``transform``
-        stays as the fallback for a kernel defining neither.
+        the row store, so nothing full-width is built.
         """
         store = self._fit_store()
         if kernel.needs_rows:
@@ -1660,17 +1676,18 @@ class PooledState:
             values = kernel.fit_rows(self._rows, store)
         else:
             values = kernel.fit_from_store(store, inner)
-            if values is None:
-                values = store.gather(self.transform(kernel, inner), 0)
         return store.row_values(values)
 
     def prime(self, kernel, inner: Dict[str, Any]) -> None:
         """Leave ``inner`` as a fit would, without keeping the features."""
-        if kernel.fit_from_store(self._fit_store(), inner) is None:
-            self.transform(kernel, inner)
+        kernel.fit_from_store(self._fit_store(), inner)
 
     def transform(self, kernel, inner: Dict[str, Any]) -> np.ndarray:
-        """Full ``(n_buckets, width)`` feature block, priming the inner state."""
+        """Full ``(n_buckets, width)`` feature block, priming the inner state.
+
+        The dense reference the store path is checked against; the engine
+        itself fits through `fit_values`.
+        """
         self._require_untrimmed()
         if kernel.custom:
             return kernel.run_transform(self, inner["_state"])
@@ -1774,13 +1791,7 @@ class PooledState:
         remap = np.searchsorted(merged, self.bucket_uniques).astype(np.int64)
         n_new = merged.size
         for name, arr in self.base.items():
-            grown = np.zeros((n_new, arr.shape[1]), dtype=arr.dtype)
-            if name == "min":
-                grown[:] = np.inf
-            elif name == "max":
-                grown[:] = -np.inf
-            grown[remap] = arr
-            self.base[name] = grown
+            self.base[name] = _grow_rows(arr, remap, n_new, _fill(name))
         for view, shift in self.shift.items():
             self.shift[view] = _grow_rows(shift, remap, n_new, np.nan)
         if self._rows is not None:
@@ -1824,30 +1835,16 @@ class PooledState:
     def snapshot(self):
         # aggregates are only appended to during predict, so copying the array
         # references is enough -- no deep copy of the whole state per model
-        return (
-            dict(self.base),
-            dict(self.shift),
-            self._width,
-            self.n_ordinals,
-            self.series_bucket_id,
-            self.n_buckets,
-            self.bucket_uniques,
-            self._rows.snapshot() if self._rows is not None else None,
-        )
+        attrs = {name: getattr(self, name) for name in _SNAPSHOT_ATTRS}
+        rows = self._rows.snapshot() if self._rows is not None else None
+        return dict(self.base), dict(self.shift), attrs, rows
 
     def restore(self, snap) -> None:
-        (
-            base,
-            shift,
-            self._width,
-            self.n_ordinals,
-            self.series_bucket_id,
-            self.n_buckets,
-            self.bucket_uniques,
-            rows,
-        ) = snap
+        base, shift, attrs, rows = snap
         self.base = dict(base)
         self.shift = dict(shift)
+        for name, value in attrs.items():
+            setattr(self, name, value)
         if rows is not None:
             assert self._rows is not None
             self._rows.restore(rows)

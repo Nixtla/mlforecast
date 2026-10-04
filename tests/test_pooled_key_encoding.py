@@ -5,7 +5,7 @@ encoded key strings. It builds one string per distinct *combination* rather
 than one per row -- hash-factorize each column, combine the codes as a mixed
 radix, encode and join only the survivors -- which is what keeps a partitioned
 fit off an ``O(n_rows)`` Python string path. The reference it must reproduce is
-the straightforward version, ``np.unique(_join_keys(arrays))``, so these guards
+the straightforward version, ``np.unique(encode_keys(arrays))``, so these guards
 assert equivalence to it rather than re-deriving the expected values:
 
 * **G3.1 reference equivalence** -- ``(ids, uniques)`` are byte-identical to the
@@ -34,12 +34,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mlforecast.pooled import _NULL_KEY, _join_keys, factorize
+from mlforecast.pooled import _NULL_KEY, encode_keys, factorize
 
 
 def _reference(arrays):
     """The per-row string path ``factorize`` replaced."""
-    keys = _join_keys(arrays)
+    keys = encode_keys(arrays)
     uniques, ids = np.unique(keys, return_inverse=True)
     return ids.ravel().astype(np.int64, copy=False), uniques
 
@@ -150,7 +150,7 @@ def test_g3_1_ids_round_trip_through_the_vocabulary():
         np.array([str(x) for x in rng.integers(0, 6, _N)], dtype=object),
     ]
     ids, uniques = factorize(arrays)
-    np.testing.assert_array_equal(uniques[ids], _join_keys(arrays))
+    np.testing.assert_array_equal(uniques[ids], encode_keys(arrays))
 
 
 # --------------------------------------------------------------------------- #

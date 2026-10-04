@@ -3430,12 +3430,17 @@ from mlforecast.lag_transforms import (  # noqa: E402
     SeasonalRollingMean,
 )
 from mlforecast.pooled import (  # noqa: E402
-    _build_cells,
+    _CellStore,
     _collapse,
     _view_value,
 )
 
 _BASE = ("count", "sum", "sumsq", "min", "max")
+
+
+def _build_cells(bucket_id, ordinal, y, n_buckets, width, names):
+    """Dense ``(n_buckets, width)`` block per channel, straight from the rows."""
+    return _CellStore(bucket_id, ordinal, y, n_buckets, width, names).dense(0, width)
 
 
 def _one_bucket_cells():
@@ -3811,7 +3816,7 @@ def test_ewm_time_agg_mean_skips_reaggregation():
     EWM's native rule is time_agg="mean", so it reads a derived view on every
     step; that view must be built once and reused rather than recomputed.
     """
-    from mlforecast.pooled import _build_cells, PooledState
+    from mlforecast.pooled import PooledState
 
     bid = np.array([0, 0, 0])
     ordv = np.array([0, 1, 2])
