@@ -1,3 +1,5 @@
+import warnings
+
 import lightgbm
 import numpy as np
 import pandas as pd
@@ -128,6 +130,46 @@ def test_transfer_conformal_with_dynamic_partition_columns(method):
     assert "LinearRegression-lo-90" in result
     assert "LinearRegression-hi-90" in result
 
+
+def test_transfer_conformal_static_groupby_key_not_in_backtest_X_df():
+    df = _dynamic_exog_system()
+    df["grp"] = 1
+    new_df = df.iloc[:45]
+    X_df = df[["unique_id", "ds", "u"]].iloc[45:50]
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(window_size=2, groupby=["grp"])]},
+    )
+    fcst.fit(
+        df.iloc[:30],
+        static_features=["grp"],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*considered static during fit")
+        fcst.predict(
+            h=5, new_df=new_df, X_df=X_df, transfer_conformal="recalibrate", level=[90]
+        )
+
+
+def test_transfer_conformal_missing_dynamic_exog_in_new_df():
+    df = _dynamic_exog_system()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df.iloc[:30],
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+    )
+    with pytest.raises(ValueError, match=r"new_df.*X_df.*\['u'\]"):
+        fcst.predict(
+            h=5,
+            new_df=df.iloc[:45].drop(columns="u"),
+            X_df=df[["unique_id", "ds", "u"]].iloc[45:50],
+            transfer_conformal="recalibrate",
+            level=[90],
+        )
 
 
 # ---------------------------------------------------------------------------

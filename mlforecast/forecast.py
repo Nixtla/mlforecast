@@ -116,14 +116,13 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    future_cols = list(
-        dict.fromkeys(
-            [
-                *fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_),
-                *fcst.ts._pooled_aux_cols,
-            ]
+    future_cols = fcst.ts._required_future_cols()
+    missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
+    if missing:
+        raise ValueError(
+            "`new_df` is missing columns required to build the backtest X_df: "
+            f"{missing}."
         )
-    )
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -1606,13 +1605,11 @@ class MLForecast:
             scratch = self._with_ts(self.ts._clone_cold())
             transfer_preprocess = None
             if spec.needs_preprocess:
-                transfer_preprocess = partial(
-                    scratch.preprocess,
-                    id_col=self.ts.id_col,
-                    time_col=self.ts.time_col,
-                    target_col=self.ts.target_col,
-                    static_features=self.ts.static_features,
-                )
+                settings = self.ts._fit_settings()
+                # features only: horizon targets and numpy output don't apply
+                for k in ("as_numpy", "horizon_features", "horizons", "max_horizon"):
+                    settings.pop(k, None)
+                transfer_preprocess = partial(scratch.preprocess, **settings)
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
