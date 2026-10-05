@@ -1,7 +1,6 @@
 import copy
 import pickle
 
-import cloudpickle
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -15,10 +14,6 @@ from mlforecast.callbacks import SaveFeatures
 from mlforecast.utils import generate_daily_series
 
 
-def _is_weekend(dates):
-    return dates.dt.weekday().to_numpy() >= 6
-
-
 def _pandas_reference(dates: pd.Series, name: str) -> np.ndarray:
     if name == "week_of_year":
         return dates.dt.isocalendar().week.to_numpy()
@@ -28,7 +23,7 @@ def _pandas_reference(dates: pd.Series, name: str) -> np.ndarray:
 
 def test_available_lists_every_exported_feature():
     features = dtf.available()
-    exported = set(dtf.__all__) - {"CalendarFeature", "available"}
+    exported = set(dtf.__all__) - {"available"}
     assert [f.name for f in features] == [
         name for name in dtf.__all__ if name in exported
     ]
@@ -185,29 +180,3 @@ def test_pickling_keeps_identity():
     loaded = pickle.loads(pickle.dumps(fcst))
     assert loaded.ts.date_features == [dtf.day_of_week, dtf.month]
     pd.testing.assert_frame_equal(loaded.predict(3), fcst.predict(3))
-
-
-def test_pickling_custom_features():
-    is_weekend = dtf.CalendarFeature("is_weekend", "", np.uint8, None, _is_weekend)
-    loaded = pickle.loads(pickle.dumps(is_weekend))
-    assert loaded == is_weekend
-    dates = pd.Series(pd.date_range("2000-01-01", periods=14, freq="D"))
-    np.testing.assert_array_equal(loaded.compute(dates), is_weekend.compute(dates))
-
-    # custom feature with a built-in name isn't replaced by the built-in
-    custom_month = dtf.CalendarFeature(
-        "month", "", np.uint8, None, lambda d: d.dt.month().to_numpy() * 0
-    )
-    copied = copy.deepcopy(custom_month)
-    assert copied is not dtf.month
-    np.testing.assert_array_equal(copied.compute(dates), 0)
-
-    series = generate_daily_series(2, min_length=40, max_length=40)
-    fcst = MLForecast(
-        models=[LinearRegression()],
-        freq="D",
-        lags=[1],
-        date_features=[is_weekend, custom_month],
-    ).fit(series)
-    loaded_fcst = cloudpickle.loads(cloudpickle.dumps(fcst))
-    pd.testing.assert_frame_equal(loaded_fcst.predict(3), fcst.predict(3))

@@ -1,5 +1,4 @@
 __all__ = [
-    "CalendarFeature",
     "available",
     "year",
     "quarter",
@@ -31,9 +30,11 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class CalendarFeature:
-    """Feature computed from the dates.
+    """Calendar feature exported by this module.
 
-    Args:
+    For internal use only, custom date features can be passed to `date_features` as functions.
+
+    Attributes:
         name (str): Name of the feature, used as the column name.
         description (str): Description of the values.
         dtype (type): numpy dtype of the computed values.
@@ -72,10 +73,8 @@ class CalendarFeature:
             dates = dates.dt.replace_time_zone(None)
         return self._compute(dates).astype(self.dtype)
 
-    def __reduce_ex__(self, protocol):
-        if _FEATURES.get(self.name) is self:
-            return _from_name, (self.name,)
-        return super().__reduce_ex__(protocol)
+    def __reduce__(self):
+        return _from_name, (self.name,)
 
 
 def _dt(dates: nw.Series, attr: str) -> np.ndarray:

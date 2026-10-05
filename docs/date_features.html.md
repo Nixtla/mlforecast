@@ -50,6 +50,4 @@ polars. Functions that take the dates and return the feature values are also
 accepted; see the [custom date features](./docs/how-to-guides/custom_date_features.html)
 guide.
 
-::: mlforecast.date_features.CalendarFeature
-
 ::: mlforecast.date_features.available
