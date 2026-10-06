@@ -116,13 +116,8 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    future_cols = fcst.ts._required_future_cols
-    missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
-    if missing:
-        raise ValueError(
-            "`new_df` is missing columns required to build the backtest X_df: "
-            f"{missing}."
-        )
+    # the windows' predict validates X_df against a clone warmed from `new_df`
+    future_cols = fcst.ts._clone_warm(new_df)._required_future_cols
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -1525,6 +1520,13 @@ class MLForecast:
 
         new_ts: Optional[TimeSeries] = None
         if new_df is not None:
+            new_cols = set(nw.from_native(new_df).columns)
+            missing = [c for c in self.ts._required_future_cols if c not in new_cols]
+            if missing:
+                raise ValueError(
+                    "`new_df` must include the dynamic columns used during fit "
+                    f"(the ones `X_df` provides). Missing: {missing}."
+                )
             new_ts = self.ts._clone_warm(new_df)
             ts = new_ts
         else:

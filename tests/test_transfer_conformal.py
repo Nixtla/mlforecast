@@ -7,6 +7,7 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.forecast import _frozen_backtest
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
 from mlforecast.utils import (
     PredictionIntervals,
@@ -91,6 +92,24 @@ def test_transfer_conformal_with_dynamic_exog(method):
     )
     assert "LinearRegression-lo-90" in result
     assert "LinearRegression-hi-90" in result
+    if method == "recalibrate":
+        # the model is exact, so only the perturbed rows can widen the intervals
+        clean = fcst.predict(
+            h=5, new_df=df.iloc[:45], X_df=X_df, transfer_conformal=method, level=[90]
+        )
+        clean_width = clean["LinearRegression-hi-90"] - clean["LinearRegression-lo-90"]
+        width = result["LinearRegression-hi-90"] - result["LinearRegression-lo-90"]
+        np.testing.assert_allclose(clean_width, 0, atol=1e-6)
+        assert (width > 1).all()
+
+
+def test_frozen_backtest_aligns_dynamic_exog():
+    df = _dynamic_exog_system()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df.iloc[:30], static_features=[])
+    res = _frozen_backtest(fcst, df.iloc[:45], n_windows=3, h=5, max_lag=1)
+    # an exact model only reproduces y when each window gets its own future u
+    np.testing.assert_allclose(res["LinearRegression"], res["y"], atol=1e-6)
 
 
 @pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
@@ -154,20 +173,63 @@ def test_transfer_conformal_static_groupby_key_not_in_backtest_X_df():
         )
 
 
-def test_transfer_conformal_missing_dynamic_exog_in_new_df():
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_conformal_missing_dynamic_exog_in_new_df(method):
     df = _dynamic_exog_system()
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
     fcst.fit(
         df.iloc[:30],
         static_features=[],
-        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
     )
     with pytest.raises(ValueError, match=r"new_df.*X_df.*\['u'\]"):
         fcst.predict(
             h=5,
             new_df=df.iloc[:45].drop(columns="u"),
             X_df=df[["unique_id", "ds", "u"]].iloc[45:50],
+            transfer_conformal=method,
+            level=[90],
+        )
+
+
+def test_transfer_conformal_backtest_uses_new_df_columns():
+    df = _dynamic_exog_system()
+    df["v"] = 1.0
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df.iloc[:30].drop(columns="v"),
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer("recalibrate"),
+    )
+    # the backtest X_df carries `v`, so the error comes from the model, not X_df
+    with pytest.raises(ValueError, match="feature names"):
+        fcst.predict(
+            h=5,
+            new_df=df.iloc[:45],
+            X_df=df[["unique_id", "ds", "u", "v"]].iloc[45:50],
             transfer_conformal="recalibrate",
+            level=[90],
+        )
+
+
+@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
+def test_transfer_conformal_weighted_rejects_ids(method):
+    a = _dynamic_exog_system()
+    df = pd.concat([a, a.assign(unique_id="B")], ignore_index=True)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        a.iloc[:30],
+        static_features=[],
+        prediction_intervals=_intervals_for_dynamic_exog_transfer(method),
+    )
+    # DRE weights are fit on every target series, so a subset can't reuse them
+    with pytest.raises(ValueError, match="ids= filtering"):
+        fcst.predict(
+            h=5,
+            new_df=df.groupby("unique_id").head(45),
+            X_df=df.groupby("unique_id").nth(slice(45, 50))[["unique_id", "ds", "u"]],
+            ids=["A"],
+            transfer_conformal=method,
             level=[90],
         )
 
