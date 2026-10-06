@@ -1540,15 +1540,21 @@ class TimeSeries:
             self.horizon_features_ = horizon_features
         return self
 
-    def _fit_settings(self) -> Dict[str, Any]:
-        """Arguments that warm a fresh instance the way this one was fit."""
-        settings: Dict[str, Any] = dict(
+    def _feature_settings(self) -> Dict[str, Any]:
+        """Arguments that build features the way this instance was fit."""
+        return dict(
             id_col=self.id_col,
             time_col=self.time_col,
             target_col=self.target_col,
             static_features=self.static_features,
             keep_last_n=self.keep_last_n,
             weight_col=self.weight_col,
+        )
+
+    def _fit_settings(self) -> Dict[str, Any]:
+        """Arguments that warm a fresh instance the way this one was fit."""
+        settings: Dict[str, Any] = dict(
+            **self._feature_settings(),
             as_numpy=self.as_numpy,
             horizon_features=copy.deepcopy(self.horizon_features_),
         )

@@ -1602,14 +1602,12 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
-            scratch = self._with_ts(self.ts._clone_cold())
             transfer_preprocess = None
             if spec.needs_preprocess:
-                settings = self.ts._fit_settings()
-                # features only: horizon targets and numpy output don't apply
-                for k in ("as_numpy", "horizon_features", "horizons", "max_horizon"):
-                    settings.pop(k, None)
-                transfer_preprocess = partial(scratch.preprocess, **settings)
+                scratch = self._with_ts(self.ts._clone_cold())
+                transfer_preprocess = partial(
+                    scratch.preprocess, **self.ts._feature_settings()
+                )
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
