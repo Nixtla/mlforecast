@@ -380,13 +380,15 @@ class TimeSeries:
     def _partition_cols(self) -> List[str]:
         return self._leaf_cols("_pt_cols")
 
+    @property
     def _required_future_cols(self) -> List[str]:
-        """Columns `predict` needs in `X_df`: dynamic exog plus partition keys."""
+        """Columns `X_df` must provide: dynamic exog plus non-static partition keys."""
+        statics = set(self.static_features_.columns)
         return list(
             dict.fromkeys(
                 [
                     *self._get_dynamic_exog_cols(self.features_order_),
-                    *self._partition_cols,
+                    *(c for c in self._partition_cols if c not in statics),
                 ]
             )
         )
@@ -501,15 +503,23 @@ class TimeSeries:
         part_cols = self._partition_cols
         part: Dict[str, np.ndarray] = {}
         if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
+            missing = [
+                c for c in part_cols if c not in df.columns and c not in statics.columns
+            ]
             if missing:
                 raise ValueError(
                     f"`partition_by` column(s) {missing} must be provided in the "
                     "update frame."
                 )
-            pdf = df[part_cols]
+            # static partition keys are broadcast from the statics
             part = {
-                c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
+                c: (
+                    np.asarray(df[c].to_numpy()).reshape(n_series, n_new)
+                    if c in df.columns
+                    else np.repeat(np.asarray(statics[c].to_numpy()), n_new).reshape(
+                        n_series, n_new
+                    )
+                )
                 for c in part_cols
             }
         leaves_by_key = self._get_pooled_tfms()
@@ -2117,7 +2127,7 @@ class TimeSeries:
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = self._required_future_cols()
+            required_future_cols = self._required_future_cols
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2148,7 +2158,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                missing = sorted(set(self._required_future_cols()) - set(dynamics))
+                missing = sorted(set(self._required_future_cols) - set(dynamics))
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "

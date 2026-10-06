@@ -116,7 +116,7 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    future_cols = fcst.ts._required_future_cols()
+    future_cols = fcst.ts._required_future_cols
     missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
     if missing:
         raise ValueError(

@@ -615,6 +615,49 @@ def test_partition_by_update(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_static_partition_by_update_without_key(engine):
+    """A static partition key is read from the statics, not the update frame."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a", "a", "a", "b", "b", "b"],
+            "ds": [1, 2, 3, 1, 2, 3],
+            "y": [1.0, 2.0, 3.0, 10.0, 20.0, 30.0],
+            "promo": [0, 0, 0, 1, 1, 1],
+        },
+    )
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["promo"])]}
+    )
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    assert ts._required_future_cols == []
+    with_key = copy.deepcopy(ts)
+    rows = {"unique_id": ["a", "b"], "ds": [4, 4], "y": [4.0, 40.0]}
+    with_key.update(_make_df(engine, {**rows, "promo": [0, 1]}))
+    ts.update(_make_df(engine, rows))
+
+    class _Zero:
+        def predict(self, X):
+            return np.zeros(len(X))
+
+    def features(t):
+        captured = []
+        t.predict(
+            {"m": _Zero()}, 1, before_predict_callback=lambda x: captured.append(x) or x
+        )
+        return np.asarray(captured[0], dtype=float)
+
+    np.testing.assert_allclose(features(ts), features(with_key))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_by_local_numeric_values(engine):
     """Verify rolling mean per (id, promo) bucket matches hand-computed values."""
     df = _make_df(
