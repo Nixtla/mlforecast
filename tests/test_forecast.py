@@ -2878,3 +2878,43 @@ def test_null_times_raise(engine):
     fcst.fit(series)
     with pytest.raises(ValueError, match="ds column contains null values"):
         fcst.update(series_with_nulls)
+
+
+def _transfer_setup(with_exog):
+    series = generate_daily_series(4, min_length=50, max_length=50, n_static_features=0)
+    series["grp"] = series["unique_id"].cat.codes % 2
+    if with_exog:
+        series["u"] = np.random.default_rng(0).random(series.shape[0])
+    valid = series.groupby("unique_id", observed=True).tail(5)
+    train = series.drop(valid.index)
+    future = valid[["unique_id", "ds", "u"]] if with_exog else None
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1, 2],
+        lag_transforms={1: [RollingMean(2, partition_by=["grp"])]},
+    )
+    fcst.fit(
+        train,
+        static_features=["grp"],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=5),
+    )
+    return fcst, train, future
+
+
+@pytest.mark.parametrize(
+    "with_exog, level", [(True, None), (False, None), (False, [80])]
+)
+def test_transfer_learning_keeps_fit_features(with_exog, level):
+    fcst, train, future = _transfer_setup(with_exog)
+    expected = fcst.predict(h=5, new_df=train, X_df=future, level=level)
+    extra = train.assign(v=np.arange(train.shape[0], dtype=float))
+    preds = fcst.predict(h=5, new_df=extra, X_df=future, level=level)
+    pd.testing.assert_frame_equal(preds, expected)
+
+
+@pytest.mark.parametrize("col", ["u", "grp"])
+def test_transfer_learning_missing_fit_column_raises(col):
+    fcst, train, future = _transfer_setup(with_exog=True)
+    with pytest.raises(ValueError, match=rf"missing from the data: \['{col}'\]"):
+        fcst.predict(h=5, new_df=train.drop(columns=col), X_df=future)

@@ -767,6 +767,15 @@ class TimeSeries:
             exclude.add(self.weight_col)
         return [c for c in df_columns if c not in exclude]
 
+    @property
+    def _required_future_cols(self) -> List[str]:
+        """Columns whose future values have to be provided to predict."""
+        cols = self._get_dynamic_exog_cols(self.features_order_)
+        statics = set(self.static_features_.columns)
+        return cols + [
+            c for c in self._pooled_aux_cols if c not in statics and c not in cols
+        ]
+
     def _split_horizon_exog_cols(
         self,
         exog_cols: List[str],
@@ -1585,8 +1594,19 @@ class TimeSeries:
         `overrides` replace individual settings, e.g. `static_features`. The
         default `trim=False` keeps the full history `df` provides.
         """
+        statics = overrides.get("static_features")
+        if statics is None:
+            statics = list(self.static_features_.columns)
+        required = self._required_future_cols
+        required += [c for c in statics if c not in required]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"The following columns used during fit are missing from the data: {missing}."
+            )
         out = self._clone_cold()
         out.history_warmup(df, **{**self._fit_settings(), **overrides}, trim=trim)
+        out.features_order_ = list(self.features_order_)
         return out
 
     def _update_y(self, new: np.ndarray) -> None:
@@ -2120,11 +2140,8 @@ class TimeSeries:
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
+        required_future_cols = self._required_future_cols
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2155,11 +2172,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = sorted(set(required_future_cols) - set(dynamics))
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
