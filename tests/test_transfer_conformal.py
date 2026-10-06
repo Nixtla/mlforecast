@@ -107,7 +107,9 @@ def test_frozen_backtest_aligns_dynamic_exog():
     df = _dynamic_exog_system()
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
     fcst.fit(df.iloc[:30], static_features=[])
-    res = _frozen_backtest(fcst, df.iloc[:45], n_windows=3, h=5, max_lag=1)
+    res = _frozen_backtest(
+        fcst, df.iloc[:45], n_windows=3, h=5, future_cols=["u"], max_lag=1
+    )
     # an exact model only reproduces y when each window gets its own future u
     np.testing.assert_allclose(res["LinearRegression"], res["y"], atol=1e-6)
 

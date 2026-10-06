@@ -84,6 +84,7 @@ def _frozen_backtest(
     new_df: DFType,
     n_windows: int,
     h: int,
+    future_cols: List[str],
     step_size: int = 1,
     max_lag: int = 0,
     id_col: str = "unique_id",
@@ -116,8 +117,6 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
-    # the windows' predict validates X_df against a clone warmed from `new_df`
-    future_cols = fcst.ts._clone_warm(new_df)._required_future_cols
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -1591,6 +1590,8 @@ class MLForecast:
                     new_df=new_df,
                     n_windows=effective_n,
                     h=self.prediction_intervals.h,
+                    # the windows' predict validates X_df against a clone warmed from `new_df`
+                    future_cols=ts._required_future_cols,
                     step_size=(
                         transfer_conformal.step_size
                         if transfer_conformal.step_size is not None
