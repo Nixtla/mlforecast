@@ -919,6 +919,83 @@ def test_default_static_features_with_partition_cols(engine):
     assert tfm._get_name(1) in result.columns
 
 
+def _static_partition_df(engine):
+    return _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 4 + ["b"] * 4,
+            "ds": [1, 2, 3, 4, 1, 2, 3, 4],
+            "y": [1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0],
+            "promo": [0, 0, 0, 0, 1, 1, 1, 1],
+        },
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_static_partition_key_in_x_df_is_ignored(engine):
+    """A static partition key passed in X_df doesn't change the buckets."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=1, lags=[1], lag_transforms={1: [tfm]}
+    )
+    df = _static_partition_df(engine)
+    df = (
+        df.with_columns(price=pl.lit(1.0))
+        if engine == "polars"
+        else df.assign(price=1.0)
+    )
+    fcst.fit(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["promo"],
+    )
+    rows = {"unique_id": ["a", "b"], "ds": [5, 5], "price": [1.0, 1.0]}
+    x_df = _make_df(engine, {**rows, "promo": [0, 1]})
+    flipped = _make_df(engine, {**rows, "promo": [1, 0]})
+    with pytest.warns(UserWarning, match="will be ignored"):
+        expected = fcst.predict(h=1, X_df=x_df)
+    with pytest.warns(UserWarning, match="will be ignored"):
+        actual = fcst.predict(h=1, X_df=flipped)
+    np.testing.assert_allclose(
+        actual["LinearRegression"].to_numpy(), expected["LinearRegression"].to_numpy()
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_without_static_partition_key(engine):
+    """update() broadcasts a static partition key from the statics."""
+
+    def fitted_ts():
+        tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+        ts.fit_transform(
+            _static_partition_df(engine),
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            dropna=False,
+            static_features=["promo"],
+        )
+        return ts
+
+    rows = {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}
+    expected = fitted_ts()
+    expected.update(_make_df(engine, {**rows, "promo": [0, 1]}))
+    actual = fitted_ts()
+    actual.update(_make_df(engine, rows))
+    part_key = ("nonlocal", (), ("promo",))
+    exp_state = expected._pooled_states[part_key]
+    act_state = actual._pooled_states[part_key]
+    np.testing.assert_array_equal(act_state.bucket_uniques, exp_state.bucket_uniques)
+    for name, values in exp_state.base.items():
+        np.testing.assert_allclose(act_state.base[name], values)
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_by_backup_restore(engine):
     """_backup() correctly restores partition_by state."""

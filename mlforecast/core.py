@@ -392,6 +392,27 @@ class TimeSeries:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
+    def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
+        """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
+        statics = self.static_features_
+        frame_cols = set(getattr(frame, "columns", []))
+        missing = [c for c in cols if c not in statics.columns and c not in frame_cols]
+        if missing:
+            raise ValueError(
+                f"Pooled key column(s) {missing} must be static features or be "
+                "provided in the data."
+            )
+        out = []
+        for c in cols:
+            if c in statics.columns:
+                vals = np.asarray(statics[c].to_numpy())
+                if reps is not None:
+                    vals = np.repeat(vals, reps)
+            else:
+                vals = np.asarray(frame[c].to_numpy())
+            out.append(vals)
+        return out
+
     def _pooled_feature_values(self, tfm, updates_only: bool) -> np.ndarray:
         """Evaluate a (possibly wrapped) pooled feature.
 
@@ -493,37 +514,22 @@ class TimeSeries:
         uids = np.asarray(
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
-        statics = self.static_features_
-        part_cols = self._partition_cols
-        part: Dict[str, np.ndarray] = {}
-        if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"`partition_by` column(s) {missing} must be provided in the "
-                    "update frame."
-                )
-            pdf = df[part_cols]
-            part = {
-                c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
-                for c in part_cols
-            }
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
             mode, gcols, pcols = key
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
+            keys = [
+                v.reshape(n_series, n_new)
+                for v in self._key_values([*gcols, *pcols], df, reps=n_new)
+            ]
             bids = None
             for j in range(n_new):
                 if mode == "global" and not pcols:
                     bids = np.zeros(n_series, dtype=np.int64)
                 else:
-                    arrays = []
-                    if mode == "local":
-                        arrays.append(uids)
-                    elif gcols:
-                        arrays += [np.asarray(statics[c].to_numpy()) for c in gcols]
-                    arrays += [part[c][:, j] for c in pcols]
+                    arrays = [uids] if mode == "local" else []
+                    arrays += [v[:, j] for v in keys]
                     remap = state.grow_buckets(np.unique(encode_keys(arrays)))
                     if remap is not None:
                         # growing renumbers buckets, so the per-kernel inner state
@@ -963,30 +969,17 @@ class TimeSeries:
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
         statics = self.static_features_
-        # Key columns for a partitioned bucket are read per row, so they may vary
-        # over time; a groupby column that is static is broadcast from statics.
-        key_cols = self._pooled_aux_cols
-        row_cols = [c for c in key_cols if c in df.columns]
-        part_cols = self._partition_cols
-        missing = [
-            c for c in part_cols if c not in df.columns and c not in statics.columns
+        # non-static key columns are read per row, so they may vary over time
+        row_cols = [
+            c
+            for c in self._pooled_aux_cols
+            if c in df.columns and c not in statics.columns
         ]
-        if missing:
-            raise ValueError(
-                f"partition_by column(s) {missing} not found in dataframe."
-            )
-        key_rows: Dict[str, np.ndarray] = {}
+        key_df = None
         if row_cols:
-            kdf = df[row_cols]
+            key_df = df[row_cols]
             if self._sort_idxs is not None:
-                kdf = ufp.take_rows(kdf, self._sort_idxs)
-            key_rows = {c: np.asarray(kdf[c].to_numpy()) for c in row_cols}
-
-        def _row_values(col):
-            """Per-row values for a key column, from the frame or the statics."""
-            if col in key_rows:
-                return key_rows[col]
-            return np.repeat(np.asarray(statics[col].to_numpy()), lens)
+                key_df = ufp.take_rows(key_df, self._sort_idxs)
 
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
@@ -1012,12 +1005,8 @@ class TimeSeries:
                     n_buckets = len(uniques)
                 row_bid = np.repeat(series_bid, lens)
             else:
-                arrays = []
-                if mode == "local":
-                    arrays.append(np.repeat(uid_vals, lens))
-                elif gcols:
-                    arrays += [_row_values(c) for c in gcols]
-                arrays += [_row_values(c) for c in pcols]
+                arrays = [np.repeat(uid_vals, lens)] if mode == "local" else []
+                arrays += self._key_values([*gcols, *pcols], key_df, reps=lens)
                 row_bid, uniques = factorize(arrays)
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
@@ -1741,7 +1730,6 @@ class TimeSeries:
         if not self._partition_cols:
             return None
         X_row = self._current_step_rows(X_df)
-        x_cols = set(getattr(X_row, "columns", []))
         uids = np.asarray(
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
@@ -1749,26 +1737,8 @@ class TimeSeries:
             mode, gcols, pcols = key
             if not pcols:
                 continue
-            sf_cols = set(self.static_features_.columns)
-            needed = list(gcols) + list(pcols)
-            missing = [c for c in needed if c not in x_cols and c not in sf_cols]
-            if missing:
-                raise ValueError(
-                    f"Partition/group key column(s) {missing} not found in X_df "
-                    "or static_features. Provide these columns in X_df for "
-                    "prediction."
-                )
-
-            def _ctx(col):
-                src = X_row if col in x_cols else self.static_features_
-                return np.asarray(src[col].to_numpy())
-
-            arrays = []
-            if mode == "local":
-                arrays.append(uids)
-            elif gcols:
-                arrays += [_ctx(c) for c in gcols]
-            arrays += [_ctx(c) for c in pcols]
+            arrays = [uids] if mode == "local" else []
+            arrays += self._key_values([*gcols, *pcols], X_row)
             state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
         return X_row
 
