@@ -2880,14 +2880,18 @@ def test_null_times_raise(engine):
         fcst.update(series_with_nulls)
 
 
-def _transfer_setup(with_exog):
+def _transfer_setup(with_exog, static_features=["grp"]):
     series = generate_daily_series(4, min_length=50, max_length=50, n_static_features=0)
     series["grp"] = series["unique_id"].cat.codes % 2
     if with_exog:
         series["u"] = np.random.default_rng(0).random(series.shape[0])
     valid = series.groupby("unique_id", observed=True).tail(5)
     train = series.drop(valid.index)
-    future = valid[["unique_id", "ds", "u"]] if with_exog else None
+    future_cols = ["u"] if with_exog else []
+    if static_features is None:
+        # inferred statics leave out partition_by columns
+        future_cols.append("grp")
+    future = valid[["unique_id", "ds", *future_cols]] if future_cols else None
     fcst = MLForecast(
         models=[LinearRegression()],
         freq="D",
@@ -2896,25 +2900,44 @@ def _transfer_setup(with_exog):
     )
     fcst.fit(
         train,
-        static_features=["grp"],
+        static_features=static_features,
         prediction_intervals=PredictionIntervals(n_windows=2, h=5),
+        fitted=True,
     )
     return fcst, train, future
 
 
 @pytest.mark.parametrize(
-    "with_exog, level", [(True, None), (False, None), (False, [80])]
+    "with_exog, static_features, level",
+    [
+        (True, ["grp"], None),
+        (False, ["grp"], None),
+        (False, ["grp"], [80]),
+        (False, None, None),
+    ],
 )
-def test_transfer_learning_keeps_fit_features(with_exog, level):
-    fcst, train, future = _transfer_setup(with_exog)
+def test_transfer_learning_keeps_fit_features(with_exog, static_features, level):
+    fcst, train, future = _transfer_setup(with_exog, static_features)
     expected = fcst.predict(h=5, new_df=train, X_df=future, level=level)
     extra = train.assign(v=np.arange(train.shape[0], dtype=float))
     preds = fcst.predict(h=5, new_df=extra, X_df=future, level=level)
     pd.testing.assert_frame_equal(preds, expected)
 
 
-@pytest.mark.parametrize("col", ["u", "grp"])
-def test_transfer_learning_missing_fit_column_raises(col):
+def test_transfer_learning_dynamic_exog_not_needed_in_history():
     fcst, train, future = _transfer_setup(with_exog=True)
-    with pytest.raises(ValueError, match=rf"missing from the data: \['{col}'\]"):
-        fcst.predict(h=5, new_df=train.drop(columns=col), X_df=future)
+    expected = fcst.predict(h=5, new_df=train, X_df=future)
+    preds = fcst.predict(h=5, new_df=train.drop(columns="u"), X_df=future)
+    pd.testing.assert_frame_equal(preds, expected)
+
+
+def test_transfer_learning_missing_static_raises():
+    fcst, train, future = _transfer_setup(with_exog=True)
+    with pytest.raises(ValueError, match=r"static_features \['grp'\] not found"):
+        fcst.predict(h=5, new_df=train.drop(columns="grp"), X_df=future)
+
+
+def test_fitted_values_static_partition_key():
+    fcst, _, _ = _transfer_setup(with_exog=False)
+    fitted = fcst.forecast_fitted_values(h=2)
+    assert fitted["LinearRegression"].notna().all()

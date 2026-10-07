@@ -1052,12 +1052,8 @@ class MLForecast:
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
+        update_cols = [id_col, time_col, target_col, *self.ts._partition_cols]
         model_names = list(self.models_.keys())
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(self.ts.static_features_, pd.DataFrame):
-            static_features_pd = self.ts.static_features_.copy(deep=True)
-        else:
-            static_features_pd = self.ts.static_features_.to_pandas()
 
         rows = []
         for uid, group in train_pd.groupby(id_col, observed=True):
@@ -1078,21 +1074,15 @@ class MLForecast:
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
             hist = group.iloc[: first_origin + 1]
-            hist = hist[[id_col, time_col, target_col, *dynamic]]
-            # a one-series instance wearing the parent's statics, since `hist`
-            # doesn't carry them
-            temp_ts = self.ts._clone_warm(hist, static_features=[id_col])
-            temp_ts.static_features_ = static_features_pd[
-                static_features_pd[id_col].eq(uid)
-            ].reset_index(drop=True)
-            temp_ts.static_features = self.ts.static_features
+            hist = hist[[id_col, time_col, target_col, *static, *dynamic]]
+            temp_ts = self.ts._clone_warm(hist)
 
             current_origin = first_origin
             for origin_idx in valid_origins:
                 if origin_idx > current_origin:
                     # Advance the state to the current origin with observed values.
                     for update_idx in range(current_origin + 1, origin_idx + 1):
-                        obs = group.iloc[[update_idx]][[id_col, time_col, target_col]]
+                        obs = group.iloc[[update_idx]][update_cols]
                         temp_ts.update(obs)
                     current_origin = origin_idx
 
