@@ -529,7 +529,7 @@ class TimeSeries:
                     bids = np.zeros(n_series, dtype=np.int64)
                 else:
                     arrays = [uids] if mode == "local" else []
-                    arrays += [v[:, j] for v in keys]
+                    arrays.extend(v[:, j] for v in keys)
                     remap = state.grow_buckets(np.unique(encode_keys(arrays)))
                     if remap is not None:
                         # growing renumbers buckets, so the per-kernel inner state
@@ -1006,7 +1006,7 @@ class TimeSeries:
                 row_bid = np.repeat(series_bid, lens)
             else:
                 arrays = [np.repeat(uid_vals, lens)] if mode == "local" else []
-                arrays += self._key_values([*gcols, *pcols], key_df, reps=lens)
+                arrays.extend(self._key_values([*gcols, *pcols], key_df, reps=lens))
                 row_bid, uniques = factorize(arrays)
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
@@ -1738,7 +1738,7 @@ class TimeSeries:
             if not pcols:
                 continue
             arrays = [uids] if mode == "local" else []
-            arrays += self._key_values([*gcols, *pcols], X_row)
+            arrays.extend(self._key_values([*gcols, *pcols], X_row))
             state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
         return X_row
 
