@@ -967,33 +967,138 @@ def test_static_partition_key_in_x_df_is_ignored(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_predict_without_static_partition_key(engine):
+    """predict() takes a static partition key from the statics, X_df not needed."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=1, lags=[1], lag_transforms={1: [tfm]}
+    )
+    fcst.fit(
+        _static_partition_df(engine),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["promo"],
+    )
+    x_df = _make_df(
+        engine,
+        {"unique_id": ["a", "a", "b", "b"], "ds": [5, 6, 5, 6], "promo": [0, 0, 1, 1]},
+    )
+    with pytest.warns(UserWarning, match="will be ignored"):
+        expected = fcst.predict(h=2, X_df=x_df)
+    actual = fcst.predict(h=2)
+    np.testing.assert_allclose(
+        actual["LinearRegression"].to_numpy(), expected["LinearRegression"].to_numpy()
+    )
+
+
+def _fitted_static_partition_ts(engine):
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    ts.fit_transform(
+        _static_partition_df(engine),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    return ts
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_update_without_static_partition_key(engine):
     """update() broadcasts a static partition key from the statics."""
-
-    def fitted_ts():
-        tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
-        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
-        ts.fit_transform(
-            _static_partition_df(engine),
-            id_col="unique_id",
-            time_col="ds",
-            target_col="y",
-            dropna=False,
-            static_features=["promo"],
-        )
-        return ts
+    from mlforecast.pooled import lookup
 
     rows = {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}
-    expected = fitted_ts()
+    expected = _fitted_static_partition_ts(engine)
     expected.update(_make_df(engine, {**rows, "promo": [0, 1]}))
-    actual = fitted_ts()
+    actual = _fitted_static_partition_ts(engine)
     actual.update(_make_df(engine, rows))
     part_key = ("nonlocal", (), ("promo",))
     exp_state = expected._pooled_states[part_key]
     act_state = actual._pooled_states[part_key]
     np.testing.assert_array_equal(act_state.bucket_uniques, exp_state.bucket_uniques)
+    np.testing.assert_array_equal(
+        act_state.series_bucket_id, exp_state.series_bucket_id
+    )
+    np.testing.assert_array_equal(
+        act_state.series_bucket_id, lookup([np.array([0, 1])], act_state.bucket_uniques)
+    )
     for name, values in exp_state.base.items():
         np.testing.assert_allclose(act_state.base[name], values)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_warns_on_changed_static_partition_key(engine):
+    ts = _fitted_static_partition_ts(engine)
+    update = _make_df(
+        engine,
+        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [1, 1]},
+    )
+    with pytest.warns(UserWarning, match=r"will be ignored: \['promo'\]"):
+        ts.update(update)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_static_partition_key_changing_within_series_raises(engine):
+    df = _static_partition_df(engine)
+    promo = [0, 1, 1, 0, 1, 1, 1, 1]
+    df = (
+        df.with_columns(promo=pl.Series(promo))
+        if engine == "polars"
+        else df.assign(promo=promo)
+    )
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    with pytest.raises(ValueError, match="change within a series"):
+        ts.fit_transform(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            static_features=["promo"],
+        )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_missing_dynamic_key_mutates_nothing(engine):
+    df = _static_partition_df(engine)
+    price = [1.0, 2.0, 1.0, 2.0, 1.0, 1.0, 2.0, 2.0]
+    df = (
+        df.with_columns(price=pl.Series(price))
+        if engine == "polars"
+        else df.assign(price=price)
+    )
+    tfms = [
+        RollingMean(2, min_samples=1, global_=True),
+        RollingMean(2, min_samples=1, global_=True, partition_by=["price"]),
+    ]
+    ts = TimeSeries(freq=1, lag_transforms={1: tfms})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    before = copy.deepcopy(ts._pooled_states)
+    data_before = ts.ga.data.copy()
+    update = _make_df(
+        engine,
+        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [0, 1]},
+    )
+    with pytest.raises(ValueError, match=r"\['price'\] must be provided"):
+        ts.update(update)
+    np.testing.assert_array_equal(ts.ga.data, data_before)
+    for key, state in before.items():
+        for name, values in state.base.items():
+            np.testing.assert_array_equal(ts._pooled_states[key].base[name], values)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])

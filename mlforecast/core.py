@@ -248,6 +248,13 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
+def _varies_within_series(values: np.ndarray, statics: np.ndarray, reps) -> bool:
+    """Whether any per-row value differs from its series' static value."""
+    codes, _ = factorize([np.concatenate([statics, values])])
+    n = len(statics)
+    return bool((codes[n:] != np.repeat(codes[:n], reps)).any())
+
+
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -392,6 +399,11 @@ class TimeSeries:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
+    @property
+    def _dynamic_key_cols(self) -> List[str]:
+        statics = self.static_features_.columns
+        return [c for c in self._pooled_aux_cols if c not in statics]
+
     def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
         """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
         statics = self.static_features_
@@ -514,6 +526,23 @@ class TimeSeries:
         uids = np.asarray(
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
+        statics = self.static_features_
+        ignored = [
+            c
+            for c in self._pooled_aux_cols
+            if c in statics.columns
+            and c in df.columns
+            and _varies_within_series(
+                np.asarray(df[c].to_numpy()), np.asarray(statics[c].to_numpy()), n_new
+            )
+        ]
+        if ignored:
+            warnings.warn(
+                "The following pooled key columns were considered static during fit "
+                f"and their new values in the update frame will be ignored: {ignored}.",
+                UserWarning,
+                stacklevel=3,
+            )
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
             mode, gcols, pcols = key
@@ -969,17 +998,30 @@ class TimeSeries:
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
         statics = self.static_features_
-        # non-static key columns are read per row, so they may vary over time
-        row_cols = [
-            c
-            for c in self._pooled_aux_cols
-            if c in df.columns and c not in statics.columns
-        ]
+        # non-static key columns are read per row, so they may vary over time;
+        # static ones are broadcast from the statics and must not
+        row_cols = [c for c in self._pooled_aux_cols if c in df.columns]
         key_df = None
         if row_cols:
             key_df = df[row_cols]
             if self._sort_idxs is not None:
                 key_df = ufp.take_rows(key_df, self._sort_idxs)
+            changing = [
+                c
+                for c in row_cols
+                if c in statics.columns
+                and _varies_within_series(
+                    np.asarray(key_df[c].to_numpy()),
+                    np.asarray(statics[c].to_numpy()),
+                    lens,
+                )
+            ]
+            if changing:
+                raise ValueError(
+                    f"Pooled key column(s) {changing} are declared as static features "
+                    "but change within a series. Exclude them from `static_features` "
+                    "so they're read per row."
+                )
 
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
@@ -999,9 +1041,7 @@ class TimeSeries:
                     n_buckets = 1
                     series_bid = np.zeros(len(lens), dtype=np.int64)
                 else:
-                    series_bid, uniques = factorize(
-                        [np.asarray(statics[c].to_numpy()) for c in gcols]
-                    )
+                    series_bid, uniques = factorize(self._key_values(gcols, None))
                     n_buckets = len(uniques)
                 row_bid = np.repeat(series_bid, lens)
             else:
@@ -1729,23 +1769,24 @@ class TimeSeries:
         """
         if not self._partition_cols:
             return None
-        X_row = self._current_step_rows(X_df)
+        X_row = None if X_df is None else self._current_step_rows(X_df)
         uids = np.asarray(
             self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
         )
+        static_cols = self.static_features_.columns
         for key, state in self._pooled_states.items():
             mode, gcols, pcols = key
-            if not pcols:
+            cols = [*gcols, *pcols]
+            # static keys don't change over the horizon, so they're assigned once
+            if not pcols or (self._h > 0 and all(c in static_cols for c in cols)):
                 continue
             arrays = [uids] if mode == "local" else []
-            arrays.extend(self._key_values([*gcols, *pcols], X_row))
+            arrays.extend(self._key_values(cols, X_row))
             state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
-        X_row = None
-        if X_df is not None:
-            X_row = self._update_partition_assignments(X_df)
+        X_row = self._update_partition_assignments(X_df)
         # same frame _update_features builds, but with the statics trimmed to
         # model features (_statics_keep) so columns dropped by the
         # features_order_ selection below aren't carried through every step
@@ -2094,7 +2135,7 @@ class TimeSeries:
             required_future_cols = set(
                 self._get_dynamic_exog_cols(self.features_order_)
             )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            required_future_cols.update(self._dynamic_key_cols)
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2128,7 +2169,7 @@ class TimeSeries:
                 required_future_cols = set(
                     self._get_dynamic_exog_cols(self.features_order_)
                 )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
+                required_future_cols.update(self._dynamic_key_cols)
                 missing = sorted(required_future_cols - set(dynamics))
                 if missing:
                     raise ValueError(
@@ -2166,6 +2207,9 @@ class TimeSeries:
                 drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)
+                if not X_df.shape[1]:
+                    # only statics were provided; a polars frame with no columns has no rows
+                    X_df = None
             if getattr(self, "max_horizon", None) is None:
                 preds = self._predict_recursive(
                     models=models,
@@ -2257,6 +2301,11 @@ class TimeSeries:
             if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
+                )
+            missing = [c for c in self._dynamic_key_cols if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"Pooled key column(s) {missing} must be provided in the update frame."
                 )
         if validate_new_data:
             self._validate_new_df(df=df)
