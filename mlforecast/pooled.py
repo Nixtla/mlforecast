@@ -28,7 +28,7 @@ cancels).  See ``_PooledKernel`` subclasses for the full table.
 
 __all__ = ["PooledState"]
 
-from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -838,7 +838,10 @@ class _PooledKernel:
         return float(getattr(self.tfm, "window_size", 1))
 
     def combine(
-        self, res: Dict[str, np.ndarray], k: np.ndarray, shift: Optional[np.ndarray]
+        self,
+        res: Dict[str, np.ndarray],
+        k: Union[float, np.ndarray],
+        shift: Optional[np.ndarray],
     ) -> np.ndarray:
         """Feature values from the reduced channels ``res``.
 
@@ -874,7 +877,7 @@ class _PooledKernel:
             tfm.stats_ = _grow_rows(stats, remap, n_new, _expanding_fill(tfm, stats))
 
     @staticmethod
-    def _n_obs(res: Dict[str, np.ndarray], k: np.ndarray) -> np.ndarray:
+    def _n_obs(res: Dict[str, np.ndarray], k: Union[float, np.ndarray]) -> np.ndarray:
         """Total observations inside the window: ``k * mean(count)``.
 
         Rounded because the count only ever comes back as a *mean* over ``k``
@@ -1356,12 +1359,12 @@ class _ExpandingRowMixin(_RowKernel):
         return 1.0
 
 
-class RollingQuantileK(_RollingRowMixin, _RowKernel):
+class RollingQuantileK(_RollingRowMixin):
     def stat(self, mat):
         return np.quantile(mat, self.tfm.p, axis=1)
 
 
-class ExpandingQuantileK(_ExpandingRowMixin, _RowKernel):
+class ExpandingQuantileK(_ExpandingRowMixin):
     def stat(self, mat):
         return np.quantile(mat, self.tfm.p, axis=1)
 
