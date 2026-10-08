@@ -1,5 +1,6 @@
 import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
 import lightgbm as lgb
 import numpy as np
@@ -9,8 +10,8 @@ import ray
 import xgboost as xgb
 from sklearn.base import clone
 
-from mlforecast.distributed.models.ray.lgb import RayLGBMForecast
-from mlforecast.distributed.models.ray.xgb import RayXGBForecast
+from mlforecast.distributed.models.ray.lgb import RayLGBMForecast, _lgb_train_loop
+from mlforecast.distributed.models.ray.xgb import RayXGBForecast, _xgb_train_loop
 
 
 @pytest.mark.ray
@@ -117,6 +118,55 @@ def test_model_is_the_estimator_fitted_in_the_worker(model_cls, local_cls):
 
 
 @pytest.mark.ray
+@pytest.mark.parametrize(
+    "train_loop,metric",
+    [(_lgb_train_loop, "train-l2"), (_xgb_train_loop, "validation_0-rmse")],
+    ids=["lightgbm", "xgboost"],
+)
+def test_train_loop_reports_once(monkeypatch, train_loop, metric):
+    """Each ray.train.report waits for the controller's next poll (~2s by default).
+
+    Reporting every boosting round made each tree cost that much on top of
+    training, so only the fitted model is reported, with its final metrics.
+    """
+    import ray.train
+    import ray.train.lightgbm
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"x": rng.normal(size=100), "y": rng.random(size=100)})
+    shard = SimpleNamespace(
+        materialize=lambda: SimpleNamespace(to_pandas=lambda: df.copy())
+    )
+    context = SimpleNamespace(get_world_rank=lambda: 0)
+    runtime_context = SimpleNamespace(get_assigned_resources=lambda: {"CPU": 1.0})
+    reports = []
+
+    def report(metrics, checkpoint=None):
+        # the checkpoint's directory is removed once report returns
+        files = None
+        if checkpoint is not None:
+            files = sorted(p.name for p in Path(checkpoint.path).iterdir())
+        reports.append((metrics, files))
+
+    monkeypatch.setattr(ray.train, "get_dataset_shard", lambda name: shard)
+    monkeypatch.setattr(ray.train, "get_context", lambda: context)
+    monkeypatch.setattr(ray, "get_runtime_context", lambda: runtime_context)
+    monkeypatch.setattr(ray.train, "report", report)
+    monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: {})
+
+    params = {"n_estimators": 5, "random_state": 0}
+    if train_loop is _lgb_train_loop:
+        params["verbosity"] = -1
+    train_loop({"params": params, "target_col": "y"})
+
+    assert len(reports) == 1
+    metrics, files = reports[0]
+    assert metric in metrics
+    booster_file = "model.txt" if train_loop is _lgb_train_loop else "model.ubj"
+    assert files == sorted(["model.pkl", booster_file])
+
+
+@pytest.mark.ray
 def test_lgb_honors_param_aliases():
     """The hand rolled translation dropped lightgbm's aliases; its own does not.
 
@@ -134,13 +184,8 @@ def test_lgb_honors_param_aliases():
 
 
 @pytest.mark.ray
-def test_xgb_keeps_random_state_and_drops_the_ray_callback():
-    """xgb.train knows `random_state`, so there was never a `seed` to translate to.
-
-    xgboost also stores callbacks as a parameter, so the ray reporting callback
-    would otherwise ride back to the driver and into whatever the user pickles
-    through DistributedMLForecast.save.
-    """
+def test_xgb_keeps_random_state_and_model_is_picklable():
+    """xgb.train knows `random_state`, so there was never a `seed` to translate to."""
     rng = np.random.default_rng(0)
     df = pd.DataFrame({"x": rng.normal(size=100), "y": rng.random(size=100)})
     model = RayXGBForecast(random_state=0, n_estimators=5)
