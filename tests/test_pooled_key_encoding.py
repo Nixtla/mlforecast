@@ -245,16 +245,8 @@ def test_g3_4_mixed_none_and_nan_share_one_bucket():
 
 
 def test_g3_4_pd_na_lands_in_the_sentinel_bucket():
-    """Deliberate behaviour change, pinned so it cannot regress silently.
-
-    The per-row path raises on ``pd.NA``: ``_encode_column``'s object branch
-    tests ``v != v``, which returns ``pd.NA`` rather than a bool. Factorizing
-    first hands the check to pandas, which treats it as missing like any other
-    NA -- consistent with the ``_NULL_KEY`` contract, so it is kept.
-    """
     column = np.array(["a", pd.NA, "b"], dtype=object)
-    with pytest.raises(TypeError, match="ambiguous"):
-        _reference([column])
+    _assert_matches_reference([column])
     ids, uniques = factorize([column])
     assert uniques[ids[1]] == _NULL_KEY
     assert len(uniques) == 3
