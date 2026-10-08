@@ -5403,3 +5403,73 @@ def test_predict_ids_with_id_in_pooled_key(engine, kwargs):
         sub["HistGradientBoostingRegressor"].to_numpy(),
         full.loc[full.unique_id == "b", "HistGradientBoostingRegressor"].to_numpy(),
     )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_groupby_key_with_inner_null_fits(engine):
+    """A groupby key is read from the statics, so a null inside a series is fine."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 4 + ["b"] * 4,
+            "ds": [1, 2, 3, 4] * 2,
+            "y": np.arange(8.0),
+            "brand": [0.0, np.nan, 0.0, 0.0] + [1.0] * 4,
+        },
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["brand"])]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    (state,) = ts._pooled_states.values()
+    np.testing.assert_array_equal(state.series_bucket_id, [0, 1])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_id_partition_key_with_default_static_features(engine):
+    """The id column stays static when it is a partition column."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, new, _ = _key_spelling_frames(engine)
+    future = (
+        new.drop(["y", "brand"])
+        if engine == "polars"
+        else new.drop(columns=["y", "brand"])
+    )
+    tfm = RollingMean(
+        3, min_samples=1, global_=True, partition_by=["unique_id", "promo"]
+    )
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(train)
+    assert "unique_id" in fcst.ts.static_features_.columns
+    assert fcst.predict(2, X_df=future).shape[0] == 6
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_new_series_without_static_key_mutates_nothing(engine):
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["brand"])]}
+    )
+    train, _, _ = _key_spelling_frames(engine)
+    ts.fit_transform(
+        train,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    uids = list(ts.uids)
+    new = _make_df(
+        engine,
+        {"unique_id": ["a", "b", "c", "d"], "ds": [13] * 4, "y": [1.0] * 4},
+    )
+    with pytest.raises(ValueError, match="New series must include"):
+        ts.update(new)
+    assert list(ts.uids) == uids
+    assert ts.ga.n_groups == len(uids)

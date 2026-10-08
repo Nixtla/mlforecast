@@ -918,7 +918,8 @@ class TimeSeries:
             static_features = [
                 c
                 for c in df.columns
-                if c not in [time_col, target_col] and c not in partition_cols
+                if c not in [time_col, target_col]
+                and (c == id_col or c not in partition_cols)
             ]
         else:
             if id_col not in static_features:
@@ -1001,8 +1002,6 @@ class TimeSeries:
         row_ord = row_ord.astype(np.int64, copy=False).ravel()
         n_ordinals = int(row_ord.max()) + 1
         statics = self.static_features_
-        # non-static key columns are read per row, so they may vary over time;
-        # static ones are broadcast from the statics and must not
         row_cols = [c for c in self._pooled_aux_cols if c in df.columns]
         key_df = None
         if row_cols:
@@ -1011,8 +1010,10 @@ class TimeSeries:
                 key_df = ufp.take_rows(key_df, self._sort_idxs)
             changing = [
                 c
-                for c in row_cols
-                if c in statics.columns
+                for c in self._partition_cols
+                if c in row_cols
+                and c in statics.columns
+                and c != self.id_col
                 and _varies_within_series(
                     np.asarray(key_df[c].to_numpy()),
                     np.asarray(statics[c].to_numpy()),
@@ -1773,8 +1774,7 @@ class TimeSeries:
         static_cols = self.static_features_.columns
         for key, state in self._pooled_states.items():
             cols = self._bucket_cols(key)
-            # static keys don't change over the horizon, so they're assigned once
-            if not cols or (self._h > 0 and all(c in static_cols for c in cols)):
+            if all(c in static_cols for c in cols):
                 continue
             if X_row is None and X_df is not None:
                 X_row = self._current_step_rows(X_df)
@@ -2076,6 +2076,8 @@ class TimeSeries:
         last_dates = self.last_dates
         targ_tfms = copy.copy(self.target_transforms)
         lag_tfms = copy.deepcopy(self.transforms)
+        pooled_states = list(getattr(self, "_pooled_states", {}).values())
+        bucket_ids = [state.series_bucket_id for state in pooled_states]
 
         if idxs is not None:
             # assign subsets
@@ -2092,9 +2094,13 @@ class TimeSeries:
                 if isinstance(lag_tfm, _BaseLagTransform):
                     lag_tfm = lag_tfm.take(idxs)
                 self.transforms[name] = lag_tfm
+            for state, bids in zip(pooled_states, bucket_ids):
+                state.set_series_bucket_id(bids[idxs])
         try:
             yield
         finally:
+            for state, bids in zip(pooled_states, bucket_ids):
+                state.set_series_bucket_id(bids)
             self.ga = ga
             self.uids = uids
             self.static_features_ = statics
@@ -2316,6 +2322,12 @@ class TimeSeries:
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
+        if new_groups.any():
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series must include their static features: {missing}."
+                )
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
