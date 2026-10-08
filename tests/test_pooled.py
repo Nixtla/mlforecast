@@ -5521,3 +5521,27 @@ def test_static_partition_key_with_pd_na_fits():
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         ts.update(new)
+
+
+def test_predict_ids_restores_series_when_subsetting_fails(monkeypatch):
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, new, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, partition_by=["promo"])]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    uids = list(fcst.ts.uids)
+    (tfm,) = fcst.ts.transforms.values()
+
+    def fail(idxs):
+        raise RuntimeError("take failed")
+
+    monkeypatch.setattr(tfm, "take", fail)
+    with pytest.raises(RuntimeError, match="take failed"):
+        fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
+    assert list(fcst.ts.uids) == uids
+    assert fcst.ts.ga.n_groups == len(uids)

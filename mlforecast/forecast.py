@@ -1081,8 +1081,7 @@ class MLForecast:
             first_origin = valid_origins[0]
             hist = group.iloc[: first_origin + 1]
             hist = hist[[id_col, time_col, target_col, *static_keys, *dynamic]]
-            # a one-series instance wearing the parent's statics and feature
-            # order, since `hist` carries neither
+            # a one-series instance wearing the parent's statics and feature order
             temp_ts = self.ts._clone_warm(hist, static_features=[id_col, *static_keys])
             temp_ts.static_features_ = static_features_pd[
                 static_features_pd[id_col].eq(uid)

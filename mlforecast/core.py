@@ -984,7 +984,11 @@ class TimeSeries:
         row_ord = row_ord.astype(np.int64, copy=False).ravel()
         n_ordinals = int(row_ord.max()) + 1
         statics = self.static_features_
-        row_cols = [c for c in self._pooled_aux_cols if c in df.columns]
+        row_cols = [
+            c
+            for c in self._pooled_aux_cols
+            if c in df.columns and c not in statics.columns
+        ]
         key_df = None
         if row_cols:
             key_df = df[row_cols]
@@ -2043,24 +2047,24 @@ class TimeSeries:
         pooled_states = list(getattr(self, "_pooled_states", {}).values())
         bucket_ids = [state.series_bucket_id for state in pooled_states]
 
-        if idxs is not None:
-            # assign subsets
-            self.ga = self.ga.take(idxs)
-            self.uids = uids[idxs]
-            self.static_features_ = ufp.take_rows(statics, idxs)
-            self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
-            self.last_dates = last_dates[idxs]
-            if self.target_transforms is not None:
-                for i, tfm in enumerate(self.target_transforms):
-                    if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                        self.target_transforms[i] = tfm.take(idxs)
-            for name, lag_tfm in self.transforms.items():
-                if isinstance(lag_tfm, _BaseLagTransform):
-                    lag_tfm = lag_tfm.take(idxs)
-                self.transforms[name] = lag_tfm
-            for state, bids in zip(pooled_states, bucket_ids):
-                state.set_series_bucket_id(bids[idxs])
         try:
+            if idxs is not None:
+                # assign subsets
+                self.ga = self.ga.take(idxs)
+                self.uids = uids[idxs]
+                self.static_features_ = ufp.take_rows(statics, idxs)
+                self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
+                self.last_dates = last_dates[idxs]
+                if self.target_transforms is not None:
+                    for i, tfm in enumerate(self.target_transforms):
+                        if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                            self.target_transforms[i] = tfm.take(idxs)
+                for name, lag_tfm in self.transforms.items():
+                    if isinstance(lag_tfm, _BaseLagTransform):
+                        lag_tfm = lag_tfm.take(idxs)
+                    self.transforms[name] = lag_tfm
+                for state, bids in zip(pooled_states, bucket_ids):
+                    state.set_series_bucket_id(bids[idxs])
             yield
         finally:
             if idxs is not None:
