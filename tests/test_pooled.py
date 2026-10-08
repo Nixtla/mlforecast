@@ -5548,13 +5548,35 @@ def test_predict_ids_restores_series_when_subsetting_fails(monkeypatch):
 
 
 def test_update_reuses_static_buckets_without_new_series(monkeypatch):
-    ts = _fitted_static_partition_ts("pandas")
-    (state,) = ts._pooled_states.values()
+    tail = pd.DataFrame(
+        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [0, 1]}
+    )
+    full = pd.concat([_static_partition_df("pandas"), tail]).sort_values(
+        ["unique_id", "ds"], ignore_index=True
+    )
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["promo"])
+    control = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    control.fit_transform(
+        full,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    updated = _fitted_static_partition_ts("pandas")
+    (state,) = updated._pooled_states.values()
     bids = state.series_bucket_id.copy()
 
     def fail(keys):
         raise AssertionError("static buckets were re-resolved")
 
     monkeypatch.setattr(state, "grow_buckets", fail)
-    ts.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
+    updated.update(tail.drop(columns="promo"))
     np.testing.assert_array_equal(state.series_bucket_id, bids)
+    for ts in (updated, control):
+        ts._predict_setup()
+    np.testing.assert_allclose(
+        updated._get_features_for_next_step().to_numpy(),
+        control._get_features_for_next_step().to_numpy(),
+    )

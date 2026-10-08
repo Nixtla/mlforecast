@@ -517,7 +517,9 @@ class TimeSeries:
             keep_rows = len(bounded) < len(block) + len(rows)
             state.trim_to_last(max(keep, *bounded), keep_rows=keep_rows)
 
-    def _update_pooled_states(self, df, sizes, values: np.ndarray) -> None:
+    def _update_pooled_states(
+        self, df, sizes, values: np.ndarray, has_new_series: bool
+    ) -> None:
         """Fold newly observed timestamps into the bucket aggregates.
 
         Buckets advance one timestamp for every series at once, so an update has
@@ -553,17 +555,17 @@ class TimeSeries:
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             cols = self._bucket_cols(key)
             keys = None
-            if not cols:
-                bids = np.zeros(n_series, dtype=np.int64)
-            elif any(c not in statics.columns for c in cols):
+            if any(c not in statics.columns for c in cols):
                 keys = [
                     v if c in statics.columns else v.reshape(n_series, n_new)
                     for c, v in zip(cols, self._key_values(cols, df))
                 ]
-            elif len(state.series_bucket_id) == n_series:
+            elif not has_new_series:
                 bids = state.series_bucket_id
-            else:
+            elif cols:
                 bids = _assign_buckets(state, leaves, self._key_values(cols, None))
+            else:
+                bids = np.zeros(n_series, dtype=np.int64)
             for j in range(n_new):
                 if keys is not None:
                     arrays = [v[:, j] if v.ndim == 2 else v for v in keys]
@@ -1749,8 +1751,6 @@ class TimeSeries:
         ``_get_features_for_next_step`` can reuse it, or ``None`` when no key
         was read from it.
         """
-        if not self._partition_cols:
-            return None
         X_row = None
         static_cols = self.static_features_.columns
         for key, state in self._pooled_states.items():
@@ -2356,4 +2356,4 @@ class TimeSeries:
         self._advance_lag_transform_states(
             prev_ga, appended_counts, values, new_groups_mask
         )
-        self._update_pooled_states(df, sizes, values)
+        self._update_pooled_states(df, sizes, values, bool(new_groups_mask.any()))
