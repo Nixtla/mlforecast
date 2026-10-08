@@ -2054,6 +2054,7 @@ class TimeSeries:
         return result
 
     def _has_ga_target_tfms(self):
+        assert self.target_transforms is not None
         return any(
             isinstance(tfm, _BaseGroupedArrayTargetTransform)
             for tfm in self.target_transforms

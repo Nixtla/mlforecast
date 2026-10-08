@@ -960,7 +960,7 @@ class _MaxKernel(_PooledKernel):
         return np.where(ok, res["max"], np.nan)
 
 
-class _RollingMixin:
+class _RollingMixin(_PooledKernel):
     primes_state = False
 
     def window_cells(self, ordinals):
@@ -977,7 +977,7 @@ class _RollingMixin:
         return cls(lag=self.lag, window_size=self.tfm.window_size, min_samples=1, **kw)
 
 
-class _SeasonalMixin:
+class _SeasonalMixin(_PooledKernel):
     primes_state = False
 
     def window_cells(self, ordinals):
@@ -1002,9 +1002,12 @@ class _SeasonalMixin:
         )
 
 
-class _ExpandingMixin:
+class _ExpandingMixin(_PooledKernel):
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, None).astype(float)
+
+    def make_inner(self, lag=None) -> Dict[str, Any]:
+        raise NotImplementedError
 
     def _inner(self, cls, lag=None, **kw):
         return cls(lag=self.lag if lag is None else lag, **kw)
@@ -1338,14 +1341,14 @@ class _RowKernel(_PooledKernel):
         return self.values_at(self._view(state._rows), np.arange(n), targets)
 
 
-class _RollingRowMixin:
+class _RollingRowMixin(_RowKernel):
     def window_bounds(self, rows, bucket, ordinal):
         hi_ord = ordinal - self.lag
         lo_ord = hi_ord - self.tfm.window_size + 1
         return rows.search(bucket, lo_ord, "left"), rows.search(bucket, hi_ord, "right")
 
 
-class _ExpandingRowMixin:
+class _ExpandingRowMixin(_RowKernel):
     def window_bounds(self, rows, bucket, ordinal):
         return rows.indptr[bucket], rows.search(bucket, ordinal - self.lag, "right")
 
