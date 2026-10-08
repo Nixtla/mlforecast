@@ -402,7 +402,18 @@ class TimeSeries:
     @property
     def _dynamic_key_cols(self) -> List[str]:
         statics = self.static_features_.columns
-        return [c for c in self._pooled_aux_cols if c not in statics]
+        cols: List[str] = []
+        for key in getattr(self, "_pooled_states", {}):
+            cols.extend(
+                c for c in self._bucket_cols(key) if c not in statics and c not in cols
+            )
+        return cols
+
+    def _bucket_cols(self, key) -> List[str]:
+        """Columns whose values identify a bucket of the pooled `key`."""
+        mode, gcols, pcols = key
+        id_cols = [self.id_col] if mode == "local" else []
+        return [*id_cols, *gcols, *pcols]
 
     def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
         """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
@@ -523,9 +534,6 @@ class TimeSeries:
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
-        uids = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
         statics = self.static_features_
         ignored = [
             c
@@ -545,20 +553,18 @@ class TimeSeries:
             )
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
-            mode, gcols, pcols = key
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             keys = [
                 v.reshape(n_series, n_new)
-                for v in self._key_values([*gcols, *pcols], df, reps=n_new)
+                for v in self._key_values(self._bucket_cols(key), df, reps=n_new)
             ]
             bids = None
             for j in range(n_new):
-                if mode == "global" and not pcols:
+                if not keys:
                     bids = np.zeros(n_series, dtype=np.int64)
                 else:
-                    arrays = [uids] if mode == "local" else []
-                    arrays.extend(v[:, j] for v in keys)
+                    arrays = [v[:, j] for v in keys]
                     remap = state.grow_buckets(np.unique(encode_keys(arrays)))
                     if remap is not None:
                         # growing renumbers buckets, so the per-kernel inner state
@@ -994,9 +1000,6 @@ class TimeSeries:
         _, row_ord = np.unique(times, return_inverse=True)
         row_ord = row_ord.astype(np.int64, copy=False).ravel()
         n_ordinals = int(row_ord.max()) + 1
-        uid_vals = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
         statics = self.static_features_
         # non-static key columns are read per row, so they may vary over time;
         # static ones are broadcast from the statics and must not
@@ -1025,6 +1028,7 @@ class TimeSeries:
 
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
+            cols = self._bucket_cols(key)
             if not pcols:
                 # a pure groupby bucket is broadcast from the statics at predict,
                 # so its key has to be static; with partition_by the key is read
@@ -1036,18 +1040,16 @@ class TimeSeries:
                         f"Missing from static_features: {missing_static}."
                     )
             uniques = None
-            if not pcols:
-                if mode == "global":
-                    n_buckets = 1
-                    series_bid = np.zeros(len(lens), dtype=np.int64)
-                else:
-                    series_bid, uniques = factorize(self._key_values(gcols, None))
-                    n_buckets = len(uniques)
+            if not cols:
+                n_buckets = 1
+                series_bid = np.zeros(len(lens), dtype=np.int64)
+                row_bid = np.repeat(series_bid, lens)
+            elif all(c in statics.columns for c in cols):
+                series_bid, uniques = factorize(self._key_values(cols, None))
+                n_buckets = len(uniques)
                 row_bid = np.repeat(series_bid, lens)
             else:
-                arrays = [np.repeat(uid_vals, lens)] if mode == "local" else []
-                arrays.extend(self._key_values([*gcols, *pcols], key_df, reps=lens))
-                row_bid, uniques = factorize(arrays)
+                row_bid, uniques = factorize(self._key_values(cols, key_df, reps=lens))
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
                 # timestamp; predict overwrites this per step from X_df
@@ -1764,25 +1766,20 @@ class TimeSeries:
         """Re-bucket every series for the current step from the dynamic columns.
 
         Returns the sliced ``X_row`` (one row per series for this step) so
-        ``_get_features_for_next_step`` can reuse it, or ``None`` when there are
-        no partition columns.
+        ``_get_features_for_next_step`` can reuse it, or ``None`` when no key
+        was read from it.
         """
-        if not self._partition_cols:
-            return None
-        X_row = None if X_df is None else self._current_step_rows(X_df)
-        uids = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
+        X_row = None
         static_cols = self.static_features_.columns
         for key, state in self._pooled_states.items():
-            mode, gcols, pcols = key
-            cols = [*gcols, *pcols]
+            cols = self._bucket_cols(key)
             # static keys don't change over the horizon, so they're assigned once
-            if not pcols or (self._h > 0 and all(c in static_cols for c in cols)):
+            if not cols or (self._h > 0 and all(c in static_cols for c in cols)):
                 continue
-            arrays = [uids] if mode == "local" else []
-            arrays.extend(self._key_values(cols, X_row))
-            state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
+            if X_row is None and X_df is not None:
+                X_row = self._current_step_rows(X_df)
+            keys = self._key_values(cols, X_row)
+            state.set_series_bucket_id(lookup(keys, state.bucket_uniques))
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
@@ -2115,10 +2112,11 @@ class TimeSeries:
         ids: Optional[List[str]] = None,
     ) -> DFType:
         if ids is not None:
-            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
-            if has_nonlocal:
+            if any(
+                self.id_col not in self._bucket_cols(k) for k in self._pooled_states
+            ):
                 raise ValueError(
-                    "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
+                    "Cannot use `ids` with lag transforms pooled across series. "
                     "These transforms require forecasting all series together."
                 )
         self._check_aligned_ends()
