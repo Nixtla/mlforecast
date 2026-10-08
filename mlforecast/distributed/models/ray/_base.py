@@ -2,10 +2,11 @@ __all__ = ["RayForecastBase"]
 
 
 import contextlib
-import pickle
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+import cloudpickle
 
 _RAY_PARAMS = ("num_workers", "resources_per_worker", "storage_path")
 _MODEL_FILE = "model.pkl"
@@ -59,7 +60,8 @@ def report_fitted_model(model: Any, booster: Any, booster_file: str) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         booster.save_model(Path(tmp_dir, booster_file).as_posix())
         with open(Path(tmp_dir, _MODEL_FILE), "wb") as f:
-            pickle.dump(model, f)
+            # user callbacks defined in __main__ or holding lambdas need cloudpickle
+            cloudpickle.dump(model, f)
         ray.train.report(metrics, checkpoint=Checkpoint.from_directory(tmp_dir))
 
 
@@ -162,5 +164,5 @@ class RayForecastBase:
             )
             with trainer.fit().checkpoint.as_directory() as ckpt_dir:
                 with open(Path(ckpt_dir, _MODEL_FILE), "rb") as f:
-                    self.model_ = pickle.load(f)
+                    self.model_ = cloudpickle.load(f)
         return self

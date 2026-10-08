@@ -207,26 +207,34 @@ class _CountRounds(xgb.callback.TrainingCallback):
 
 
 @pytest.mark.ray
-def test_xgb_train_loop_runs_the_user_callbacks(run_train_loop):
+def test_xgb_train_loop_runs_and_keeps_the_user_callbacks(run_train_loop):
+    """Callbacks defined in a notebook or holding a lambda can't be plain pickled."""
+    # plain pickle looks classes up by module, and this one isn't in __main__
+    notebook_cls = type("_CountRounds", (_CountRounds,), {"__module__": "__main__"})
+    scheduler = xgb.callback.LearningRateScheduler(lambda epoch: 0.3)
     reports = run_train_loop(
-        _xgb_train_loop, {"n_estimators": 3, "callbacks": [_CountRounds()]}
+        _xgb_train_loop,
+        {"n_estimators": 3, "callbacks": [notebook_cls(), scheduler]},
     )
     _, _, model = reports[0]
-    [callback] = model.get_params()["callbacks"]
-    assert isinstance(callback, _CountRounds)
-    assert callback.rounds == 3
+    counter, scheduler = model.get_params()["callbacks"]
+    assert counter.rounds == 3
+    assert scheduler.learning_rates(0) == 0.3
 
 
 @pytest.mark.ray
-@pytest.mark.parametrize("n_jobs,nthread", [(None, 0), (2, 2)])
-def test_xgb_train_loop_restores_n_jobs_with_a_metric_list(
-    run_train_loop, n_jobs, nthread
+@pytest.mark.parametrize(
+    "n_jobs,user_nthread,nthread",
+    [(None, None, 0), (2, None, 2), (None, 3, 3), (2, 3, 3)],
+)
+def test_xgb_train_loop_restores_the_thread_params_with_a_metric_list(
+    run_train_loop, n_jobs, user_nthread, nthread
 ):
-    """Restoring n_jobs mustn't push the eval_metric list into the booster."""
-    reports = run_train_loop(
-        _xgb_train_loop,
-        {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": n_jobs},
-    )
+    """Restoring them mustn't push the eval_metric list into the booster."""
+    params = {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": n_jobs}
+    if user_nthread is not None:
+        params["nthread"] = user_nthread
+    reports = run_train_loop(_xgb_train_loop, params)
     metrics, _, model = reports[0]
     assert set(metrics) == {"validation_0-rmse", "validation_0-mae"}
     assert model.n_jobs == n_jobs
