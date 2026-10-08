@@ -59,6 +59,7 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # Booster.refit sets up the network again when these are present
     for key in _NETWORK_KEYS:
         model.booster_.params.pop(key, None)
+    model.booster_.free_network()
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 

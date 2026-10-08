@@ -293,6 +293,7 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     _, _, model = reports[0]
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
     assert not network.keys() & model.booster_.params.keys()
+    assert not model.booster_._network
 
 
 @pytest.mark.ray
