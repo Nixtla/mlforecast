@@ -5619,6 +5619,7 @@ def test_update_new_partition_value_mid_batch_matches_fit(tfm_factory):
     (ref,) = control._pooled_states.values()
     np.testing.assert_array_equal(state.bucket_uniques, ref.bucket_uniques)
     np.testing.assert_array_equal(state.series_bucket_id, ref.series_bucket_id)
+    assert state.series_bucket_id.flags.owndata
     col = tfm_factory()._get_name(1)
     for ts in (updated, control):
         ts._predict_setup()

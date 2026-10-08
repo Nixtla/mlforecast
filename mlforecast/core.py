@@ -54,7 +54,6 @@ from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
     PooledState,
     base_channels,
-    encode_keys,
     factorize,
     get_kernel,
     lookup,
@@ -250,7 +249,8 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
 
 def _assign_buckets(state, leaves, arrays) -> np.ndarray:
     """Bucket ids of the key `arrays`, adding unseen keys to `state`."""
-    remap = state.grow_buckets(np.unique(encode_keys(arrays)))
+    ids, uniques = factorize(arrays)
+    remap = state.grow_buckets(uniques)
     if remap is not None:
         # growing renumbers buckets, so the per-kernel inner state
         # has to be permuted and extended to match
@@ -258,7 +258,7 @@ def _assign_buckets(state, leaves, arrays) -> np.ndarray:
             leaf._pooled_kernel.remap_buckets(
                 leaf._pooled_inner, remap, state.n_buckets
             )
-    return lookup(arrays, state.bucket_uniques)
+    return np.searchsorted(state.bucket_uniques, uniques)[ids]
 
 
 def _to_native_index(values, *, df):
@@ -572,7 +572,8 @@ class TimeSeries:
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
-            state.set_series_bucket_id(bids)
+            # a column of step_bids would keep the whole matrix alive
+            state.set_series_bucket_id(np.ascontiguousarray(bids))
 
     def _stateful_cores(self) -> List[Any]:
         """Inner coreforecast transforms that carry a per-group accumulator."""
