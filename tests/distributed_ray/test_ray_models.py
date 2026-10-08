@@ -259,11 +259,22 @@ def test_lgb_train_loop_ignores_user_network_params(run_train_loop, monkeypatch)
 
     network = {"num_machines": 1, "local_listen_port": 12400}
     monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: network)
-    with pytest.warns(UserWarning, match="will be ignored"):
-        reports = run_train_loop(
+    trained_params = []
+    lgb_fit = lgb.LGBMRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        trained_params.append(self.get_params())
+        return lgb_fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMRegressor, "fit", fit)
+    with pytest.warns(UserWarning, match="will be ignored") as record:
+        run_train_loop(
             _lgb_train_loop, {"n_estimators": 2, "num_machines": 3, "port": 1234}
         )
-    assert len(reports) == 1
+    assert {"num_machines", "port"} <= {str(w.message).split()[1] for w in record}
+    [params] = trained_params
+    assert "port" not in params
+    assert params.items() >= network.items()
 
 
 @pytest.mark.ray
