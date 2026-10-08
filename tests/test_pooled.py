@@ -5524,3 +5524,88 @@ def test_changing_static_groupby_key_with_partition_raises(engine):
             dropna=False,
             static_features=["brand"],
         )
+
+
+def test_update_static_datetime_key_with_other_unit_doesnt_warn():
+    launch = np.array(["2020-01-01", "2021-01-01"], dtype="M8[ns]")
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a"] * 3 + ["b"] * 3,
+            "ds": [1, 2, 3] * 2,
+            "y": np.arange(6.0),
+            "launch": np.repeat(launch, 3),
+        }
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["launch"])]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    new = pd.DataFrame(
+        {
+            "unique_id": ["a", "b"],
+            "ds": [4, 4],
+            "y": [1.0, 2.0],
+            "launch": launch.astype("M8[us]"),
+        }
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts.update(new)
+
+
+def test_update_new_series_with_target_transforms_mutates_nothing():
+    from mlforecast.target_transforms import LocalStandardScaler
+
+    ts = TimeSeries(freq=1, lags=[1], target_transforms=[LocalStandardScaler()])
+    train, _, _ = _key_spelling_frames("pandas")
+    ts.fit_transform(
+        train, id_col="unique_id", time_col="ds", target_col="y", static_features=[]
+    )
+    uids = list(ts.uids)
+    new = pd.DataFrame(
+        {"unique_id": ["a", "b", "c", "d"], "ds": [13] * 4, "y": [1.0] * 4}
+    )
+    with pytest.raises(ValueError, match="Can not update target_transforms"):
+        ts.update(new)
+    assert list(ts.uids) == uids
+
+
+@pytest.mark.parametrize(
+    "kwargs, static_features",
+    [
+        (dict(partition_by=["brand"]), ["brand"]),
+        (dict(partition_by=["promo"]), ["brand"]),
+        (dict(global_=True, partition_by=["unique_id", "promo"]), ["brand"]),
+        (dict(groupby=["unique_id"]), []),
+    ],
+    ids=["local_static", "local_dynamic", "global_with_id", "groupby_id"],
+)
+def test_recursive_fitted_values_with_id_in_pooled_key(kwargs, static_features):
+    """Pooled keys holding the id match a per-series transform with the same buckets."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, _, _ = _key_spelling_frames("pandas")
+    if "promo" not in kwargs.get("partition_by", []):
+        # buckets are the series themselves, as in the per-series transform
+        expected_tfm = RollingMean(3, min_samples=1)
+    else:
+        expected_tfm = RollingMean(3, min_samples=1, partition_by=["promo"])
+
+    def fitted_h2(tfm):
+        fcst = MLForecast(
+            models=[HistGradientBoostingRegressor(max_iter=10)],
+            freq=1,
+            lag_transforms={1: [tfm]},
+            drop_auxiliary_columns=False,
+        )
+        fcst.fit(train, fitted=True, static_features=static_features)
+        return fcst.forecast_fitted_values(h=2)[
+            "HistGradientBoostingRegressor"
+        ].to_numpy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        expected = fitted_h2(expected_tfm)
+        actual = fitted_h2(RollingMean(3, min_samples=1, **kwargs))
+    np.testing.assert_allclose(actual, expected)

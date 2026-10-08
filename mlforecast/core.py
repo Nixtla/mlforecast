@@ -250,10 +250,12 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
 
 def _varies_within_series(values: np.ndarray, statics: np.ndarray, reps) -> bool:
     """Whether any per-row value differs from its series' static value."""
-    # encoded separately so differing dtypes compare as unequal instead of raising
+    if values.dtype.kind == statics.dtype.kind == "M":
+        # the key encoding includes the datetime unit
+        dtype = np.promote_types(values.dtype, statics.dtype)
+        values, statics = values.astype(dtype), statics.astype(dtype)
     codes, uniques = factorize([values])
-    static_codes, static_uniques = factorize([statics])
-    return bool((uniques[codes] != np.repeat(static_uniques[static_codes], reps)).any())
+    return bool((codes != np.repeat(lookup([statics], uniques), reps)).any())
 
 
 def _to_native_index(values, *, df):
@@ -403,18 +405,32 @@ class TimeSeries:
     @property
     def _dynamic_key_cols(self) -> List[str]:
         statics = self.static_features_.columns
-        cols: List[str] = []
-        for key in getattr(self, "_pooled_states", {}):
-            cols.extend(
-                c for c in self._bucket_cols(key) if c not in statics and c not in cols
-            )
-        return cols
+        return _dedupe_preserve_order(
+            c
+            for key in getattr(self, "_pooled_states", {})
+            for c in self._bucket_cols(key)
+            if c not in statics
+        )
 
     def _bucket_cols(self, key) -> List[str]:
         """Columns whose values identify a bucket of the pooled `key`."""
         mode, gcols, pcols = key
         id_cols = [self.id_col] if mode == "local" else []
         return [*id_cols, *gcols, *pcols]
+
+    def _changed_static_keys(self, cols, frame, reps) -> List[str]:
+        """Static key columns whose values in `frame` differ from the statics."""
+        statics = self.static_features_
+        return [
+            c
+            for c in cols
+            if c != self.id_col
+            and c in statics.columns
+            and c in frame.columns
+            and _varies_within_series(
+                np.asarray(frame[c].to_numpy()), np.asarray(statics[c].to_numpy()), reps
+            )
+        ]
 
     def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
         """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
@@ -536,16 +552,7 @@ class TimeSeries:
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
         statics = self.static_features_
-        ignored = [
-            c
-            for c in self._pooled_aux_cols
-            if c in statics.columns
-            and c in df.columns
-            and c != self.id_col
-            and _varies_within_series(
-                np.asarray(df[c].to_numpy()), np.asarray(statics[c].to_numpy()), n_new
-            )
-        ]
+        ignored = self._changed_static_keys(self._pooled_aux_cols, df, n_new)
         if ignored:
             warnings.warn(
                 "The following pooled key columns were considered static during fit "
@@ -557,16 +564,17 @@ class TimeSeries:
         for key, state in states.items():
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
+            cols = self._bucket_cols(key)
+            # statics stay one value per series, dynamic keys get one column per step
             keys = [
-                v.reshape(n_series, n_new)
-                for v in self._key_values(self._bucket_cols(key), df, reps=n_new)
+                v if c in statics.columns else v.reshape(n_series, n_new)
+                for c, v in zip(cols, self._key_values(cols, df))
             ]
-            bids = None
+            dynamic = any(v.ndim == 2 for v in keys)
+            bids = None if keys else np.zeros(n_series, dtype=np.int64)
             for j in range(n_new):
-                if not keys:
-                    bids = np.zeros(n_series, dtype=np.int64)
-                else:
-                    arrays = [v[:, j] for v in keys]
+                if bids is None or dynamic:
+                    arrays = [v[:, j] if v.ndim == 2 else v for v in keys]
                     remap = state.grow_buckets(np.unique(encode_keys(arrays)))
                     if remap is not None:
                         # growing renumbers buckets, so the per-kernel inner state
@@ -579,8 +587,7 @@ class TimeSeries:
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
-            if bids is not None:
-                state.set_series_bucket_id(bids)
+            state.set_series_bucket_id(bids)
 
     def _stateful_cores(self) -> List[Any]:
         """Inner coreforecast transforms that carry a per-group accumulator."""
@@ -1014,18 +1021,9 @@ class TimeSeries:
             row_key_cols = {
                 c for key in pooled if key[2] for c in self._bucket_cols(key)
             }
-            changing = [
-                c
-                for c in row_cols
-                if c in row_key_cols
-                and c in statics.columns
-                and c != self.id_col
-                and _varies_within_series(
-                    np.asarray(key_df[c].to_numpy()),
-                    np.asarray(statics[c].to_numpy()),
-                    lens,
-                )
-            ]
+            changing = self._changed_static_keys(
+                [c for c in row_cols if c in row_key_cols], key_df, lens
+            )
             if changing:
                 raise ValueError(
                     f"Pooled key column(s) {changing} are declared as static features "
@@ -2329,6 +2327,8 @@ class TimeSeries:
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
         if new_groups.any():
+            if self.target_transforms is not None:
+                raise ValueError("Can not update target_transforms with new series.")
             missing = [c for c in self.static_features_.columns if c not in df.columns]
             if missing:
                 raise ValueError(
@@ -2345,8 +2345,6 @@ class TimeSeries:
         self.uids = _to_native_index(self.uids, df=df)
         self.last_dates = _to_native_index(self.last_dates, df=df)
         if new_groups.any():
-            if self.target_transforms is not None:
-                raise ValueError("Can not update target_transforms with new series.")
             new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
             new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
