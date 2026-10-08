@@ -51,9 +51,8 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # lightgbm.dask's _train_part.
     model = lgb.LGBMRegressor(**params, **network_params)
     model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
-    # model_ is used by the forecasting workers and can be refit locally, so it
-    # keeps the user's params rather than this worker's threads and network.
-    # Only these keys are reset: set_params on all of them would clobber objective_
+    # model_ is used by forecasting workers and refit locally, so it keeps the
+    # user's params. Only these keys: set_params on all of them clobbers objective_
     for key in _WORKER_KEYS:
         model._other_params.pop(key, None)
     model.set_params(**{k: v for k, v in user_params.items() if k in _WORKER_KEYS})

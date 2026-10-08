@@ -19,7 +19,8 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     n_jobs = config["params"].get("n_jobs")
     user_nthread = config["params"].get("nthread")
     # nthread beats n_jobs in the booster
-    clamp = worker_n_jobs(n_jobs if user_nthread is None else user_nthread)
+    requested = n_jobs if user_nthread is None else user_nthread
+    clamp = worker_n_jobs(requested)
     params = {**config["params"], "n_jobs": clamp}
     if user_nthread is not None:
         params["nthread"] = clamp
@@ -30,11 +31,9 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # model_ keeps the requested threads rather than the worker's clamp. Not via
     # set_params, which pushes a list eval_metric into the booster and breaks it.
     model.n_jobs = n_jobs
-    if user_nthread is None:
-        nthread = 0 if n_jobs is None else n_jobs
-    else:
-        nthread = model.kwargs["nthread"] = user_nthread
-    model.get_booster().set_param("nthread", nthread)
+    if user_nthread is not None:
+        model.kwargs["nthread"] = user_nthread
+    model.get_booster().set_param("nthread", 0 if requested is None else requested)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME
     )
