@@ -21,10 +21,8 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # input validation rejects, so they're mapped back to numpy dtypes here.
     df = normalize_pandas_for_lightgbm(shard.materialize().to_pandas())
     label = df.pop(config["target_col"])
-    params = {
-        **config["params"],
-        "n_jobs": worker_n_jobs(config["params"].get("n_jobs")),
-    }
+    n_jobs = config["params"].get("n_jobs")
+    params = {**config["params"], "n_jobs": worker_n_jobs(n_jobs)}
     # each worker only sees its own shard. ray's LightGBMConfig stashes the
     # network params in a per worker global rather than injecting them, so
     # without these every worker trains an independent model on 1/N of the data
@@ -36,7 +34,7 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
     # the clamp is for this worker's thread pool; model_ is shipped to the
     # forecasting workers and returned by to_local, so it keeps what was asked for
-    model.set_params(n_jobs=config["params"].get("n_jobs"))
+    model.set_params(n_jobs=n_jobs)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 

@@ -16,10 +16,8 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # unlike lightgbm, xgboost accepts arrow backed pandas columns.
     df = shard.materialize().to_pandas()
     label = df.pop(config["target_col"])
-    params = {
-        **config["params"],
-        "n_jobs": worker_n_jobs(config["params"].get("n_jobs")),
-    }
+    n_jobs = config["params"].get("n_jobs")
+    params = {**config["params"], "n_jobs": worker_n_jobs(n_jobs)}
     # XGBoostConfig wraps the loop in a CommunicatorContext, so unlike lightgbm
     # there are no network params to pass: training is distributed already.
     model = xgb.XGBRegressor(**params)
@@ -27,11 +25,9 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # the n_jobs clamp is for this worker's thread pool; model_ is shipped to the
     # forecasting workers and returned by to_local, so it keeps what was asked for
     # set_params would push every param into the booster, and a list eval_metric
-    # breaks save_model once it's been set that way
-    n_jobs = config["params"].get("n_jobs")
+    # breaks save_model once it's been set that way. nthread 0 is xgboost's default.
     model.n_jobs = n_jobs
-    if n_jobs is not None:
-        model.get_booster().set_param("nthread", n_jobs)
+    model.get_booster().set_param("nthread", 0 if n_jobs is None else n_jobs)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME
     )

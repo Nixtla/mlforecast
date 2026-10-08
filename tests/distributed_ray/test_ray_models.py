@@ -1,3 +1,4 @@
+import json
 import pickle
 from pathlib import Path
 from types import SimpleNamespace
@@ -128,9 +129,13 @@ def run_train_loop(monkeypatch):
     shard = SimpleNamespace(
         materialize=lambda: SimpleNamespace(to_pandas=lambda: df.copy())
     )
-    runtime_context = SimpleNamespace(get_assigned_resources=lambda: {"CPU": 1.0})
     monkeypatch.setattr(ray.train, "get_dataset_shard", lambda name: shard)
-    monkeypatch.setattr(ray, "get_runtime_context", lambda: runtime_context)
+    # the driver isn't a worker, so it has no assigned resources to read
+    for module in ("lgb", "xgb"):
+        monkeypatch.setattr(
+            f"mlforecast.distributed.models.ray.{module}.worker_n_jobs",
+            lambda requested: 1,
+        )
     monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: {})
 
     def run(train_loop, params, rank=0):
@@ -192,16 +197,41 @@ def test_xgb_train_loop_without_evaluated_metrics(run_train_loop):
     assert [metrics for metrics, *_ in reports] == [{}]
 
 
+class _CountRounds(xgb.callback.TrainingCallback):
+    def __init__(self):
+        self.rounds = 0
+
+    def after_iteration(self, model, epoch, evals_log):
+        self.rounds += 1
+        return False
+
+
 @pytest.mark.ray
-def test_xgb_train_loop_keeps_n_jobs_with_a_metric_list(run_train_loop):
+def test_xgb_train_loop_runs_the_user_callbacks(run_train_loop):
+    reports = run_train_loop(
+        _xgb_train_loop, {"n_estimators": 3, "callbacks": [_CountRounds()]}
+    )
+    _, _, model = reports[0]
+    [callback] = model.get_params()["callbacks"]
+    assert isinstance(callback, _CountRounds)
+    assert callback.rounds == 3
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize("n_jobs,nthread", [(None, 0), (2, 2)])
+def test_xgb_train_loop_restores_n_jobs_with_a_metric_list(
+    run_train_loop, n_jobs, nthread
+):
     """Restoring n_jobs mustn't push the eval_metric list into the booster."""
     reports = run_train_loop(
         _xgb_train_loop,
-        {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": 1},
+        {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": n_jobs},
     )
     metrics, _, model = reports[0]
     assert set(metrics) == {"validation_0-rmse", "validation_0-mae"}
-    assert model.n_jobs == 1
+    assert model.n_jobs == n_jobs
+    config = json.loads(model.get_booster().save_config())
+    assert int(config["learner"]["generic_param"]["nthread"]) == nthread
 
 
 @pytest.mark.ray
