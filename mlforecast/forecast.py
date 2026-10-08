@@ -1080,13 +1080,17 @@ class MLForecast:
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
             hist = group.iloc[: first_origin + 1]
-            hist = hist[[id_col, time_col, target_col, *static_keys, *dynamic]]
+            uid_statics = static_features_pd[
+                static_features_pd[id_col].eq(uid)
+            ].reset_index(drop=True)
+            # the prefix takes the fitted static keys, which it may not hold constant
+            hist = hist[[id_col, time_col, target_col, *dynamic]].assign(
+                **{c: uid_statics.loc[0, c] for c in static_keys}
+            )
             # a one-series instance wearing the parent's statics and feature
             # order, since `hist` carries neither
             temp_ts = self.ts._clone_warm(hist, static_features=[id_col, *static_keys])
-            temp_ts.static_features_ = static_features_pd[
-                static_features_pd[id_col].eq(uid)
-            ].reset_index(drop=True)
+            temp_ts.static_features_ = uid_statics
             temp_ts.static_features = self.ts.static_features
             temp_ts.features_order_ = list(self.ts.features_order_)
 

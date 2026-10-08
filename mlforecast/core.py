@@ -248,6 +248,29 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
+def _key_values_differ(fit, new) -> bool:
+    """Whether any value in `new` differs from `fit`, comparing across dtypes."""
+    if any(isinstance(v.dtype, (nw.Categorical, nw.Enum)) for v in (fit, new)):
+        # categoricals with different categories can't be compared
+        return _static_feature_changes_over_time(
+            fit.cast(nw.String), new.cast(nw.String)
+        )
+    if fit.dtype == new.dtype:
+        return _static_feature_changes_over_time(fit, new)
+    # a cast can lose information, so a difference in either direction counts
+    comparable = False
+    for a, b in ((fit, new), (new, fit)):
+        try:
+            b = b.cast(a.dtype)
+        except Exception:
+            # each backend raises its own error for an impossible cast
+            continue
+        comparable = True
+        if _static_feature_changes_over_time(a, b):
+            return True
+    return not comparable
+
+
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -429,25 +452,18 @@ class TimeSeries:
         )
         fit_vals = ufp.rename(statics[cols], {c: f"_fit_{c}" for c in cols})
         fit_vals = ufp.assign_columns(fit_vals, self.id_col, fit_ids)
-        new_vals = ufp.assign_columns(df[cols], self.id_col, new_ids)
+        new_vals = ufp.assign_columns(
+            ufp.copy_if_pandas(df[cols], deep=False), self.id_col, new_ids
+        )
         joined = ufp.join(new_vals, fit_vals, on=self.id_col)
-        changed = []
-        for c in cols:
-            new = nw.from_native(joined[c], series_only=True)
-            fit = nw.from_native(joined[f"_fit_{c}"], series_only=True)
-            if any(isinstance(v.dtype, (nw.Categorical, nw.Enum)) for v in (new, fit)):
-                # categoricals with different categories can't be compared
-                new, fit = new.cast(nw.String), fit.cast(nw.String)
-            elif new.dtype != fit.dtype:
-                try:
-                    new = new.cast(fit.dtype)
-                except Exception:
-                    # each backend raises its own error for an impossible cast
-                    changed.append(c)
-                    continue
-            if _static_feature_changes_over_time(fit, new):
-                changed.append(c)
-        return changed
+        return [
+            c
+            for c in cols
+            if _key_values_differ(
+                nw.from_native(joined[f"_fit_{c}"], series_only=True),
+                nw.from_native(joined[c], series_only=True),
+            )
+        ]
 
     def _key_values(
         self, cols, frame, reps=None, prefer_frame=False
@@ -1045,13 +1061,13 @@ class TimeSeries:
                         f"Missing from static_features: {missing_static}."
                     )
             uniques = None
-            if not cols:
-                n_buckets = 1
-                series_bid = np.zeros(len(lens), dtype=np.int64)
-                row_bid = np.repeat(series_bid, lens)
-            elif not pcols:
-                series_bid, uniques = factorize(self._key_values(cols, None))
-                n_buckets = len(uniques)
+            if not pcols:
+                if cols:
+                    series_bid, uniques = factorize(self._key_values(cols, None))
+                    n_buckets = len(uniques)
+                else:
+                    series_bid = np.zeros(len(lens), dtype=np.int64)
+                    n_buckets = 1
                 row_bid = np.repeat(series_bid, lens)
             else:
                 row_bid, uniques = factorize(
@@ -2105,8 +2121,9 @@ class TimeSeries:
         try:
             yield
         finally:
-            for state, bids in zip(pooled_states, bucket_ids):
-                state.set_series_bucket_id(bids)
+            if idxs is not None:
+                for state, bids in zip(pooled_states, bucket_ids):
+                    state.set_series_bucket_id(bids)
             self.ga = ga
             self.uids = uids
             self.static_features_ = statics

@@ -5694,3 +5694,61 @@ def test_update_static_bool_key_as_int_doesnt_warn(engine):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         ts.update(new)
+
+
+def test_recursive_fitted_values_with_static_key_varying_inside_series():
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    n = 10
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a"] * n + ["b"] * n,
+            "ds": list(range(n)) * 2,
+            "y": np.arange(2 * n, dtype=float),
+            "brand": [0] + [1] * (n - 3) + [0, 0] + [1] * n,
+        }
+    )
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=5)],
+        freq=1,
+        lags=[3],
+        lag_transforms={1: [RollingMean(2, partition_by=["brand"])]},
+    )
+    fcst.fit(df, fitted=True, static_features=["brand"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        assert fcst.forecast_fitted_values(h=2).shape[0] > 0
+
+
+def test_update_with_static_key_doesnt_warn_setting_with_copy():
+    ts = _fitted_static_partition_ts("pandas")
+    update = pd.DataFrame(
+        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [0, 1]}
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pd.errors.SettingWithCopyWarning)
+        ts.update(update)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_static_int_key_as_fractional_float_warns(engine):
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 3 + ["b"] * 3,
+            "ds": [1, 2, 3] * 2,
+            "y": np.arange(6.0),
+            "flag": [1] * 3 + [2] * 3,
+        },
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["flag"])]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    new = _make_df(
+        engine,
+        {"unique_id": ["a", "b"], "ds": [4, 4], "y": [1.0, 2.0], "flag": [1.7, 2.9]},
+    )
+    with pytest.warns(UserWarning, match="will be ignored"):
+        ts.update(new)
