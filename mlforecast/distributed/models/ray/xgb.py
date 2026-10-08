@@ -22,11 +22,8 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # there are no network params to pass: training is distributed already.
     model = xgb.XGBRegressor(**params)
     model.fit(df, label, eval_set=[(df, label)])
-    # the n_jobs clamp is for this worker's thread pool; model_ is shipped to the
-    # forecasting workers and returned by to_local, so it keeps what was asked for
-    # set_params would push every param into the booster, and a list eval_metric
-    # breaks save_model once it's been set that way. As in xgboost, an explicit
-    # nthread wins over n_jobs, and 0 is its default.
+    # model_ keeps the requested threads rather than the worker's clamp. Not via
+    # set_params, which pushes a list eval_metric into the booster and breaks it.
     model.n_jobs = n_jobs
     nthread = config["params"].get("nthread")
     if nthread is None:
