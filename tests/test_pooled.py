@@ -1034,14 +1034,21 @@ def test_update_without_static_partition_key(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_warns_on_changed_static_partition_key(engine):
-    ts = _fitted_static_partition_ts(engine)
-    update = _make_df(
-        engine,
-        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [1, 1]},
-    )
-    with pytest.warns(UserWarning, match=r"will be ignored: \['promo'\]"):
-        ts.update(update)
+def test_update_ignores_static_partition_key_values(engine):
+    rows = {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}
+    expected = _fitted_static_partition_ts(engine)
+    expected.update(_make_df(engine, rows))
+    actual = _fitted_static_partition_ts(engine)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        actual.update(_make_df(engine, {**rows, "promo": [1, 1]}))
+    for key, exp_state in expected._pooled_states.items():
+        act_state = actual._pooled_states[key]
+        np.testing.assert_array_equal(
+            act_state.series_bucket_id, exp_state.series_bucket_id
+        )
+        for name, values in exp_state.base.items():
+            np.testing.assert_allclose(act_state.base[name], values)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -5385,26 +5392,6 @@ def test_predict_ids_with_id_in_pooled_key(engine, kwargs):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_groupby_key_with_inner_null_fits(engine):
-    """A groupby key is read from the statics, so a null inside a series is fine."""
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 4 + ["b"] * 4,
-            "ds": [1, 2, 3, 4] * 2,
-            "y": np.arange(8.0),
-            "brand": [0.0, np.nan, 0.0, 0.0] + [1.0] * 4,
-        },
-    )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["brand"])]})
-    ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
-    )
-    (state,) = ts._pooled_states.values()
-    np.testing.assert_array_equal(state.series_bucket_id, [0, 1])
-
-
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_id_partition_key_with_default_static_features(engine):
     """The id column stays static when it is a partition column."""
     from mlforecast.forecast import MLForecast
@@ -5452,59 +5439,6 @@ def test_update_new_series_without_static_key_mutates_nothing(engine):
         ts.update(new)
     assert list(ts.uids) == uids
     assert ts.ga.n_groups == len(uids)
-
-
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_static_key_with_other_dtype_warns(engine):
-    """A static key arriving with another dtype in update is ignored, not a crash."""
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 3 + ["b"] * 3,
-            "ds": [1, 2, 3] * 2,
-            "y": np.arange(6.0),
-            "launch": np.repeat(np.array(["2020-01-01", "2021-01-01"], "M8[ns]"), 3),
-        },
-    )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["launch"])]})
-    ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
-    )
-    new = _make_df(
-        engine,
-        {"unique_id": ["a", "b"], "ds": [4, 4], "y": [1.0, 2.0], "launch": [0, 1]},
-    )
-    with pytest.warns(UserWarning, match="will be ignored"):
-        ts.update(new)
-    (state,) = ts._pooled_states.values()
-    assert state.n_ordinals == 4
-
-
-def test_update_static_datetime_key_with_other_unit_doesnt_warn():
-    launch = np.array(["2020-01-01", "2021-01-01"], dtype="M8[ns]")
-    df = pd.DataFrame(
-        {
-            "unique_id": ["a"] * 3 + ["b"] * 3,
-            "ds": [1, 2, 3] * 2,
-            "y": np.arange(6.0),
-            "launch": np.repeat(launch, 3),
-        }
-    )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["launch"])]})
-    ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
-    )
-    new = pd.DataFrame(
-        {
-            "unique_id": ["a", "b"],
-            "ds": [4, 4],
-            "y": [1.0, 2.0],
-            "launch": launch.astype("M8[us]"),
-        }
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        ts.update(new)
 
 
 def test_update_new_series_with_target_transforms_mutates_nothing():
@@ -5565,74 +5499,6 @@ def test_recursive_fitted_values_with_id_in_pooled_key(kwargs, static_features):
     np.testing.assert_allclose(actual, expected)
 
 
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-@pytest.mark.parametrize(
-    "kwargs, key",
-    [
-        (dict(global_=True, partition_by=["promo"]), "promo"),
-        (dict(groupby=["brand"], partition_by=["promo"]), "brand"),
-    ],
-    ids=["partition", "groupby_with_partition"],
-)
-def test_partitioned_key_reads_static_columns_per_row(engine, kwargs, key):
-    """At fit, static columns of a partitioned key bucket each row by its own value."""
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 4 + ["b"] * 4,
-            "ds": [1, 2, 3, 4] * 2,
-            "y": np.arange(8.0),
-            "brand": [0.0, np.nan, 1.0, 0.0] + [1.0] * 4,
-            "promo": [0, 1, 1, 0] + [1] * 4,
-        },
-    )
-
-    def fit_feats(static_features):
-        tfm = RollingMean(2, min_samples=1, **kwargs)
-        ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
-        out = ts.fit_transform(
-            df,
-            id_col="unique_id",
-            time_col="ds",
-            target_col="y",
-            dropna=False,
-            static_features=static_features,
-        )
-        return out[out.columns[-1]].to_numpy()
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        np.testing.assert_allclose(fit_feats([key]), fit_feats([]))
-
-
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_groupby_and_partitioned_groupby_with_inner_null_fit(engine):
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 4 + ["b"] * 4,
-            "ds": [1, 2, 3, 4] * 2,
-            "y": np.arange(8.0),
-            "brand": [0.0, np.nan, 0.0, 0.0] + [1.0] * 4,
-            "promo": [0, 1] * 4,
-        },
-    )
-    tfms = [
-        RollingMean(2, groupby=["brand"]),
-        RollingMean(2, groupby=["brand"], partition_by=["promo"]),
-    ]
-    ts = TimeSeries(freq=1, lag_transforms={1: tfms})
-    ts.fit_transform(
-        df,
-        id_col="unique_id",
-        time_col="ds",
-        target_col="y",
-        dropna=False,
-        static_features=["brand"],
-    )
-    assert len(ts._pooled_states) == 2
-
-
 def test_static_partition_key_with_pd_na_fits():
     df = pd.DataFrame(
         {
@@ -5654,101 +5520,4 @@ def test_static_partition_key_with_pd_na_fits():
     new = df[df.ds == 3].assign(ds=4, y=1.0)
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        ts.update(new)
-
-
-def test_changed_static_key_warns_before_updating():
-    ts = _fitted_static_partition_ts("pandas")
-    n_rows = ts.ga.data.size
-    last_dates = list(ts.last_dates)
-    update = pd.DataFrame(
-        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [1, 1]}
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        with pytest.raises(UserWarning, match="will be ignored"):
-            ts.update(update)
-    assert ts.ga.data.size == n_rows
-    assert list(ts.last_dates) == last_dates
-
-
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_static_bool_key_as_int_doesnt_warn(engine):
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 3 + ["b"] * 3,
-            "ds": [1, 2, 3] * 2,
-            "y": np.arange(6.0),
-            "flag": [True] * 3 + [False] * 3,
-        },
-    )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["flag"])]})
-    ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
-    )
-    new = _make_df(
-        engine,
-        {"unique_id": ["a", "b"], "ds": [4, 4], "y": [1.0, 2.0], "flag": [1, 0]},
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        ts.update(new)
-
-
-def test_recursive_fitted_values_with_static_key_varying_inside_series():
-    from mlforecast.forecast import MLForecast
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    n = 10
-    df = pd.DataFrame(
-        {
-            "unique_id": ["a"] * n + ["b"] * n,
-            "ds": list(range(n)) * 2,
-            "y": np.arange(2 * n, dtype=float),
-            "brand": [0] + [1] * (n - 3) + [0, 0] + [1] * n,
-        }
-    )
-    fcst = MLForecast(
-        models=[HistGradientBoostingRegressor(max_iter=5)],
-        freq=1,
-        lags=[3],
-        lag_transforms={1: [RollingMean(2, partition_by=["brand"])]},
-    )
-    fcst.fit(df, fitted=True, static_features=["brand"])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        assert fcst.forecast_fitted_values(h=2).shape[0] > 0
-
-
-def test_update_with_static_key_doesnt_warn_setting_with_copy():
-    ts = _fitted_static_partition_ts("pandas")
-    update = pd.DataFrame(
-        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [0, 1]}
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", pd.errors.SettingWithCopyWarning)
-        ts.update(update)
-
-
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_static_int_key_as_fractional_float_warns(engine):
-    df = _make_df(
-        engine,
-        {
-            "unique_id": ["a"] * 3 + ["b"] * 3,
-            "ds": [1, 2, 3] * 2,
-            "y": np.arange(6.0),
-            "flag": [1] * 3 + [2] * 3,
-        },
-    )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["flag"])]})
-    ts.fit_transform(
-        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
-    )
-    new = _make_df(
-        engine,
-        {"unique_id": ["a", "b"], "ds": [4, 4], "y": [1.0, 2.0], "flag": [1.7, 2.9]},
-    )
-    with pytest.warns(UserWarning, match="will be ignored"):
         ts.update(new)
