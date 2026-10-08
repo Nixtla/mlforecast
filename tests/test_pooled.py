@@ -5249,3 +5249,157 @@ def test_get_kernel_resolves_subclasses():
 
     with pytest.raises(NotImplementedError, match="NotPooled"):
         get_kernel(NotPooled())
+
+
+def _key_spelling_frames(engine):
+    T = 12
+    rows = [
+        {
+            "unique_id": sid,
+            "ds": t,
+            "y": 10.0 + (3 * t + 7 * i) % 5 + i,
+            "brand": brand,
+            "promo": (t + i) % 3 == 0,
+        }
+        for i, (sid, brand) in enumerate({"a": 0, "b": 0, "c": 1}.items())
+        for t in range(1, T + 5)
+    ]
+    df = pd.DataFrame(rows)
+    df["promo"] = df["promo"].astype(int)
+    train, new, future = (
+        df[df.ds <= T],
+        df[df.ds.between(T + 1, T + 2)],
+        df[df.ds > T + 2],
+    )
+    future = future.drop(columns=["y", "brand"])
+    if engine == "polars":
+        train, new, future = (pl.from_pandas(f) for f in (train, new, future))
+    return train, new, future
+
+
+def _run_key_spelling(engine, tfm):
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    def capture(X):
+        step_feats.append(np.asarray(X[X.columns[-1]].to_numpy()))
+        return X
+
+    train, new, future = _key_spelling_frames(engine)
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    prep = fcst.preprocess(train, static_features=["brand"], dropna=False)
+    step_feats = [prep[prep.columns[-1]].to_numpy()]
+    fcst.fit(train, static_features=["brand"])
+    fcst.update(new)
+    preds = fcst.predict(2, X_df=future, before_predict_callback=capture)
+    return step_feats, preds["HistGradientBoostingRegressor"].to_numpy()
+
+
+_SPELLING_TFMS = [
+    (lambda **kw: RollingMean(3, **kw), {"min_samples": 1}),
+    (lambda **kw: RollingStd(3, **kw), {"min_samples": 1}),
+    (lambda **kw: ExpandingMean(**kw), {}),
+    (lambda **kw: ExponentiallyWeightedMean(alpha=0.5, **kw), {}),
+]
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "tfm_factory, local_kw",
+    _SPELLING_TFMS,
+    ids=["rolling_mean", "rolling_std", "expanding_mean", "ewm"],
+)
+@pytest.mark.parametrize("pair", ["groupby", "local_partition"])
+def test_equivalent_key_spellings(engine, tfm_factory, local_kw, pair):
+    """Spellings that pool the same bucket key give the same features and forecasts."""
+    if pair == "groupby":
+        kwargs = dict(groupby=["brand"])
+        equivalent = dict(global_=True, partition_by=["brand"])
+    else:
+        kwargs = dict(partition_by=["promo"])
+        equivalent = dict(global_=True, partition_by=["unique_id", "promo"], **local_kw)
+    exp_feats, exp_preds = _run_key_spelling(engine, tfm_factory(**kwargs))
+    feats, preds = _run_key_spelling(engine, tfm_factory(**equivalent))
+    for step, exp_step in zip(feats, exp_feats, strict=True):
+        np.testing.assert_allclose(step, exp_step)
+    np.testing.assert_allclose(preds, exp_preds)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "partition_by, expected",
+    [
+        (["promo"], ["a\x1f0", "a\x1f2", "b\x1f0", "b\x1f1"]),
+        (["brand"], ["a\x1fy", "b\x1fx"]),
+        (
+            ["brand", "promo"],
+            ["a\x1fy\x1f0", "a\x1fy\x1f2", "b\x1fx\x1f0", "b\x1fx\x1f1"],
+        ),
+    ],
+)
+def test_local_partition_bucket_uniques(engine, partition_by, expected):
+    """Saved local-partition models keep the bucket vocabulary they were fit with."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["b"] * 3 + ["a"] * 3,
+            "ds": [1, 2, 3] * 2,
+            "y": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "promo": [1, 0, 1, 0, 0, 2],
+            "brand": ["x"] * 3 + ["y"] * 3,
+        },
+    )
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, partition_by=partition_by)]}
+    )
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    (state,) = ts._pooled_states.values()
+    assert list(state.bucket_uniques) == expected
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(partition_by=["promo"]),
+        dict(global_=True, partition_by=["unique_id", "promo"], min_samples=1),
+        dict(groupby=["unique_id"]),
+    ],
+    ids=["local", "global_with_id", "groupby_id"],
+)
+def test_predict_ids_with_id_in_pooled_key(engine, kwargs):
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, new, _ = _key_spelling_frames(engine)
+    future = (
+        new.drop(["y", "brand"])
+        if engine == "polars"
+        else new.drop(columns=["y", "brand"])
+    )
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, **kwargs)]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    full = fcst.predict(2, X_df=future)
+    sub = fcst.predict(2, X_df=future, ids=["b"])
+    if engine == "polars":
+        full = full.to_pandas()
+        sub = sub.to_pandas()
+    np.testing.assert_allclose(
+        sub["HistGradientBoostingRegressor"].to_numpy(),
+        full.loc[full.unique_id == "b", "HistGradientBoostingRegressor"].to_numpy(),
+    )
