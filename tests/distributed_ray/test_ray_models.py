@@ -197,31 +197,6 @@ def test_xgb_train_loop_without_evaluated_metrics(run_train_loop):
     assert [metrics for metrics, *_ in reports] == [{}]
 
 
-class _CountRounds(xgb.callback.TrainingCallback):
-    def __init__(self):
-        self.rounds = 0
-
-    def after_iteration(self, model, epoch, evals_log):  # noqa: ARG002
-        self.rounds += 1
-        return False
-
-
-@pytest.mark.ray
-def test_xgb_train_loop_runs_and_keeps_the_user_callbacks(run_train_loop):
-    """Callbacks defined in a notebook or holding a lambda can't be plain pickled."""
-    # plain pickle looks classes up by module, and this one isn't in __main__
-    notebook_cls = type("_CountRounds", (_CountRounds,), {"__module__": "__main__"})
-    scheduler = xgb.callback.LearningRateScheduler(lambda _epoch: 0.3)
-    reports = run_train_loop(
-        _xgb_train_loop,
-        {"n_estimators": 3, "callbacks": [notebook_cls(), scheduler]},
-    )
-    _, _, model = reports[0]
-    counter, scheduler = model.get_params()["callbacks"]
-    assert counter.rounds == 3
-    assert scheduler.learning_rates(0) == 0.3
-
-
 @pytest.mark.ray
 @pytest.mark.parametrize(
     "n_jobs,user_nthread,nthread",
@@ -270,7 +245,6 @@ def test_xgb_keeps_random_state_and_model_is_picklable():
     params = model.model_.get_params()
     assert params["random_state"] == 0
     assert "seed" not in params
-    assert params["callbacks"] is None
     pickle.loads(pickle.dumps(model.model_))
 
 

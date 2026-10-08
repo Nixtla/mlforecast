@@ -6,8 +6,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import cloudpickle
-
 _RAY_PARAMS = ("num_workers", "resources_per_worker", "storage_path")
 _MODEL_FILE = "model.pkl"
 
@@ -50,6 +48,7 @@ def report_fitted_model(model: Any, booster: Any, booster_file: str) -> None:
     reporting from rank 0 only deadlocks.
     """
     import ray.train
+    from ray import cloudpickle
     from ray.train import Checkpoint
 
     # xgboost doesn't set evals_result_ when no metric was evaluated
@@ -60,7 +59,6 @@ def report_fitted_model(model: Any, booster: Any, booster_file: str) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         booster.save_model(Path(tmp_dir, booster_file).as_posix())
         with open(Path(tmp_dir, _MODEL_FILE), "wb") as f:
-            # user callbacks defined in __main__ or holding lambdas need cloudpickle
             cloudpickle.dump(model, f)
         ray.train.report(metrics, checkpoint=Checkpoint.from_directory(tmp_dir))
 
@@ -134,6 +132,7 @@ class RayForecastBase:
         dataset: Any,
         target_col: str,
     ) -> "RayForecastBase":
+        from ray import cloudpickle
         from ray.train import RunConfig, ScalingConfig
 
         params = self.get_params()  # type: ignore[attr-defined]
