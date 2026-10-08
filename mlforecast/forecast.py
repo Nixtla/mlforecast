@@ -1336,7 +1336,7 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             h (int): Forecast horizon for fitted values. Defaults to 1.
                 For recursive models and ``h>1``, values are computed on demand and are not available
-                when global or grouped lag transforms are configured.
+                when lag transforms pool across series.
             train_df (pandas or polars DataFrame, optional): Training data to use when computing
                 recursive fitted values for ``h>1`` on demand. Pass this to avoid caching a full
                 copy of the training data on the fitted object. Defaults to None.
@@ -1396,13 +1396,10 @@ class MLForecast:
             if h == 1:
                 res = self.fcst_fitted_values_
             else:
-                if any(
-                    self.ts.id_col not in self.ts._bucket_cols(k)
-                    for k in self.ts._pooled_states
-                ):
+                if self.ts._pools_across_series:
                     raise ValueError(
-                        "On-demand recursive fitted values for `h>1` are not supported when using "
-                        "global or grouped lag transforms."
+                        "On-demand recursive fitted values for `h>1` are not supported with "
+                        "lag transforms pooled across series."
                     )
                 warnings.warn(
                     "Computing recursive fitted values for h>1 on demand can be slow.",

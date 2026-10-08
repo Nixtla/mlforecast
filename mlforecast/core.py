@@ -248,16 +248,6 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
-def _varies_within_series(values: np.ndarray, statics: np.ndarray, reps) -> bool:
-    """Whether any per-row value differs from its series' static value."""
-    if values.dtype.kind == statics.dtype.kind == "M":
-        # the key encoding includes the datetime unit
-        dtype = np.promote_types(values.dtype, statics.dtype)
-        values, statics = values.astype(dtype), statics.astype(dtype)
-    codes, uniques = factorize([values])
-    return bool((codes != np.repeat(lookup([statics], uniques), reps)).any())
-
-
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -412,28 +402,60 @@ class TimeSeries:
             if c not in statics
         )
 
+    @property
+    def _pools_across_series(self) -> bool:
+        """Whether some pooled bucket mixes series."""
+        states = getattr(self, "_pooled_states", {})
+        return any(self.id_col not in self._bucket_cols(key) for key in states)
+
     def _bucket_cols(self, key) -> List[str]:
         """Columns whose values identify a bucket of the pooled `key`."""
         mode, gcols, pcols = key
         id_cols = [self.id_col] if mode == "local" else []
         return [*id_cols, *gcols, *pcols]
 
-    def _changed_static_keys(self, cols, frame, reps) -> List[str]:
-        """Static key columns whose values in `frame` differ from the statics."""
+    def _changed_static_keys(self, df) -> List[str]:
+        """Static pooled key columns whose values in `df` differ from the statics."""
         statics = self.static_features_
-        return [
+        cols = [
             c
-            for c in cols
-            if c != self.id_col
-            and c in statics.columns
-            and c in frame.columns
-            and _varies_within_series(
-                np.asarray(frame[c].to_numpy()), np.asarray(statics[c].to_numpy()), reps
-            )
+            for c in self._pooled_aux_cols
+            if c != self.id_col and c in statics.columns and c in df.columns
         ]
+        if not cols:
+            return []
+        fit_ids, new_ids = ufp.match_if_categorical(
+            statics[self.id_col], df[self.id_col]
+        )
+        fit_vals = ufp.rename(statics[cols], {c: f"_fit_{c}" for c in cols})
+        fit_vals = ufp.assign_columns(fit_vals, self.id_col, fit_ids)
+        new_vals = ufp.assign_columns(df[cols], self.id_col, new_ids)
+        joined = ufp.join(new_vals, fit_vals, on=self.id_col)
+        changed = []
+        for c in cols:
+            new = nw.from_native(joined[c], series_only=True)
+            fit = nw.from_native(joined[f"_fit_{c}"], series_only=True)
+            if any(isinstance(v.dtype, (nw.Categorical, nw.Enum)) for v in (new, fit)):
+                # categoricals with different categories can't be compared
+                new, fit = new.cast(nw.String), fit.cast(nw.String)
+            elif new.dtype != fit.dtype:
+                try:
+                    new = new.cast(fit.dtype)
+                except Exception:
+                    # each backend raises its own error for an impossible cast
+                    changed.append(c)
+                    continue
+            if _static_feature_changes_over_time(fit, new):
+                changed.append(c)
+        return changed
 
-    def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
-        """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
+    def _key_values(
+        self, cols, frame, reps=None, prefer_frame=False
+    ) -> List[np.ndarray]:
+        """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s.
+
+        With `prefer_frame`, columns present in `frame` are read from it.
+        """
         statics = self.static_features_
         frame_cols = set(getattr(frame, "columns", []))
         missing = [c for c in cols if c not in statics.columns and c not in frame_cols]
@@ -444,7 +466,7 @@ class TimeSeries:
             )
         out = []
         for c in cols:
-            if c in statics.columns:
+            if c in statics.columns and not (prefer_frame and c in frame_cols):
                 vals = np.asarray(statics[c].to_numpy())
                 if reps is not None:
                     vals = np.repeat(vals, reps)
@@ -552,20 +574,11 @@ class TimeSeries:
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
         statics = self.static_features_
-        ignored = self._changed_static_keys(self._pooled_aux_cols, df, n_new)
-        if ignored:
-            warnings.warn(
-                "The following pooled key columns were considered static during fit "
-                f"and their new values in the update frame will be ignored: {ignored}.",
-                UserWarning,
-                stacklevel=3,
-            )
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             cols = self._bucket_cols(key)
-            # statics stay one value per series, dynamic keys get one column per step
             keys = [
                 v if c in statics.columns else v.reshape(n_series, n_new)
                 for c, v in zip(cols, self._key_values(cols, df))
@@ -1017,19 +1030,6 @@ class TimeSeries:
             key_df = df[row_cols]
             if self._sort_idxs is not None:
                 key_df = ufp.take_rows(key_df, self._sort_idxs)
-            # pure groupby keys were always read from the statics
-            row_key_cols = {
-                c for key in pooled if key[2] for c in self._bucket_cols(key)
-            }
-            changing = self._changed_static_keys(
-                [c for c in row_cols if c in row_key_cols], key_df, lens
-            )
-            if changing:
-                raise ValueError(
-                    f"Pooled key column(s) {changing} are declared as static features "
-                    "but change within a series. Exclude them from `static_features` "
-                    "so they're read per row."
-                )
 
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
@@ -1049,12 +1049,14 @@ class TimeSeries:
                 n_buckets = 1
                 series_bid = np.zeros(len(lens), dtype=np.int64)
                 row_bid = np.repeat(series_bid, lens)
-            elif all(c in statics.columns for c in cols):
+            elif not pcols:
                 series_bid, uniques = factorize(self._key_values(cols, None))
                 n_buckets = len(uniques)
                 row_bid = np.repeat(series_bid, lens)
             else:
-                row_bid, uniques = factorize(self._key_values(cols, key_df, reps=lens))
+                row_bid, uniques = factorize(
+                    self._key_values(cols, key_df, reps=lens, prefer_frame=True)
+                )
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
                 # timestamp; predict overwrites this per step from X_df
@@ -2122,9 +2124,7 @@ class TimeSeries:
         ids: Optional[List[str]] = None,
     ) -> DFType:
         if ids is not None:
-            if any(
-                self.id_col not in self._bucket_cols(k) for k in self._pooled_states
-            ):
+            if self._pools_across_series:
                 raise ValueError(
                     "Cannot use `ids` with lag transforms pooled across series. "
                     "These transforms require forecasting all series together."
@@ -2314,6 +2314,15 @@ class TimeSeries:
             if missing:
                 raise ValueError(
                     f"Pooled key column(s) {missing} must be provided in the update frame."
+                )
+            ignored = self._changed_static_keys(df)
+            if ignored:
+                warnings.warn(
+                    "The following pooled key columns were considered static during "
+                    "fit and their new values in the update frame will be ignored: "
+                    f"{ignored}.",
+                    UserWarning,
+                    stacklevel=2,
                 )
         if validate_new_data:
             self._validate_new_df(df=df)

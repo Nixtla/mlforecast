@@ -57,7 +57,7 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
     if values.dtype.kind in "fc":
         missing = np.isnan(values)
     elif values.dtype.kind == "O":
-        missing = np.array([v is None or v != v for v in values], dtype=bool)
+        missing = np.asarray(pd.isna(values), dtype=bool)
     elif values.dtype.kind == "M":
         missing = np.isnat(values)
     else:
