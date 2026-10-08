@@ -1009,7 +1009,7 @@ class _ExpandingMixin(_PooledKernel):
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, None).astype(float)
 
-    def make_inner(self, lag=None) -> Dict[str, Any]:
+    def make_inner(self, lag: Optional[int] = None) -> Dict[str, Any]:
         raise NotImplementedError
 
     def _inner(self, cls, lag=None, **kw):
