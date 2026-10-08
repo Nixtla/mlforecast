@@ -560,6 +560,11 @@ class TimeSeries:
                     v if c in statics.columns else v.reshape(n_series, n_new)
                     for c, v in zip(cols, self._key_values(cols, df))
                 ]
+                _assign_buckets(
+                    state,
+                    leaves,
+                    [v.ravel() if v.ndim == 2 else np.repeat(v, n_new) for v in keys],
+                )
             elif not has_new_series:
                 bids = state.series_bucket_id
             elif cols:
@@ -569,7 +574,7 @@ class TimeSeries:
             for j in range(n_new):
                 if keys is not None:
                     arrays = [v[:, j] if v.ndim == 2 else v for v in keys]
-                    bids = _assign_buckets(state, leaves, arrays)
+                    bids = lookup(arrays, state.bucket_uniques)
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)

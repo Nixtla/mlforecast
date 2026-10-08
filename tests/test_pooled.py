@@ -5580,3 +5580,49 @@ def test_update_reuses_static_buckets_without_new_series(monkeypatch):
         updated._get_features_for_next_step().to_numpy(),
         control._get_features_for_next_step().to_numpy(),
     )
+
+
+@pytest.mark.parametrize(
+    "tfm_factory",
+    [
+        lambda: RollingMean(2, min_samples=1, global_=True, partition_by=["promo"]),
+        lambda: ExpandingMean(global_=True, partition_by=["promo"]),
+    ],
+    ids=["rolling_mean", "expanding_mean"],
+)
+def test_update_new_partition_value_mid_batch_matches_fit(tfm_factory):
+    full = pd.DataFrame(
+        {
+            "unique_id": ["a"] * 5 + ["b"] * 5,
+            "ds": [1, 2, 3, 4, 5] * 2,
+            "y": [1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0],
+            "promo": [0, 0, 0, 0, 1, 0, 0, 0, 1, 1],
+        }
+    )
+
+    def fit(df):
+        ts = TimeSeries(freq=1, lag_transforms={1: [tfm_factory()]})
+        ts.fit_transform(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            dropna=False,
+            static_features=[],
+        )
+        return ts
+
+    updated = fit(full[full["ds"] <= 3])
+    updated.update(full[full["ds"] > 3])
+    control = fit(full)
+    (state,) = updated._pooled_states.values()
+    (ref,) = control._pooled_states.values()
+    np.testing.assert_array_equal(state.bucket_uniques, ref.bucket_uniques)
+    np.testing.assert_array_equal(state.series_bucket_id, ref.series_bucket_id)
+    col = tfm_factory()._get_name(1)
+    for ts in (updated, control):
+        ts._predict_setup()
+    np.testing.assert_allclose(
+        updated._update_features()[col].to_numpy(),
+        control._update_features()[col].to_numpy(),
+    )
