@@ -51,7 +51,8 @@ def report_fitted_model(model: Any, booster: Any, booster_file: str) -> None:
     import ray.train
     from ray.train import Checkpoint
 
-    metrics = _last_metrics(model.evals_result_)
+    # xgboost doesn't set evals_result_ when no metric was evaluated
+    metrics = _last_metrics(getattr(model, "evals_result_", {}))
     if ray.train.get_context().get_world_rank() != 0:
         ray.train.report(metrics)
         return

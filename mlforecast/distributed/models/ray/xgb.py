@@ -26,7 +26,12 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     model.fit(df, label, eval_set=[(df, label)])
     # the n_jobs clamp is for this worker's thread pool; model_ is shipped to the
     # forecasting workers and returned by to_local, so it keeps what was asked for
-    model.set_params(n_jobs=config["params"].get("n_jobs"))
+    # set_params would push every param into the booster, and a list eval_metric
+    # breaks save_model once it's been set that way
+    n_jobs = config["params"].get("n_jobs")
+    model.n_jobs = n_jobs
+    if n_jobs is not None:
+        model.get_booster().set_param("nthread", n_jobs)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME
     )

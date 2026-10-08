@@ -117,18 +117,9 @@ def test_model_is_the_estimator_fitted_in_the_worker(model_cls, local_cls):
         )
 
 
-@pytest.mark.ray
-@pytest.mark.parametrize(
-    "train_loop,metric",
-    [(_lgb_train_loop, "train-l2"), (_xgb_train_loop, "validation_0-rmse")],
-    ids=["lightgbm", "xgboost"],
-)
-def test_train_loop_reports_once(monkeypatch, train_loop, metric):
-    """Each ray.train.report waits for the controller's next poll (~2s by default).
-
-    Reporting every boosting round made each tree cost that much on top of
-    training, so only the fitted model is reported, with its final metrics.
-    """
+@pytest.fixture
+def run_train_loop(monkeypatch):
+    """Runs a train loop in this process, recording its ray.train.report calls."""
     import ray.train
     import ray.train.lightgbm
 
@@ -137,33 +128,80 @@ def test_train_loop_reports_once(monkeypatch, train_loop, metric):
     shard = SimpleNamespace(
         materialize=lambda: SimpleNamespace(to_pandas=lambda: df.copy())
     )
-    context = SimpleNamespace(get_world_rank=lambda: 0)
     runtime_context = SimpleNamespace(get_assigned_resources=lambda: {"CPU": 1.0})
-    reports = []
-
-    def report(metrics, checkpoint=None):
-        # the checkpoint's directory is removed once report returns
-        files = None
-        if checkpoint is not None:
-            files = sorted(p.name for p in Path(checkpoint.path).iterdir())
-        reports.append((metrics, files))
-
     monkeypatch.setattr(ray.train, "get_dataset_shard", lambda name: shard)
-    monkeypatch.setattr(ray.train, "get_context", lambda: context)
     monkeypatch.setattr(ray, "get_runtime_context", lambda: runtime_context)
-    monkeypatch.setattr(ray.train, "report", report)
     monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: {})
 
-    params = {"n_estimators": 5, "random_state": 0}
-    if train_loop is _lgb_train_loop:
-        params["verbosity"] = -1
-    train_loop({"params": params, "target_col": "y"})
+    def run(train_loop, params, rank=0):
+        reports = []
+
+        def report(metrics, checkpoint=None):
+            # the checkpoint's directory is removed once report returns
+            files, model = None, None
+            if checkpoint is not None:
+                ckpt_dir = Path(checkpoint.path)
+                files = sorted(p.name for p in ckpt_dir.iterdir())
+                with open(ckpt_dir / "model.pkl", "rb") as f:
+                    model = pickle.load(f)
+            reports.append((metrics, files, model))
+
+        context = SimpleNamespace(get_world_rank=lambda: rank)
+        monkeypatch.setattr(ray.train, "get_context", lambda: context)
+        monkeypatch.setattr(ray.train, "report", report)
+        if train_loop is _lgb_train_loop:
+            params = {"verbosity": -1, **params}
+        train_loop({"params": params, "target_col": "y"})
+        return reports
+
+    return run
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize(
+    "train_loop,data,metric,booster_file",
+    [
+        (_lgb_train_loop, "train", "l2", "model.txt"),
+        (_xgb_train_loop, "validation_0", "rmse", "model.ubj"),
+    ],
+    ids=["lightgbm", "xgboost"],
+)
+@pytest.mark.parametrize("rank", [0, 1])
+def test_train_loop_reports_once(
+    run_train_loop, train_loop, data, metric, booster_file, rank
+):
+    """Each worker reports once, with the final metrics; only rank 0 checkpoints."""
+    reports = run_train_loop(train_loop, {"n_estimators": 5}, rank=rank)
 
     assert len(reports) == 1
-    metrics, files = reports[0]
-    assert metric in metrics
-    booster_file = "model.txt" if train_loop is _lgb_train_loop else "model.ubj"
+    metrics, files, model = reports[0]
+    assert list(metrics) == [f"{data}-{metric}"]
+    if rank != 0:
+        assert files is None
+        return
     assert files == sorted(["model.pkl", booster_file])
+    assert metrics[f"{data}-{metric}"] == model.evals_result_[data][metric][-1]
+
+
+@pytest.mark.ray
+def test_xgb_train_loop_without_evaluated_metrics(run_train_loop):
+    """xgboost doesn't set evals_result_ when no metric is evaluated."""
+    reports = run_train_loop(
+        _xgb_train_loop, {"n_estimators": 2, "disable_default_eval_metric": True}
+    )
+    assert [metrics for metrics, *_ in reports] == [{}]
+
+
+@pytest.mark.ray
+def test_xgb_train_loop_keeps_n_jobs_with_a_metric_list(run_train_loop):
+    """Restoring n_jobs mustn't push the eval_metric list into the booster."""
+    reports = run_train_loop(
+        _xgb_train_loop,
+        {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": 1},
+    )
+    metrics, _, model = reports[0]
+    assert set(metrics) == {"validation_0-rmse", "validation_0-mae"}
+    assert model.n_jobs == 1
 
 
 @pytest.mark.ray
