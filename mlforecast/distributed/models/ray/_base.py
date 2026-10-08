@@ -31,7 +31,7 @@ def worker_n_jobs(requested: Any) -> int:
 
 
 def _last_metrics(evals_result: Dict[str, Dict[str, List[float]]]) -> Dict[str, float]:
-    """Final value of each eval metric, keyed as ray's report callbacks do."""
+    """Final value of each eval metric."""
     return {
         f"{data}-{name}": values[-1]
         for data, metrics in evals_result.items()

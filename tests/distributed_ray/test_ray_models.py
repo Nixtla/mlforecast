@@ -129,12 +129,12 @@ def run_train_loop(monkeypatch):
     shard = SimpleNamespace(
         materialize=lambda: SimpleNamespace(to_pandas=lambda: df.copy())
     )
-    monkeypatch.setattr(ray.train, "get_dataset_shard", lambda name: shard)
+    monkeypatch.setattr(ray.train, "get_dataset_shard", lambda _name: shard)
     # the driver isn't a worker, so it has no assigned resources to read
     for module in ("lgb", "xgb"):
         monkeypatch.setattr(
             f"mlforecast.distributed.models.ray.{module}.worker_n_jobs",
-            lambda requested: 1,
+            lambda _requested: 1,
         )
     monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: {})
 
@@ -201,7 +201,7 @@ class _CountRounds(xgb.callback.TrainingCallback):
     def __init__(self):
         self.rounds = 0
 
-    def after_iteration(self, model, epoch, evals_log):
+    def after_iteration(self, model, epoch, evals_log):  # noqa: ARG002
         self.rounds += 1
         return False
 
@@ -211,7 +211,7 @@ def test_xgb_train_loop_runs_and_keeps_the_user_callbacks(run_train_loop):
     """Callbacks defined in a notebook or holding a lambda can't be plain pickled."""
     # plain pickle looks classes up by module, and this one isn't in __main__
     notebook_cls = type("_CountRounds", (_CountRounds,), {"__module__": "__main__"})
-    scheduler = xgb.callback.LearningRateScheduler(lambda epoch: 0.3)
+    scheduler = xgb.callback.LearningRateScheduler(lambda _epoch: 0.3)
     reports = run_train_loop(
         _xgb_train_loop,
         {"n_estimators": 3, "callbacks": [notebook_cls(), scheduler]},
