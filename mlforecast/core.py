@@ -554,16 +554,11 @@ class TimeSeries:
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             cols = self._bucket_cols(key)
-            keys = None
+            step_bids = None
             if any(c not in statics.columns for c in cols):
-                keys = [
-                    v if c in statics.columns else v.reshape(n_series, n_new)
-                    for c, v in zip(cols, self._key_values(cols, df))
-                ]
-                _assign_buckets(
-                    state,
-                    leaves,
-                    [v.ravel() if v.ndim == 2 else np.repeat(v, n_new) for v in keys],
+                keys = self._key_values(cols, df, reps=np.full(n_series, n_new))
+                step_bids = _assign_buckets(state, leaves, keys).reshape(
+                    n_series, n_new
                 )
             elif not has_new_series:
                 bids = state.series_bucket_id
@@ -572,9 +567,8 @@ class TimeSeries:
             else:
                 bids = np.zeros(n_series, dtype=np.int64)
             for j in range(n_new):
-                if keys is not None:
-                    arrays = [v[:, j] if v.ndim == 2 else v for v in keys]
-                    bids = lookup(arrays, state.bucket_uniques)
+                if step_bids is not None:
+                    bids = step_bids[:, j]
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
@@ -1018,8 +1012,8 @@ class TimeSeries:
             cols = self._bucket_cols(key)
             if not pcols:
                 # a pure groupby bucket is broadcast from the statics at predict,
-                # so its key has to be static; with partition_by the key is read
-                # per row instead and may come from the frame
+                # so its key has to be static; with partition_by its dynamic
+                # columns are read per row from the frame
                 missing_static = [c for c in gcols if c not in statics.columns]
                 if missing_static:
                     raise ValueError(
@@ -1758,7 +1752,7 @@ class TimeSeries:
         """
         X_row = None
         static_cols = self.static_features_.columns
-        for key, state in self._pooled_states.items():
+        for key, state in getattr(self, "_pooled_states", {}).items():
             cols = self._bucket_cols(key)
             if all(c in static_cols for c in cols):
                 continue

@@ -5626,3 +5626,32 @@ def test_update_new_partition_value_mid_batch_matches_fit(tfm_factory):
         updated._update_features()[col].to_numpy(),
         control._update_features()[col].to_numpy(),
     )
+
+
+def test_predict_ids_restores_bucket_ids():
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, new, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, partition_by=["promo"])]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    (state,) = fcst.ts._pooled_states.values()
+    bids = state.series_bucket_id.copy()
+    fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
+    np.testing.assert_array_equal(state.series_bucket_id, bids)
+
+
+def test_direct_predict_without_pooled_states():
+    """Models pickled before pooled transforms existed have no `_pooled_states`."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    fcst = MLForecast(models=[LinearRegression()], freq=1, lags=[1])
+    fcst.fit(_static_partition_df("pandas"), max_horizon=2)
+    expected = fcst.predict(2)
+    del fcst.ts._pooled_states
+    pd.testing.assert_frame_equal(fcst.predict(2), expected)
