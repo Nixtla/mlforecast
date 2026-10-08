@@ -5473,3 +5473,54 @@ def test_update_new_series_without_static_key_mutates_nothing(engine):
         ts.update(new)
     assert list(ts.uids) == uids
     assert ts.ga.n_groups == len(uids)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_static_key_with_other_dtype_warns(engine):
+    """A static key arriving with another dtype in update is ignored, not a crash."""
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 3 + ["b"] * 3,
+            "ds": [1, 2, 3] * 2,
+            "y": np.arange(6.0),
+            "launch": np.repeat(np.array(["2020-01-01", "2021-01-01"], "M8[ns]"), 3),
+        },
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, groupby=["launch"])]})
+    ts.fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    new = _make_df(
+        engine,
+        {"unique_id": ["a", "b"], "ds": [4, 4], "y": [1.0, 2.0], "launch": [0, 1]},
+    )
+    with pytest.warns(UserWarning, match="will be ignored"):
+        ts.update(new)
+    (state,) = ts._pooled_states.values()
+    assert state.n_ordinals == 4
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_changing_static_groupby_key_with_partition_raises(engine):
+    df = _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 4 + ["b"] * 4,
+            "ds": [1, 2, 3, 4] * 2,
+            "y": np.arange(8.0),
+            "brand": ["x", "y", "y", "x"] + ["y"] * 4,
+            "promo": [0, 1] * 4,
+        },
+    )
+    tfm = RollingMean(2, groupby=["brand"], partition_by=["promo"])
+    ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
+    with pytest.raises(ValueError, match="change within a series"):
+        ts.fit_transform(
+            df,
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            dropna=False,
+            static_features=["brand"],
+        )

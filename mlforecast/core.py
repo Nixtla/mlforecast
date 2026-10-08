@@ -250,9 +250,10 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
 
 def _varies_within_series(values: np.ndarray, statics: np.ndarray, reps) -> bool:
     """Whether any per-row value differs from its series' static value."""
-    codes, _ = factorize([np.concatenate([statics, values])])
-    n = len(statics)
-    return bool((codes[n:] != np.repeat(codes[:n], reps)).any())
+    # encoded separately so differing dtypes compare as unequal instead of raising
+    codes, uniques = factorize([values])
+    static_codes, static_uniques = factorize([statics])
+    return bool((uniques[codes] != np.repeat(static_uniques[static_codes], reps)).any())
 
 
 def _to_native_index(values, *, df):
@@ -540,6 +541,7 @@ class TimeSeries:
             for c in self._pooled_aux_cols
             if c in statics.columns
             and c in df.columns
+            and c != self.id_col
             and _varies_within_series(
                 np.asarray(df[c].to_numpy()), np.asarray(statics[c].to_numpy()), n_new
             )
@@ -1008,10 +1010,14 @@ class TimeSeries:
             key_df = df[row_cols]
             if self._sort_idxs is not None:
                 key_df = ufp.take_rows(key_df, self._sort_idxs)
+            # pure groupby keys were always read from the statics
+            row_key_cols = {
+                c for key in pooled if key[2] for c in self._bucket_cols(key)
+            }
             changing = [
                 c
-                for c in self._partition_cols
-                if c in row_cols
+                for c in row_cols
+                if c in row_key_cols
                 and c in statics.columns
                 and c != self.id_col
                 and _varies_within_series(

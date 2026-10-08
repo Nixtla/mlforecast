@@ -72,8 +72,8 @@ across **multiple series at once**:
   combination of partition values gets its own bucket. Composes with `global_`
   (cross-series aggregates within each partition), with `groupby` (group
   aggregates within each partition), or stands alone (per-(id, partition)
-  buckets — *local* mode). Partition columns must be supplied via `X_df` at
-  prediction.
+  buckets — *local* mode). Dynamic partition columns must be supplied via
+  `X_df` at prediction; static ones are taken from the static features.
 
 `global_` and `groupby` are **mutually exclusive** on the same transform.
 `partition_by` composes with either one or stands alone. All pooled modes
