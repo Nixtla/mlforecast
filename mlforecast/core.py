@@ -248,6 +248,19 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
+def _assign_buckets(state, leaves, arrays) -> np.ndarray:
+    """Bucket ids of the key `arrays`, adding unseen keys to `state`."""
+    remap = state.grow_buckets(np.unique(encode_keys(arrays)))
+    if remap is not None:
+        # growing renumbers buckets, so the per-kernel inner state
+        # has to be permuted and extended to match
+        for leaf in leaves:
+            leaf._pooled_kernel.remap_buckets(
+                leaf._pooled_inner, remap, state.n_buckets
+            )
+    return lookup(arrays, state.bucket_uniques)
+
+
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -539,24 +552,22 @@ class TimeSeries:
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
             cols = self._bucket_cols(key)
-            keys = [
-                v if c in statics.columns else v.reshape(n_series, n_new)
-                for c, v in zip(cols, self._key_values(cols, df))
-            ]
-            dynamic = any(v.ndim == 2 for v in keys)
-            bids = None if keys else np.zeros(n_series, dtype=np.int64)
+            keys = None
+            if not cols:
+                bids = np.zeros(n_series, dtype=np.int64)
+            elif any(c not in statics.columns for c in cols):
+                keys = [
+                    v if c in statics.columns else v.reshape(n_series, n_new)
+                    for c, v in zip(cols, self._key_values(cols, df))
+                ]
+            elif len(state.series_bucket_id) == n_series:
+                bids = state.series_bucket_id
+            else:
+                bids = _assign_buckets(state, leaves, self._key_values(cols, None))
             for j in range(n_new):
-                if bids is None or dynamic:
+                if keys is not None:
                     arrays = [v[:, j] if v.ndim == 2 else v for v in keys]
-                    remap = state.grow_buckets(np.unique(encode_keys(arrays)))
-                    if remap is not None:
-                        # growing renumbers buckets, so the per-kernel inner state
-                        # has to be permuted and extended to match
-                        for leaf in leaves:
-                            leaf._pooled_kernel.remap_buckets(
-                                leaf._pooled_inner, remap, state.n_buckets
-                            )
-                    bids = lookup(arrays, state.bucket_uniques)
+                    bids = _assign_buckets(state, leaves, arrays)
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
@@ -1738,6 +1749,8 @@ class TimeSeries:
         ``_get_features_for_next_step`` can reuse it, or ``None`` when no key
         was read from it.
         """
+        if not self._partition_cols:
+            return None
         X_row = None
         static_cols = self.static_features_.columns
         for key, state in self._pooled_states.items():

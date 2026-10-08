@@ -5545,3 +5545,16 @@ def test_predict_ids_restores_series_when_subsetting_fails(monkeypatch):
         fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
     assert list(fcst.ts.uids) == uids
     assert fcst.ts.ga.n_groups == len(uids)
+
+
+def test_update_reuses_static_buckets_without_new_series(monkeypatch):
+    ts = _fitted_static_partition_ts("pandas")
+    (state,) = ts._pooled_states.values()
+    bids = state.series_bucket_id.copy()
+
+    def fail(keys):
+        raise AssertionError("static buckets were re-resolved")
+
+    monkeypatch.setattr(state, "grow_buckets", fail)
+    ts.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
+    np.testing.assert_array_equal(state.series_bucket_id, bids)
