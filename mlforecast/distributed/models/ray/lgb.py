@@ -11,9 +11,8 @@ from ._base import _RAY_PARAMS, RayForecastBase, report_fitted_model, worker_n_j
 
 # feature parallel needs the full data on every worker and serial trains on the shard
 _TREE_LEARNERS = {"data", "data_parallel", "voting", "voting_parallel"}
-_WORKER_KEYS = _ConfigAliases.get(
-    "tree_learner", "num_machines", "machines", "local_listen_port", "num_threads"
-)
+_NETWORK_KEYS = _ConfigAliases.get("num_machines", "machines", "local_listen_port")
+_WORKER_KEYS = _NETWORK_KEYS | _ConfigAliases.get("tree_learner", "num_threads")
 
 
 def _lgb_train_loop(config: Dict[str, Any]) -> None:
@@ -31,13 +30,13 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     label = df.pop(config["target_col"])
     user_params = config["params"]
     params = _choose_param_value("tree_learner", user_params, "data_parallel")
-    if params["tree_learner"] not in _TREE_LEARNERS:
+    if str(params["tree_learner"]).lower() not in _TREE_LEARNERS:
         warnings.warn(
             f"Parameter tree_learner set to {params['tree_learner']}, which is not "
             'allowed. Using "data_parallel" as default'
         )
         params["tree_learner"] = "data_parallel"
-    for alias in _ConfigAliases.get("num_machines", "machines", "local_listen_port"):
+    for alias in _NETWORK_KEYS:
         if alias in params:
             warnings.warn(f"Parameter {alias} will be ignored.")
             params.pop(alias)
@@ -55,9 +54,12 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # model_ is used by the forecasting workers and can be refit locally, so it
     # keeps the user's params rather than this worker's threads and network.
     # Only these keys are reset: set_params on all of them would clobber objective_
-    for key in _WORKER_KEYS | network_params.keys():
+    for key in _WORKER_KEYS:
         model._other_params.pop(key, None)
     model.set_params(**{k: v for k, v in user_params.items() if k in _WORKER_KEYS})
+    # Booster.refit sets up the network again when these are present
+    for key in _NETWORK_KEYS:
+        model.booster_.params.pop(key, None)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 

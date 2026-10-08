@@ -75,6 +75,7 @@ def test_lgb_trains_on_the_full_dataset_across_workers():
     # and none of the worker's network params, which would hang a local refit
     assert "machines" not in model.model_.get_params()
     clone(model.model_).fit(df[["x"]], df["y"])
+    model.model_.booster_.refit(df[["x"]], df["y"])
 
 
 @pytest.mark.ray
@@ -221,12 +222,18 @@ def test_xgb_train_loop_restores_the_thread_params_with_a_metric_list(
 
 
 @pytest.mark.ray
-@pytest.mark.parametrize("tree_param", ["tree_learner", "tree"])
-def test_lgb_train_loop_honors_the_user_tree_learner(run_train_loop, tree_param):
-    reports = run_train_loop(_lgb_train_loop, {"n_estimators": 2, tree_param: "voting"})
+@pytest.mark.parametrize(
+    "tree_param,tree_learner", [("tree_learner", "voting"), ("tree", "Voting")]
+)
+def test_lgb_train_loop_honors_the_user_tree_learner(
+    run_train_loop, tree_param, tree_learner
+):
+    reports = run_train_loop(
+        _lgb_train_loop, {"n_estimators": 2, tree_param: tree_learner}
+    )
     _, _, model = reports[0]
-    assert model.booster_.params["tree_learner"] == "voting"
-    assert model.get_params()[tree_param] == "voting"
+    assert model.booster_.params["tree_learner"] == tree_learner
+    assert model.get_params()[tree_param] == tree_learner
 
 
 @pytest.mark.ray
@@ -251,8 +258,8 @@ def test_lgb_train_loop_ignores_user_network_params(run_train_loop):
             _lgb_train_loop, {"n_estimators": 2, "num_machines": 3, "port": 1234}
         )
     _, _, model = reports[0]
-    assert model.booster_.params.get("num_machines") != 3
-    assert model.booster_.params.get("local_listen_port") != 1234
+    assert "num_machines" not in model.booster_.params
+    assert "port" not in model.booster_.params
 
 
 @pytest.mark.ray
@@ -269,18 +276,8 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     user_params = {"n_estimators": 2, "verbosity": -1, "nthread": 3}
     reports = run_train_loop(_lgb_train_loop, user_params)
     _, _, model = reports[0]
-    assert model.booster_.params["machines"] == network["machines"]
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
-
-
-class _RecordNthread(xgb.callback.TrainingCallback):
-    def __init__(self):
-        self.nthreads = []
-
-    def after_iteration(self, model, epoch, evals_log):  # noqa: ARG002
-        config = json.loads(model.save_config())
-        self.nthreads.append(config["learner"]["generic_param"]["nthread"])
-        return False
+    assert not network.keys() & model.booster_.params.keys()
 
 
 @pytest.mark.ray
@@ -298,18 +295,24 @@ def test_train_loop_clamps_thread_aliases(
         f"mlforecast.distributed.models.ray.{module}.worker_n_jobs",
         lambda r: requested.append(r) or 1,
     )
-    params = {"n_estimators": 2, thread_param: 8}
-    if train_loop is _xgb_train_loop:
-        params["callbacks"] = [_RecordNthread()]
-    reports = run_train_loop(train_loop, params)
+    trained_nthreads = []
+    xgb_fit = xgb.XGBRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        xgb_fit(self, *args, **kwargs)
+        config = json.loads(self.get_booster().save_config())
+        trained_nthreads.append(config["learner"]["generic_param"]["nthread"])
+        return self
+
+    monkeypatch.setattr(xgb.XGBRegressor, "fit", fit)
+    reports = run_train_loop(train_loop, {"n_estimators": 2, thread_param: 8})
     _, _, model = reports[0]
     assert requested == [8]
     assert model.get_params()[thread_param] == 8
     if train_loop is _lgb_train_loop:
         assert model.booster_.params["num_threads"] == 1
     else:
-        [callback] = model.get_params()["callbacks"]
-        assert set(callback.nthreads) == {"1"}
+        assert trained_nthreads == ["1"]
 
 
 @pytest.mark.ray
