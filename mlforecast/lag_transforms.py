@@ -304,7 +304,7 @@ class LookupLag(_BaseLagTransform):
     via ``X_df`` at prediction.
 
     Args:
-        partition_by (Sequence[str]): Dynamic column names used to define the
+        partition_by (Sequence[str]): Column names used to define the
             matching buckets within each series. Required.
     """
 
@@ -389,8 +389,9 @@ class _RollingBase(_BaseLagTransform):
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-                Columns must be static features unless ``partition_by`` is set, in which case dynamic ones
-                must be supplied via ``X_df`` at prediction. Mutually exclusive with `global_`. Defaults to None.
+                Columns must be static features unless ``partition_by`` is set, in which case columns left
+                out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+                at prediction. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -545,8 +546,9 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-                Columns must be static features unless ``partition_by`` is set, in which case dynamic ones
-                must be supplied via ``X_df`` at prediction. Mutually exclusive with `global_`. Defaults to None.
+                Columns must be static features unless ``partition_by`` is set, in which case columns left
+                out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+                at prediction. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -654,8 +656,9 @@ class _ExpandingBase(_BaseLagTransform):
         global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-            Columns must be static features unless ``partition_by`` is set, in which case dynamic ones
-            must be supplied via ``X_df`` at prediction. Mutually exclusive with `global_`. Defaults to None.
+            Columns must be static features unless ``partition_by`` is set, in which case columns left
+            out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+            at prediction. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -768,8 +771,9 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-            Columns must be static features unless ``partition_by`` is set, in which case dynamic ones
-            must be supplied via ``X_df`` at prediction. Mutually exclusive with `global_`. Defaults to None.
+            Columns must be static features unless ``partition_by`` is set, in which case columns left
+            out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+            at prediction. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be

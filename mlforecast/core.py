@@ -55,8 +55,9 @@ from .pooled import (
     PooledState,
     base_channels,
     factorize,
+    factorize_column,
     get_kernel,
-    lookup,
+    lookup_columns,
 )
 from .utils import (
     _ShortSeriesException,
@@ -1759,8 +1760,16 @@ class TimeSeries:
                 continue
             if X_row is None and X_df is not None:
                 X_row = self._current_step_rows(X_df)
-            keys = self._key_values(cols, X_row)
-            state.set_series_bucket_id(lookup(keys, state.bucket_uniques))
+            dynamic = iter(
+                self._key_values([c for c in cols if c not in static_cols], X_row)
+            )
+            columns = [
+                self._static_key_columns[c]
+                if c in static_cols
+                else factorize_column(next(dynamic))
+                for c in cols
+            ]
+            state.set_series_bucket_id(lookup_columns(columns, state.bucket_uniques))
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
@@ -1869,6 +1878,19 @@ class TimeSeries:
             self._statics_keep = self.static_features_[static_cols]
         else:
             self._statics_keep = self.static_features_
+        # static parts of the keys re-bucketed every step, encoded once
+        statics = statics_nw.columns
+        dynamic_keys = [
+            cols
+            for cols in map(self._bucket_cols, getattr(self, "_pooled_states", {}))
+            if any(c not in statics for c in cols)
+        ]
+        self._static_key_columns = {
+            c: factorize_column(self.static_features_[c].to_numpy())
+            for c in _dedupe_preserve_order(
+                c for cols in dynamic_keys for c in cols if c in statics
+            )
+        }
 
     def _predict_recursive(
         self,
@@ -2285,10 +2307,9 @@ class TimeSeries:
                     nw.len().alias("_n_rows"),
                 )
             )
-            mismatched = (nw.col("_n_ids") != expected_count) | (
-                nw.col("_n_rows") != expected_count
-            )
-            if counts.filter(mismatched).shape[0] > 0:
+            if counts.filter(nw.col("_n_rows") != nw.col("_n_ids")).shape[0] > 0:
+                raise ValueError("Update has duplicate rows for an id and timestamp.")
+            if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
                 )

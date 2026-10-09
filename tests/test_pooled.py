@@ -5668,7 +5668,7 @@ def test_update_duplicate_rows_mutates_nothing():
     dup = pd.DataFrame(
         {"unique_id": ["a", "a", "b"], "ds": [5, 5, 5], "y": [5.0, 6.0, 50.0]}
     )
-    with pytest.raises(ValueError, match="include all series"):
+    with pytest.raises(ValueError, match="duplicate rows"):
         ts.update(dup)
     assert list(ts.uids) == uids
     np.testing.assert_array_equal(ts.ga.data, data)
@@ -5688,3 +5688,32 @@ def test_recursive_fitted_values_take_static_keys_from_model():
     expected = fcst.forecast_fitted_values(h=2, train_df=train)
     actual = fcst.forecast_fitted_values(h=2, train_df=train.drop(columns="brand"))
     pd.testing.assert_frame_equal(actual, expected)
+
+
+from mlforecast.pooled import factorize_column  # noqa: E402
+
+
+def test_predict_encodes_static_key_columns_once(monkeypatch):
+    import mlforecast.core as core_mod
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, new, _ = _key_spelling_frames("pandas")
+    future = new.drop(columns=["y", "brand"])
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=["promo"])]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    expected = fcst.predict(2, X_df=future)
+    encoded = []
+
+    def spy(values):
+        encoded.append(np.asarray(values).dtype.kind)
+        return factorize_column(values)
+
+    monkeypatch.setattr(core_mod, "factorize_column", spy)
+    pd.testing.assert_frame_equal(fcst.predict(2, X_df=future), expected)
+    # the id once at setup, promo at each of the two steps
+    assert encoded == ["O", "i", "i"]
