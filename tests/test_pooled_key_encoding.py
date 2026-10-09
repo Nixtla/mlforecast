@@ -25,10 +25,10 @@ assert equivalence to it rather than re-deriving the expected values:
   product of the cardinalities.
 * **G3.4 the null contract** -- ``None``, ``NaN``, ``NaT`` and ``pd.NA`` all
   collapse to the one sentinel bucket and match nothing else, which is SQL
-  ``PARTITION BY`` semantics. ``pd.NA`` is a deliberate behaviour change: the
-  per-row path raised ``TypeError`` on it, because ``_encode_column``'s object
-  branch evaluates ``v != v``, which is ambiguous for ``pd.NA``.
+  ``PARTITION BY`` semantics.
 """
+
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -274,3 +274,20 @@ def test_lookup_matches_per_row_reference():
     expected = np.where(vocab[pos] == keys, pos, -1)
     np.testing.assert_array_equal(lookup(arrays, vocab), expected)
     assert (lookup(arrays, vocab) == -1).sum() == 2
+
+
+def test_int64_bounds_encode_like_ints():
+    ints = np.array([-(2**63), 2**62], dtype=np.int64)
+    np.testing.assert_array_equal(
+        _encode_column(ints.astype(np.float64)), _encode_column(ints)
+    )
+    np.testing.assert_array_equal(
+        _encode_column(ints.astype(np.float64).astype(object)), _encode_column(ints)
+    )
+
+
+def test_float16_keys_encode_without_warnings():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = _encode_column(np.array([1.0, 0.5, np.inf], dtype=np.float16))
+    assert out[0] == "1"

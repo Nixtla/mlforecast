@@ -1754,7 +1754,7 @@ class TimeSeries:
         """
         X_row = None
         static_cols = self.static_features_.columns
-        key_columns = dict(self._static_key_columns)
+        key_columns = dict(self._encoded_static_key_columns())
         for key, state in getattr(self, "_pooled_states", {}).items():
             cols = self._bucket_cols(key)
             if all(c in static_cols for c in cols):
@@ -1767,6 +1767,25 @@ class TimeSeries:
             columns = [key_columns[c] for c in cols]
             state.set_series_bucket_id(lookup_columns(columns, state.bucket_uniques))
         return X_row
+
+    def _encoded_static_key_columns(self) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+        """Encoded static columns of the keys re-bucketed at every predict step."""
+        cache = getattr(self, "_static_key_columns", None)
+        if cache is None or cache[0] is not self.static_features_:
+            statics = self.static_features_.columns
+            dynamic_keys = [
+                cols
+                for cols in map(self._bucket_cols, getattr(self, "_pooled_states", {}))
+                if any(c not in statics for c in cols)
+            ]
+            columns = {
+                c: factorize_column(self.static_features_[c].to_numpy())
+                for c in _dedupe_preserve_order(
+                    c for cols in dynamic_keys for c in cols if c in statics
+                )
+            }
+            cache = self._static_key_columns = (self.static_features_, columns)
+        return cache[1]
 
     def _get_features_for_next_step(self, X_df=None):
         X_row = self._update_partition_assignments(X_df)
@@ -1849,18 +1868,6 @@ class TimeSeries:
         self._uniform_dates = bool(
             nw.from_native(last_dates, series_only=True).n_unique() == 1
         )
-        statics = self.static_features_.columns
-        dynamic_keys = [
-            cols
-            for cols in map(self._bucket_cols, getattr(self, "_pooled_states", {}))
-            if any(c not in statics for c in cols)
-        ]
-        self._static_key_columns = {
-            c: factorize_column(self.static_features_[c].to_numpy())
-            for c in _dedupe_preserve_order(
-                c for cols in dynamic_keys for c in cols if c in statics
-            )
-        }
         # _predict_setup runs once per model; the statics-derived state below
         # is fixed for the whole predict, so reuse it across models
         # (TimeSeries.predict clears _static_null_src per call)
@@ -2066,6 +2073,16 @@ class TimeSeries:
         )
 
     @contextmanager
+    def _predict_caches(self) -> Iterator[None]:
+        # invalidate the per-predict statics cache in _predict_setup
+        self._static_null_src = None
+        try:
+            yield
+        finally:
+            # sized by the series, so it isn't kept on the saved model
+            self._static_key_columns = None
+
+    @contextmanager
     def _maybe_subset(self, idxs: Optional[np.ndarray]) -> Iterator[None]:
         # save original
         ga = self.ga
@@ -2143,9 +2160,7 @@ class TimeSeries:
                     "for feature generation or model inputs used during training: "
                     f"{sorted(required_future_cols)}."
                 )
-        with self._maybe_subset(idxs):
-            # invalidate the per-predict statics cache in _predict_setup
-            self._static_null_src = None
+        with self._maybe_subset(idxs), self._predict_caches():
             if X_df is not None:
                 if self.id_col not in X_df or self.time_col not in X_df:
                     raise ValueError(

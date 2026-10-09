@@ -65,7 +65,8 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
     if values.dtype.kind == "f":
         safe = np.where(missing, 0.0, values)
         # values outside int64 (inf included) can't be cast, so they keep the float form
-        integral = (np.abs(safe) < 2**63) & (safe == np.floor(safe))
+        wide = safe.astype(np.float64)
+        integral = (wide >= -(2**63)) & (wide < 2**63) & (safe == np.floor(safe))
         out = np.empty(values.shape, dtype=object)
         if integral.any():
             out[integral] = safe[integral].astype(np.int64).astype(str)
@@ -76,7 +77,7 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
         out = np.array(
             [
                 str(int(v))
-                if isinstance(v, float) and v.is_integer() and abs(v) < 2**63
+                if isinstance(v, float) and v.is_integer() and -(2**63) <= v < 2**63
                 else str(v)
                 for v in values
             ],
