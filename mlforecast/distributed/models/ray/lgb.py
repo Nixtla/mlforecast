@@ -64,9 +64,8 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # lightgbm.dask's _train_part.
     model = lgb.LGBMRegressor(**params, **network_params)
     model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
-    # model_ is used by forecasting workers and refit locally, so it keeps the
-    # user's params minus the network ones, which would make it wait for the
-    # workers. Only these keys: set_params on all of them clobbers objective_
+    # model_ keeps the user's params minus the network ones, which hang a local
+    # refit. Only these keys, since set_params on all of them clobbers objective_
     param_names = model._get_param_names()
     for key in _NETWORK_KEYS | _RESTORED_KEYS:
         model._other_params.pop(key, None)

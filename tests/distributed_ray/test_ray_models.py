@@ -306,7 +306,6 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
     assert not {*network, "num_threads", "tree_learner"} & vars(model).keys()
     assert not network.keys() & model.booster_.params.keys()
-    # the worker's booster joined the network, and it was freed
     assert freed == [True]
     # a booster loaded from the saved model would read them back
     model_str = model.booster_.model_to_string()
