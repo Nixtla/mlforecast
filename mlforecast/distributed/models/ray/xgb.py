@@ -18,12 +18,10 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     label = df.pop(config["target_col"])
     n_jobs = config["params"].get("n_jobs")
     user_nthread = config["params"].get("nthread")
-    # nthread beats n_jobs in the booster
-    requested = n_jobs if user_nthread is None else user_nthread
-    clamp = worker_n_jobs(requested)
-    params = {**config["params"], "n_jobs": clamp}
+    # n_jobs builds the DMatrix and nthread, when set, trains, so each gets a cap
+    params = {**config["params"], "n_jobs": worker_n_jobs(n_jobs)}
     if user_nthread is not None:
-        params["nthread"] = clamp
+        params["nthread"] = worker_n_jobs(user_nthread)
     # XGBoostConfig wraps the loop in a CommunicatorContext, so unlike lightgbm
     # there are no network params to pass: training is distributed already.
     model = xgb.XGBRegressor(**params)
@@ -33,6 +31,8 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     model.n_jobs = n_jobs
     if user_nthread is not None:
         model.kwargs["nthread"] = user_nthread
+    # nthread beats n_jobs in the booster
+    requested = n_jobs if user_nthread is None else user_nthread
     model.get_booster().set_param("nthread", 0 if requested is None else requested)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME

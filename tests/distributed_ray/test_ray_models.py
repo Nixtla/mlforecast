@@ -52,7 +52,7 @@ def test_default_num_boost_round_matches_sklearn():
 @pytest.mark.ray
 # the thread method, since SIGALRM doesn't fire while lightgbm waits on a socket
 @pytest.mark.timeout(300, method="thread")
-def test_lgb_trains_on_the_full_dataset_across_workers():
+def test_lgb_trains_on_the_full_dataset_across_workers(tmp_path):
     """Every worker only sees its shard, so lightgbm needs its network params.
 
     Without them each worker trains an independent model on 1/N of the data and
@@ -78,6 +78,8 @@ def test_lgb_trains_on_the_full_dataset_across_workers():
     assert "machines" not in model.model_.get_params()
     clone(model.model_).fit(df[["x"]], df["y"])
     model.model_.booster_.refit(df[["x"]], df["y"])
+    model.model_.booster_.save_model(tmp_path / "model.txt")
+    lgb.Booster(model_file=tmp_path / "model.txt").refit(df[["x"]], df["y"])
 
 
 @pytest.mark.ray
@@ -294,6 +296,9 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
     assert not network.keys() & model.booster_.params.keys()
     assert not model.booster_._network
+    # a booster loaded from the saved model would read them back
+    model_str = model.booster_.model_to_string()
+    assert not any(f"[{key}: " in model_str for key in network)
 
 
 @pytest.mark.ray
@@ -323,12 +328,34 @@ def test_train_loop_clamps_thread_aliases(
     monkeypatch.setattr(xgb.XGBRegressor, "fit", fit)
     reports = run_train_loop(train_loop, {"n_estimators": 2, thread_param: 8})
     _, _, model = reports[0]
-    assert requested == [8]
+    assert 8 in requested
     assert model.get_params()[thread_param] == 8
     if train_loop is _lgb_train_loop:
         assert model.booster_.params["num_threads"] == 1
     else:
         assert trained_nthreads == ["1"]
+
+
+@pytest.mark.ray
+def test_xgb_train_loop_caps_n_jobs_and_nthread_separately(run_train_loop, monkeypatch):
+    """n_jobs builds the DMatrix and nthread trains, so neither takes the other's cap."""
+    monkeypatch.setattr(
+        "mlforecast.distributed.models.ray.xgb.worker_n_jobs", lambda r: min(r, 4)
+    )
+    fitted = []
+    xgb_fit = xgb.XGBRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        fitted.append((self.n_jobs, self.get_params()["nthread"]))
+        return xgb_fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(xgb.XGBRegressor, "fit", fit)
+    reports = run_train_loop(
+        _xgb_train_loop, {"n_estimators": 2, "n_jobs": 1, "nthread": 8}
+    )
+    _, _, model = reports[0]
+    assert fitted == [(1, 4)]
+    assert (model.n_jobs, model.get_params()["nthread"]) == (1, 8)
 
 
 @pytest.mark.ray

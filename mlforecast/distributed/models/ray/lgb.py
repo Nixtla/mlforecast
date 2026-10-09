@@ -1,6 +1,7 @@
 __all__ = ["RayLGBMForecast"]
 
 
+import re
 import warnings
 from typing import Any, Dict
 
@@ -13,6 +14,23 @@ from ._base import _RAY_PARAMS, RayForecastBase, report_fitted_model, worker_n_j
 _TREE_LEARNERS = {"data", "data_parallel", "voting", "voting_parallel"}
 _NETWORK_KEYS = _ConfigAliases.get("num_machines", "machines", "local_listen_port")
 _WORKER_KEYS = _NETWORK_KEYS | _ConfigAliases.get("tree_learner", "num_threads")
+_NETWORK_LINE = re.compile(
+    r"^\[(?:machines|num_machines|local_listen_port): .*\]\n", re.MULTILINE
+)
+
+
+def _without_network(booster: lgb.Booster) -> lgb.Booster:
+    """Copy of the booster without the network params, also in its model string.
+
+    ``Booster.refit`` and a booster loaded from the saved model would otherwise
+    try to reach the training workers.
+    """
+    model_str = _NETWORK_LINE.sub("", booster.model_to_string(num_iteration=-1))
+    clean = lgb.Booster(model_str=model_str)
+    clean.params = {k: v for k, v in booster.params.items() if k not in _NETWORK_KEYS}
+    clean.best_iteration = booster.best_iteration
+    clean.best_score = booster.best_score
+    return clean
 
 
 def _lgb_train_loop(config: Dict[str, Any]) -> None:
@@ -56,10 +74,8 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     for key in _WORKER_KEYS:
         model._other_params.pop(key, None)
     model.set_params(**{k: v for k, v in user_params.items() if k in _WORKER_KEYS})
-    # Booster.refit sets up the network again when these are present
-    for key in _NETWORK_KEYS:
-        model.booster_.params.pop(key, None)
     model.booster_.free_network()
+    model._Booster = _without_network(model.booster_)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 
