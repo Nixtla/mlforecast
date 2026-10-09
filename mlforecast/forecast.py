@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -83,6 +84,7 @@ def _frozen_backtest(
     new_df: DFType,
     n_windows: int,
     h: int,
+    future_cols: List[str],
     step_size: int = 1,
     max_lag: int = 0,
     id_col: str = "unique_id",
@@ -126,7 +128,8 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for cutoffs, train, valid in splits:
-        preds = fcst.predict(h=h, new_df=train)
+        X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
+        preds = fcst.predict(h=h, new_df=train, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
         joined = ufp.join(
             valid[[id_col, time_col, target_col]],
@@ -1517,6 +1520,13 @@ class MLForecast:
 
         new_ts: Optional[TimeSeries] = None
         if new_df is not None:
+            new_cols = set(nw.from_native(new_df).columns)
+            missing = [c for c in self.ts._required_future_cols if c not in new_cols]
+            if missing:
+                raise ValueError(
+                    "`new_df` must include the dynamic columns used during fit "
+                    f"(the ones `X_df` provides). Missing: {missing}."
+                )
             new_ts = self.ts._clone_warm(new_df)
             ts = new_ts
         else:
@@ -1581,6 +1591,8 @@ class MLForecast:
                     new_df=new_df,
                     n_windows=effective_n,
                     h=self.prediction_intervals.h,
+                    # the windows' predict validates X_df against a clone warmed from `new_df`
+                    future_cols=ts._required_future_cols,
                     step_size=(
                         transfer_conformal.step_size
                         if transfer_conformal.step_size is not None
@@ -1594,7 +1606,12 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
-            scratch = self._with_ts(self.ts._clone_cold())
+            transfer_preprocess = None
+            if spec.needs_preprocess:
+                scratch = self._with_ts(self.ts._clone_cold())
+                transfer_preprocess = partial(
+                    scratch.preprocess, **self.ts._feature_settings()
+                )
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
@@ -1604,7 +1621,7 @@ class MLForecast:
                 target_col=self.ts.target_col,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
-                preprocess_fn=(scratch.preprocess if spec.needs_preprocess else None),
+                preprocess_fn=transfer_preprocess,
                 source_cs_df=(self._cs_df if spec.needs_source_cs else None),
                 source_scales=(
                     self._cs_source_scales_ if spec.needs_source_cs else None

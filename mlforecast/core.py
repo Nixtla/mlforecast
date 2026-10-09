@@ -388,6 +388,19 @@ class TimeSeries:
         return self._leaf_cols("_pt_cols")
 
     @property
+    def _required_future_cols(self) -> List[str]:
+        """Columns `X_df` must provide: dynamic exog plus non-static partition keys."""
+        statics = set(self.static_features_.columns)
+        return list(
+            dict.fromkeys(
+                [
+                    *self._get_dynamic_exog_cols(self.features_order_),
+                    *(c for c in self._partition_cols if c not in statics),
+                ]
+            )
+        )
+
+    @property
     def _pooled_aux_cols(self) -> List[str]:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
@@ -497,15 +510,23 @@ class TimeSeries:
         part_cols = self._partition_cols
         part: Dict[str, np.ndarray] = {}
         if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
+            missing = [
+                c for c in part_cols if c not in df.columns and c not in statics.columns
+            ]
             if missing:
                 raise ValueError(
                     f"`partition_by` column(s) {missing} must be provided in the "
                     "update frame."
                 )
-            pdf = df[part_cols]
+            # static partition keys are broadcast from the statics
             part = {
-                c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
+                c: (
+                    np.asarray(df[c].to_numpy()).reshape(n_series, n_new)
+                    if c in df.columns
+                    else np.repeat(np.asarray(statics[c].to_numpy()), n_new).reshape(
+                        n_series, n_new
+                    )
+                )
                 for c in part_cols
             }
         leaves_by_key = self._get_pooled_tfms()
@@ -1534,15 +1555,21 @@ class TimeSeries:
             self.horizon_features_ = horizon_features
         return self
 
-    def _fit_settings(self) -> Dict[str, Any]:
-        """Arguments that warm a fresh instance the way this one was fit."""
-        settings: Dict[str, Any] = dict(
+    def _feature_settings(self) -> Dict[str, Any]:
+        """Arguments that build features the way this instance was fit."""
+        return dict(
             id_col=self.id_col,
             time_col=self.time_col,
             target_col=self.target_col,
             static_features=self.static_features,
             keep_last_n=self.keep_last_n,
             weight_col=self.weight_col,
+        )
+
+    def _fit_settings(self) -> Dict[str, Any]:
+        """Arguments that warm a fresh instance the way this one was fit."""
+        settings: Dict[str, Any] = dict(
+            **self._feature_settings(),
             as_numpy=self.as_numpy,
             horizon_features=copy.deepcopy(self.horizon_features_),
         )
@@ -2121,10 +2148,7 @@ class TimeSeries:
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            required_future_cols = self._required_future_cols
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2155,11 +2179,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = sorted(set(self._required_future_cols) - set(dynamics))
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
