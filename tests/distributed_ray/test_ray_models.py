@@ -270,13 +270,15 @@ def test_lgb_train_loop_ignores_user_network_params(run_train_loop, monkeypatch)
 
     monkeypatch.setattr(lgb.LGBMRegressor, "fit", fit)
     with pytest.warns(UserWarning, match="will be ignored") as record:
-        run_train_loop(
+        reports = run_train_loop(
             _lgb_train_loop, {"n_estimators": 2, "num_machines": 3, "port": 1234}
         )
     assert {"num_machines", "port"} <= {str(w.message).split()[1] for w in record}
     [params] = trained_params
     assert "port" not in params
     assert params.items() >= network.items()
+    [(_, _, model)] = reports
+    assert not {"num_machines", "port"} & model.get_params().keys()
 
 
 @pytest.mark.ray
@@ -294,6 +296,7 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     reports = run_train_loop(_lgb_train_loop, user_params)
     _, _, model = reports[0]
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
+    assert not {*network, "num_threads", "tree_learner"} & vars(model).keys()
     assert not network.keys() & model.booster_.params.keys()
     assert not model.booster_._network
     # a booster loaded from the saved model would read them back

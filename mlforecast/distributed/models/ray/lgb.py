@@ -12,19 +12,15 @@ from ._base import _RAY_PARAMS, RayForecastBase, report_fitted_model, worker_n_j
 
 # feature parallel needs the full data on every worker and serial trains on the shard
 _TREE_LEARNERS = {"data", "data_parallel", "voting", "voting_parallel"}
-_NETWORK_KEYS = _ConfigAliases.get("num_machines", "machines", "local_listen_port")
-_WORKER_KEYS = _NETWORK_KEYS | _ConfigAliases.get("tree_learner", "num_threads")
-_NETWORK_LINE = re.compile(
-    r"^\[(?:machines|num_machines|local_listen_port): .*\]\n", re.MULTILINE
-)
+_NETWORK_PARAMS = ("num_machines", "machines", "local_listen_port")
+_NETWORK_KEYS = _ConfigAliases.get(*_NETWORK_PARAMS)
+_RESTORED_KEYS = _ConfigAliases.get("tree_learner", "num_threads")
+# the model string only has the main names
+_NETWORK_LINE = re.compile(rf"^\[(?:{'|'.join(_NETWORK_PARAMS)}): .*\]\n", re.MULTILINE)
 
 
 def _without_network(booster: lgb.Booster) -> lgb.Booster:
-    """Copy of the booster without the network params, also in its model string.
-
-    ``Booster.refit`` and a booster loaded from the saved model would otherwise
-    try to reach the training workers.
-    """
+    """Copy of the booster without the network params, also in its model string."""
     model_str = _NETWORK_LINE.sub("", booster.model_to_string(num_iteration=-1))
     clean = lgb.Booster(model_str=model_str)
     clean.params = {k: v for k, v in booster.params.items() if k not in _NETWORK_KEYS}
@@ -70,10 +66,14 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     model = lgb.LGBMRegressor(**params, **network_params)
     model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
     # model_ is used by forecasting workers and refit locally, so it keeps the
-    # user's params. Only these keys: set_params on all of them clobbers objective_
-    for key in _WORKER_KEYS:
+    # user's params minus the network ones, which would make it wait for the
+    # workers. Only these keys: set_params on all of them clobbers objective_
+    param_names = model._get_param_names()
+    for key in _NETWORK_KEYS | _RESTORED_KEYS:
         model._other_params.pop(key, None)
-    model.set_params(**{k: v for k, v in user_params.items() if k in _WORKER_KEYS})
+        if key not in param_names:
+            vars(model).pop(key, None)
+    model.set_params(**{k: v for k, v in user_params.items() if k in _RESTORED_KEYS})
     model.booster_.free_network()
     model._Booster = _without_network(model.booster_)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
