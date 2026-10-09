@@ -286,6 +286,9 @@ class TimeSeries:
     _uniform_dates: bool = False
     _feature_null_cols: List[str]
     _xdf_null_cols: Optional[List[str]]
+    _static_key_columns: Optional[
+        Tuple[DataFrame, Dict[str, Tuple[np.ndarray, np.ndarray]]]
+    ]
     # Fit-time state (set in ``_fit``/``_apply_keep_last_n``). Declared here
     # so mypy has a type regardless of method processing order.
     keep_last_n: Optional[int]
