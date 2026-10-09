@@ -64,7 +64,8 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
         missing = np.zeros(values.shape, dtype=bool)
     if values.dtype.kind == "f":
         safe = np.where(missing, 0.0, values)
-        integral = safe == np.floor(safe)
+        # values outside int64 (inf included) can't be cast, so they keep the float form
+        integral = (np.abs(safe) < 2**63) & (safe == np.floor(safe))
         out = np.empty(values.shape, dtype=object)
         if integral.any():
             out[integral] = safe[integral].astype(np.int64).astype(str)
@@ -75,7 +76,7 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
         out = np.array(
             [
                 str(int(v))
-                if isinstance(v, float) and not (v != v) and v == int(v)
+                if isinstance(v, float) and v.is_integer() and abs(v) < 2**63
                 else str(v)
                 for v in values
             ],
@@ -149,11 +150,12 @@ def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
 
 def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
     """Map key columns onto an existing vocabulary; unseen keys get ``-1``."""
-    keys = _join_keys(arrays)
+    ids, keys = factorize(arrays)
     if len(uniques) == 0:
-        return np.full(len(keys), -1, dtype=np.int64)
+        return np.full(len(ids), -1, dtype=np.int64)
     pos = np.clip(np.searchsorted(uniques, keys), 0, len(uniques) - 1)
-    return np.where(uniques[pos] == keys, pos, -1).astype(np.int64, copy=False)
+    found = np.where(uniques[pos] == keys, pos, -1).astype(np.int64, copy=False)
+    return found[ids]
 
 
 # %% cell aggregates

@@ -5646,13 +5646,45 @@ def test_predict_ids_restores_bucket_ids():
     np.testing.assert_array_equal(state.series_bucket_id, bids)
 
 
-def test_direct_predict_without_pooled_states():
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_predict_and_update_without_pooled_states(max_horizon):
     """Models pickled before pooled transforms existed have no `_pooled_states`."""
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
     fcst = MLForecast(models=[LinearRegression()], freq=1, lags=[1])
-    fcst.fit(_static_partition_df("pandas"), max_horizon=2)
+    fcst.fit(_static_partition_df("pandas"), max_horizon=max_horizon)
     expected = fcst.predict(2)
     del fcst.ts._pooled_states
     pd.testing.assert_frame_equal(fcst.predict(2), expected)
+    fcst.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
+    assert fcst.predict(1)["ds"].tolist() == [6, 6]
+
+
+def test_update_duplicate_rows_mutates_nothing():
+    ts = _fitted_static_partition_ts("pandas")
+    uids = list(ts.uids)
+    data = ts.ga.data.copy()
+    dup = pd.DataFrame(
+        {"unique_id": ["a", "a", "b"], "ds": [5, 5, 5], "y": [5.0, 6.0, 50.0]}
+    )
+    with pytest.raises(ValueError, match="include all series"):
+        ts.update(dup)
+    assert list(ts.uids) == uids
+    np.testing.assert_array_equal(ts.ga.data, data)
+
+
+def test_recursive_fitted_values_take_static_keys_from_model():
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, _, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=["brand"])]},
+    )
+    fcst.fit(train, fitted=True, static_features=["brand"], cache_train_df=False)
+    expected = fcst.forecast_fitted_values(h=2, train_df=train)
+    actual = fcst.forecast_fitted_values(h=2, train_df=train.drop(columns="brand"))
+    pd.testing.assert_frame_equal(actual, expected)

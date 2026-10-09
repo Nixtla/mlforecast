@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mlforecast.pooled import _NULL_KEY, _join_keys, factorize
+from mlforecast.pooled import _NULL_KEY, _encode_column, _join_keys, factorize, lookup
 
 
 def _reference(arrays):
@@ -250,3 +250,27 @@ def test_g3_4_pd_na_lands_in_the_sentinel_bucket():
     ids, uniques = factorize([column])
     assert uniques[ids[1]] == _NULL_KEY
     assert len(uniques) == 3
+
+
+def test_out_of_int64_floats_keep_distinct_keys():
+    values = [np.inf, -np.inf, 1e300, -1e300, 2.0**63, float(2**62), 3.0]
+    floats = _encode_column(np.array(values))
+    objects = _encode_column(np.array(values, dtype=object))
+    np.testing.assert_array_equal(floats, objects)
+    assert len(set(floats)) == len(values)
+    assert floats[-1] == "3"
+
+
+def test_lookup_matches_per_row_reference():
+    vocab = factorize([np.array(["a", "b", None], dtype=object), np.array([1, 2, 3])])[
+        1
+    ]
+    arrays = [
+        np.array(["b", "a", "z", None, "b"], dtype=object),
+        np.array([2, 1, 1, 3, 9]),
+    ]
+    keys = _join_keys(arrays)
+    pos = np.clip(np.searchsorted(vocab, keys), 0, len(vocab) - 1)
+    expected = np.where(vocab[pos] == keys, pos, -1)
+    np.testing.assert_array_equal(lookup(arrays, vocab), expected)
+    assert (lookup(arrays, vocab) == -1).sum() == 2

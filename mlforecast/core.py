@@ -1612,7 +1612,7 @@ class TimeSeries:
         self.y_pred.append(new)
         new_arr = np.asarray(new)
         self.ga = self.ga.append(new_arr)
-        for state in self._pooled_states.values():
+        for state in getattr(self, "_pooled_states", {}).values():
             state.append(new_arr)
 
     def _update_features(self) -> DataFrame:
@@ -2267,7 +2267,7 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        if self._pooled_states:
+        if getattr(self, "_pooled_states", {}):
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
             )
@@ -2280,9 +2280,15 @@ class TimeSeries:
             counts = (
                 nw.from_native(df, eager_only=True)
                 .group_by(self.time_col)
-                .agg(nw.col(self.id_col).n_unique().alias("_n_ids"))
+                .agg(
+                    nw.col(self.id_col).n_unique().alias("_n_ids"),
+                    nw.len().alias("_n_rows"),
+                )
             )
-            if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
+            mismatched = (nw.col("_n_ids") != expected_count) | (
+                nw.col("_n_rows") != expected_count
+            )
+            if counts.filter(mismatched).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
                 )
