@@ -301,7 +301,7 @@ class LookupLag(_BaseLagTransform):
     ``partition_by`` is required: it defines the matching buckets and is what
     makes this a lookup rather than a plain :class:`Lag`. Like other pooled
     transforms, the partition columns may vary over time; dynamic ones must be supplied
-    via ``X_df`` at prediction.
+    via ``X_df`` at prediction and in ``update``.
 
     Args:
         partition_by (Sequence[str]): Column names used to define the
@@ -395,7 +395,7 @@ class _RollingBase(_BaseLagTransform):
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
-                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
@@ -552,7 +552,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
-                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
@@ -662,7 +662,7 @@ class _ExpandingBase(_BaseLagTransform):
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
-            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
@@ -777,7 +777,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
-            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.

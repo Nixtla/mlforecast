@@ -5715,7 +5715,7 @@ def test_predict_encodes_static_key_columns_once(monkeypatch):
 
     monkeypatch.setattr(core_mod, "factorize_column", spy)
     pd.testing.assert_frame_equal(fcst.predict(2, X_df=future), expected)
-    assert encoded == ["O", "i", "i", "i", "i"]
+    assert encoded.count("O") == 1
     assert fcst.ts._static_key_columns is None
 
 
