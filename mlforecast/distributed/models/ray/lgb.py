@@ -19,14 +19,13 @@ _RESTORED_KEYS = _ConfigAliases.get("tree_learner", "num_threads")
 _NETWORK_LINE = re.compile(rf"^\[(?:{'|'.join(_NETWORK_PARAMS)}): .*\]\n", re.MULTILINE)
 
 
-def _without_network(booster: lgb.Booster) -> lgb.Booster:
-    """Copy of the booster without the network params, also in its model string."""
-    model_str = _NETWORK_LINE.sub("", booster.model_to_string(num_iteration=-1))
-    clean = lgb.Booster(model_str=model_str)
-    clean.params = {k: v for k, v in booster.params.items() if k not in _NETWORK_KEYS}
-    clean.best_iteration = booster.best_iteration
-    clean.best_score = booster.best_score
-    return clean
+def _drop_network(booster: lgb.Booster) -> None:
+    """Frees the booster's network and removes its params, also from its model string."""
+    booster.free_network()
+    model_str = booster.model_to_string(num_iteration=-1)
+    booster.model_from_string(_NETWORK_LINE.sub("", model_str))
+    for key in _NETWORK_KEYS:
+        booster.params.pop(key, None)
 
 
 def _lgb_train_loop(config: Dict[str, Any]) -> None:
@@ -74,8 +73,7 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
         if key not in param_names:
             vars(model).pop(key, None)
     model.set_params(**{k: v for k, v in user_params.items() if k in _RESTORED_KEYS})
-    model.booster_.free_network()
-    model._Booster = _without_network(model.booster_)
+    _drop_network(model.booster_)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 

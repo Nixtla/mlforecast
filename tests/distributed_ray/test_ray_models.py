@@ -292,13 +292,22 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
         "local_listen_port": 12400,
     }
     monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: network)
+    freed = []
+    free_network = lgb.Booster.free_network
+
+    def record_free_network(self):
+        freed.append(self._network)
+        return free_network(self)
+
+    monkeypatch.setattr(lgb.Booster, "free_network", record_free_network)
     user_params = {"n_estimators": 2, "verbosity": -1, "nthread": 3}
     reports = run_train_loop(_lgb_train_loop, user_params)
     _, _, model = reports[0]
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
     assert not {*network, "num_threads", "tree_learner"} & vars(model).keys()
     assert not network.keys() & model.booster_.params.keys()
-    assert not model.booster_._network
+    # the worker's booster joined the network, and it was freed
+    assert freed == [True]
     # a booster loaded from the saved model would read them back
     model_str = model.booster_.model_to_string()
     assert not any(f"[{key}: " in model_str for key in network)
