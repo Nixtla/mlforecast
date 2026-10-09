@@ -286,7 +286,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     fcst.fit(df, fitted=True, static_features=[])
 
     with pytest.raises(
-        ValueError, match="not supported.*global or grouped lag transforms"
+        ValueError, match="not supported.*pooled across series"
     ):
         fcst.forecast_fitted_values(h=2)
 

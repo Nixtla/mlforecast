@@ -1052,6 +1052,8 @@ class MLForecast:
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
+        static_keys = [c for c in self.ts._pooled_aux_cols if c in static]
+        dynamic_keys = self.ts._dynamic_key_cols
         model_names = list(self.models_.keys())
         # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(self.ts.static_features_, pd.DataFrame):
@@ -1077,14 +1079,24 @@ class MLForecast:
 
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
-            hist = group.iloc[: first_origin + 1]
-            hist = hist[[id_col, time_col, target_col, *dynamic]]
-            # a one-series instance wearing the parent's statics and feature
-            # order, since `hist` carries neither
-            temp_ts = self.ts._clone_warm(hist, static_features=[id_col])
-            temp_ts.static_features_ = static_features_pd[
+            uid_statics = static_features_pd[
                 static_features_pd[id_col].eq(uid)
             ].reset_index(drop=True)
+            hist = group.iloc[: first_origin + 1]
+            # static keys come from the model, train_df may not carry them
+            hist = pd.concat(
+                [
+                    hist[[id_col, time_col, target_col]],
+                    uid_statics[static_keys]
+                    .iloc[np.zeros(len(hist), dtype=int)]
+                    .set_axis(hist.index),
+                    hist[dynamic],
+                ],
+                axis=1,
+            )
+            # a one-series instance wearing the parent's statics and feature order
+            temp_ts = self.ts._clone_warm(hist, static_features=[id_col, *static_keys])
+            temp_ts.static_features_ = uid_statics
             temp_ts.static_features = self.ts.static_features
             temp_ts.features_order_ = list(self.ts.features_order_)
 
@@ -1093,7 +1105,9 @@ class MLForecast:
                 if origin_idx > current_origin:
                     # Advance the state to the current origin with observed values.
                     for update_idx in range(current_origin + 1, origin_idx + 1):
-                        obs = group.iloc[[update_idx]][[id_col, time_col, target_col]]
+                        obs = group.iloc[[update_idx]][
+                            [id_col, time_col, target_col, *dynamic_keys]
+                        ]
                         temp_ts.update(obs)
                     current_origin = origin_idx
 
@@ -1332,7 +1346,7 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             h (int): Forecast horizon for fitted values. Defaults to 1.
                 For recursive models and ``h>1``, values are computed on demand and are not available
-                when global or grouped lag transforms are configured.
+                when lag transforms pool across series.
             train_df (pandas or polars DataFrame, optional): Training data to use when computing
                 recursive fitted values for ``h>1`` on demand. Pass this to avoid caching a full
                 copy of the training data on the fitted object. Defaults to None.
@@ -1392,13 +1406,10 @@ class MLForecast:
             if h == 1:
                 res = self.fcst_fitted_values_
             else:
-                has_nonlocal = any(
-                    mode != "local" for mode, _, _ in self.ts._pooled_states
-                )
-                if has_nonlocal:
+                if self.ts._pools_across_series:
                     raise ValueError(
-                        "On-demand recursive fitted values for `h>1` are not supported when using "
-                        "global or grouped lag transforms."
+                        "On-demand recursive fitted values for `h>1` are not supported with "
+                        "lag transforms pooled across series."
                     )
                 warnings.warn(
                     "Computing recursive fitted values for h>1 on demand can be slow.",

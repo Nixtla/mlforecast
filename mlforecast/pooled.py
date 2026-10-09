@@ -57,14 +57,16 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
     if values.dtype.kind in "fc":
         missing = np.isnan(values)
     elif values.dtype.kind == "O":
-        missing = np.array([v is None or v != v for v in values], dtype=bool)
+        missing = np.asarray(pd.isna(values), dtype=bool)
     elif values.dtype.kind == "M":
         missing = np.isnat(values)
     else:
         missing = np.zeros(values.shape, dtype=bool)
     if values.dtype.kind == "f":
         safe = np.where(missing, 0.0, values)
-        integral = safe == np.floor(safe)
+        # values outside int64 (inf included) can't be cast, so they keep the float form
+        wide = safe.astype(np.float64)
+        integral = (wide >= -(2**63)) & (wide < 2**63) & (safe == np.floor(safe))
         out = np.empty(values.shape, dtype=object)
         if integral.any():
             out[integral] = safe[integral].astype(np.int64).astype(str)
@@ -75,7 +77,7 @@ def _encode_column(values: np.ndarray) -> np.ndarray:
         out = np.array(
             [
                 str(int(v))
-                if isinstance(v, float) and not (v != v) and v == int(v)
+                if isinstance(v, float) and v.is_integer() and -(2**63) <= v < 2**63
                 else str(v)
                 for v in values
             ],
@@ -104,6 +106,18 @@ def encode_keys(arrays: Sequence[np.ndarray]) -> np.ndarray:
     return _join_keys(arrays)
 
 
+def factorize_column(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Integer codes of a key column and the encoded key of each code."""
+    codes, uniques = pd.factorize(np.asarray(values))
+    enc = _encode_column(np.asarray(uniques))
+    if (codes < 0).any():
+        # pandas parks every missing value at -1; give it a slot of its own
+        # so it encodes to the sentinel like any other key
+        enc = np.append(enc, _NULL_KEY)
+        codes = np.where(codes < 0, len(uniques), codes)
+    return codes.astype(np.int64, copy=False), enc
+
+
 def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     """Map a set of key columns to dense bucket ids. Returns (ids, uniques).
 
@@ -118,18 +132,25 @@ def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     separator (``"a"`` sorts before ``"a\\nb"`` as a tuple, after it once
     joined), so the survivors are joined first and sorted second.
     """
-    codes: List[np.ndarray] = []
-    encoded: List[np.ndarray] = []
-    for arr in arrays:
-        col_codes, col_uniques = pd.factorize(np.asarray(arr))
-        enc = _encode_column(np.asarray(col_uniques))
-        if (col_codes < 0).any():
-            # pandas parks every missing value at -1; give it a slot of its own
-            # so it encodes to the sentinel like any other key
-            enc = np.append(enc, _NULL_KEY)
-            col_codes = np.where(col_codes < 0, len(col_uniques), col_codes)
-        codes.append(col_codes.astype(np.int64, copy=False))
-        encoded.append(enc)
+    return factorize_columns([factorize_column(arr) for arr in arrays])
+
+
+def factorize_columns(
+    columns: Sequence[Tuple[np.ndarray, np.ndarray]],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """`factorize` over columns already split by `factorize_column`."""
+    combo_ids, keys = _combination_keys(columns)
+    # sorts, and dedupes where two raw values encode alike (None beside NaN)
+    uniques, inv = np.unique(keys, return_inverse=True)
+    return inv.ravel()[combo_ids].astype(np.int64, copy=False), uniques
+
+
+def _combination_keys(
+    columns: Sequence[Tuple[np.ndarray, np.ndarray]],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Combination id per row and the joined key of each combination, unsorted."""
+    codes = [c for c, _ in columns]
+    encoded = [enc for _, enc in columns]
     combined = codes[0]
     for col_codes, enc in zip(codes[1:], encoded[1:]):
         # re-compressed every step so the radix product cannot overflow int64
@@ -142,18 +163,24 @@ def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     first = np.zeros(len(combo_uniques), dtype=np.int64)
     first[combo_ids[::-1]] = np.arange(len(combo_ids))[::-1]
     keys = _join_encoded([enc[c[first]] for c, enc in zip(codes, encoded)])
-    # sorts, and dedupes where two raw values encode alike (None beside NaN)
-    uniques, inv = np.unique(keys, return_inverse=True)
-    return inv.ravel()[combo_ids].astype(np.int64, copy=False), uniques
+    return combo_ids, keys
 
 
 def lookup(arrays: Sequence[np.ndarray], uniques: np.ndarray) -> np.ndarray:
     """Map key columns onto an existing vocabulary; unseen keys get ``-1``."""
-    keys = _join_keys(arrays)
+    return lookup_columns([factorize_column(arr) for arr in arrays], uniques)
+
+
+def lookup_columns(
+    columns: Sequence[Tuple[np.ndarray, np.ndarray]], uniques: np.ndarray
+) -> np.ndarray:
+    """`lookup` over columns already split by `factorize_column`."""
     if len(uniques) == 0:
-        return np.full(len(keys), -1, dtype=np.int64)
+        return np.full(len(columns[0][0]), -1, dtype=np.int64)
+    ids, keys = _combination_keys(columns)
     pos = np.clip(np.searchsorted(uniques, keys), 0, len(uniques) - 1)
-    return np.where(uniques[pos] == keys, pos, -1).astype(np.int64, copy=False)
+    found = np.where(uniques[pos] == keys, pos, -1).astype(np.int64, copy=False)
+    return found[ids]
 
 
 # %% cell aggregates
