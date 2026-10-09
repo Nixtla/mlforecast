@@ -65,15 +65,17 @@ across **multiple series at once**:
   value at each timestamp.
 - **`groupby: Sequence[str]`** — column names to group by before computing the
   statistic. Columns must be declared as static features when calling
-  `fit` / `preprocess`. Series in the same group share the feature value at
+  `fit` / `preprocess`, unless the transform also sets `partition_by` and the
+  column is left out of an explicit `static_features`; such columns may vary
+  over time and must be supplied via `X_df` and in `update`. Series in the same group share the feature value at
   each timestamp; series in different groups get different values.
 - **`partition_by: Sequence[str]`** — column names to partition further along
   a **dynamic** (time-varying) key, such as `promo` or `regime`. Each unique
   combination of partition values gets its own bucket. Composes with `global_`
   (cross-series aggregates within each partition), with `groupby` (group
   aggregates within each partition), or stands alone (per-(id, partition)
-  buckets — *local* mode). Partition columns must be supplied via `X_df` at
-  prediction.
+  buckets — *local* mode). Dynamic partition columns must be supplied via
+  `X_df` at prediction and in `update`; static ones are taken from the static features.
 
 `global_` and `groupby` are **mutually exclusive** on the same transform.
 `partition_by` composes with either one or stands alone. All pooled modes
@@ -235,8 +237,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
-`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features unless ``partition_by`` is set, in which case columns left out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None. | *required*
+`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time; dynamic ones must be supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
 `time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
@@ -251,8 +253,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
-`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features unless ``partition_by`` is set, in which case columns left out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None. | *required*
+`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time; dynamic ones must be supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
 `time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
@@ -267,8 +269,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
-`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features unless ``partition_by`` is set, in which case columns left out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None. | *required*
+`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time; dynamic ones must be supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
 `time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
@@ -283,8 +285,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | *required*
-`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`groupby` | <code>Sequence[str]</code> | Column names to group by before computing the statistic. Columns must be static features unless ``partition_by`` is set, in which case columns left out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None. | *required*
+`partition_by` | <code>Sequence[str]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time; dynamic ones must be supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | *required*
 `time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or ``groupby``. Defaults to None. | *required*
 
 
@@ -304,8 +306,8 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
 `global_` | <code>[bool](#bool)</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | <code>False</code>
-`groupby` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to group by before computing the statistic. Columns must be static features. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
-`partition_by` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time and must be supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | <code>None</code>
+`groupby` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to group by before computing the statistic. Columns must be static features unless ``partition_by`` is set, in which case columns left out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None. | <code>None</code>
+`partition_by` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Column names to partition by. Each unique combination of partition values creates a separate bucket. Unlike ``groupby``, partition columns may vary over time; dynamic ones must be supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series aggregates within each partition), ``groupby`` (group aggregates within each partition), or stands alone (per-(id, partition) buckets, *local* mode). See the Pooled lag transforms guide for details. Defaults to None. | <code>None</code>
 `time_agg` | <code>[str](#str)</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Values other than ``"mean"`` require ``global_`` or ``groupby``. Defaults to ``"mean"``, which matches EWM's bucket-mean update rule: each timestamp contributes its bucket aggregate mean exactly once, regardless of how many rows aggregated there. ``None`` is not accepted. | <code>'mean'</code>
 
 

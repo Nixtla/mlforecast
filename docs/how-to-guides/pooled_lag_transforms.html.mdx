@@ -90,7 +90,8 @@ more static features**. Series in the same group share the feature value
 at each timestamp; series in different groups get different values.
 
 Any column used in `groupby` must be declared as a static feature when
-fitting.
+fitting, unless the transform also sets `partition_by` and the column is
+left out of an explicit `static_features`.
 
 ```python
 fcst = MLForecast(
@@ -303,7 +304,8 @@ are computed per bucket.
 
 Unlike `groupby`, `partition_by` columns **do not need to be static**.
 They can vary across timestamps for the same `unique_id`. At prediction
-time you must supply their future values via `X_df`.
+time you must supply their future values via `X_df`, unless they’re
+declared in `static_features`.
 
 Three combinations are supported:
 
@@ -387,9 +389,9 @@ The bucket key here is `(brand, promo)`. There are at most
 
 ## Dynamic partition values at prediction time
 
-Because partition columns are *not* static, you must supply their future
-values when forecasting. Pass an `X_df` containing `unique_id`, `ds`,
-and every partition column for every horizon step:
+Partition columns that aren’t static features must have their future
+values supplied when forecasting. Pass an `X_df` containing `unique_id`,
+`ds`, and every such partition column for every horizon step:
 
 ```python
 from sklearn.linear_model import LinearRegression
@@ -423,16 +425,17 @@ fcst.predict(h=3, X_df=future_promo).head()
 
 A few notes on dynamic prediction:
 
--   If `X_df` introduces a partition value never seen during fit,
-    mlforecast creates a fresh bucket on the fly. The first few
-    predictions for that bucket may be `NaN` if its history is shorter
-    than `window_size`/`min_samples`.
--   Subset prediction (`predict(ids=[...])`) is rejected when nonlocal
-    `partition_by` is in play: the missing series would still contribute
-    to the bucket aggregates, so partial subsets are ambiguous.
+-   If `X_df` introduces a partition value never seen during fit or
+    `update`, that bucket has no history, so its feature is `NaN` at
+    those steps.
+-   Subset prediction (`predict(ids=[...])`) is rejected unless the id
+    column is part of every pooled bucket key (e.g. local
+    `partition_by`, or `global_=True, partition_by=["unique_id", ...]`):
+    otherwise the missing series would still contribute to the bucket
+    aggregates, so partial subsets are ambiguous.
 -   Partition columns are **automatically excluded from
-    `static_features`** even when `static_features=None`. They must come
-    from `X_df` at predict time.
+    `static_features`** when `static_features=None` (except the id
+    column). They must then come from `X_df` at predict time.
 
 ## Understanding ordinals and parent calendars
 
@@ -543,10 +546,10 @@ e.g. “last year’s Easter value” — where the relevant previous target is
 not a fixed calendar lag.
 
 `partition_by` is required and defines the buckets. Because it is a
-pooled transform, the partition columns may change over time and must be
-supplied via `X_df` at prediction. Since the lookup is computed inside
-`mlforecast`, it stays aligned with any target transforms
-(e.g. `LocalStandardScaler`).
+pooled transform, the partition columns may change over time; dynamic
+ones must be supplied via `X_df` at prediction. Since the lookup is
+computed inside `mlforecast`, it stays aligned with any target
+transforms (e.g. `LocalStandardScaler`).
 
 ```python
 from mlforecast.lag_transforms import LookupLag
@@ -566,8 +569,12 @@ prep.head()
     same transform. Use two separate transforms if you want both feature
     families. `partition_by` composes with either one, or stands alone.
 -   Columns in `groupby` must be declared in `static_features` when you
-    call `fit` / `preprocess`. Columns in `partition_by` must **not** be
-    — they are dynamic and supplied via `X_df` at prediction.
+    call `fit` / `preprocess`, unless the transform also sets
+    `partition_by` and the column is left out of an explicit
+    `static_features`. Columns in `partition_by`, and such `groupby`
+    columns, may vary over time: dynamic ones are supplied via `X_df` at
+    prediction and in `update`, static ones are taken from
+    `static_features`.
 -   `min_samples=0` in pooled mode produces NaN for timestamps with no
     observations in the window and triggers a warning at construction
     time — prefer `min_samples=1` if you want “as soon as there is any
@@ -575,9 +582,9 @@ prep.head()
 -   All pooled modes — `global_`, `groupby`, and `partition_by`
     (including local, alone) — require **series to end at the same
     timestamp**.
--   Subset prediction (`predict(ids=[...])`) is rejected when nonlocal
-    pooled transforms are in play: omitted series would still contribute
-    to the bucket aggregates.
+-   Subset prediction (`predict(ids=[...])`) is rejected unless the id
+    column is part of every pooled bucket key: otherwise omitted series
+    would still contribute to the bucket aggregates.
 -   All supported rolling, expanding, seasonal-rolling, and
     exponentially weighted transforms accept `global_`, `groupby`, and
     `partition_by`. `Offset` and `Combine` delegate to their wrapped
