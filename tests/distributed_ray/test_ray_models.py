@@ -50,7 +50,9 @@ def test_default_num_boost_round_matches_sklearn():
 
 
 @pytest.mark.ray
-def test_lgb_trains_on_the_full_dataset_across_workers():
+# the thread method, since SIGALRM doesn't fire while lightgbm waits on a socket
+@pytest.mark.timeout(300, method="thread")
+def test_lgb_trains_on_the_full_dataset_across_workers(tmp_path):
     """Every worker only sees its shard, so lightgbm needs its network params.
 
     Without them each worker trains an independent model on 1/N of the data and
@@ -72,6 +74,12 @@ def test_lgb_trains_on_the_full_dataset_across_workers():
     )
     # the clamp is the worker's business; model_ carries what was asked for
     assert model.model_.n_jobs == 2
+    # and none of the worker's network params, which would hang a local refit
+    assert "machines" not in model.model_.get_params()
+    clone(model.model_).fit(df[["x"]], df["y"])
+    model.model_.booster_.refit(df[["x"]], df["y"])
+    model.model_.booster_.save_model(tmp_path / "model.txt")
+    lgb.Booster(model_file=tmp_path / "model.txt").refit(df[["x"]], df["y"])
 
 
 @pytest.mark.ray
@@ -215,6 +223,150 @@ def test_xgb_train_loop_restores_the_thread_params_with_a_metric_list(
     assert model.n_jobs == n_jobs
     config = json.loads(model.get_booster().save_config())
     assert int(config["learner"]["generic_param"]["nthread"]) == nthread
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize(
+    "tree_param,tree_learner", [("tree_learner", "voting"), ("tree", "Voting")]
+)
+def test_lgb_train_loop_honors_the_user_tree_learner(
+    run_train_loop, tree_param, tree_learner
+):
+    reports = run_train_loop(
+        _lgb_train_loop, {"n_estimators": 2, tree_param: tree_learner}
+    )
+    _, _, model = reports[0]
+    assert model.booster_.params["tree_learner"] == tree_learner
+    assert model.get_params()[tree_param] == tree_learner
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize("tree_learner", ["serial", "feature"])
+def test_lgb_train_loop_replaces_an_unsupported_tree_learner(
+    run_train_loop, tree_learner
+):
+    """Serial trains on the shard alone and feature parallel needs all the data."""
+    with pytest.warns(UserWarning, match="tree_learner"):
+        reports = run_train_loop(
+            _lgb_train_loop, {"n_estimators": 2, "tree_learner": tree_learner}
+        )
+    _, _, model = reports[0]
+    assert model.booster_.params["tree_learner"] == "data_parallel"
+
+
+@pytest.mark.ray
+def test_lgb_train_loop_ignores_user_network_params(run_train_loop, monkeypatch):
+    """Ray sets up the network, so these would collide with or override its params."""
+    import ray.train.lightgbm
+
+    network = {"num_machines": 1, "local_listen_port": 12400}
+    monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: network)
+    trained_params = []
+    lgb_fit = lgb.LGBMRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        trained_params.append(self.get_params())
+        return lgb_fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMRegressor, "fit", fit)
+    with pytest.warns(UserWarning, match="will be ignored") as record:
+        reports = run_train_loop(
+            _lgb_train_loop, {"n_estimators": 2, "num_machines": 3, "port": 1234}
+        )
+    assert {"num_machines", "port"} <= {str(w.message).split()[1] for w in record}
+    [params] = trained_params
+    assert "port" not in params
+    assert params.items() >= network.items()
+    [(_, _, model)] = reports
+    assert not {"num_machines", "port"} & model.get_params().keys()
+
+
+@pytest.mark.ray
+def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
+    """Worker only params on model_ make a local refit wait for gone peers."""
+    import ray.train.lightgbm
+
+    network = {
+        "machines": "127.0.0.1:12400",
+        "num_machines": 1,
+        "local_listen_port": 12400,
+    }
+    monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: network)
+    freed = []
+    free_network = lgb.Booster.free_network
+
+    def record_free_network(self):
+        freed.append(self._network)
+        return free_network(self)
+
+    monkeypatch.setattr(lgb.Booster, "free_network", record_free_network)
+    user_params = {"n_estimators": 2, "verbosity": -1, "nthread": 3}
+    reports = run_train_loop(_lgb_train_loop, user_params)
+    _, _, model = reports[0]
+    assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
+    assert not {*network, "num_threads", "tree_learner"} & vars(model).keys()
+    assert not network.keys() & model.booster_.params.keys()
+    assert freed == [True]
+    # a booster loaded from the saved model would read them back
+    model_str = model.booster_.model_to_string()
+    assert not any(f"[{key}: " in model_str for key in network)
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize(
+    "train_loop,module,thread_param",
+    [(_lgb_train_loop, "lgb", "num_threads"), (_xgb_train_loop, "xgb", "nthread")],
+    ids=["lightgbm", "xgboost"],
+)
+def test_train_loop_clamps_thread_aliases(
+    run_train_loop, monkeypatch, train_loop, module, thread_param
+):
+    """The alias the library prefers over n_jobs is what the clamp has to see."""
+    requested = []
+    monkeypatch.setattr(
+        f"mlforecast.distributed.models.ray.{module}.worker_n_jobs",
+        lambda r: requested.append(r) or 1,
+    )
+    trained_nthreads = []
+    xgb_fit = xgb.XGBRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        xgb_fit(self, *args, **kwargs)
+        config = json.loads(self.get_booster().save_config())
+        trained_nthreads.append(config["learner"]["generic_param"]["nthread"])
+        return self
+
+    monkeypatch.setattr(xgb.XGBRegressor, "fit", fit)
+    reports = run_train_loop(train_loop, {"n_estimators": 2, thread_param: 8})
+    _, _, model = reports[0]
+    assert 8 in requested
+    assert model.get_params()[thread_param] == 8
+    if train_loop is _lgb_train_loop:
+        assert model.booster_.params["num_threads"] == 1
+    else:
+        assert trained_nthreads == ["1"]
+
+
+@pytest.mark.ray
+def test_xgb_train_loop_caps_n_jobs_and_nthread_separately(run_train_loop, monkeypatch):
+    """n_jobs builds the DMatrix and nthread trains, so neither takes the other's cap."""
+    monkeypatch.setattr(
+        "mlforecast.distributed.models.ray.xgb.worker_n_jobs", lambda r: min(r, 4)
+    )
+    fitted = []
+    xgb_fit = xgb.XGBRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        fitted.append((self.n_jobs, self.get_params()["nthread"]))
+        return xgb_fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(xgb.XGBRegressor, "fit", fit)
+    reports = run_train_loop(
+        _xgb_train_loop, {"n_estimators": 2, "n_jobs": 1, "nthread": 8}
+    )
+    _, _, model = reports[0]
+    assert fitted == [(1, 4)]
+    assert (model.n_jobs, model.get_params()["nthread"]) == (1, 8)
 
 
 @pytest.mark.ray

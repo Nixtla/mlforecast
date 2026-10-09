@@ -17,7 +17,11 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     df = shard.materialize().to_pandas()
     label = df.pop(config["target_col"])
     n_jobs = config["params"].get("n_jobs")
+    user_nthread = config["params"].get("nthread")
+    # n_jobs builds the DMatrix and nthread, when set, trains, so each gets a cap
     params = {**config["params"], "n_jobs": worker_n_jobs(n_jobs)}
+    if user_nthread is not None:
+        params["nthread"] = worker_n_jobs(user_nthread)
     # XGBoostConfig wraps the loop in a CommunicatorContext, so unlike lightgbm
     # there are no network params to pass: training is distributed already.
     model = xgb.XGBRegressor(**params)
@@ -25,10 +29,11 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # model_ keeps the requested threads rather than the worker's clamp. Not via
     # set_params, which pushes a list eval_metric into the booster and breaks it.
     model.n_jobs = n_jobs
-    nthread = config["params"].get("nthread")
-    if nthread is None:
-        nthread = 0 if n_jobs is None else n_jobs
-    model.get_booster().set_param("nthread", nthread)
+    if user_nthread is not None:
+        model.kwargs["nthread"] = user_nthread
+    # nthread beats n_jobs in the booster
+    requested = n_jobs if user_nthread is None else user_nthread
+    model.get_booster().set_param("nthread", 0 if requested is None else requested)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME
     )
@@ -50,8 +55,8 @@ class RayXGBForecast(RayForecastBase, xgb.XGBRegressor):
     worker is given and therefore how many threads the booster can use. It
     defaults to the cluster's CPUs split evenly across the workers and bounded by
     the smallest node, as ``xgboost_ray._autodetect_resources`` did, and ``n_jobs``
-    can only lower it below that share. ``model_`` keeps the requested ``n_jobs``
-    rather than the clamp.
+    (or a thread alias) can only lower it below that share. ``model_`` keeps the
+    requested ``n_jobs`` rather than the clamp.
 
     ``storage_path`` is where ray train writes the run. It defaults to a
     temporary directory that is discarded once the fitted model has been read
