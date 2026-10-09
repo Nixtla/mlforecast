@@ -1089,7 +1089,7 @@ class MLForecast:
                     hist[[id_col, time_col, target_col]],
                     uid_statics[static_keys]
                     .iloc[np.zeros(len(hist), dtype=int)]
-                    .reset_index(drop=True),
+                    .set_axis(hist.index),
                     hist[dynamic],
                 ],
                 axis=1,

@@ -5717,3 +5717,24 @@ def test_predict_encodes_static_key_columns_once(monkeypatch):
     pd.testing.assert_frame_equal(fcst.predict(2, X_df=future), expected)
     # the id once at setup, promo at each of the two steps
     assert encoded == ["O", "i", "i"]
+
+
+def test_step_features_after_setup_without_static_key_cache():
+    """A model saved after a predict keeps the statics cache but not this one."""
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["promo"])]}
+    )
+    train, new, _ = _key_spelling_frames("pandas")
+    ts.fit_transform(
+        train,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["brand"],
+    )
+    x_df = new.drop(columns=["y", "brand"])
+    ts._predict_setup()
+    del ts._static_key_columns
+    ts._predict_setup()
+    assert ts._get_features_for_next_step(x_df).shape[0] == len(ts.uids)

@@ -1754,21 +1754,17 @@ class TimeSeries:
         """
         X_row = None
         static_cols = self.static_features_.columns
+        key_columns = dict(self._static_key_columns)
         for key, state in getattr(self, "_pooled_states", {}).items():
             cols = self._bucket_cols(key)
             if all(c in static_cols for c in cols):
                 continue
             if X_row is None and X_df is not None:
                 X_row = self._current_step_rows(X_df)
-            dynamic = iter(
-                self._key_values([c for c in cols if c not in static_cols], X_row)
-            )
-            columns = [
-                self._static_key_columns[c]
-                if c in static_cols
-                else factorize_column(next(dynamic))
-                for c in cols
-            ]
+            missing = [c for c in cols if c not in key_columns]
+            for c, values in zip(missing, self._key_values(missing, X_row)):
+                key_columns[c] = factorize_column(values)
+            columns = [key_columns[c] for c in cols]
             state.set_series_bucket_id(lookup_columns(columns, state.bucket_uniques))
         return X_row
 
@@ -1853,6 +1849,18 @@ class TimeSeries:
         self._uniform_dates = bool(
             nw.from_native(last_dates, series_only=True).n_unique() == 1
         )
+        statics = self.static_features_.columns
+        dynamic_keys = [
+            cols
+            for cols in map(self._bucket_cols, getattr(self, "_pooled_states", {}))
+            if any(c not in statics for c in cols)
+        ]
+        self._static_key_columns = {
+            c: factorize_column(self.static_features_[c].to_numpy())
+            for c in _dedupe_preserve_order(
+                c for cols in dynamic_keys for c in cols if c in statics
+            )
+        }
         # _predict_setup runs once per model; the statics-derived state below
         # is fixed for the whole predict, so reuse it across models
         # (TimeSeries.predict clears _static_null_src per call)
@@ -1878,19 +1886,6 @@ class TimeSeries:
             self._statics_keep = self.static_features_[static_cols]
         else:
             self._statics_keep = self.static_features_
-        # static parts of the keys re-bucketed every step, encoded once
-        statics = statics_nw.columns
-        dynamic_keys = [
-            cols
-            for cols in map(self._bucket_cols, getattr(self, "_pooled_states", {}))
-            if any(c not in statics for c in cols)
-        ]
-        self._static_key_columns = {
-            c: factorize_column(self.static_features_[c].to_numpy())
-            for c in _dedupe_preserve_order(
-                c for cols in dynamic_keys for c in cols if c in statics
-            )
-        }
 
     def _predict_recursive(
         self,

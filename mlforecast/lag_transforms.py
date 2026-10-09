@@ -391,7 +391,7 @@ class _RollingBase(_BaseLagTransform):
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features unless ``partition_by`` is set, in which case columns left
                 out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
-                at prediction. Mutually exclusive with `global_`. Defaults to None.
+                at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -548,7 +548,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
                 Columns must be static features unless ``partition_by`` is set, in which case columns left
                 out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
-                at prediction. Mutually exclusive with `global_`. Defaults to None.
+                at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
                 Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -658,7 +658,7 @@ class _ExpandingBase(_BaseLagTransform):
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features unless ``partition_by`` is set, in which case columns left
             out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
-            at prediction. Mutually exclusive with `global_`. Defaults to None.
+            at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
@@ -773,7 +773,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
             Columns must be static features unless ``partition_by`` is set, in which case columns left
             out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
-            at prediction. Mutually exclusive with `global_`. Defaults to None.
+            at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
             Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
