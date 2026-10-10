@@ -2263,6 +2263,11 @@ class TimeSeries:
         _validate_no_null_times(df, self.time_col)
         uids = _index_to_series(self.uids)
         uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
+        if isinstance(uids.dtype, pd.CategoricalDtype):
+            # pandas considers unordered categoricals with the same categories
+            # equal regardless of their order, so the cast above can keep the
+            # update's codes. Recode them so sorting by id matches self.uids.
+            new_ids = new_ids.cat.set_categories(uids.cat.categories)
         df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)
         df = ufp.sort(df, by=[self.id_col, self.time_col])

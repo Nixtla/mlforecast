@@ -867,6 +867,54 @@ def test_local_partition_lag_transform_requires_aligned_ends(engine):
         )
 
 
+def _last_values(ts):
+    return {
+        str(uid): ts.ga.data[ts.ga.indptr[i + 1] - 1] for i, uid in enumerate(ts.uids)
+    }
+
+
+@pytest.mark.parametrize(
+    "new_ids, new_categories, new_y, expected",
+    [
+        (
+            ["a", "b", "c", "d"],
+            ["d", "c", "b", "a"],
+            [20.0, 200.0, 30.0, 10.0],
+            {"d": 10.0, "c": 30.0, "a": 20.0, "b": 200.0},
+        ),
+        (
+            ["a", "c", "d"],
+            ["a", "c", "d"],
+            [20.0, 30.0, 10.0],
+            {"d": 10.0, "c": 30.0, "a": 20.0},
+        ),
+    ],
+)
+def test_ts_update_categorical_ids_with_different_category_order(
+    new_ids, new_categories, new_y, expected
+):
+    train = pd.DataFrame(
+        {
+            "unique_id": pd.Categorical(["d", "a", "c"], categories=["d", "c", "a"]),
+            "ds": [1, 1, 1],
+            "y": [1.0, 2.0, 3.0],
+        }
+    )
+    ts = TimeSeries(freq=1, lags=[1])
+    ts.fit_transform(
+        train, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    new = pd.DataFrame(
+        {
+            "unique_id": pd.Categorical(new_ids, categories=new_categories),
+            "ds": [2] * len(new_ids),
+            "y": new_y,
+        }
+    )
+    ts.update(new)
+    assert _last_values(ts) == expected
+
+
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_global_update_requires_complete_timestamps(engine):
     if engine == "polars":
