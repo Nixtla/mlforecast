@@ -3,7 +3,7 @@ __all__ = ["DistributedMLForecast"]
 
 import copy
 from collections import namedtuple
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import base64
 import cloudpickle
@@ -61,6 +61,16 @@ class DistributedMLForecast:
     """Multi backend distributed pipeline"""
 
     _PARTITION_FIELDS = ("ts", "train", "valid", "first_uid", "all_uids", "x_df")
+    # what `_preprocess` records on `_base_ts` and every partition is built with
+    _PARTITION_SETTINGS = (
+        "id_col",
+        "time_col",
+        "target_col",
+        "static_features",
+        "dropna",
+        "keep_last_n",
+        "weight_col",
+    )
 
     def __init__(
         self,
@@ -297,6 +307,10 @@ class DistributedMLForecast:
         # so that we don't need to recompute this on predict
         return fa.persist(res, lazy=False, engine=self.engine, as_fugue=True)
 
+    def _partition_settings(self) -> Dict[str, Any]:
+        """The `_preprocess` arguments, as `_preprocess_partitions` takes them."""
+        return {name: getattr(self._base_ts, name) for name in self._PARTITION_SETTINGS}
+
     def _preprocess(
         self,
         data: fugue.AnyDataFrame,
@@ -319,15 +333,7 @@ class DistributedMLForecast:
         self._base_ts.keep_last_n = keep_last_n
         self._base_ts.weight_col = weight_col
         self._partition_results = self._preprocess_partitions(
-            data=data,
-            id_col=id_col,
-            time_col=time_col,
-            target_col=target_col,
-            static_features=static_features,
-            dropna=dropna,
-            keep_last_n=keep_last_n,
-            window_info=window_info,
-            weight_col=weight_col,
+            data=data, window_info=window_info, **self._partition_settings()
         )
         base_schema = fa.get_schema(data)
         features_schema = {
@@ -691,14 +697,7 @@ class DistributedMLForecast:
         """
         if new_df is not None:
             partition_results = self._preprocess_partitions(
-                new_df,
-                id_col=self._base_ts.id_col,
-                time_col=self._base_ts.time_col,
-                target_col=self._base_ts.target_col,
-                static_features=self._base_ts.static_features,
-                dropna=self._base_ts.dropna,
-                keep_last_n=self._base_ts.keep_last_n,
-                fit_ts_only=True,
+                new_df, fit_ts_only=True, **self._partition_settings()
             )
         else:
             partition_results = self._partition_results
