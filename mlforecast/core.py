@@ -880,6 +880,9 @@ class TimeSeries:
                 if c not in [time_col, target_col] and c not in partition_cols
             ]
         else:
+            missing = [c for c in static_features if c not in df.columns]
+            if missing:
+                raise ValueError(f"static_features {missing} not found in dataframe.")
             if id_col not in static_features:
                 static_features = [id_col, *static_features]
             else:
@@ -967,13 +970,12 @@ class TimeSeries:
         # over time; a groupby column that is static is broadcast from statics.
         key_cols = self._pooled_aux_cols
         row_cols = [c for c in key_cols if c in df.columns]
-        part_cols = self._partition_cols
         missing = [
-            c for c in part_cols if c not in df.columns and c not in statics.columns
+            c for c in key_cols if c not in df.columns and c not in statics.columns
         ]
         if missing:
             raise ValueError(
-                f"partition_by column(s) {missing} not found in dataframe."
+                f"partition_by/groupby column(s) {missing} not found in dataframe."
             )
         key_rows: Dict[str, np.ndarray] = {}
         if row_cols:
@@ -1585,8 +1587,15 @@ class TimeSeries:
         `overrides` replace individual settings, e.g. `static_features`. The
         default `trim=False` keeps the full history `df` provides.
         """
+        settings = {
+            **self._fit_settings(),
+            "static_features": list(self.static_features_.columns),
+            **overrides,
+        }
         out = self._clone_cold()
-        out.history_warmup(df, **{**self._fit_settings(), **overrides}, trim=trim)
+        out.history_warmup(df, **settings, trim=trim)
+        out.static_features = self.static_features
+        out.features_order_ = list(self.features_order_)
         return out
 
     def _update_y(self, new: np.ndarray) -> None:
@@ -2120,11 +2129,13 @@ class TimeSeries:
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
+        pooled_cols = [
+            c for c in self._pooled_aux_cols if c not in self.features_order_
+        ]
+        required_future_cols = self._get_dynamic_exog_cols(
+            [*self.features_order_, *pooled_cols]
+        )
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2155,11 +2166,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = sorted(set(required_future_cols) - set(dynamics))
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
