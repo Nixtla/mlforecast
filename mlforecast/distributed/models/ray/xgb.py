@@ -1,6 +1,7 @@
 __all__ = ["RayXGBForecast"]
 
 
+import warnings
 from typing import Any, Dict
 
 import xgboost as xgb
@@ -18,6 +19,8 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     label = df.pop(config["target_col"])
     n_jobs = config["params"].get("n_jobs")
     params = {**config["params"], "n_jobs": worker_n_jobs(n_jobs)}
+    if params.pop("nthread", None) is not None:
+        warnings.warn("Parameter nthread will be ignored.")
     # XGBoostConfig wraps the loop in a CommunicatorContext, so unlike lightgbm
     # there are no network params to pass: training is distributed already.
     model = xgb.XGBRegressor(**params)
@@ -25,10 +28,7 @@ def _xgb_train_loop(config: Dict[str, Any]) -> None:
     # model_ keeps the requested threads rather than the worker's clamp. Not via
     # set_params, which pushes a list eval_metric into the booster and breaks it.
     model.n_jobs = n_jobs
-    nthread = config["params"].get("nthread")
-    if nthread is None:
-        nthread = 0 if n_jobs is None else n_jobs
-    model.get_booster().set_param("nthread", nthread)
+    model.get_booster().set_param("nthread", 0 if n_jobs is None else n_jobs)
     report_fitted_model(
         model, model.get_booster(), RayTrainReportCallback.CHECKPOINT_NAME
     )

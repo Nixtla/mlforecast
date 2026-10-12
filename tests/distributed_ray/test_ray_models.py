@@ -50,6 +50,8 @@ def test_default_num_boost_round_matches_sklearn():
 
 
 @pytest.mark.ray
+# the thread method, since SIGALRM doesn't fire while lightgbm waits on a socket
+@pytest.mark.timeout(300, method="thread")
 def test_lgb_trains_on_the_full_dataset_across_workers():
     """Every worker only sees its shard, so lightgbm needs its network params.
 
@@ -72,6 +74,9 @@ def test_lgb_trains_on_the_full_dataset_across_workers():
     )
     # the clamp is the worker's business; model_ carries what was asked for
     assert model.model_.n_jobs == 2
+    # and none of the worker's network params, which would hang a local refit
+    assert "machines" not in model.model_.get_params()
+    clone(model.model_).fit(df[["x"]], df["y"])
 
 
 @pytest.mark.ray
@@ -198,23 +203,76 @@ def test_xgb_train_loop_without_evaluated_metrics(run_train_loop):
 
 
 @pytest.mark.ray
-@pytest.mark.parametrize(
-    "n_jobs,user_nthread,nthread",
-    [(None, None, 0), (2, None, 2), (None, 3, 3), (2, 3, 3)],
-)
+@pytest.mark.parametrize("n_jobs,nthread", [(None, 0), (2, 2)])
 def test_xgb_train_loop_restores_the_thread_params_with_a_metric_list(
-    run_train_loop, n_jobs, user_nthread, nthread
+    run_train_loop, n_jobs, nthread
 ):
     """Restoring them mustn't push the eval_metric list into the booster."""
     params = {"n_estimators": 2, "eval_metric": ["rmse", "mae"], "n_jobs": n_jobs}
-    if user_nthread is not None:
-        params["nthread"] = user_nthread
     reports = run_train_loop(_xgb_train_loop, params)
     metrics, _, model = reports[0]
     assert set(metrics) == {"validation_0-rmse", "validation_0-mae"}
     assert model.n_jobs == n_jobs
     config = json.loads(model.get_booster().save_config())
     assert int(config["learner"]["generic_param"]["nthread"]) == nthread
+
+
+@pytest.mark.ray
+def test_xgb_train_loop_ignores_nthread(run_train_loop):
+    with pytest.warns(UserWarning, match="nthread will be ignored"):
+        reports = run_train_loop(_xgb_train_loop, {"n_estimators": 2, "nthread": 8})
+    _, _, model = reports[0]
+    assert "nthread" not in model.get_params()
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize("tree_param", ["tree_learner", "tree"])
+def test_lgb_train_loop_honors_the_user_tree_learner(run_train_loop, tree_param):
+    reports = run_train_loop(_lgb_train_loop, {"n_estimators": 2, tree_param: "voting"})
+    _, _, model = reports[0]
+    assert model.booster_.params["tree_learner"] == "voting"
+
+
+@pytest.mark.ray
+@pytest.mark.parametrize("tree_learner", ["serial", "feature"])
+def test_lgb_train_loop_replaces_an_unsupported_tree_learner(
+    run_train_loop, tree_learner
+):
+    """Serial trains on the shard alone and feature parallel needs all the data."""
+    with pytest.warns(UserWarning, match="tree_learner"):
+        reports = run_train_loop(
+            _lgb_train_loop, {"n_estimators": 2, "tree_learner": tree_learner}
+        )
+    _, _, model = reports[0]
+    assert model.booster_.params["tree_learner"] == "data_parallel"
+
+
+@pytest.mark.ray
+def test_lgb_train_loop_ignores_user_network_and_thread_params(
+    run_train_loop, monkeypatch
+):
+    """Ray sets up the network and n_jobs is the worker's thread count."""
+    import ray.train.lightgbm
+
+    network = {"num_machines": 1, "local_listen_port": 12400}
+    monkeypatch.setattr(ray.train.lightgbm, "get_network_params", lambda: network)
+    trained_params = []
+    lgb_fit = lgb.LGBMRegressor.fit
+
+    def fit(self, *args, **kwargs):
+        trained_params.append(self.get_params())
+        return lgb_fit(self, *args, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMRegressor, "fit", fit)
+    ignored = {"num_machines": 3, "port": 1234, "num_threads": 8}
+    with pytest.warns(UserWarning, match="will be ignored") as record:
+        reports = run_train_loop(_lgb_train_loop, {"n_estimators": 2, **ignored})
+    assert set(ignored) <= {str(w.message).split()[1] for w in record}
+    [params] = trained_params
+    assert not {"port", "num_threads"} & params.keys()
+    assert params.items() >= network.items()
+    [(_, _, model)] = reports
+    assert not set(ignored) & model.get_params().keys()
 
 
 @pytest.mark.ray
