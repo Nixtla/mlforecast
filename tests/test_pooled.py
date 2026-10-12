@@ -5067,3 +5067,27 @@ def test_get_kernel_resolves_subclasses():
 
     with pytest.raises(NotImplementedError, match="NotPooled"):
         get_kernel(NotPooled())
+
+
+def test_static_partition_key_with_pd_na_fits():
+    df = pd.DataFrame(
+        {
+            "unique_id": ["a"] * 3 + ["b"] * 3,
+            "ds": [1, 2, 3] * 2,
+            "y": np.arange(6.0),
+            "k": pd.array(["x"] * 3 + [pd.NA] * 3, dtype="string"),
+        }
+    )
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, partition_by=["k"])]})
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["k"],
+    )
+    new = df[df.ds == 3].assign(ds=4, y=1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        ts.update(new)
