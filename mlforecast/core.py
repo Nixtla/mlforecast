@@ -2310,14 +2310,20 @@ class TimeSeries:
         if self.target_transforms is not None:
             if self._has_ga_target_tfms():
                 indptr = np.append(0, id_counts["counts"]).cumsum()
-            for tfm in self.target_transforms:
-                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                    ga = GroupedArray(values, indptr)
-                    ga = tfm.update(ga)
-                    df = ufp.assign_columns(df, self.target_col, ga.data)
-                else:
-                    df = tfm.update(df)
-                values = df[self.target_col].to_numpy()
+            # transforms advance their state in place, restore it if any of them fails
+            fitted_tfms = copy.deepcopy(self.target_transforms)
+            try:
+                for tfm in self.target_transforms:
+                    if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                        ga = GroupedArray(values, indptr)
+                        ga = tfm.update(ga)
+                        df = ufp.assign_columns(df, self.target_col, ga.data)
+                    else:
+                        df = tfm.update(df)
+                    values = df[self.target_col].to_numpy()
+            except Exception:
+                self.target_transforms = fitted_tfms
+                raise
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})

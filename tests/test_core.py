@@ -2617,18 +2617,27 @@ def test_update_new_series_with_target_transforms_mutates_nothing():
 
 
 def test_update_failing_target_transform_mutates_nothing():
-    class FailingUpdate(LocalStandardScaler):
-        def update(self, ga):
-            raise RuntimeError("update failed")
+    class FailingDifferences(Differences):
+        fail = True
 
-    ts = TimeSeries(freq=1, lags=[1], target_transforms=[FailingUpdate()])
-    ts.fit_transform(
-        _update_validation_df("pandas"),
-        id_col="unique_id",
-        time_col="ds",
-        target_col="y",
-        static_features=[],
-    )
+        def update(self, ga):
+            ga = super().update(ga)
+            if self.fail:
+                raise RuntimeError("update failed")
+            return ga
+
+    def fitted_ts(tfm):
+        ts = TimeSeries(freq=1, lags=[1], target_transforms=[tfm])
+        ts.fit_transform(
+            _update_validation_df("pandas"),
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            static_features=[],
+        )
+        return ts
+
+    ts = fitted_ts(FailingDifferences([1]))
     last_dates = list(ts.last_dates)
     data = ts.ga.data.copy()
     new = pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]})
@@ -2636,6 +2645,12 @@ def test_update_failing_target_transform_mutates_nothing():
         ts.update(new)
     assert list(ts.last_dates) == last_dates
     np.testing.assert_array_equal(ts.ga.data, data)
+
+    ts.target_transforms[0].fail = False
+    ts.update(new)
+    expected = fitted_ts(Differences([1]))
+    expected.update(new)
+    np.testing.assert_array_equal(ts.ga.data, expected.ga.data)
 
 
 @pytest.mark.parametrize(
