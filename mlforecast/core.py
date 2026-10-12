@@ -2265,6 +2265,16 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
+        counts = (
+            nw.from_native(df, eager_only=True)
+            .group_by(self.time_col)
+            .agg(
+                nw.col(self.id_col).n_unique().alias("_n_ids"),
+                nw.len().alias("_n_rows"),
+            )
+        )
+        if counts.filter(nw.col("_n_rows") != nw.col("_n_ids")).shape[0] > 0:
+            raise ValueError("Update has duplicate rows for an id and timestamp.")
         if getattr(self, "_pooled_states", {}):
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
@@ -2275,16 +2285,6 @@ class TimeSeries:
             expected_count = nw.concat(
                 [uids_nw.to_frame(), new_ids_nw.to_frame()], how="vertical"
             )["_uid"].n_unique()
-            counts = (
-                nw.from_native(df, eager_only=True)
-                .group_by(self.time_col)
-                .agg(
-                    nw.col(self.id_col).n_unique().alias("_n_ids"),
-                    nw.len().alias("_n_rows"),
-                )
-            )
-            if counts.filter(nw.col("_n_rows") != nw.col("_n_ids")).shape[0] > 0:
-                raise ValueError("Update has duplicate rows for an id and timestamp.")
             if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."

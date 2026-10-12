@@ -5149,10 +5149,15 @@ def test_update_new_series_with_target_transforms_mutates_nothing():
     assert list(ts.uids) == uids
 
 
-def test_update_duplicate_rows_mutates_nothing():
-    ts = TimeSeries(
-        freq=1, lag_transforms={1: [RollingMean(2, min_samples=1, global_=True)]}
-    )
+@pytest.mark.parametrize(
+    "ts_kwargs",
+    [
+        {"lag_transforms": {1: [RollingMean(2, min_samples=1, global_=True)]}},
+        {"lags": [1]},
+    ],
+)
+def test_update_duplicate_rows_mutates_nothing(ts_kwargs):
+    ts = TimeSeries(freq=1, **ts_kwargs)
     ts.fit_transform(
         _update_validation_df("pandas"),
         id_col="unique_id",
@@ -5187,3 +5192,16 @@ def test_predict_and_update_without_pooled_states(max_horizon):
     pd.testing.assert_frame_equal(fcst.predict(2), expected)
     fcst.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
     assert fcst.predict(1)["ds"].tolist() == [6, 6]
+
+
+def test_forecast_fitted_values_without_pooled_states():
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    fcst = MLForecast(models=[LinearRegression()], freq=1, lags=[1])
+    fcst.fit(_update_validation_df("pandas").drop(columns="price"), fitted=True)
+    with pytest.warns(UserWarning, match="on demand"):
+        expected = fcst.forecast_fitted_values(h=2)
+    del fcst.ts._pooled_states
+    with pytest.warns(UserWarning, match="on demand"):
+        pd.testing.assert_frame_equal(fcst.forecast_fitted_values(h=2), expected)
