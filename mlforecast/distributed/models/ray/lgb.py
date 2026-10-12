@@ -1,7 +1,6 @@
 __all__ = ["RayLGBMForecast"]
 
 
-import re
 import warnings
 from typing import Any, Dict
 
@@ -12,20 +11,8 @@ from ._base import _RAY_PARAMS, RayForecastBase, report_fitted_model, worker_n_j
 
 # feature parallel needs the full data on every worker and serial trains on the shard
 _TREE_LEARNERS = {"data", "data_parallel", "voting", "voting_parallel"}
-_NETWORK_PARAMS = ("num_machines", "machines", "local_listen_port")
-_NETWORK_KEYS = _ConfigAliases.get(*_NETWORK_PARAMS)
+_NETWORK_KEYS = _ConfigAliases.get("num_machines", "machines", "local_listen_port")
 _RESTORED_KEYS = _ConfigAliases.get("tree_learner", "num_threads")
-# the model string only has the main names
-_NETWORK_LINE = re.compile(rf"^\[(?:{'|'.join(_NETWORK_PARAMS)}): .*\]\n", re.MULTILINE)
-
-
-def _drop_network(booster: lgb.Booster) -> None:
-    """Frees the booster's network and removes its params, also from its model string."""
-    booster.free_network()
-    model_str = booster.model_to_string(num_iteration=-1)
-    booster.model_from_string(_NETWORK_LINE.sub("", model_str))
-    for key in _NETWORK_KEYS:
-        booster.params.pop(key, None)
 
 
 def _lgb_train_loop(config: Dict[str, Any]) -> None:
@@ -63,7 +50,11 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
     # and rank 0's is the one that gets checkpointed. Plain kwargs, as in
     # lightgbm.dask's _train_part.
     model = lgb.LGBMRegressor(**params, **network_params)
-    model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
+    try:
+        model.fit(df, label, eval_set=[(df, label)], eval_names=["train"])
+    finally:
+        if getattr(model, "fitted_", False):
+            model.booster_.free_network()
     # model_ keeps the user's params minus the network ones, which hang a local
     # refit. Only these keys, since set_params on all of them clobbers objective_
     param_names = model._get_param_names()
@@ -72,7 +63,6 @@ def _lgb_train_loop(config: Dict[str, Any]) -> None:
         if key not in param_names:
             vars(model).pop(key, None)
     model.set_params(**{k: v for k, v in user_params.items() if k in _RESTORED_KEYS})
-    _drop_network(model.booster_)
     report_fitted_model(model, model.booster_, RayTrainReportCallback.CHECKPOINT_NAME)
 
 

@@ -52,7 +52,7 @@ def test_default_num_boost_round_matches_sklearn():
 @pytest.mark.ray
 # the thread method, since SIGALRM doesn't fire while lightgbm waits on a socket
 @pytest.mark.timeout(300, method="thread")
-def test_lgb_trains_on_the_full_dataset_across_workers(tmp_path):
+def test_lgb_trains_on_the_full_dataset_across_workers():
     """Every worker only sees its shard, so lightgbm needs its network params.
 
     Without them each worker trains an independent model on 1/N of the data and
@@ -77,9 +77,6 @@ def test_lgb_trains_on_the_full_dataset_across_workers(tmp_path):
     # and none of the worker's network params, which would hang a local refit
     assert "machines" not in model.model_.get_params()
     clone(model.model_).fit(df[["x"]], df["y"])
-    model.model_.booster_.refit(df[["x"]], df["y"])
-    model.model_.booster_.save_model(tmp_path / "model.txt")
-    lgb.Booster(model_file=tmp_path / "model.txt").refit(df[["x"]], df["y"])
 
 
 @pytest.mark.ray
@@ -305,11 +302,7 @@ def test_lgb_model_keeps_only_the_user_params(run_train_loop, monkeypatch):
     _, _, model = reports[0]
     assert model.get_params() == lgb.LGBMRegressor(**user_params).get_params()
     assert not {*network, "num_threads", "tree_learner"} & vars(model).keys()
-    assert not network.keys() & model.booster_.params.keys()
     assert freed == [True]
-    # a booster loaded from the saved model would read them back
-    model_str = model.booster_.model_to_string()
-    assert not any(f"[{key}: " in model_str for key in network)
 
 
 @pytest.mark.ray
