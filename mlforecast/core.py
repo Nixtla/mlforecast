@@ -286,6 +286,7 @@ class TimeSeries:
     _horizons: Optional[List[int]] = None
     # shared dict is safe: every writer rebinds the attribute
     horizon_features_: Dict[int, List[str]] = {}
+    _pooled_states: Dict[Tuple, PooledState] = {}
 
     def __init__(
         self,
@@ -475,18 +476,13 @@ class TimeSeries:
         timestamp; the same call is made here for every appended timestamp,
         otherwise the next predict would skip straight to the newest one.
         """
-        states = getattr(self, "_pooled_states", {})
+        states = self._pooled_states
         if not states:
             return
         counts = np.asarray(sizes["counts"].to_numpy())
         if not counts.any():
             return  # nothing appended
         n_new = int(counts[0])
-        if not bool((counts == n_new).all()):
-            raise ValueError(
-                "Pooled lag transforms require updates to include all series for "
-                "each timestamp."
-            )
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
@@ -574,7 +570,7 @@ class TimeSeries:
             self.keep_last_n = max(self.keep_last_n, min_kept)
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
-        for state in getattr(self, "_pooled_states", {}).values():
+        for state in self._pooled_states.values():
             state.finish_fit()
 
     def _initialize_lag_transform_states(self) -> None:
@@ -937,7 +933,7 @@ class TimeSeries:
         Runs after the target transforms so the channels see the transformed
         target, and after ``static_features_`` so ``groupby`` keys resolve.
         """
-        self._pooled_states: Dict[Tuple, PooledState] = {}
+        self._pooled_states = {}
         pooled = self._get_pooled_tfms()
         if not pooled:
             return
@@ -1593,7 +1589,7 @@ class TimeSeries:
         self.y_pred.append(new)
         new_arr = np.asarray(new)
         self.ga = self.ga.append(new_arr)
-        for state in getattr(self, "_pooled_states", {}).values():
+        for state in self._pooled_states.values():
             state.append(new_arr)
 
     def _update_features(self) -> DataFrame:
@@ -1818,7 +1814,7 @@ class TimeSeries:
         # Pooled states are only appended to during prediction, so a cheap
         # structural snapshot (references + shallow container copies) restores
         # them faithfully without deep-copying every aggregate array per model.
-        pooled_states = getattr(self, "_pooled_states", {})
+        pooled_states = self._pooled_states
         pooled_snaps = {key: state.snapshot() for key, state in pooled_states.items()}
         try:
             yield
@@ -2098,9 +2094,7 @@ class TimeSeries:
         ids: Optional[List[str]] = None,
     ) -> DFType:
         if ids is not None:
-            has_nonlocal = any(
-                mode != "local" for mode, _, _ in getattr(self, "_pooled_states", {})
-            )
+            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
             if has_nonlocal:
                 raise ValueError(
                     "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
@@ -2265,17 +2259,11 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        counts = (
-            nw.from_native(df, eager_only=True)
-            .group_by(self.time_col)
-            .agg(
-                nw.col(self.id_col).n_unique().alias("_n_ids"),
-                nw.len().alias("_n_rows"),
-            )
-        )
-        if counts.filter(nw.col("_n_rows") != nw.col("_n_ids")).shape[0] > 0:
+        ids = df[self.id_col].to_numpy()
+        times = df[self.time_col].to_numpy()
+        if ((ids[1:] == ids[:-1]) & (times[1:] == times[:-1])).any():
             raise ValueError("Update has duplicate rows for an id and timestamp.")
-        if getattr(self, "_pooled_states", {}):
+        if self._pooled_states:
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
             )
@@ -2285,6 +2273,11 @@ class TimeSeries:
             expected_count = nw.concat(
                 [uids_nw.to_frame(), new_ids_nw.to_frame()], how="vertical"
             )["_uid"].n_unique()
+            counts = (
+                nw.from_native(df, eager_only=True)
+                .group_by(self.time_col)
+                .agg(nw.col(self.id_col).n_unique().alias("_n_ids"))
+            )
             if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
@@ -2314,6 +2307,17 @@ class TimeSeries:
                 raise ValueError(
                     f"New series must include their static features: {missing}."
                 )
+        if self.target_transforms is not None:
+            if self._has_ga_target_tfms():
+                indptr = np.append(0, id_counts["counts"]).cumsum()
+            for tfm in self.target_transforms:
+                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                    ga = GroupedArray(values, indptr)
+                    ga = tfm.update(ga)
+                    df = ufp.assign_columns(df, self.target_col, ga.data)
+                else:
+                    df = tfm.update(df)
+                values = df[self.target_col].to_numpy()
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
@@ -2336,17 +2340,6 @@ class TimeSeries:
                 [self.static_features_, new_statics]
             )
             self.static_features_ = ufp.sort(self.static_features_, self.id_col)
-        if self.target_transforms is not None:
-            if self._has_ga_target_tfms():
-                indptr = np.append(0, id_counts["counts"]).cumsum()
-            for tfm in self.target_transforms:
-                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                    ga = GroupedArray(values, indptr)
-                    ga = tfm.update(ga)
-                    df = ufp.assign_columns(df, self.target_col, ga.data)
-                else:
-                    df = tfm.update(df)
-                values = df[self.target_col].to_numpy()
         # the outer join above can make the sizes float, which the offset
         # arithmetic in _advance_lag_transform_states needs as integers
         appended_counts = sizes["counts"].to_numpy().astype(np.int64)
