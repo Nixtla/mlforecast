@@ -5112,6 +5112,25 @@ def test_update_missing_partition_key_mutates_nothing(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_empty_frame_without_partition_key(engine):
+    ts = TimeSeries(
+        freq=1,
+        lag_transforms={1: [RollingMean(2, min_samples=1, partition_by=["price"])]},
+    )
+    ts.fit_transform(
+        _update_validation_df(engine),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    data = ts.ga.data.copy()
+    empty = _make_df(engine, {"unique_id": ["a"], "ds": [5], "y": [5.0]})[:0]
+    ts.update(empty)
+    np.testing.assert_array_equal(ts.ga.data, data)
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_update_new_series_without_static_features_mutates_nothing(engine):
     ts = TimeSeries(freq=1, lags=[1])
     ts.fit_transform(

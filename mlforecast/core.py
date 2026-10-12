@@ -2290,7 +2290,7 @@ class TimeSeries:
                     "Pooled lag transforms require updates to include all series for each timestamp."
                 )
             missing = [c for c in self._partition_cols if c not in df.columns]
-            if missing:
+            if missing and df.shape[0] > 0:
                 raise ValueError(
                     f"`partition_by` column(s) {missing} must be provided in the "
                     "update frame."
