@@ -34,7 +34,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mlforecast.pooled import _NULL_KEY, _encode_column, _join_keys, factorize
+from mlforecast.pooled import (
+    _NULL_KEY,
+    _encode_column,
+    _join_keys,
+    factorize,
+    lookup,
+)
 
 
 def _reference(arrays):
@@ -259,6 +265,36 @@ def test_out_of_int64_floats_keep_distinct_keys():
     np.testing.assert_array_equal(floats, objects)
     assert len(set(floats)) == len(values)
     assert floats[-1] == "3"
+
+
+def test_out_of_int64_integral_floats_encode_like_ints():
+    ints = np.array([2**63, 10**19], dtype=np.uint64)
+    np.testing.assert_array_equal(
+        _encode_column(ints.astype(np.float64)), _encode_column(ints)
+    )
+    np.testing.assert_array_equal(
+        _encode_column(np.array([2.0**63, 1e19], dtype=object)),
+        _encode_column(np.array([2**63, 10**19], dtype=object)),
+    )
+
+
+def test_equal_mixed_values_factorize_and_lookup_alike():
+    column = np.array([2**63, 2.0**63, 10**19, 1e19], dtype=object)
+    ids, uniques = factorize([column])
+    assert len(uniques) == 2
+    np.testing.assert_array_equal(lookup([column], uniques), ids)
+
+
+def test_numpy_float_in_object_column_encodes_like_int():
+    column = np.array([np.float32(1.0), np.float64(2.0), 1, 2], dtype=object)
+    out = _encode_column(column)
+    np.testing.assert_array_equal(out, ["1", "2", "1", "2"])
+
+
+def test_timedelta_nat_lands_in_the_sentinel_bucket():
+    out = _encode_column(np.array([np.timedelta64("NaT"), np.timedelta64(1, "D")]))
+    assert out[0] == _NULL_KEY
+    assert out[1] != _NULL_KEY
 
 
 def test_int64_bounds_encode_like_ints():
