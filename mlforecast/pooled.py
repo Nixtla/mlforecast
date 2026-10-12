@@ -42,9 +42,20 @@ _NULL_KEY = "\x00__MLF_NULL__"
 
 
 # %% key encoding
+# object column contents whose equal values always encode alike
+_SAFE_MIXES = {
+    "empty",
+    "string",
+    "integer",
+    "floating",
+    "mixed-integer-float",
+    "boolean",
+}
+
+
 def _encode_value(v: Any) -> str:
     # integral floats encode as ints so a key matches whether it arrives as int or float
-    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+    if isinstance(v, (float, np.floating)) and np.isfinite(v) and v == np.floor(v):
         return str(int(v))
     return str(v)
 
@@ -56,7 +67,19 @@ def _factorize_column(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     and nothing else, and a key encodes the same whether it arrives as an int
     or a float.
     """
-    codes, uniques = pd.factorize(np.asarray(values))
+    values = np.asarray(values)
+    if values.dtype.kind == "f" and values.dtype.itemsize > 8:
+        # pandas factorizes longdouble through float64
+        values = values.astype(object)
+    codes, uniques = pd.factorize(values)
+    if (
+        values.dtype.kind == "O"
+        and pd.api.types.infer_dtype(values, skipna=True) not in _SAFE_MIXES
+    ):
+        # equal values of different types (True and 1) factorize together but encode apart
+        encoded = np.array([_encode_value(v) for v in values], dtype=object)
+        encoded[pd.isna(values)] = None
+        codes, uniques = pd.factorize(encoded)
     uniques = np.asarray(uniques)
     if uniques.dtype.kind in "fO":
         enc = np.array([_encode_value(v) for v in uniques], dtype=object)

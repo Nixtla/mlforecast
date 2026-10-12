@@ -312,3 +312,22 @@ def test_float16_keys_encode_without_warnings():
         warnings.simplefilter("error")
         out = _encode_column(np.array([1.0, 0.5, np.inf], dtype=np.float16))
     assert out[0] == "1"
+
+
+@pytest.mark.parametrize("raw", [True, 1 + 0j])
+def test_equal_values_of_other_types_keep_their_own_key(raw):
+    ids, uniques = factorize([np.array([raw, 1], dtype=object)])
+    assert len(uniques) == 2
+    np.testing.assert_array_equal(
+        lookup([np.array([1, raw], dtype=object)], uniques), ids[::-1]
+    )
+
+
+def test_longdouble_keys_keep_their_precision():
+    big = np.longdouble(2) ** 1100
+    near = np.longdouble(2) ** 60 + np.longdouble(0.5)
+    column = np.array([big, near, np.longdouble(2) ** 60], dtype=np.longdouble)
+    out = _encode_column(column)
+    assert out[0] == str(2**1100)
+    assert out[2] == str(2**60)
+    assert len(set(out)) == 3
