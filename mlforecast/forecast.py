@@ -1393,7 +1393,8 @@ class MLForecast:
                 res = self.fcst_fitted_values_
             else:
                 has_nonlocal = any(
-                    mode != "local" for mode, _, _ in self.ts._pooled_states
+                    mode != "local"
+                    for mode, _, _ in getattr(self.ts, "_pooled_states", {})
                 )
                 if has_nonlocal:
                     raise ValueError(

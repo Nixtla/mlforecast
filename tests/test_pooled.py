@@ -5067,3 +5067,123 @@ def test_get_kernel_resolves_subclasses():
 
     with pytest.raises(NotImplementedError, match="NotPooled"):
         get_kernel(NotPooled())
+
+
+def _update_validation_df(engine):
+    return _make_df(
+        engine,
+        {
+            "unique_id": ["a"] * 4 + ["b"] * 4,
+            "ds": [1, 2, 3, 4, 1, 2, 3, 4],
+            "y": [1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0],
+            "promo": [0, 0, 0, 0, 1, 1, 1, 1],
+            "price": [1.0, 2.0, 1.0, 2.0, 1.0, 1.0, 2.0, 2.0],
+        },
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_missing_partition_key_mutates_nothing(engine):
+    tfms = [
+        RollingMean(2, min_samples=1, global_=True),
+        RollingMean(2, min_samples=1, global_=True, partition_by=["price"]),
+    ]
+    ts = TimeSeries(freq=1, lag_transforms={1: tfms})
+    ts.fit_transform(
+        _update_validation_df(engine),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=["promo"],
+    )
+    before = copy.deepcopy(ts._pooled_states)
+    data_before = ts.ga.data.copy()
+    update = _make_df(
+        engine,
+        {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "promo": [0, 1]},
+    )
+    with pytest.raises(ValueError, match=r"\['price'\] must be provided"):
+        ts.update(update)
+    np.testing.assert_array_equal(ts.ga.data, data_before)
+    for key, state in before.items():
+        for name, values in state.base.items():
+            np.testing.assert_array_equal(ts._pooled_states[key].base[name], values)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_new_series_without_static_features_mutates_nothing(engine):
+    ts = TimeSeries(freq=1, lags=[1])
+    ts.fit_transform(
+        _update_validation_df(engine),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=["promo"],
+    )
+    uids = list(ts.uids)
+    new = _make_df(
+        engine, {"unique_id": ["a", "b", "c"], "ds": [5] * 3, "y": [1.0] * 3}
+    )
+    with pytest.raises(ValueError, match="New series must include"):
+        ts.update(new)
+    assert list(ts.uids) == uids
+    assert ts.ga.n_groups == len(uids)
+
+
+def test_update_new_series_with_target_transforms_mutates_nothing():
+    from mlforecast.target_transforms import LocalStandardScaler
+
+    ts = TimeSeries(freq=1, lags=[1], target_transforms=[LocalStandardScaler()])
+    ts.fit_transform(
+        _update_validation_df("pandas"),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    uids = list(ts.uids)
+    new = pd.DataFrame({"unique_id": ["a", "b", "c"], "ds": [5] * 3, "y": [1.0] * 3})
+    with pytest.raises(ValueError, match="Can not update target_transforms"):
+        ts.update(new)
+    assert list(ts.uids) == uids
+
+
+def test_update_duplicate_rows_mutates_nothing():
+    ts = TimeSeries(
+        freq=1, lag_transforms={1: [RollingMean(2, min_samples=1, global_=True)]}
+    )
+    ts.fit_transform(
+        _update_validation_df("pandas"),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    uids = list(ts.uids)
+    data = ts.ga.data.copy()
+    dup = pd.DataFrame(
+        {"unique_id": ["a", "a", "b"], "ds": [5, 5, 5], "y": [5.0, 6.0, 50.0]}
+    )
+    with pytest.raises(ValueError, match="duplicate rows"):
+        ts.update(dup)
+    assert list(ts.uids) == uids
+    np.testing.assert_array_equal(ts.ga.data, data)
+
+
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_predict_and_update_without_pooled_states(max_horizon):
+    """Models pickled before pooled transforms existed have no `_pooled_states`."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    fcst = MLForecast(models=[LinearRegression()], freq=1, lags=[1])
+    fcst.fit(
+        _update_validation_df("pandas").drop(columns="price"), max_horizon=max_horizon
+    )
+    expected = fcst.predict(2)
+    del fcst.ts._pooled_states
+    pd.testing.assert_frame_equal(fcst.predict(2), expected)
+    fcst.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
+    assert fcst.predict(1)["ds"].tolist() == [6, 6]

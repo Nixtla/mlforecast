@@ -497,12 +497,6 @@ class TimeSeries:
         part_cols = self._partition_cols
         part: Dict[str, np.ndarray] = {}
         if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"`partition_by` column(s) {missing} must be provided in the "
-                    "update frame."
-                )
             pdf = df[part_cols]
             part = {
                 c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
@@ -1599,7 +1593,7 @@ class TimeSeries:
         self.y_pred.append(new)
         new_arr = np.asarray(new)
         self.ga = self.ga.append(new_arr)
-        for state in self._pooled_states.values():
+        for state in getattr(self, "_pooled_states", {}).values():
             state.append(new_arr)
 
     def _update_features(self) -> DataFrame:
@@ -2104,7 +2098,9 @@ class TimeSeries:
         ids: Optional[List[str]] = None,
     ) -> DFType:
         if ids is not None:
-            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
+            has_nonlocal = any(
+                mode != "local" for mode, _, _ in getattr(self, "_pooled_states", {})
+            )
             if has_nonlocal:
                 raise ValueError(
                     "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
@@ -2269,7 +2265,7 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
-        if self._pooled_states:
+        if getattr(self, "_pooled_states", {}):
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
             )
@@ -2282,11 +2278,22 @@ class TimeSeries:
             counts = (
                 nw.from_native(df, eager_only=True)
                 .group_by(self.time_col)
-                .agg(nw.col(self.id_col).n_unique().alias("_n_ids"))
+                .agg(
+                    nw.col(self.id_col).n_unique().alias("_n_ids"),
+                    nw.len().alias("_n_rows"),
+                )
             )
+            if counts.filter(nw.col("_n_rows") != nw.col("_n_ids")).shape[0] > 0:
+                raise ValueError("Update has duplicate rows for an id and timestamp.")
             if counts.filter(nw.col("_n_ids") != expected_count).shape[0] > 0:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
+                )
+            missing = [c for c in self._partition_cols if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"`partition_by` column(s) {missing} must be provided in the "
+                    "update frame."
                 )
         if validate_new_data:
             self._validate_new_df(df=df)
@@ -2299,6 +2306,14 @@ class TimeSeries:
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
+        if new_groups.any():
+            if self.target_transforms is not None:
+                raise ValueError("Can not update target_transforms with new series.")
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series must include their static features: {missing}."
+                )
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
@@ -2310,8 +2325,6 @@ class TimeSeries:
         self.uids = _to_native_index(self.uids, df=df)
         self.last_dates = _to_native_index(self.last_dates, df=df)
         if new_groups.any():
-            if self.target_transforms is not None:
-                raise ValueError("Can not update target_transforms with new series.")
             new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
             new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
             new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
