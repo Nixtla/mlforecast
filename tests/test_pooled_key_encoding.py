@@ -28,6 +28,7 @@ assert equivalence to it rather than re-deriving the expected values:
   ``PARTITION BY`` semantics.
 """
 
+import decimal
 import warnings
 
 import numpy as np
@@ -335,3 +336,48 @@ def test_longdouble_keys_keep_their_precision():
     assert out[0] == str(2**1100)
     assert out[2] == str(2**60)
     assert len(set(out)) == 3
+
+
+def test_float_widths_in_object_column_keep_their_own_key():
+    narrow = np.float32(0.1)
+    ids, uniques = factorize([np.array([narrow, np.float64(narrow)], dtype=object)])
+    assert len(uniques) == 2
+    np.testing.assert_array_equal(
+        lookup([np.array([np.float64(narrow), narrow], dtype=object)], uniques),
+        ids[::-1],
+    )
+
+
+def test_every_row_looks_up_its_own_bucket():
+    pool = [
+        True,
+        False,
+        1,
+        0,
+        1.0,
+        0.0,
+        -0.0,
+        0.1,
+        np.float32(0.1),
+        np.float64(np.float32(0.1)),
+        np.int64(1),
+        np.uint64(1),
+        1 + 0j,
+        decimal.Decimal("1.0"),
+        2**63,
+        2.0**63,
+        "a",
+        "1",
+        None,
+        np.nan,
+        pd.NA,
+    ]
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        column = np.empty(rng.integers(1, 10), dtype=object)
+        column[:] = [pool[i] for i in rng.integers(0, len(pool), len(column))]
+        ids, uniques = factorize([column])
+        for i in range(len(column)):
+            single = np.empty(1, dtype=object)
+            single[0] = column[i]
+            assert lookup([single], uniques)[0] == ids[i], repr(column[i])

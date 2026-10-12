@@ -42,22 +42,20 @@ _NULL_KEY = "\x00__MLF_NULL__"
 
 
 # %% key encoding
-# object column contents whose equal values always encode alike
-_SAFE_MIXES = {
-    "empty",
-    "string",
-    "integer",
-    "floating",
-    "mixed-integer-float",
-    "boolean",
-}
+# object column contents whose equal values always print alike
+_PRINT_STABLE = {"empty", "string", "integer", "boolean"}
 
 
 def _encode_value(v: Any) -> str:
     # integral floats encode as ints so a key matches whether it arrives as int or float
-    if isinstance(v, (float, np.floating)) and np.isfinite(v) and v == np.floor(v):
-        return str(int(v))
-    return str(v)
+    if isinstance(v, float):
+        integral = v.is_integer()
+    elif isinstance(v, np.floating):
+        # checked in its own dtype so longdouble keeps its precision
+        integral = np.isfinite(v) and v == np.floor(v)
+    else:
+        return str(v)
+    return str(int(v)) if integral else str(v)
 
 
 def _factorize_column(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -71,17 +69,18 @@ def _factorize_column(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     if values.dtype.kind == "f" and values.dtype.itemsize > 8:
         # pandas factorizes longdouble through float64
         values = values.astype(object)
-    codes, uniques = pd.factorize(values)
     if (
         values.dtype.kind == "O"
-        and pd.api.types.infer_dtype(values, skipna=True) not in _SAFE_MIXES
+        and pd.api.types.infer_dtype(values, skipna=True) not in _PRINT_STABLE
     ):
-        # equal values of different types (True and 1) factorize together but encode apart
+        # pandas merges equal values that print differently (True and 1), so
+        # these are factorized by their encoding
         encoded = np.array([_encode_value(v) for v in values], dtype=object)
         encoded[pd.isna(values)] = None
-        codes, uniques = pd.factorize(encoded)
+        values = encoded
+    codes, uniques = pd.factorize(values)
     uniques = np.asarray(uniques)
-    if uniques.dtype.kind in "fO":
+    if uniques.dtype.kind == "f":
         enc = np.array([_encode_value(v) for v in uniques], dtype=object)
     else:
         enc = uniques.astype(str).astype(object)
