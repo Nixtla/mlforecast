@@ -323,6 +323,10 @@ def test_equal_values_of_other_types_keep_their_own_key(raw):
     )
 
 
+@pytest.mark.skipif(
+    np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant,
+    reason="longdouble is float64 on this platform",
+)
 def test_longdouble_keys_keep_their_precision():
     big = np.longdouble(2) ** 1100
     near = np.longdouble(2) ** 60 + np.longdouble(0.5)
