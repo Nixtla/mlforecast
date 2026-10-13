@@ -2841,3 +2841,38 @@ def test_update_target_transform_returning_only_target():
     )
     ts.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
     assert list(ts.last_dates) == [5, 5]
+
+
+def test_update_target_transform_returning_only_target_with_partition():
+    class OnlyTarget(BaseTargetTransform):
+        def fit_transform(self, df):
+            return df
+
+        def update(self, df):
+            return df[[self.id_col, self.target_col]]
+
+        def inverse_transform(self, df):
+            return df
+
+    df = _update_validation_df("pandas").assign(price=1.0)
+    ts = TimeSeries(
+        freq=1,
+        lag_transforms={
+            1: [RollingMean(2, min_samples=1, global_=True, partition_by=["price"])]
+        },
+        target_transforms=[OnlyTarget()],
+    )
+    ts.fit_transform(
+        df,
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        dropna=False,
+        static_features=[],
+    )
+    ts.update(
+        pd.DataFrame(
+            {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0], "price": 2.0}
+        )
+    )
+    assert list(ts.last_dates) == [5, 5]

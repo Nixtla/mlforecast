@@ -2348,15 +2348,18 @@ class TimeSeries:
             if self.target_transforms is not None:
                 if self._has_ga_target_tfms():
                     indptr = np.append(0, id_counts["counts"]).cumsum()
+                transformed = df
                 for tfm in self.target_transforms:
                     tfm_snaps.append(copy.deepcopy(tfm))
                     if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                         ga = GroupedArray(values, indptr)
                         ga = tfm.update(ga)
-                        df = ufp.assign_columns(df, self.target_col, ga.data)
+                        transformed = ufp.assign_columns(
+                            transformed, self.target_col, ga.data
+                        )
                     else:
-                        df = tfm.update(df)
-                    values = df[self.target_col].to_numpy()
+                        transformed = tfm.update(transformed)
+                    values = transformed[self.target_col].to_numpy()
             self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
             self.uids = ufp.sort(sizes[self.id_col])
             self.uids = _to_native_index(self.uids, df=df)
