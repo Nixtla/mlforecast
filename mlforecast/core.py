@@ -691,6 +691,33 @@ class TimeSeries:
             primed.transform(CoreGroupedArray(sub.data, sub.indptr))
             core.stats_[fresh] = primed.stats_
 
+    def _lag_transform_snapshots(self) -> Tuple[List[Any], Dict[Tuple, Any]]:
+        """State that ``update`` advances in place, to restore it on failure."""
+        cores = [(core, core.stats_.copy()) for core in self._stateful_cores()]
+        leaves_by_key = self._get_pooled_tfms()
+        pooled = {
+            key: (
+                state.snapshot(),
+                [
+                    (leaf, copy.deepcopy(leaf._pooled_inner))
+                    for leaf in leaves_by_key.get(key, ())
+                ],
+            )
+            for key, state in self._pooled_states.items()
+        }
+        return cores, pooled
+
+    def _restore_lag_transforms(
+        self, snaps: Tuple[List[Any], Dict[Tuple, Any]]
+    ) -> None:
+        cores, pooled = snaps
+        for core, stats in cores:
+            core.stats_ = stats
+        for key, (snap, inners) in pooled.items():
+            self._pooled_states[key].restore(snap)
+            for leaf, inner in inners:
+                leaf._pooled_inner = inner
+
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
         if not self._get_pooled_tfms():
@@ -2307,13 +2334,15 @@ class TimeSeries:
                 raise ValueError(
                     f"New series must include their static features: {missing}."
                 )
-        if self.target_transforms is not None:
-            if self._has_ga_target_tfms():
-                indptr = np.append(0, id_counts["counts"]).cumsum()
-            # transforms advance their state in place, restore it if any of them fails
-            fitted_tfms = copy.deepcopy(self.target_transforms)
-            try:
+        prev = (self.uids, self.last_dates, self.static_features_, self.ga)
+        lag_snaps = self._lag_transform_snapshots()
+        tfm_snaps = []
+        try:
+            if self.target_transforms is not None:
+                if self._has_ga_target_tfms():
+                    indptr = np.append(0, id_counts["counts"]).cumsum()
                 for tfm in self.target_transforms:
+                    tfm_snaps.append(copy.deepcopy(tfm))
                     if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                         ga = GroupedArray(values, indptr)
                         ga = tfm.update(ga)
@@ -2321,42 +2350,50 @@ class TimeSeries:
                     else:
                         df = tfm.update(df)
                     values = df[self.target_col].to_numpy()
-            except Exception:
-                self.target_transforms = fitted_tfms
-                raise
-        last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
-        last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
-        curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
-        last_dates = ufp.join(last_dates, curr_last_dates, on=self.id_col, how="left")
-        last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
-        last_dates = ufp.sort(last_dates, by=self.id_col)
-        self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
-        self.uids = ufp.sort(sizes[self.id_col])
-        self.uids = _to_native_index(self.uids, df=df)
-        self.last_dates = _to_native_index(self.last_dates, df=df)
-        if new_groups.any():
-            new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
-            new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
-            new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
-            new_statics = ufp.take_rows(
-                new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
+            last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
+            last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
+            curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
+            last_dates = ufp.join(
+                last_dates, curr_last_dates, on=self.id_col, how="left"
             )
-            new_statics = new_statics[self.static_features_.columns]
-            self.static_features_ = ufp.vertical_concat(
-                [self.static_features_, new_statics]
+            last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
+            last_dates = ufp.sort(last_dates, by=self.id_col)
+            self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
+            self.uids = ufp.sort(sizes[self.id_col])
+            self.uids = _to_native_index(self.uids, df=df)
+            self.last_dates = _to_native_index(self.last_dates, df=df)
+            if new_groups.any():
+                new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
+                new_ids_df = ufp.filter_with_mask(
+                    df, ufp.is_in(df[self.id_col], new_ids)
+                )
+                new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
+                new_statics = ufp.take_rows(
+                    new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
+                )
+                new_statics = new_statics[self.static_features_.columns]
+                self.static_features_ = ufp.vertical_concat(
+                    [self.static_features_, new_statics]
+                )
+                self.static_features_ = ufp.sort(self.static_features_, self.id_col)
+            # the outer join above can make the sizes float, which the offset
+            # arithmetic in _advance_lag_transform_states needs as integers
+            appended_counts = sizes["counts"].to_numpy().astype(np.int64)
+            new_groups_mask = new_groups.to_numpy()
+            prev_ga = self.ga
+            self.ga = self.ga.append_several(
+                new_sizes=appended_counts.astype(np.int32),
+                new_values=values,
+                new_groups=new_groups_mask,
             )
-            self.static_features_ = ufp.sort(self.static_features_, self.id_col)
-        # the outer join above can make the sizes float, which the offset
-        # arithmetic in _advance_lag_transform_states needs as integers
-        appended_counts = sizes["counts"].to_numpy().astype(np.int64)
-        new_groups_mask = new_groups.to_numpy()
-        prev_ga = self.ga
-        self.ga = self.ga.append_several(
-            new_sizes=appended_counts.astype(np.int32),
-            new_values=values,
-            new_groups=new_groups_mask,
-        )
-        self._advance_lag_transform_states(
-            prev_ga, appended_counts, values, new_groups_mask
-        )
-        self._update_pooled_states(df, sizes, values)
+            self._advance_lag_transform_states(
+                prev_ga, appended_counts, values, new_groups_mask
+            )
+            self._update_pooled_states(df, sizes, values)
+        except BaseException:
+            self.uids, self.last_dates, self.static_features_, self.ga = prev
+            self._restore_lag_transforms(lag_snaps)
+            if tfm_snaps:
+                assert self.target_transforms is not None
+                self.target_transforms[: len(tfm_snaps)] = tfm_snaps
+            raise

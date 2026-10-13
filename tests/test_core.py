@@ -27,6 +27,7 @@ from mlforecast.lag_transforms import (
     RollingStd,
 )
 from mlforecast.date_features import _DUMMY_ALIASES
+from mlforecast.pooled import PooledState
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import (
     generate_daily_series,
@@ -2679,3 +2680,98 @@ def test_update_duplicate_rows_mutates_nothing(ts_kwargs):
         ts.update(dup)
     assert list(ts.uids) == uids
     np.testing.assert_array_equal(ts.ga.data, data)
+
+
+def _features_after(ts):
+    ts._predict_setup()
+    return ts._get_features_for_next_step()
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}),
+        pd.DataFrame(
+            {
+                "unique_id": ["a", "b", "c"],
+                "ds": [5] * 3,
+                "y": [5.0, 50.0, 7.0],
+                "promo": [0, 1, 2],
+            }
+        ),
+    ],
+)
+def test_update_failing_after_target_transforms_mutates_nothing(monkeypatch, new):
+    def fitted_ts():
+        ts = TimeSeries(
+            freq=1,
+            lags=[1],
+            lag_transforms={
+                1: [
+                    ExpandingMean(),
+                    ExpandingMean(global_=True),
+                    RollingMean(2, min_samples=1, groupby=["promo"]),
+                ]
+            },
+            target_transforms=None if "promo" in new else [Differences([1])],
+        )
+        ts.fit_transform(
+            _update_validation_df("pandas"),
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            dropna=False,
+            static_features=["promo"],
+        )
+        return ts
+
+    def fail(*_):
+        raise RuntimeError("update failed")
+
+    ts = fitted_ts()
+    with monkeypatch.context() as m:
+        m.setattr(PooledState, "set_series_bucket_id", fail)
+        with pytest.raises(RuntimeError, match="update failed"):
+            ts.update(new)
+    expected = fitted_ts()
+    assert list(ts.uids) == list(expected.uids)
+    pd.testing.assert_frame_equal(ts.static_features_, expected.static_features_)
+    pd.testing.assert_frame_equal(_features_after(ts), _features_after(expected))
+    ts.update(new)
+    expected.update(new)
+    np.testing.assert_array_equal(ts.ga.data, expected.ga.data)
+    pd.testing.assert_frame_equal(_features_after(ts), _features_after(expected))
+
+
+def test_update_interrupted_target_transform_chain_mutates_nothing():
+    class Interrupted(LocalStandardScaler):
+        interrupt = False
+
+        def update(self, ga):
+            if self.interrupt:
+                raise KeyboardInterrupt
+            return super().update(ga)
+
+    def fitted_ts():
+        ts = TimeSeries(
+            freq=1, lags=[1], target_transforms=[Differences([1]), Interrupted()]
+        )
+        ts.fit_transform(
+            _update_validation_df("pandas"),
+            id_col="unique_id",
+            time_col="ds",
+            target_col="y",
+            static_features=[],
+        )
+        return ts
+
+    ts = fitted_ts()
+    ts.target_transforms[1].interrupt = True
+    new = pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]})
+    with pytest.raises(KeyboardInterrupt):
+        ts.update(new)
+    ts.target_transforms[1].interrupt = False
+    ts.update(new)
+    expected = fitted_ts()
+    expected.update(new)
+    np.testing.assert_array_equal(ts.ga.data, expected.ga.data)
