@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
@@ -5,6 +7,7 @@ from utilsforecast.losses import smape
 
 from mlforecast import MLForecast
 from mlforecast.hooks import Hook, Profiler
+from mlforecast.lag_transforms import RollingMean
 from mlforecast.utils import PredictionIntervals, generate_daily_series
 
 
@@ -72,6 +75,45 @@ def test_direct_conformal_warning_points_to_caller(series):
     with pytest.warns(UserWarning, match="near-zero scale") as caught:
         _compute_series_scales(frame, "unique_id", "ds", "y", method="mad")
     assert caught[0].filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+@pytest.mark.parametrize("stage", ["preprocess", "fit", "cross_validation"])
+def test_warnings_raised_inside_stages_point_to_the_caller(series, stage, with_hooks):
+    """The stage wrapper adds a frame on every path, with or without hooks."""
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    kwargs = {"max_horizon": 2, "horizon_features": {1: []}}
+    calls = {
+        "preprocess": lambda: fcst.preprocess(series, **kwargs),
+        "fit": lambda: fcst.fit(series, **kwargs),
+        "cross_validation": lambda: fcst.cross_validation(
+            series, n_windows=1, h=2, **kwargs
+        ),
+    }
+    with pytest.warns(UserWarning, match="has no effect") as caught:
+        calls[stage]()
+    (warning,) = [w for w in caught if "has no effect" in str(w.message)]
+    assert warning.filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+def test_pooled_validation_warning_points_to_the_caller(series, with_hooks):
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(3, global_=True)]},
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    with pytest.warns(UserWarning, match="gap-free") as caught:
+        fcst.fit(series, validate_data=False)
+    (warning,) = [w for w in caught if "gap-free" in str(w.message)]
+    assert warning.filename == __file__
 
 
 def test_stages_receive_bound_arguments(series):
@@ -187,6 +229,12 @@ def test_cv_window_receives_bound_arguments(series):
     ]
     assert [window["i_window"] for window in windows] == [0, 1]
     assert all("cutoffs" in window for window in windows)
+
+
+def test_memory_profiling_without_psutil_names_the_argument(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psutil", None)  # makes `import psutil` fail
+    with pytest.raises(ImportError, match=r"Profiler\(memory=True\) requires psutil"):
+        Profiler(memory=True)
 
 
 def test_profiler_can_record_memory(series):
