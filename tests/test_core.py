@@ -26,9 +26,9 @@ from mlforecast.lag_transforms import (
     RollingQuantile,
     RollingStd,
 )
+from mlforecast.date_features import _DUMMY_ALIASES
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import (
-    _DUMMY_FEATURE_VALUES,
     generate_daily_series,
     generate_prices_for_series,
 )
@@ -2305,11 +2305,11 @@ def test_date_feature_dummies_polars(series):
 
 
 def test_date_feature_dummies_mixed(series):
-    """Features in _DUMMY_FEATURE_VALUES are dummified; others stay ordinal."""
+    """Features in _DUMMY_ALIASES are dummified; others stay ordinal."""
     ts = TimeSeries(
         freq="D",
         lags=[1],
-        date_features=["dayofweek", "year"],  # year not in _DUMMY_FEATURE_VALUES
+        date_features=["dayofweek", "year"],  # year not in _DUMMY_ALIASES
         date_features_as_dummies=True,
     )
     result = ts.fit_transform(series, id_col="unique_id", time_col="ds", target_col="y")
@@ -2378,9 +2378,9 @@ def test_date_feature_dummies_month_values(series):
 
 
 def test_date_feature_dummies_all_supported(series):
-    """Every feature in _DUMMY_FEATURE_VALUES can be dummified without error."""
+    """Every feature in _DUMMY_ALIASES can be dummified without error."""
     # Use a series that covers all hours/minutes/seconds by overriding frequency
-    for feature in _DUMMY_FEATURE_VALUES:
+    for feature, calendar_feature in _DUMMY_ALIASES.items():
         ts = TimeSeries(
             freq="D",
             lags=[1],
@@ -2390,7 +2390,7 @@ def test_date_feature_dummies_all_supported(series):
         result = ts.fit_transform(
             series, id_col="unique_id", time_col="ds", target_col="y"
         )
-        expected_cols = [f"{feature}_{v}" for v in _DUMMY_FEATURE_VALUES[feature]]
+        expected_cols = [f"{feature}_{v}" for v in calendar_feature.values]
         for col in expected_cols:
             assert col in result.columns, f"feature={feature}: missing {col}"
 
@@ -2543,3 +2543,24 @@ def test_update_validation_polars_ns_timestamps():
         }
     )
     ts.update(update, validate_new_data=True)
+
+
+# Regression: the "weekofyear" date feature on a pandas DatetimeIndex used to
+# raise AttributeError because isocalendar() exposes the ISO week under the
+# "week" column, not "weekofyear". Both aliases must return that column.
+def test_pandas_weekofyear_alias():
+    dates = pd.date_range("2020-12-20", periods=40, freq="D")
+    df = pd.DataFrame({"unique_id": ["a"] * 40, "ds": dates, "y": np.arange(40.0)})
+
+    prep_week = TimeSeries(freq="D", date_features=["week"]).fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y"
+    )
+    prep_woy = TimeSeries(freq="D", date_features=["weekofyear"]).fit_transform(
+        df, id_col="unique_id", time_col="ds", target_col="y"
+    )
+
+    expected = dates.isocalendar()["week"].to_numpy()
+    np.testing.assert_array_equal(np.asarray(prep_woy["weekofyear"]), expected)
+    np.testing.assert_array_equal(
+        np.asarray(prep_woy["weekofyear"]), np.asarray(prep_week["week"])
+    )
