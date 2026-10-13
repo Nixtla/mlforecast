@@ -896,7 +896,8 @@ class TimeSeries:
             static_features = [
                 c
                 for c in df.columns
-                if c not in [time_col, target_col] and c not in partition_cols
+                if c not in [time_col, target_col]
+                and (c == id_col or c not in partition_cols)
             ]
         else:
             if id_col not in static_features:

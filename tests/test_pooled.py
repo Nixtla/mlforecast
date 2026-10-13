@@ -1052,6 +1052,27 @@ def test_update_ignores_static_partition_key_values(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_id_partition_key_with_default_statics(engine):
+    """An id partition key stays static, so predict and update don't need it."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    tfm = RollingMean(2, min_samples=1, global_=True, partition_by=["unique_id"])
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=1, lags=[1], lag_transforms={1: [tfm]}
+    )
+    fcst.fit(
+        _static_partition_df(engine), id_col="unique_id", time_col="ds", target_col="y"
+    )
+    assert fcst.ts.static_features_.columns[0] == "unique_id"
+    fcst.predict(h=2)
+    fcst.update(
+        _make_df(engine, {"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]})
+    )
+    fcst.predict(h=2)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_by_backup_restore(engine):
     """_backup() correctly restores partition_by state."""
     df = _make_df(
