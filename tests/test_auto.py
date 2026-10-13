@@ -263,7 +263,8 @@ def test_nonstandard_column_names(weekly_data):
     )
 
 
-def test_input_size_limits_training_rows(weekly_data):
+@pytest.mark.parametrize("reuse_cv_splits", [False, True])
+def test_input_size_limits_training_rows(weekly_data, reuse_cv_splits):
     train, _, info = weekly_data
     input_size = 50
     rows = []
@@ -277,6 +278,7 @@ def test_input_size_limits_training_rows(weekly_data):
         freq=1,
         models={"ridge": AutoModel(Ridge(), config=lambda trial: {})},  # noqa: ARG005
         init_config=lambda trial: {"lags": [1, 2, 3]},  # noqa: ARG005
+        reuse_cv_splits=reuse_cv_splits,
     )
     with patch.object(Ridge, "fit", spy):
         model.fit(
