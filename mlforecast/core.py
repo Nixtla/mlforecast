@@ -1769,6 +1769,7 @@ class TimeSeries:
             elif gcols:
                 arrays += [_ctx(c) for c in gcols]
             arrays += [_ctx(c) for c in pcols]
+            assert state.bucket_uniques is not None
             state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
         return X_row
 
@@ -2056,7 +2057,7 @@ class TimeSeries:
     def _has_ga_target_tfms(self):
         return any(
             isinstance(tfm, _BaseGroupedArrayTargetTransform)
-            for tfm in self.target_transforms
+            for tfm in self.target_transforms or ()
         )
 
     @contextmanager

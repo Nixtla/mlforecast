@@ -98,10 +98,15 @@ select = ["F", "ARG"]
 
 [tool.mypy]
 ignore_missing_imports = true
+check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = 'mlforecast.compat'
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = 'tests.*'
+check_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
