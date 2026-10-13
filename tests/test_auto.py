@@ -283,10 +283,9 @@ def test_input_size_limits_training_rows(weekly_data):
             df=train, n_windows=2, h=info.horizon, num_samples=1, input_size=input_size
         )
 
+    # one search fit: every serie keeps input_size rows minus the 3 dropped by the lags.
     # the last fit is the best model refit on the full data, which input_size doesn't cap
-    search_rows = rows[:-1]
-    assert search_rows
-    assert max(search_rows) <= train["unique_id"].nunique() * input_size
+    assert rows[:-1] == [train["unique_id"].nunique() * (input_size - 3)]
 
 
 def test_reuse_cv_splits_same_predictions(weekly_data):
