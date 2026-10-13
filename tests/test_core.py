@@ -28,7 +28,11 @@ from mlforecast.lag_transforms import (
 )
 from mlforecast.date_features import _DUMMY_ALIASES
 from mlforecast.pooled import PooledState
-from mlforecast.target_transforms import Differences, LocalStandardScaler
+from mlforecast.target_transforms import (
+    BaseTargetTransform,
+    Differences,
+    LocalStandardScaler,
+)
 from mlforecast.utils import (
     generate_daily_series,
     generate_prices_for_series,
@@ -2814,3 +2818,26 @@ def test_update_duplicate_rows_with_validation_names_series():
     )
     with pytest.raises(ValueError, match="'a'"):
         ts.update(dup, validate_new_data=True)
+
+
+def test_update_target_transform_returning_only_target():
+    class OnlyTarget(BaseTargetTransform):
+        def fit_transform(self, df):
+            return df
+
+        def update(self, df):
+            return df[[self.id_col, self.target_col]]
+
+        def inverse_transform(self, df):
+            return df
+
+    ts = TimeSeries(freq=1, lags=[1], target_transforms=[OnlyTarget()])
+    ts.fit_transform(
+        _update_validation_df("pandas"),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    ts.update(pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]}))
+    assert list(ts.last_dates) == [5, 5]

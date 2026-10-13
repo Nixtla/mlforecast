@@ -2288,10 +2288,11 @@ class TimeSeries:
         self._check_aligned_ends()
         if validate_new_data:
             self._validate_new_df(df=df)
-        ids = df[self.id_col].to_numpy()
-        times = df[self.time_col].to_numpy()
-        if ((ids[1:] == ids[:-1]) & (times[1:] == times[:-1])).any():
-            raise ValueError("Update has duplicate rows for an id and timestamp.")
+        else:
+            ids = df[self.id_col].to_numpy()
+            times = df[self.time_col].to_numpy()
+            if ((ids[1:] == ids[:-1]) & (times[1:] == times[:-1])).any():
+                raise ValueError("Update has duplicate rows for an id and timestamp.")
         if self._pooled_states:
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
@@ -2334,6 +2335,12 @@ class TimeSeries:
                 raise ValueError(
                     f"New series must include their static features: {missing}."
                 )
+        last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
+        last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
+        curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
+        last_dates = ufp.join(last_dates, curr_last_dates, on=self.id_col, how="left")
+        last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
+        last_dates = ufp.sort(last_dates, by=self.id_col)
         prev = (self.uids, self.last_dates, self.static_features_, self.ga)
         lag_snaps = self._lag_transform_snapshots()
         tfm_snaps = []
@@ -2350,14 +2357,6 @@ class TimeSeries:
                     else:
                         df = tfm.update(df)
                     values = df[self.target_col].to_numpy()
-            last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
-            last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
-            curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
-            last_dates = ufp.join(
-                last_dates, curr_last_dates, on=self.id_col, how="left"
-            )
-            last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
-            last_dates = ufp.sort(last_dates, by=self.id_col)
             self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
             self.uids = ufp.sort(sizes[self.id_col])
             self.uids = _to_native_index(self.uids, df=df)
