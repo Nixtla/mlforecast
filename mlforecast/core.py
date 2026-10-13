@@ -2286,6 +2286,8 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
+        if validate_new_data:
+            self._validate_new_df(df=df)
         ids = df[self.id_col].to_numpy()
         times = df[self.time_col].to_numpy()
         if ((ids[1:] == ids[:-1]) & (times[1:] == times[:-1])).any():
@@ -2315,8 +2317,6 @@ class TimeSeries:
                     f"`partition_by` column(s) {missing} must be provided in the "
                     "update frame."
                 )
-        if validate_new_data:
-            self._validate_new_df(df=df)
         id_counts = ufp.counts_by_id(df, self.id_col)
         try:
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
@@ -2393,7 +2393,6 @@ class TimeSeries:
         except BaseException:
             self.uids, self.last_dates, self.static_features_, self.ga = prev
             self._restore_lag_transforms(lag_snaps)
-            if tfm_snaps:
-                assert self.target_transforms is not None
-                self.target_transforms[: len(tfm_snaps)] = tfm_snaps
+            for tfm, snap in zip(self.target_transforms or [], tfm_snaps):
+                tfm.__dict__ = snap.__dict__
             raise

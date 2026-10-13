@@ -2775,3 +2775,42 @@ def test_update_interrupted_target_transform_chain_mutates_nothing():
     expected = fitted_ts()
     expected.update(new)
     np.testing.assert_array_equal(ts.ga.data, expected.ga.data)
+
+
+def test_update_failure_restores_target_transforms_in_place():
+    class Failing(LocalStandardScaler):
+        def update(self, _ga):
+            raise RuntimeError("update failed")
+
+    diffs = Differences([1])
+    tfms = (diffs, Failing())
+    ts = TimeSeries(freq=1, lags=[1], target_transforms=tfms)
+    ts.fit_transform(
+        _update_validation_df("pandas"),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    tails = copy.deepcopy(diffs.scalers_[0].tails_)
+    new = pd.DataFrame({"unique_id": ["a", "b"], "ds": [5, 5], "y": [5.0, 50.0]})
+    with pytest.raises(RuntimeError, match="update failed"):
+        ts.update(new)
+    assert ts.target_transforms[0] is diffs
+    np.testing.assert_array_equal(diffs.scalers_[0].tails_, tails)
+
+
+def test_update_duplicate_rows_with_validation_names_series():
+    ts = TimeSeries(freq=1, lags=[1])
+    ts.fit_transform(
+        _update_validation_df("pandas"),
+        id_col="unique_id",
+        time_col="ds",
+        target_col="y",
+        static_features=[],
+    )
+    dup = pd.DataFrame(
+        {"unique_id": ["a", "a", "b"], "ds": [5, 5, 5], "y": [5.0, 6.0, 50.0]}
+    )
+    with pytest.raises(ValueError, match="'a'"):
+        ts.update(dup, validate_new_data=True)
