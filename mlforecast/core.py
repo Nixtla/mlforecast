@@ -406,14 +406,28 @@ class TimeSeries:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
-    @property
-    def _dynamic_key_cols(self) -> List[str]:
+    def _key_cols(self, static: bool) -> List[str]:
         statics = self.static_features_.columns
         return _dedupe_preserve_order(
             c
-            for key in getattr(self, "_pooled_states", {})
+            for key in self._pooled_states
             for c in self._bucket_cols(key)
-            if c not in statics
+            if (c in statics) == static
+        )
+
+    @property
+    def _dynamic_key_cols(self) -> List[str]:
+        return self._key_cols(static=False)
+
+    @property
+    def _static_key_cols(self) -> List[str]:
+        return [c for c in self._key_cols(static=True) if c != self.id_col]
+
+    @property
+    def _pools_across_series(self) -> bool:
+        """Whether some pooled bucket mixes series."""
+        return any(
+            self.id_col not in self._bucket_cols(key) for key in self._pooled_states
         )
 
     def _bucket_cols(self, key) -> List[str]:
@@ -1758,7 +1772,7 @@ class TimeSeries:
         was read from it.
         """
         X_row = None
-        for key, state in getattr(self, "_pooled_states", {}).items():
+        for key, state in self._pooled_states.items():
             _, _, pcols = key
             if not pcols:
                 continue
@@ -2062,25 +2076,32 @@ class TimeSeries:
         last_dates = self.last_dates
         targ_tfms = copy.copy(self.target_transforms)
         lag_tfms = copy.deepcopy(self.transforms)
+        pooled_states = list(self._pooled_states.values())
+        bucket_ids = [state.series_bucket_id for state in pooled_states]
 
-        if idxs is not None:
-            # assign subsets
-            self.ga = self.ga.take(idxs)
-            self.uids = uids[idxs]
-            self.static_features_ = ufp.take_rows(statics, idxs)
-            self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
-            self.last_dates = last_dates[idxs]
-            if self.target_transforms is not None:
-                for i, tfm in enumerate(self.target_transforms):
-                    if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                        self.target_transforms[i] = tfm.take(idxs)
-            for name, lag_tfm in self.transforms.items():
-                if isinstance(lag_tfm, _BaseLagTransform):
-                    lag_tfm = lag_tfm.take(idxs)
-                self.transforms[name] = lag_tfm
         try:
+            if idxs is not None:
+                # assign subsets
+                self.ga = self.ga.take(idxs)
+                self.uids = uids[idxs]
+                self.static_features_ = ufp.take_rows(statics, idxs)
+                self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
+                self.last_dates = last_dates[idxs]
+                if self.target_transforms is not None:
+                    for i, tfm in enumerate(self.target_transforms):
+                        if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                            self.target_transforms[i] = tfm.take(idxs)
+                for name, lag_tfm in self.transforms.items():
+                    if isinstance(lag_tfm, _BaseLagTransform):
+                        lag_tfm = lag_tfm.take(idxs)
+                    self.transforms[name] = lag_tfm
+                for state, bids in zip(pooled_states, bucket_ids):
+                    state.set_series_bucket_id(bids[idxs])
             yield
         finally:
+            if idxs is not None:
+                for state, bids in zip(pooled_states, bucket_ids):
+                    state.set_series_bucket_id(bids)
             self.ga = ga
             self.uids = uids
             self.static_features_ = statics
@@ -2097,13 +2118,11 @@ class TimeSeries:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
     ) -> DFType:
-        if ids is not None:
-            has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
-            if has_nonlocal:
-                raise ValueError(
-                    "Cannot use `ids` with global, group, or nonlocal partition lag transforms. "
-                    "These transforms require forecasting all series together."
-                )
+        if ids is not None and self._pools_across_series:
+            raise ValueError(
+                "Cannot use `ids` with lag transforms pooled across series. "
+                "These transforms require forecasting all series together."
+            )
         self._check_aligned_ends()
         if ids is not None:
             unseen = set(ids) - set(self.uids)
