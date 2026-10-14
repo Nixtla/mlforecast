@@ -71,7 +71,7 @@ def test_automlforecast_pipeline(weekly_data):
             ),
             "ridge": auto_ridge,
         },
-        fit_config=lambda trial: {"static_features": ["unique_id"]},  # noqa: ARG005
+        fit_config=lambda trial: {"static_features": ["unique_id"]},
         num_threads=2,
     )
 
@@ -90,47 +90,47 @@ def test_automlforecast_pipeline(weekly_data):
     assert not fitted_vals.empty
     assert "h" in fitted_vals.columns
     assert not any(col.startswith("h_") for col in fitted_vals.columns)
-
-
+    
 def test_automlforecast_weight_col(weekly_data):
 
-    def custom_loss(val_df, train_df, weight_col):  # noqa: ARG001
+    def custom_loss(val_df, train_df, weight_col):
         assert weight_col in val_df
-        error = (val_df["y"] - val_df["model"]).abs()
+        error = (val_df['y'] - val_df['model']).abs()
         weights = val_df[weight_col]
         weighted_sum = sum(e * w for e, w in zip(error, weights))
         total_weight = sum(weights)
 
-        weighted_error = (
-            weighted_sum / total_weight if total_weight != 0 else float("inf")
-        )
+        weighted_error = weighted_sum / total_weight if total_weight != 0 else float('inf')
         return weighted_error
 
     train, valid, info = weekly_data
     h = info.horizon
     season_length = info.seasonality
 
-    train["weights"] = 1
+    train['weights'] = 1
 
     auto_ridge = AutoModel(
-        Ridge(), lambda trial: {"alpha": trial.suggest_float("alpha", 0.0, 1.0)}
+        Ridge(),
+        lambda trial: {
+            'alpha': trial.suggest_float('alpha', 0.0, 1.0)  
+        }
     )
 
     auto_mlf = AutoMLForecast(
         freq=1,
         season_length=season_length,
-        models={"ridge": auto_ridge},
-        fit_config=lambda trial: {"static_features": []},  # noqa: ARG005
+        models={"ridge": auto_ridge},  
+        fit_config=lambda trial: {'static_features': []}
     )
 
     auto_mlf.fit(
         df=train,
         n_windows=2,
         h=h,
-        num_samples=2,
-        loss=custom_loss,
-        weight_col="weights",
-        fitted=True,
+        num_samples=2,  
+        loss=custom_loss, 
+        weight_col='weights',  
+        fitted=True
     )
 
     preds = auto_mlf.predict(h)
@@ -149,9 +149,7 @@ def test_automlforecast_errors_and_warnings():
         ),
         "`season_length` is required",
     )
-    with pytest.warns(
-        Warning, match="`season_length` is not used when `init_config` is provided."
-    ):
+    with pytest.warns(Warning, match="`season_length` is not used when `init_config` is provided."):
         AutoMLForecast(
             freq=1,
             season_length=1,
@@ -294,19 +292,16 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     train, valid, info = weekly_data
     h = info.horizon
     n_windows = 2
-    num_samples = 5
-
-    def ridge_config(trial):  # noqa: ARG001
+    num_samples = 5 
+    
+    def ridge_config(trial):  
         return {"alpha": 1.0, "fit_intercept": True, "solver": "svd"}
-
-    def fit_config(trial):  # noqa: ARG001
+    def fit_config(trial):  
         return {"dropna": True}
-
-    def init_config(trial):  # noqa: ARG001
+    def init_config(trial):  
         return {
             "lags": [1, 2, 3],
         }
-
     ridge_auto = AutoModel(model=Ridge(), config=ridge_config)
 
     common_kwargs = dict(
@@ -337,9 +332,7 @@ def test_reuse_cv_splits_same_predictions(weekly_data):
     assert (preds_a["ridge"].to_numpy() == preds_b["ridge"].to_numpy()).all()
 
 
-def test_automlforecast_refit_false_with_grouped_expanding_mean(
-    grouped_expanding_mean_df,
-):
+def test_automlforecast_refit_false_with_grouped_expanding_mean(grouped_expanding_mean_df):
     def init_config(trial):  # noqa: ARG001
         return {
             "lags": [1],
