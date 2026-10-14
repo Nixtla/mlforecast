@@ -5526,11 +5526,10 @@ def test_predict_ids_with_id_in_pooled_key(engine, kwargs):
     "kwargs, static_features",
     [
         (dict(partition_by=["brand"]), ["brand"]),
-        (dict(partition_by=["promo"]), ["brand"]),
         (dict(global_=True, partition_by=["unique_id", "promo"]), ["brand"]),
         (dict(groupby=["unique_id"]), []),
     ],
-    ids=["local_static", "local_dynamic", "global_with_id", "groupby_id"],
+    ids=["local_static", "global_with_id", "groupby_id"],
 )
 def test_recursive_fitted_values_with_id_in_pooled_key(kwargs, static_features):
     """Pooled keys holding the id match a per-series transform with the same buckets."""
@@ -5563,6 +5562,43 @@ def test_recursive_fitted_values_with_id_in_pooled_key(kwargs, static_features):
     np.testing.assert_allclose(actual, expected)
 
 
+def test_recursive_fitted_values_with_dynamic_key_match_predict():
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    h = 2
+    train, _, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=["promo"])]},
+    )
+    fcst.fit(train, fitted=True, static_features=["brand"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        fitted = fcst.forecast_fitted_values(h=h)
+    valid_times = {
+        uid: set(g["ds"])
+        for uid, g in fcst.forecast_fitted_values().groupby("unique_id")
+    }
+    expected = []
+    for uid, group in train.groupby("unique_id"):
+        group = group.reset_index(drop=True)
+        for origin in range(len(group) - h):
+            if group["ds"][origin + 1] not in valid_times[uid]:
+                continue
+            future = group.iloc[origin + 1 : origin + 1 + h]
+            preds = fcst.predict(
+                h,
+                new_df=group.iloc[: origin + 1],
+                X_df=future[["unique_id", "ds", "promo"]],
+            )
+            expected.append(preds["HistGradientBoostingRegressor"].iloc[-1])
+    np.testing.assert_allclose(
+        fitted["HistGradientBoostingRegressor"].to_numpy(), expected
+    )
+
+
 def test_recursive_fitted_values_take_static_keys_from_model():
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
@@ -5593,16 +5629,27 @@ def test_predict_ids_restores_series_when_subsetting_fails(monkeypatch):
     )
     fcst.fit(train, static_features=["brand"])
     uids = list(fcst.ts.uids)
+    (state,) = fcst.ts._pooled_states.values()
+    bids = state.series_bucket_id.copy()
     (tfm,) = fcst.ts.transforms.values()
+    future = new.drop(columns=["y", "brand"])
 
-    def fail(_idxs):
+    def fail(*_args):
         raise RuntimeError("take failed")
 
-    monkeypatch.setattr(tfm, "take", fail)
-    with pytest.raises(RuntimeError, match="take failed"):
-        fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
+    with monkeypatch.context() as m:
+        m.setattr(type(tfm), "take", fail)
+        with pytest.raises(RuntimeError, match="take failed"):
+            fcst.predict(2, X_df=future, ids=["b"])
     assert list(fcst.ts.uids) == uids
     assert fcst.ts.ga.n_groups == len(uids)
+    np.testing.assert_array_equal(state.series_bucket_id, bids)
+
+    # fails after the bucket ids were subset
+    with pytest.raises(ValueError, match="Found missing inputs in X_df"):
+        fcst.predict(2, X_df=future[future["unique_id"] != "b"], ids=["b"])
+    assert list(fcst.ts.uids) == uids
+    np.testing.assert_array_equal(state.series_bucket_id, bids)
 
 
 def test_predict_ids_restores_bucket_ids():
