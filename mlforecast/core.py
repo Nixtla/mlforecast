@@ -406,15 +406,22 @@ class TimeSeries:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
-    @property
-    def _dynamic_key_cols(self) -> List[str]:
+    def _key_cols(self, static: bool) -> List[str]:
         statics = self.static_features_.columns
         return _dedupe_preserve_order(
             c
             for key in getattr(self, "_pooled_states", {})
             for c in self._bucket_cols(key)
-            if c not in statics
+            if (c in statics) == static
         )
+
+    @property
+    def _dynamic_key_cols(self) -> List[str]:
+        return self._key_cols(static=False)
+
+    @property
+    def _static_key_cols(self) -> List[str]:
+        return [c for c in self._key_cols(static=True) if c != self.id_col]
 
     @property
     def _pools_across_series(self) -> bool:

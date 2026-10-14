@@ -1052,7 +1052,7 @@ class MLForecast:
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train_pd.columns if c not in exclude]
-        static_keys = [c for c in self.ts._pooled_aux_cols if c in static]
+        static_keys = self.ts._static_key_cols
         dynamic_keys = self.ts._dynamic_key_cols
         model_names = list(self.models_.keys())
         # pandas-only algorithm; converts to pandas at its boundary
