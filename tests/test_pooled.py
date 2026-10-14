@@ -5483,3 +5483,140 @@ def test_static_partition_key_with_pd_na_shares_one_bucket():
         fitted.drop(columns="k"), expected_fitted.drop(columns="k")
     )
     pd.testing.assert_frame_equal(feats, expected_feats)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(partition_by=["promo"]),
+        dict(global_=True, partition_by=["unique_id", "promo"], min_samples=1),
+        dict(groupby=["unique_id"]),
+    ],
+    ids=["local", "global_with_id", "groupby_id"],
+)
+def test_predict_ids_with_id_in_pooled_key(engine, kwargs):
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, new, _ = _key_spelling_frames(engine)
+    future = (
+        new.drop(["y", "brand"])
+        if engine == "polars"
+        else new.drop(columns=["y", "brand"])
+    )
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, **kwargs)]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    full = fcst.predict(2, X_df=future)
+    sub = fcst.predict(2, X_df=future, ids=["b"])
+    if engine == "polars":
+        full = full.to_pandas()
+        sub = sub.to_pandas()
+    np.testing.assert_allclose(
+        sub["HistGradientBoostingRegressor"].to_numpy(),
+        full.loc[full.unique_id == "b", "HistGradientBoostingRegressor"].to_numpy(),
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs, static_features",
+    [
+        (dict(partition_by=["brand"]), ["brand"]),
+        (dict(partition_by=["promo"]), ["brand"]),
+        (dict(global_=True, partition_by=["unique_id", "promo"]), ["brand"]),
+        (dict(groupby=["unique_id"]), []),
+    ],
+    ids=["local_static", "local_dynamic", "global_with_id", "groupby_id"],
+)
+def test_recursive_fitted_values_with_id_in_pooled_key(kwargs, static_features):
+    """Pooled keys holding the id match a per-series transform with the same buckets."""
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, _, _ = _key_spelling_frames("pandas")
+    if "promo" not in kwargs.get("partition_by", []):
+        # buckets are the series themselves, as in the per-series transform
+        expected_tfm = RollingMean(3, min_samples=1)
+    else:
+        expected_tfm = RollingMean(3, min_samples=1, partition_by=["promo"])
+
+    def fitted_h2(tfm):
+        fcst = MLForecast(
+            models=[HistGradientBoostingRegressor(max_iter=10)],
+            freq=1,
+            lag_transforms={1: [tfm]},
+            drop_auxiliary_columns=False,
+        )
+        fcst.fit(train, fitted=True, static_features=static_features)
+        return fcst.forecast_fitted_values(h=2)[
+            "HistGradientBoostingRegressor"
+        ].to_numpy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        expected = fitted_h2(expected_tfm)
+        actual = fitted_h2(RollingMean(3, min_samples=1, **kwargs))
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_recursive_fitted_values_take_static_keys_from_model():
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, _, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=["brand"])]},
+    )
+    fcst.fit(train, fitted=True, static_features=["brand"], cache_train_df=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        expected = fcst.forecast_fitted_values(h=2, train_df=train)
+        actual = fcst.forecast_fitted_values(h=2, train_df=train.drop(columns="brand"))
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_predict_ids_restores_series_when_subsetting_fails(monkeypatch):
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, new, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, partition_by=["promo"])]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    uids = list(fcst.ts.uids)
+    (tfm,) = fcst.ts.transforms.values()
+
+    def fail(_idxs):
+        raise RuntimeError("take failed")
+
+    monkeypatch.setattr(tfm, "take", fail)
+    with pytest.raises(RuntimeError, match="take failed"):
+        fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
+    assert list(fcst.ts.uids) == uids
+    assert fcst.ts.ga.n_groups == len(uids)
+
+
+def test_predict_ids_restores_bucket_ids():
+    from mlforecast.forecast import MLForecast
+    from sklearn.linear_model import LinearRegression
+
+    train, new, _ = _key_spelling_frames("pandas")
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq=1,
+        lag_transforms={1: [RollingMean(3, partition_by=["promo"])]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    (state,) = fcst.ts._pooled_states.values()
+    bids = state.series_bucket_id.copy()
+    fcst.predict(2, X_df=new.drop(columns=["y", "brand"]), ids=["b"])
+    np.testing.assert_array_equal(state.series_bucket_id, bids)
