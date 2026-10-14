@@ -1,6 +1,7 @@
 import lightgbm
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 from sklearn.linear_model import LinearRegression
 
@@ -626,10 +627,8 @@ def test_recalibrate_step_size_param():
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
 
 
-@pytest.mark.parametrize("case", ["dynamic", "static", "renamed"])
-@pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_with_dynamic_exog(case, method):
-    """Transfer intervals work when the source model uses a dynamic exog (#721)."""
+def _dynamic_exog_setup(case="dynamic", engine="pandas"):
+    """Source model fit with a dynamic exog `u`, plus target history and future X_df."""
     rng = np.random.default_rng(0)
     n = 60
     frames = []
@@ -655,23 +654,61 @@ def test_transfer_with_dynamic_exog(case, method):
         df = df.rename(columns={"unique_id": "item", "ds": "date", "y": "sales"})
         cols = {"id_col": "item", "time_col": "date", "target_col": "sales"}
     by_id = df.groupby(cols["id_col"])
-    mlf = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    train = by_id.head(30)
+    new_df = by_id.head(50)
+    X_df = by_id.nth(list(range(50, 55)))[[cols["id_col"], cols["time_col"], "u"]]
+    if engine == "polars":
+        train, new_df, X_df = (pl.from_pandas(d) for d in (train, new_df, X_df))
+    freq = "1d" if engine == "polars" else "D"
+    mlf = MLForecast(models=LinearRegression(), freq=freq, lags=[1])
     mlf.fit(
-        by_id.head(30),
+        train,
         static_features=static_features,
         prediction_intervals=PredictionIntervals(
             n_windows=5, h=5, method="weighted_conformal_error", scale_estimator="mad"
         ),
         **cols,
     )
-    preds = mlf.predict(
-        h=5,
-        new_df=by_id.head(50),
-        X_df=by_id.nth(list(range(50, 55)))[[cols["id_col"], cols["time_col"], "u"]],
-        level=[90],
-        transfer_conformal=method,
-    )
+    return mlf, new_df, X_df
+
+
+def _check_dynamic_exog_preds(preds):
     assert len(preds) == 50
-    for side in ("lo", "hi"):
-        assert np.isfinite(preds[f"LinearRegression-{side}-90"]).all()
-    assert (preds["LinearRegression-lo-90"] <= preds["LinearRegression-hi-90"]).all()
+    lo = preds["LinearRegression-lo-90"].to_numpy()
+    hi = preds["LinearRegression-hi-90"].to_numpy()
+    assert np.isfinite(lo).all() and np.isfinite(hi).all()
+    assert (lo <= hi).all()
+
+
+@pytest.mark.parametrize("case", ["dynamic", "static", "renamed"])
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_with_dynamic_exog(case, method):
+    """Transfer intervals work when the source model uses a dynamic exog (#721)."""
+    mlf, new_df, X_df = _dynamic_exog_setup(case)
+    preds = mlf.predict(
+        h=5, new_df=new_df, X_df=X_df, level=[90], transfer_conformal=method
+    )
+    _check_dynamic_exog_preds(preds)
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "weighted_conformal"])
+def test_transfer_with_dynamic_exog_polars(method):
+    mlf, new_df, X_df = _dynamic_exog_setup(engine="polars")
+    preds = mlf.predict(
+        h=5, new_df=new_df, X_df=X_df, level=[90], transfer_conformal=method
+    )
+    assert isinstance(preds, pl.DataFrame)
+    _check_dynamic_exog_preds(preds)
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_transfer_new_df_missing_dynamic_exog_raises(method):
+    mlf, new_df, X_df = _dynamic_exog_setup()
+    with pytest.raises(ValueError, match=r"`new_df` must contain .*\['u'\]"):
+        mlf.predict(
+            h=5,
+            new_df=new_df.drop(columns="u"),
+            X_df=X_df,
+            level=[90],
+            transfer_conformal=method,
+        )

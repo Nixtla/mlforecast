@@ -124,6 +124,12 @@ def _frozen_backtest(
             *fcst.ts._dynamic_key_cols,
         ]
     )
+    missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
+    if missing:
+        raise ValueError(
+            f"`new_df` must contain the future values of {missing} "
+            "to backtest transfer intervals."
+        )
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
