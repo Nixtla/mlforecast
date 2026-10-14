@@ -410,7 +410,7 @@ class TimeSeries:
         statics = self.static_features_.columns
         return _dedupe_preserve_order(
             c
-            for key in getattr(self, "_pooled_states", {})
+            for key in self._pooled_states
             for c in self._bucket_cols(key)
             if (c in statics) == static
         )
@@ -426,8 +426,9 @@ class TimeSeries:
     @property
     def _pools_across_series(self) -> bool:
         """Whether some pooled bucket mixes series."""
-        states = getattr(self, "_pooled_states", {})
-        return any(self.id_col not in self._bucket_cols(key) for key in states)
+        return any(
+            self.id_col not in self._bucket_cols(key) for key in self._pooled_states
+        )
 
     def _bucket_cols(self, key) -> List[str]:
         """Columns whose values identify a bucket of the pooled `key`."""
@@ -1771,7 +1772,7 @@ class TimeSeries:
         was read from it.
         """
         X_row = None
-        for key, state in getattr(self, "_pooled_states", {}).items():
+        for key, state in self._pooled_states.items():
             _, _, pcols = key
             if not pcols:
                 continue
@@ -2075,7 +2076,7 @@ class TimeSeries:
         last_dates = self.last_dates
         targ_tfms = copy.copy(self.target_transforms)
         lag_tfms = copy.deepcopy(self.transforms)
-        pooled_states = list(getattr(self, "_pooled_states", {}).values())
+        pooled_states = list(self._pooled_states.values())
         bucket_ids = [state.series_bucket_id for state in pooled_states]
 
         try:
