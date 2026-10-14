@@ -5368,6 +5368,26 @@ def test_update_with_dynamic_groupby_key_matches_fit(engine):
     )
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_predict_requires_dynamic_groupby_key(engine):
+    from mlforecast.forecast import MLForecast
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    train, new, future = _key_spelling_frames(engine)
+    tfm = RollingMean(2, min_samples=1, groupby=["promo"], partition_by=["brand"])
+    fcst = MLForecast(
+        models=[HistGradientBoostingRegressor(max_iter=10)],
+        freq=1,
+        lag_transforms={1: [tfm]},
+    )
+    fcst.fit(train, static_features=["brand"])
+    fcst.update(new)
+    with pytest.raises(ValueError, match=r"X_df is required.*\['promo'\]"):
+        fcst.predict(2)
+    preds = fcst.predict(2, X_df=future)
+    assert preds.shape[0] == 2 * 3
+
+
 def _update_validation_df(engine):
     return _make_df(
         engine,
