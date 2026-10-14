@@ -155,8 +155,8 @@ single series’ lag.
 These **pooled** transforms use SQL `RANGE BETWEEN ... PRECEDING`
 semantics over actual timestamps, so they handle staggered series starts
 correctly and treat `min_samples` as a coverage threshold across the
-bucket. `partition_by` extends this to time-varying keys, whose dynamic
-columns are supplied via `X_df` at prediction time. See the [Pooled lag
+bucket. `partition_by` extends this to time-varying keys and is supplied
+via `X_df` at prediction time. See the [Pooled lag
 transforms](./pooled_lag_transforms.html) guide for a full walkthrough.
 
 ## numba-based transformations
