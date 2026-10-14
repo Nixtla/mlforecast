@@ -1040,7 +1040,7 @@ class TimeSeries:
                 row_bid, uniques = factorize(self._key_values(cols, key_df, reps=lens))
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
-                # timestamp; predict overwrites this per step from X_df
+                # timestamp; predict re-buckets every step
                 series_bid = row_bid[indptr[1:] - 1]
             needed: Set[str] = set()
             needs_rows = False
@@ -1751,7 +1751,7 @@ class TimeSeries:
         return ufp.drop_index_if_pandas(ufp.take_rows(X_df, rows))
 
     def _update_partition_assignments(self, X_df):
-        """Re-bucket every series for the current step from the dynamic columns.
+        """Re-bucket every series for the current step from its partitioned keys.
 
         Returns the sliced ``X_row`` (one row per series for this step) so
         ``_get_features_for_next_step`` can reuse it, or ``None`` when no key
