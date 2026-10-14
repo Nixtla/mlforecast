@@ -4,6 +4,7 @@ __all__ = ["MLForecast"]
 import copy
 import warnings
 import re
+from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -36,6 +37,7 @@ from mlforecast.core import (
     Models,
     TargetTransform,
     TimeSeries,
+    _dedupe_preserve_order,
     _get_model_name,
     _name_models,
     _validate_horizon_params,
@@ -115,6 +117,13 @@ def _frozen_backtest(
     # `predict(new_df=...)` persists the window's history on the instance it
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
+    # future values of dynamic inputs come from each validation window
+    future_cols = _dedupe_preserve_order(
+        [
+            *fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_),
+            *fcst.ts._dynamic_key_cols,
+        ]
+    )
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -126,7 +135,8 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for cutoffs, train, valid in splits:
-        preds = fcst.predict(h=h, new_df=train)
+        X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
+        preds = fcst.predict(h=h, new_df=train, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
         joined = ufp.join(
             valid[[id_col, time_col, target_col]],
@@ -1594,7 +1604,12 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
-            scratch = self._with_ts(self.ts._clone_cold())
+            transfer_preprocess = None
+            if spec.needs_preprocess:
+                scratch = self._with_ts(self.ts._clone_cold())
+                transfer_preprocess = partial(
+                    scratch.preprocess, **self.ts._feature_settings()
+                )
             _transfer_result = spec.fn(
                 new_df=new_df,
                 prediction_intervals=self.prediction_intervals,
@@ -1604,7 +1619,7 @@ class MLForecast:
                 target_col=self.ts.target_col,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
-                preprocess_fn=(scratch.preprocess if spec.needs_preprocess else None),
+                preprocess_fn=transfer_preprocess,
                 source_cs_df=(self._cs_df if spec.needs_source_cs else None),
                 source_scales=(
                     self._cs_source_scales_ if spec.needs_source_cs else None

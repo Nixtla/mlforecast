@@ -2,6 +2,7 @@ import lightgbm
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
 from mlforecast.lag_transforms import ExpandingMean
@@ -141,7 +142,7 @@ def _predict_transfer(
     if cache_key not in _PREDICTION_CACHE:
         _PREDICTION_CACHE[cache_key] = mlf.predict(
             h=HORIZON,
-            level=LEVELS,
+            level=[*LEVELS],
             new_df=target_train,
             transfer_conformal=method,
         )
@@ -623,3 +624,54 @@ def test_recalibrate_step_size_param():
     assert "LGBMRegressor-lo-90" in preds.columns
     assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
+
+
+@pytest.mark.parametrize("case", ["dynamic", "static", "renamed"])
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_with_dynamic_exog(case, method):
+    """Transfer intervals work when the source model uses a dynamic exog (#721)."""
+    rng = np.random.default_rng(0)
+    n = 60
+    frames = []
+    for i in range(10):
+        u = rng.normal(size=n)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "unique_id": f"s{i}",
+                    "ds": pd.date_range("2000-01-01", periods=n),
+                    "u": u,
+                    "y": np.cumsum(u) + rng.normal(size=n),
+                    "s": float(i),
+                }
+            )
+        )
+    df = pd.concat(frames, ignore_index=True)
+    cols = {"id_col": "unique_id", "time_col": "ds", "target_col": "y"}
+    static_features = ["s"] if case == "static" else []
+    if case != "static":
+        df = df.drop(columns="s")
+    if case == "renamed":
+        df = df.rename(columns={"unique_id": "item", "ds": "date", "y": "sales"})
+        cols = {"id_col": "item", "time_col": "date", "target_col": "sales"}
+    by_id = df.groupby(cols["id_col"])
+    mlf = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    mlf.fit(
+        by_id.head(30),
+        static_features=static_features,
+        prediction_intervals=PredictionIntervals(
+            n_windows=5, h=5, method="weighted_conformal_error", scale_estimator="mad"
+        ),
+        **cols,
+    )
+    preds = mlf.predict(
+        h=5,
+        new_df=by_id.head(50),
+        X_df=by_id.nth(list(range(50, 55)))[[cols["id_col"], cols["time_col"], "u"]],
+        level=[90],
+        transfer_conformal=method,
+    )
+    assert len(preds) == 50
+    for side in ("lo", "hi"):
+        assert np.isfinite(preds[f"LinearRegression-{side}-90"]).all()
+    assert (preds["LinearRegression-lo-90"] <= preds["LinearRegression-hi-90"]).all()
