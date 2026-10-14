@@ -37,7 +37,6 @@ from mlforecast.core import (
     Models,
     TargetTransform,
     TimeSeries,
-    _dedupe_preserve_order,
     _get_model_name,
     _name_models,
     _validate_horizon_params,
@@ -118,18 +117,7 @@ def _frozen_backtest(
     # runs on; use a copy so the caller's state is untouched
     fcst = fcst._with_ts()
     # future values of dynamic inputs come from each validation window
-    future_cols = _dedupe_preserve_order(
-        [
-            *fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_),
-            *fcst.ts._dynamic_key_cols,
-        ]
-    )
-    missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
-    if missing:
-        raise ValueError(
-            f"`new_df` must contain the future values of {missing} "
-            "to backtest transfer intervals."
-        )
+    future_cols = fcst.ts._future_input_cols
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -1578,6 +1566,15 @@ class MLForecast:
             transfer_conformal.validate(self.prediction_intervals)
 
             spec = get_transfer_method_spec(transfer_conformal.method)
+            # methods that read target features need their future values
+            if spec.runs_target_cv or spec.needs_preprocess:
+                new_cols = nw.from_native(new_df).columns
+                missing = [c for c in self.ts._future_input_cols if c not in new_cols]
+                if missing:
+                    raise ValueError(
+                        f"`new_df` must contain the future values of {missing} "
+                        "to compute transfer intervals."
+                    )
 
             # Run frozen-model backtest on new_df for methods that need target-domain
             # conformity scores (recalibrate, error_scaled). Uses source-trained models

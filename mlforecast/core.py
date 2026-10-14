@@ -407,6 +407,16 @@ class TimeSeries:
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
     @property
+    def _future_input_cols(self) -> List[str]:
+        """Columns whose future values must be supplied at predict time."""
+        return _dedupe_preserve_order(
+            [
+                *self._get_dynamic_exog_cols(self.features_order_),
+                *self._dynamic_key_cols,
+            ]
+        )
+
+    @property
     def _dynamic_key_cols(self) -> List[str]:
         statics = self.static_features_.columns
         return _dedupe_preserve_order(
@@ -2121,10 +2131,7 @@ class TimeSeries:
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(self._dynamic_key_cols)
+            required_future_cols = set(self._future_input_cols)
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2155,10 +2162,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(self._dynamic_key_cols)
+                required_future_cols = set(self._future_input_cols)
                 missing = sorted(required_future_cols - set(dynamics))
                 if missing:
                     raise ValueError(

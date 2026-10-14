@@ -701,7 +701,10 @@ def test_transfer_with_dynamic_exog_polars(method):
     _check_dynamic_exog_preds(preds)
 
 
-@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+@pytest.mark.parametrize(
+    "method",
+    ["recalibrate", "error_scaled", "weighted_conformal", "scale_aligned_weighted"],
+)
 def test_transfer_new_df_missing_dynamic_exog_raises(method):
     mlf, new_df, X_df = _dynamic_exog_setup()
     with pytest.raises(ValueError, match=r"`new_df` must contain .*\['u'\]"):
