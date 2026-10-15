@@ -1068,6 +1068,7 @@ def _scale_aligned_weighted_transfer(
         cs_df=source_cs_df,
         weights=wc_result.weights,
         target_scales=sa_result.target_scales,
+        target_weights=wc_result.target_weights,
     )
 
 

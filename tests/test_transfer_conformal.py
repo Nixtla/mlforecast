@@ -863,3 +863,35 @@ def test_weighted_transfer_ids_polars():
         subset.sort(["unique_id", "ds"]),
         full.filter(pl.col("unique_id") == "tgt_id_1").sort(["unique_id", "ds"]),
     )
+
+
+def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
+    from functools import partial
+
+    from mlforecast.conformal_prediction import (
+        _scale_aligned_weighted_transfer,
+        _weighted_conformal_transfer,
+    )
+
+    fcst, tgt = weighted_transfer_setup
+
+    def run(fn, method):
+        scratch = fcst._with_ts(fcst.ts._clone_cold())
+        return fn(
+            new_df=tgt,
+            prediction_intervals=fcst.prediction_intervals,
+            tc=TransferConformal(method=method),
+            model_names=list(fcst.models.keys()),
+            target_col=fcst.ts.target_col,
+            id_col=fcst.ts.id_col,
+            time_col=fcst.ts.time_col,
+            preprocess_fn=partial(scratch.preprocess, **fcst.ts._feature_settings()),
+            source_cs_df=fcst._cs_df,
+            source_scales=fcst._cs_source_scales_,
+        )
+
+    sa = run(_scale_aligned_weighted_transfer, "scale_aligned_weighted")
+    wc = run(_weighted_conformal_transfer, "weighted_conformal")
+    assert sa.target_weights is not None
+    np.testing.assert_allclose(sa.target_weights, wc.target_weights)
+    np.testing.assert_allclose(sa.weights, wc.weights)
