@@ -876,11 +876,7 @@ def _recalibrate_transfer(
 def _resolve_user_weights(
     weights: Union[np.ndarray, Callable], cs_df: DFType, feature_cols: List[str]
 ) -> np.ndarray:
-    """Evaluate ``TransferConformal.weights`` on the source calibration rows.
-
-    A callable receives the stacked ``feature_cols`` (``None`` when there are
-    none). The result needs one entry per row of ``cs_df``.
-    """
+    """Evaluate ``TransferConformal.weights`` on the rows of ``cs_df``."""
     if callable(weights):
         X = (
             np.column_stack([cs_df[c].to_numpy() for c in feature_cols]).astype(float)
@@ -920,11 +916,10 @@ def _weighted_conformal_transfer(
     original ``source_cs_df`` is returned unchanged so the caller can continue
     using source residuals with weighted quantiles.
 
-    Requires ``source_cs_df`` (the existing ``_cs_df``) and, unless
-    ``tc.weights`` is given (user weights replace the density ratio),
-    ``preprocess_fn`` (``MLForecast.preprocess``).
+    Requires ``preprocess_fn`` (``MLForecast.preprocess``) and
+    ``source_cs_df`` (the existing ``_cs_df``) to be provided.
     """
-    if source_cs_df is None:
+    if preprocess_fn is None or source_cs_df is None:
         raise ValueError(
             "transfer_conformal_method='weighted_conformal' requires the model "
             "to have been fit with a weighted_conformal method so that source "
@@ -946,12 +941,6 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
-    if preprocess_fn is None:
-        raise ValueError(
-            "transfer_conformal_method='weighted_conformal' requires the model "
-            "to have been fit with a weighted_conformal method so that source "
-            "features are stored, and preprocess_fn must be supplied."
-        )
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
 

@@ -1599,9 +1599,8 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
-            # user weights replace the density ratio, so target features need no preprocessing
             transfer_preprocess = None
-            if spec.needs_preprocess and transfer_conformal.weights is None:
+            if spec.needs_preprocess:
                 scratch = self._with_ts(self.ts._clone_cold())
                 transfer_preprocess = partial(
                     scratch.preprocess, **self.ts._feature_settings()
@@ -1651,15 +1650,10 @@ class MLForecast:
                     .unique()
                     .to_list()
                 )
-                is_transfer = (
-                    new_df is not None
-                    and transfer_conformal is not None
-                    and transfer_conformal.method != "recalibrate"
-                )
                 # weighted transfer pools the source scores for every target
                 # series, so `ids` only selects which forecasts to return
                 uses_source_scores = (
-                    is_transfer
+                    new_df is not None
                     and _transfer_result is not None
                     and _transfer_result.weights is not None
                 )
@@ -1688,6 +1682,11 @@ class MLForecast:
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
+                is_transfer = (
+                    new_df is not None
+                    and transfer_conformal is not None
+                    and transfer_conformal.method != "recalibrate"
+                )
                 if self.prediction_intervals.h == 1 and h > 1:
                     if is_transfer:
                         raise ValueError(

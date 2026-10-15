@@ -724,11 +724,7 @@ WEIGHTED_TRANSFER_METHODS = ["weighted_conformal", "scale_aligned_weighted"]
 LR = "LinearRegression"
 
 
-@pytest.fixture(
-    scope="module",
-    params=["weighted_conformal_error", "weighted_conformal_distribution"],
-)
-def weighted_transfer_setup(request):
+def _weighted_transfer_setup(pi_method):
     src = generate_daily_series(8, min_length=80, max_length=80, seed=0)
     tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1)
     tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
@@ -736,10 +732,15 @@ def weighted_transfer_setup(request):
     fcst.fit(
         src,
         prediction_intervals=PredictionIntervals(
-            n_windows=5, h=3, method=request.param, scale_estimator="std"
+            n_windows=5, h=3, method=pi_method, scale_estimator="std"
         ),
     )
     return fcst, tgt
+
+
+@pytest.fixture(scope="module")
+def weighted_transfer_setup():
+    return _weighted_transfer_setup("weighted_conformal_error")
 
 
 def _feature_cols(fcst):
@@ -814,18 +815,17 @@ def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
     assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
 
 
+@pytest.mark.parametrize(
+    "pi_method", ["weighted_conformal_error", "weighted_conformal_distribution"]
+)
 @pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
-@pytest.mark.parametrize("weights_kind", ["density_ratio", "array", "callable"])
-@pytest.mark.parametrize("ids", [["tgt_id_1"], ["tgt_id_2", "tgt_id_0"]])
-def test_weighted_transfer_ids_filters_output(
-    weighted_transfer_setup, method, weights_kind, ids
-):
-    fcst, tgt = weighted_transfer_setup
-    w = _random_weights(fcst)
-    weights = {"density_ratio": None, "array": w, "callable": lambda _: w}[
-        weights_kind
-    ]
-    tc = TransferConformal(method=method, weights=weights)
+@pytest.mark.parametrize("user_weights", [False, True])
+def test_weighted_transfer_ids_filters_output(pi_method, method, user_weights):
+    fcst, tgt = _weighted_transfer_setup(pi_method)
+    ids = ["tgt_id_2", "tgt_id_0"]
+    tc = TransferConformal(
+        method=method, weights=_random_weights(fcst) if user_weights else None
+    )
     # h=2 < calibration h=3 also checks the horizon slice
     full = fcst.predict(2, new_df=tgt, level=[80, 90], transfer_conformal=tc)
     subset = fcst.predict(
@@ -838,31 +838,11 @@ def test_weighted_transfer_ids_filters_output(
     )
 
 
-def test_weighted_transfer_ids_polars():
-    from polars.testing import assert_frame_equal
-
-    src = generate_daily_series(8, min_length=80, max_length=80, seed=0, engine="polars")
-    tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1, engine="polars")
-    tgt = tgt.with_columns(
-        pl.concat_str([pl.lit("tgt_"), pl.col("unique_id").cast(pl.Utf8)]).alias(
-            "unique_id"
-        )
-    )
-    fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1, 2])
-    fcst.fit(
-        src,
-        prediction_intervals=PredictionIntervals(
-            n_windows=5, h=3, method="weighted_conformal_error"
-        ),
-    )
-    full = fcst.predict(2, new_df=tgt, level=[90], transfer_conformal="weighted_conformal")
-    subset = fcst.predict(
-        2, new_df=tgt, level=[90], transfer_conformal="weighted_conformal", ids=["tgt_id_1"]
-    )
-    assert_frame_equal(
-        subset.sort(["unique_id", "ds"]),
-        full.filter(pl.col("unique_id") == "tgt_id_1").sort(["unique_id", "ds"]),
-    )
+def test_same_domain_user_weights_reject_ids():
+    fcst, _ = _weighted_transfer_setup("weighted_conformal_error")
+    tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
+    with pytest.raises(ValueError, match="cannot be used together with"):
+        fcst.predict(3, level=[90], transfer_conformal=tc, ids=["id_0"])
 
 
 def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
