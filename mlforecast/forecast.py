@@ -55,6 +55,7 @@ from .conformal_prediction import (
     TransferConformal,
     TransferResult,
     _add_signed_transfer_intervals,
+    _resolve_user_weights,
     get_conformal_method,
     get_transfer_method_spec,
     compute_conformity_scores,
@@ -1538,20 +1539,11 @@ class MLForecast:
             and new_df is None
             and self._cs_df is not None
         ):
-            if callable(transfer_conformal.weights):
-                model_cols = set(self.models.keys())
-                non_feat = {self.ts.id_col, self.ts.time_col, "cutoff"} | model_cols
-                feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
-                src = (
-                    np.column_stack(
-                        [self._cs_df[c].to_numpy() for c in feat_cols]
-                    ).astype(float)
-                    if feat_cols
-                    else None
-                )
-                w_arr = transfer_conformal.weights(src)
-            else:
-                w_arr = np.asarray(transfer_conformal.weights, dtype=float)
+            non_feat = {self.ts.id_col, self.ts.time_col, "cutoff", *self.models}
+            feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
+            w_arr = _resolve_user_weights(
+                transfer_conformal.weights, self._cs_df, feat_cols
+            )
             _transfer_result = TransferResult(cs_df=self._cs_df, weights=w_arr)
 
         conformity_scores = self._cs_df
@@ -1567,7 +1559,11 @@ class MLForecast:
 
             spec = get_transfer_method_spec(transfer_conformal.method)
             # methods that read target features need their future values
-            if spec.runs_target_cv or spec.needs_preprocess:
+            # user weights replace the density ratio, so no target features are read
+            uses_target_features = (
+                spec.needs_preprocess and transfer_conformal.weights is None
+            )
+            if spec.runs_target_cv or uses_target_features:
                 new_cols = nw.from_native(new_df).columns
                 missing = [c for c in self.ts._future_input_cols if c not in new_cols]
                 if missing:
@@ -1608,7 +1604,7 @@ class MLForecast:
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
             transfer_preprocess = None
-            if spec.needs_preprocess:
+            if uses_target_features:
                 scratch = self._with_ts(self.ts._clone_cold())
                 transfer_preprocess = partial(
                     scratch.preprocess, **self.ts._feature_settings()

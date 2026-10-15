@@ -715,3 +715,100 @@ def test_transfer_new_df_missing_dynamic_exog_raises(method):
             level=[90],
             transfer_conformal=method,
         )
+
+
+# ---------------------------------------------------------------------------
+# #762: weighted transfer methods
+# ---------------------------------------------------------------------------
+WEIGHTED_TRANSFER_METHODS = ["weighted_conformal", "scale_aligned_weighted"]
+LR = "LinearRegression"
+
+
+@pytest.fixture(
+    scope="module",
+    params=["weighted_conformal_error", "weighted_conformal_distribution"],
+)
+def weighted_transfer_setup(request):
+    src = generate_daily_series(8, min_length=80, max_length=80, seed=0)
+    tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    fcst.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=5, h=3, method=request.param, scale_estimator="std"
+        ),
+    )
+    return fcst, tgt
+
+
+def _feature_cols(fcst):
+    non_feat = {fcst.ts.id_col, fcst.ts.time_col, "cutoff", *fcst.models.keys()}
+    return [c for c in fcst._cs_df.columns if c not in non_feat]
+
+
+def _random_weights(fcst):
+    return np.random.default_rng(0).exponential(size=len(fcst._cs_df))
+
+
+@pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
+def test_user_weights_used_with_new_df(weighted_transfer_setup, method):
+    fcst, tgt = weighted_transfer_setup
+    auto = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal=method)
+    user = fcst.predict(
+        3,
+        new_df=tgt,
+        level=[90],
+        transfer_conformal=TransferConformal(
+            method=method, weights=_random_weights(fcst)
+        ),
+    )
+    pd.testing.assert_series_equal(auto[LR], user[LR])
+    assert not np.allclose(auto[f"{LR}-hi-90"], user[f"{LR}-hi-90"])
+
+
+def test_user_weights_length_checked(weighted_transfer_setup):
+    fcst, tgt = weighted_transfer_setup
+    bad = TransferConformal(
+        method="weighted_conformal", weights=np.ones(len(fcst._cs_df) + 1)
+    )
+    msg = "one entry per source calibration row"
+    with pytest.raises(ValueError, match=msg):
+        fcst.predict(3, level=[90], transfer_conformal=bad)
+    with pytest.raises(ValueError, match=msg):
+        fcst.predict(3, new_df=tgt, level=[90], transfer_conformal=bad)
+    w = _random_weights(fcst)
+    flat = fcst.predict(
+        3,
+        new_df=tgt,
+        level=[90],
+        transfer_conformal=TransferConformal(method="weighted_conformal", weights=w),
+    )
+    column = fcst.predict(
+        3,
+        new_df=tgt,
+        level=[90],
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=w[:, None]
+        ),
+    )
+    pd.testing.assert_frame_equal(flat, column)
+
+
+def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
+    fcst, tgt = weighted_transfer_setup
+    seen = []
+
+    def weight_fn(X):
+        seen.append(X.shape)
+        return np.ones(len(X))
+
+    fcst.predict(
+        3,
+        new_df=tgt,
+        level=[90],
+        transfer_conformal=TransferConformal(
+            method="weighted_conformal", weights=weight_fn
+        ),
+    )
+    assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
