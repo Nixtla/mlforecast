@@ -1559,11 +1559,7 @@ class MLForecast:
 
             spec = get_transfer_method_spec(transfer_conformal.method)
             # methods that read target features need their future values
-            # user weights replace the density ratio, so no target features are read
-            uses_target_features = (
-                spec.needs_preprocess and transfer_conformal.weights is None
-            )
-            if spec.runs_target_cv or uses_target_features:
+            if spec.runs_target_cv or spec.needs_preprocess:
                 new_cols = nw.from_native(new_df).columns
                 missing = [c for c in self.ts._future_input_cols if c not in new_cols]
                 if missing:
@@ -1603,8 +1599,9 @@ class MLForecast:
 
             # preprocessing `new_df` fits the TimeSeries it runs on; hand the
             # method a copy so this instance keeps its source state
+            # user weights replace the density ratio, so target features need no preprocessing
             transfer_preprocess = None
-            if uses_target_features:
+            if spec.needs_preprocess and transfer_conformal.weights is None:
                 scratch = self._with_ts(self.ts._clone_cold())
                 transfer_preprocess = partial(
                     scratch.preprocess, **self.ts._feature_settings()

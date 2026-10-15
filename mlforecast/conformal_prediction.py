@@ -920,10 +920,11 @@ def _weighted_conformal_transfer(
     original ``source_cs_df`` is returned unchanged so the caller can continue
     using source residuals with weighted quantiles.
 
-    Requires ``preprocess_fn`` (``MLForecast.preprocess``) and
-    ``source_cs_df`` (the existing ``_cs_df``) to be provided.
+    Requires ``source_cs_df`` (the existing ``_cs_df``) and, unless
+    ``tc.weights`` is given (user weights replace the density ratio),
+    ``preprocess_fn`` (``MLForecast.preprocess``).
     """
-    if source_cs_df is None or (preprocess_fn is None and tc.weights is None):
+    if source_cs_df is None:
         raise ValueError(
             "transfer_conformal_method='weighted_conformal' requires the model "
             "to have been fit with a weighted_conformal method so that source "
@@ -945,7 +946,12 @@ def _weighted_conformal_transfer(
             "or 'weighted_conformal_distribution' so that source features are stored."
         )
 
-    assert preprocess_fn is not None  # mypy: guaranteed unless user weights were given
+    if preprocess_fn is None:
+        raise ValueError(
+            "transfer_conformal_method='weighted_conformal' requires the model "
+            "to have been fit with a weighted_conformal method so that source "
+            "features are stored, and preprocess_fn must be supplied."
+        )
     tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
     tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
 

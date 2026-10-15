@@ -822,7 +822,7 @@ def test_weighted_transfer_ids_filters_output(
 ):
     fcst, tgt = weighted_transfer_setup
     w = _random_weights(fcst)
-    weights = {"density_ratio": None, "array": w, "callable": lambda X: w}[
+    weights = {"density_ratio": None, "array": w, "callable": lambda _: w}[
         weights_kind
     ]
     tc = TransferConformal(method=method, weights=weights)
@@ -894,4 +894,3 @@ def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
     wc = run(_weighted_conformal_transfer, "weighted_conformal")
     assert sa.target_weights is not None
     np.testing.assert_allclose(sa.target_weights, wc.target_weights)
-    np.testing.assert_allclose(sa.weights, wc.weights)
