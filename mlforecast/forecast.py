@@ -1654,6 +1654,18 @@ class MLForecast:
                     .unique()
                     .to_list()
                 )
+                is_transfer = (
+                    new_df is not None
+                    and transfer_conformal is not None
+                    and transfer_conformal.method != "recalibrate"
+                )
+                # weighted transfer pools the source scores for every target
+                # series, so `ids` only selects which forecasts to return
+                uses_source_scores = (
+                    is_transfer
+                    and _transfer_result is not None
+                    and _transfer_result.weights is not None
+                )
                 if ids is None:
                     active_ids = set(ts.uids)
                     if cs_ids != active_ids and new_df is None:
@@ -1662,7 +1674,7 @@ class MLForecast:
                             "than the current forecasting state. Please rerun `fit` before "
                             "requesting intervals."
                         )
-                else:
+                elif not uses_source_scores:
                     missing_ids = set(ids) - cs_ids
                     if missing_ids:
                         raise ValueError(
@@ -1679,11 +1691,6 @@ class MLForecast:
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
-                is_transfer = (
-                    new_df is not None
-                    and transfer_conformal is not None
-                    and transfer_conformal.method != "recalibrate"
-                )
                 if self.prediction_intervals.h == 1 and h > 1:
                     if is_transfer:
                         raise ValueError(
@@ -1735,7 +1742,7 @@ class MLForecast:
                         "PredictionIntervals(method='weighted_conformal_error') or "
                         "'weighted_conformal_distribution'."
                     )
-                if ids is not None:
+                if ids is not None and not uses_source_scores:
                     if _cs_weights is not None:
                         raise ValueError(
                             "TransferConformal with DRE weights cannot be used together with "

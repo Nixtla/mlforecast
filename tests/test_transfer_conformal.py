@@ -812,3 +812,54 @@ def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
         ),
     )
     assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
+
+
+@pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
+@pytest.mark.parametrize("weights_kind", ["density_ratio", "array", "callable"])
+@pytest.mark.parametrize("ids", [["tgt_id_1"], ["tgt_id_2", "tgt_id_0"]])
+def test_weighted_transfer_ids_filters_output(
+    weighted_transfer_setup, method, weights_kind, ids
+):
+    fcst, tgt = weighted_transfer_setup
+    w = _random_weights(fcst)
+    weights = {"density_ratio": None, "array": w, "callable": lambda X: w}[
+        weights_kind
+    ]
+    tc = TransferConformal(method=method, weights=weights)
+    # h=2 < calibration h=3 also checks the horizon slice
+    full = fcst.predict(2, new_df=tgt, level=[80, 90], transfer_conformal=tc)
+    subset = fcst.predict(
+        2, new_df=tgt, level=[80, 90], transfer_conformal=tc, ids=ids
+    )
+    expected = full[full["unique_id"].isin(ids)]
+    pd.testing.assert_frame_equal(
+        subset.sort_values(["unique_id", "ds"]).reset_index(drop=True),
+        expected.sort_values(["unique_id", "ds"]).reset_index(drop=True),
+    )
+
+
+def test_weighted_transfer_ids_polars():
+    from polars.testing import assert_frame_equal
+
+    src = generate_daily_series(8, min_length=80, max_length=80, seed=0, engine="polars")
+    tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1, engine="polars")
+    tgt = tgt.with_columns(
+        pl.concat_str([pl.lit("tgt_"), pl.col("unique_id").cast(pl.Utf8)]).alias(
+            "unique_id"
+        )
+    )
+    fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1, 2])
+    fcst.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=5, h=3, method="weighted_conformal_error"
+        ),
+    )
+    full = fcst.predict(2, new_df=tgt, level=[90], transfer_conformal="weighted_conformal")
+    subset = fcst.predict(
+        2, new_df=tgt, level=[90], transfer_conformal="weighted_conformal", ids=["tgt_id_1"]
+    )
+    assert_frame_equal(
+        subset.sort(["unique_id", "ds"]),
+        full.filter(pl.col("unique_id") == "tgt_id_1").sort(["unique_id", "ds"]),
+    )
