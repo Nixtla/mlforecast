@@ -653,9 +653,9 @@ def estimate_density_ratio(
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """Estimate w(x) = p_target(x) / p_source(x) for source domain points.
 
-    Trains a binary classifier (source=0, target=1) on StandardScaler-
-    normalised features and returns the odds ratio p(1|x) / p(0|x) for
-    each source point.
+    Trains a binary classifier (source=0, target=1) on mean-imputed (with
+    missing-value indicators) and StandardScaler-normalised features and
+    returns the odds ratio p(1|x) / p(0|x) for each source point.
 
     Args:
         source_features: Feature matrix for source-domain calibration points,
@@ -678,6 +678,7 @@ def estimate_density_ratio(
         a tuple ``(source_weights, target_weights)`` where target_weights has
         shape (n_target,).
     """
+    from sklearn.impute import SimpleImputer
     from sklearn.preprocessing import StandardScaler
 
     n_src = len(source_features)
@@ -690,6 +691,7 @@ def estimate_density_ratio(
     X = np.vstack([source_features, target_features])
     y = np.array([0] * n_src + [1] * n_tgt)
 
+    X = SimpleImputer(add_indicator=True).fit_transform(X)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
