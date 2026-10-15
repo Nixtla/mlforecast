@@ -425,6 +425,31 @@ def test_scale_aligned_requires_scale_estimator():
 # Transfer conformal prediction tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
+def test_weighted_transfer_with_null_features(method):
+    """Weighted transfer works when source calibration features contain nulls."""
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    src = generate_daily_series(4, min_length=20, max_length=60, seed=0)
+    tgt = generate_daily_series(4, min_length=40, max_length=40, seed=1)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    fcst = MLForecast(models=HistGradientBoostingRegressor(), freq="D", lags=[1, 30])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        fcst.fit(
+            src,
+            dropna=False,
+            prediction_intervals=PredictionIntervals(
+                n_windows=3, h=3, method="weighted_conformal_error", scale_estimator="std"
+            ),
+        )
+    assert fcst._cs_df["lag30"].isna().any()
+    preds = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal=method)
+    model = "HistGradientBoostingRegressor"
+    assert preds[[f"{model}-lo-90", f"{model}-hi-90"]].notna().all().all()
+    assert (preds[f"{model}-lo-90"] <= preds[f"{model}-hi-90"]).all()
+
+
 def test_weighted_conformal_auto_dre(weighted_conformal_setup):
     """transfer_conformal_method='weighted_conformal' + new_df uses full-feature DRE."""
     fcst, series, h, _ = weighted_conformal_setup
