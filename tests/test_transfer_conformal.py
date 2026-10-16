@@ -1,3 +1,5 @@
+import copy
+
 import lightgbm
 import numpy as np
 import pandas as pd
@@ -1038,69 +1040,32 @@ def test_source_route_scores_follow_forecast_order():
     "method",
     ["conformal_distribution", "conformal_error", "weighted_conformal_error"],
 )
-def test_source_route_matches_full_predict_with_distinct_scales(method):
-    # strongly different per-series scales expose any window/series misordering
-    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
-    src["y"] = src["y"] * np.repeat([1, 10, 100, 1000], 60)
-
-    def fit():
-        fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-        fcst.fit(
-            src,
-            prediction_intervals=PredictionIntervals(n_windows=3, h=3, method=method),
-        )
-        return fcst
-
-    def width(df):
-        df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
-        return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
-
-    ids = ["id_3", "id_1"]
-    full = width(fit().predict(3, level=[90]))
-    expected = full[full.index.get_level_values(0).isin(ids)]
-    pd.testing.assert_series_equal(
-        width(fit().predict(3, level=[90], ids=ids)), expected
-    )
-    sub = pd.concat([src[src.unique_id == i] for i in ids])
-    pd.testing.assert_series_equal(
-        width(fit().predict(3, new_df=sub, level=[90])), expected
-    )
-
-
-@pytest.mark.parametrize(
-    "method",
-    ["conformal_distribution", "conformal_error", "weighted_conformal_error"],
-)
 @pytest.mark.parametrize("h", [3, 2])
-def test_source_route_matches_full_predict_unaligned_ends(method, h):
-    # series of different lengths end at different dates, so per-series cutoffs
-    # differ: scores must still be ordered window-major
-    src = generate_daily_series(4, min_length=50, max_length=90, seed=0)
+@pytest.mark.parametrize("lengths", [(60, 60), (50, 90)])
+def test_source_route_matches_full_predict_distinct_scales(method, h, lengths):
+    # distinct per-series scales expose any window/series misordering; unequal
+    # lengths give per-series cutoffs, so scores must stay window-major
+    src = generate_daily_series(4, min_length=lengths[0], max_length=lengths[1], seed=0)
     scale = {f"id_{i}": float(10**i) for i in range(4)}
     src["y"] = src["y"] * src["unique_id"].astype(str).map(scale)
-
-    def fit():
-        fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-        fcst.fit(
-            src,
-            prediction_intervals=PredictionIntervals(n_windows=3, h=3, method=method),
-        )
-        return fcst
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    fcst.fit(
+        src, prediction_intervals=PredictionIntervals(n_windows=3, h=3, method=method)
+    )
 
     def width(df):
         df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
         return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
 
-    full = width(fit().predict(h, level=[90]))
+    def predict(**kwargs):
+        return width(copy.deepcopy(fcst).predict(h, level=[90], **kwargs))
+
+    full = predict()
     for ids in (["id_3", "id_1"], ["id_3", "id_2", "id_1", "id_0"]):
         expected = full[full.index.get_level_values(0).isin(ids)]
-        pd.testing.assert_series_equal(
-            width(fit().predict(h, level=[90], ids=ids)), expected
-        )
+        pd.testing.assert_series_equal(predict(ids=ids), expected)
         sub = pd.concat([src[src.unique_id == i] for i in ids])
-        pd.testing.assert_series_equal(
-            width(fit().predict(h, new_df=sub, level=[90])), expected
-        )
+        pd.testing.assert_series_equal(predict(new_df=sub), expected)
 
 
 def test_cross_validation_refit_false_recalibrates_each_window():
@@ -1137,11 +1102,19 @@ def test_cross_validation_refit_false_late_start_series():
         prediction_intervals=PredictionIntervals(n_windows=2, h=3),
     )
     assert cv["unique_id"].nunique() == 3
-    assert cv[[f"{LR}-lo-90", f"{LR}-hi-90"]].notna().all().all()
+    widths = (cv[f"{LR}-hi-90"] - cv[f"{LR}-lo-90"]).groupby(cv["cutoff"]).mean()
+    np.testing.assert_allclose(
+        widths.to_numpy(),
+        [4.438716616614786, 4.515740698146997, 4.747456425520044],
+        rtol=1e-6,
+    )
 
 
 def test_rule7b_mixed_recalibrate_gives_intervals_for_all(routing_setup):
     fcst, _, _, _, mixed = routing_setup
     out = fcst.predict(3, new_df=mixed, level=[90], transfer_conformal="recalibrate")
     assert out["unique_id"].nunique() == 4
-    assert out[[f"{LR}-lo-90", f"{LR}-hi-90"]].notna().all().all()
+    widths = (out[f"{LR}-hi-90"] - out[f"{LR}-lo-90"]).groupby(
+        out["unique_id"].astype(str)
+    )
+    np.testing.assert_allclose(widths.mean().to_numpy(), 5.816346849923946, rtol=1e-6)
