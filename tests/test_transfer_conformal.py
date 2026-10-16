@@ -1067,6 +1067,42 @@ def test_source_route_matches_full_predict_with_distinct_scales(method):
     )
 
 
+@pytest.mark.parametrize(
+    "method",
+    ["conformal_distribution", "conformal_error", "weighted_conformal_error"],
+)
+@pytest.mark.parametrize("h", [3, 2])
+def test_source_route_matches_full_predict_unaligned_ends(method, h):
+    # series of different lengths end at different dates, so per-series cutoffs
+    # differ: scores must still be ordered window-major
+    src = generate_daily_series(4, min_length=50, max_length=90, seed=0)
+    scale = {f"id_{i}": float(10**i) for i in range(4)}
+    src["y"] = src["y"] * src["unique_id"].astype(str).map(scale)
+
+    def fit():
+        fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+        fcst.fit(
+            src,
+            prediction_intervals=PredictionIntervals(n_windows=3, h=3, method=method),
+        )
+        return fcst
+
+    def width(df):
+        df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
+        return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
+
+    full = width(fit().predict(h, level=[90]))
+    for ids in (["id_3", "id_1"], ["id_3", "id_2", "id_1", "id_0"]):
+        expected = full[full.index.get_level_values(0).isin(ids)]
+        pd.testing.assert_series_equal(
+            width(fit().predict(h, level=[90], ids=ids)), expected
+        )
+        sub = pd.concat([src[src.unique_id == i] for i in ids])
+        pd.testing.assert_series_equal(
+            width(fit().predict(h, new_df=sub, level=[90])), expected
+        )
+
+
 def test_cross_validation_refit_false_recalibrates_each_window():
     src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
@@ -1083,3 +1119,4 @@ def test_cross_validation_refit_false_recalibrates_each_window():
     # later windows recalibrate on their own history, so widths differ per cutoff
     assert widths.nunique() == 3
     np.testing.assert_allclose(widths.to_numpy(), [4.723, 5.667, 5.245], atol=2e-3)
+

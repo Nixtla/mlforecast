@@ -1737,16 +1737,22 @@ class MLForecast:
                         .with_row_index("__pos")
                     )
                     cs_nw = nw.from_native(conformity_scores, eager_only=True)
+                    # native scores are window-major; cutoffs are per series, so
+                    # the window index comes from the row position, not the cutoff
+                    win_size = cs_nw[id_col].n_unique() * self.prediction_intervals.h
                     cs_df = (
                         cs_nw.with_row_index("__row")
-                        .with_columns(nw.col(id_col).cast(nw.String).alias("__key"))
+                        .with_columns(
+                            nw.col(id_col).cast(nw.String).alias("__key"),
+                            (nw.col("__row") // win_size).alias("__win"),
+                        )
                         .join(
                             order.rename({id_col: "__key"}),
                             on="__key",
                             how="inner",
                         )
-                        .sort("cutoff", "__pos", "__row")
-                        .drop("__pos", "__row", "__key")
+                        .sort("__win", "__pos", "__row")
+                        .drop("__pos", "__row", "__key", "__win")
                         .to_native()
                     )
                     n_series = len(order)
