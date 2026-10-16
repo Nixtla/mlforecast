@@ -1034,20 +1034,21 @@ def test_source_route_matches_full_predict_distinct_scales(method, h, lengths):
 
 
 @pytest.mark.parametrize(
-    "late_start, step_size, pi_windows, expected, rtol",
+    "late_start, step_size, pi_windows, expected, tol",
     [
-        (False, 3, 3, [4.723, 5.667, 5.245], 1e-3),
+        (False, 3, 3, [4.723, 5.667, 5.245], {"atol": 2e-3}),
         (
             True,
             15,
             2,
             [4.438716616614786, 4.515740698146997, 4.747456425520044],
-            1e-6,
+            {"rtol": 1e-6},
         ),
     ],
+    ids=["full", "late_start"],
 )
 def test_cross_validation_refit_false_recalibrates_each_window(
-    late_start, step_size, pi_windows, expected, rtol
+    late_start, step_size, pi_windows, expected, tol
 ):
     n = 3 if late_start else 4
     s = generate_daily_series(n, min_length=60, max_length=60, seed=0)
@@ -1069,7 +1070,7 @@ def test_cross_validation_refit_false_recalibrates_each_window(
     widths = (cv[f"{LR}-hi-90"] - cv[f"{LR}-lo-90"]).groupby(cv["cutoff"]).mean()
     # each window recalibrates on its own history, so widths differ per cutoff
     assert widths.nunique() == 3
-    np.testing.assert_allclose(widths.to_numpy(), expected, rtol=rtol)
+    np.testing.assert_allclose(widths.to_numpy(), expected, **tol)
 
 
 def test_rule7b_mixed_recalibrate_gives_intervals_for_all(routing_setup):
