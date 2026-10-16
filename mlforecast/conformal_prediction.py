@@ -2,7 +2,18 @@ __all__ = ["PredictionIntervals", "TransferConformal", "estimate_density_ratio"]
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 import narwhals as nw
 import numpy as np
@@ -1138,3 +1149,63 @@ def get_transfer_method_spec(method: str) -> _TransferMethodSpec:
             f"please choose one of {', '.join(_TRANSFER_METHODS.keys())}"
         )
     return _TRANSFER_METHODS[method]
+
+
+IntervalRoute = Literal["none", "source", "transfer"]
+
+
+def _resolve_interval_route(
+    *,
+    level: Optional[List[Union[int, float]]],
+    ids: Optional[Sequence[str]],
+    new_ids: Optional[Set[str]],
+    cs_ids: Optional[Set[str]],
+    transfer_conformal: Optional["TransferConformal"],
+) -> IntervalRoute:
+    """Decide where prediction intervals come from: each series' own source
+    calibration ("source"), a transfer-conformal method ("transfer") or nowhere
+    ("none"). ``new_ids``/``cs_ids`` are None when there is no new_df/calibration."""
+    # row 0: transfer conformal needs the new series
+    if transfer_conformal is not None and new_ids is None:
+        raise ValueError("`transfer_conformal` requires `new_df`.")
+    # row 2
+    if ids is not None and transfer_conformal is not None:
+        raise ValueError("`ids` cannot be combined with `transfer_conformal`.")
+    if level is None or cs_ids is None:
+        return "none"
+    # row 1: no new_df, intervals come from the fitted series
+    if new_ids is None:
+        missing = set(ids) - cs_ids if ids is not None else set()
+        if missing:
+            raise ValueError(
+                "Prediction intervals are only available for series seen during "
+                f"interval calibration. Missing ids: {missing}."
+            )
+        return "source"
+    # rows 3/4: explicit ids can only use source calibration
+    if ids is not None:
+        unseen = set(ids) - cs_ids
+        if unseen:
+            raise ValueError(
+                "Prediction intervals are only available for series seen during "
+                f"interval calibration. Missing ids: {unseen}."
+            )
+        return "source"
+    # rows 5a/5b/5c: new_df only has calibrated series
+    if new_ids <= cs_ids:
+        if transfer_conformal is None:  # 5a
+            return "source"
+        if transfer_conformal.method == "recalibrate":  # 5b
+            return "transfer"
+        raise NotImplementedError(  # 5c
+            f"transfer_conformal method '{transfer_conformal.method}' is not "
+            "supported when all `new_df` series were seen during calibration."
+        )
+    # row 6: only unseen series
+    if not (new_ids & cs_ids):
+        return "transfer"
+    # row 7: mixed seen and unseen series
+    raise NotImplementedError(
+        "Prediction intervals for a `new_df` mixing seen and unseen series are "
+        "not supported yet; split `new_df` into seen and unseen calls."
+    )
