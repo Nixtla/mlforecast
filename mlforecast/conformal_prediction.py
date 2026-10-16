@@ -2,18 +2,7 @@ __all__ = ["PredictionIntervals", "TransferConformal", "estimate_density_ratio"]
 
 import warnings
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import narwhals as nw
 import numpy as np
@@ -1151,17 +1140,14 @@ def get_transfer_method_spec(method: str) -> _TransferMethodSpec:
     return _TRANSFER_METHODS[method]
 
 
-IntervalRoute = Literal["none", "source", "transfer"]
-
-
 def _resolve_interval_route(
     *,
     level: Optional[List[Union[int, float]]],
-    ids: Optional[Sequence[str]],
-    new_ids: Optional[Set[str]],
-    cs_ids: Optional[Set[str]],
-    transfer_conformal: Optional["TransferConformal"],
-) -> IntervalRoute:
+    ids: Optional[List[str]],
+    new_ids: Optional[set],
+    cs_ids: Optional[set],
+    transfer_conformal: Optional[TransferConformal],
+) -> Literal["none", "source", "transfer"]:
     """Decide where prediction intervals come from: each series' own source
     calibration ("source"), a transfer-conformal method ("transfer") or nowhere
     ("none"). ``new_ids``/``cs_ids`` are None when there is no new_df/calibration."""
@@ -1171,8 +1157,7 @@ def _resolve_interval_route(
     # row 2
     if ids is not None and transfer_conformal is not None:
         raise ValueError("`ids` cannot be combined with `transfer_conformal`.")
-    # intervals were requested but there is no calibration to take them from
-    # (checked here, not in `predict`, so every route decision lives in one place)
+    # intervals requested for new_df but there is no calibration
     if level is not None and cs_ids is None and new_ids is not None:
         raise ValueError(
             "Prediction intervals require that the model was fit with "

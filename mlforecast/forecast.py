@@ -1522,6 +1522,12 @@ class MLForecast:
                 "If you ran preprocess after fit please run fit again."
             )
 
+        new_ts: Optional[TimeSeries] = None
+        if new_df is not None:
+            new_ts = self.ts._clone_warm(new_df)
+            ts = new_ts
+        else:
+            ts = self.ts
         # Normalize shorthand before any path.
         if isinstance(transfer_conformal, str):
             transfer_conformal = TransferConformal(method=transfer_conformal)
@@ -1537,7 +1543,6 @@ class MLForecast:
             else None
         )
         new_ids = _unique_ids(new_df) if new_df is not None else None
-        # decide where the intervals come from before doing any work
         route = _resolve_interval_route(
             level=level,
             ids=ids,
@@ -1545,14 +1550,6 @@ class MLForecast:
             cs_ids=cs_ids,
             transfer_conformal=transfer_conformal,
         )
-
-        new_ts: Optional[TimeSeries] = None
-        if new_df is not None:
-            new_ts = self.ts._clone_warm(new_df)
-            ts = new_ts
-        else:
-            ts = self.ts
-
         _transfer_result: Optional[TransferResult] = None
         conformity_scores = self._cs_df
         if route == "transfer":
@@ -1650,11 +1647,7 @@ class MLForecast:
                 warnings.warn(warn_msg, UserWarning)
             else:
                 interval_ids = ids if ids is not None else new_ids
-                if (
-                    route == "source"
-                    and interval_ids is None
-                    and cs_ids != set(ts.uids)
-                ):
+                if interval_ids is None and cs_ids != set(ts.uids):
                     raise ValueError(
                         "Prediction intervals were calibrated on a different set of series "
                         "than the current forecasting state. Please rerun `fit` before "
@@ -1670,7 +1663,7 @@ class MLForecast:
                         "to prediction intervals."
                     )
                 is_transfer = (
-                    route == "transfer"
+                    new_df is not None
                     and transfer_conformal is not None
                     and transfer_conformal.method != "recalibrate"
                 )
@@ -1726,31 +1719,25 @@ class MLForecast:
                         "'weighted_conformal_distribution'."
                     )
                 if route == "source" and interval_ids is not None:
-                    # the conformal step matches scores to forecast rows by
-                    # position (window, series, horizon): the inner join keeps
-                    # the forecast's series, ordered like the forecast
+                    # conformal matches scores to forecast rows by position:
+                    # keep the forecast's series in its order, window-major
                     id_col = ts.id_col
                     order = (
                         nw.from_native(forecasts, eager_only=True)
-                        .select(nw.col(id_col).cast(nw.String))
+                        .select(nw.col(id_col).cast(nw.String).alias("__key"))
                         .unique(maintain_order=True)
                         .with_row_index("__pos")
                     )
-                    cs_nw = nw.from_native(conformity_scores, eager_only=True)
-                    # native scores are window-major; cutoffs are per series, so
-                    # the window index comes from the row position, not the cutoff
+                    # cutoffs are per series: the window comes from row position
                     win_size = len(cs_ids) * self.prediction_intervals.h
                     cs_df = (
-                        cs_nw.with_row_index("__row")
+                        nw.from_native(conformity_scores, eager_only=True)
+                        .with_row_index("__row")
                         .with_columns(
                             nw.col(id_col).cast(nw.String).alias("__key"),
                             (nw.col("__row") // win_size).alias("__win"),
                         )
-                        .join(
-                            order.rename({id_col: "__key"}),
-                            on="__key",
-                            how="inner",
-                        )
+                        .join(order, on="__key", how="inner")
                         .sort("__win", "__pos", "__row")
                         .drop("__pos", "__row", "__key", "__win")
                         .to_native()
