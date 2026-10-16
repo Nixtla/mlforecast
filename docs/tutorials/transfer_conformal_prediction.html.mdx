@@ -575,6 +575,34 @@ plt.show()
 
 ![](./transfer_conformal_prediction_files/figure-markdown_strict/cell-15-output-1.png)
 
+## Which series get transfer intervals
+
+With `level`, the intervals you get depend on whether each series was
+seen during calibration:
+
+| Your call                                                                   | What you get                                                                                                                                                                      |
+|------------------------------------|------------------------------------|
+| No `new_df` (optionally `ids`, a subset of the trained series)              | Each series’ own intervals from calibration.                                                                                                                                      |
+| `new_df` with `ids`, all of them seen in training and present in `new_df`   | The same own intervals, only for those ids. No transfer step runs.                                                                                                                |
+| `new_df` where every series was seen in training                            | Own intervals for each series in `new_df`. Pass `transfer_conformal="recalibrate"` to recalibrate on the `new_df` history instead. Other transfer methods are not supported here. |
+| `new_df` where every series is new                                          | The transfer method (`transfer_conformal`, default `"recalibrate"`).                                                                                                              |
+| `new_df` mixing seen and new series                                         | Not supported by default: split `new_df` into a seen call and a new call. `transfer_conformal="recalibrate"` works on the mixed `new_df`.                                         |
+| `ids` that include a series not seen in training, with `new_df`             | Error naming those ids.                                                                                                                                                           |
+| `ids` with `new_df` and `level` that include a series missing from `new_df` | Error naming those ids.                                                                                                                                                           |
+| `ids` together with `transfer_conformal`                                    | Error. Pass the subset as `new_df` instead.                                                                                                                                       |
+| `transfer_conformal` without `new_df`                                       | Error: transfer needs target data.                                                                                                                                                |
+
+With `level=None`, only the last two checks apply; everything else is a
+plain forecast.
+
+**Behaviour change.** A `new_df` that only extends the history of series
+the model was trained on now gets those series’ own intervals. Before,
+it was recalibrated by default; pass `transfer_conformal="recalibrate"`
+to get that result. Also, `ids=` with a transfer method, a same-domain
+`TransferConformal(weights=...)` without `new_df`, and a mixed seen/new
+`new_df` with `level` now raise instead of returning intervals.
+`TransferConformal(weights=...)` with `new_df` keeps working.
+
 ## Summary
 
 The table and charts above show how each transfer method calibrates
