@@ -657,6 +657,10 @@ def _dynamic_exog_setup(case="dynamic", engine="pandas"):
     train = by_id.head(30)
     new_df = by_id.head(50)
     X_df = by_id.nth(list(range(50, 55)))[[cols["id_col"], cols["time_col"], "u"]]
+    # series unseen during calibration, so transfer methods apply
+    new_df, X_df = new_df.copy(), X_df.copy()
+    for d in (new_df, X_df):
+        d[cols["id_col"]] = "t_" + d[cols["id_col"]].astype(str)
     if engine == "polars":
         train, new_df, X_df = (pl.from_pandas(d) for d in (train, new_df, X_df))
     freq = "1d" if engine == "polars" else "D"
@@ -775,8 +779,6 @@ def test_user_weights_length_checked(weighted_transfer_setup):
     )
     msg = "one entry per source calibration row"
     with pytest.raises(ValueError, match=msg):
-        fcst.predict(3, level=[90], transfer_conformal=bad)
-    with pytest.raises(ValueError, match=msg):
         fcst.predict(3, new_df=tgt, level=[90], transfer_conformal=bad)
     w = _random_weights(fcst)
     flat = fcst.predict(
@@ -820,28 +822,21 @@ def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
 )
 @pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
 @pytest.mark.parametrize("user_weights", [False, True])
-def test_weighted_transfer_ids_filters_output(pi_method, method, user_weights):
+def test_weighted_transfer_rejects_ids(pi_method, method, user_weights):
     fcst, tgt = _weighted_transfer_setup(pi_method)
-    ids = ["tgt_id_2", "tgt_id_0"]
     tc = TransferConformal(
         method=method, weights=_random_weights(fcst) if user_weights else None
     )
-    # h=2 < calibration h=3 also checks the horizon slice
-    full = fcst.predict(2, new_df=tgt, level=[80, 90], transfer_conformal=tc)
-    subset = fcst.predict(
-        2, new_df=tgt, level=[80, 90], transfer_conformal=tc, ids=ids
-    )
-    expected = full[full["unique_id"].isin(ids)]
-    pd.testing.assert_frame_equal(
-        subset.sort_values(["unique_id", "ds"]).reset_index(drop=True),
-        expected.sort_values(["unique_id", "ds"]).reset_index(drop=True),
-    )
+    with pytest.raises(ValueError, match="transfer_conformal"):
+        fcst.predict(
+            2, new_df=tgt, level=[80, 90], transfer_conformal=tc, ids=["tgt_id_0"]
+        )
 
 
 def test_same_domain_user_weights_reject_ids():
     fcst, _ = _weighted_transfer_setup("weighted_conformal_error")
     tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
-    with pytest.raises(ValueError, match="cannot be used together with"):
+    with pytest.raises(ValueError, match="new_df"):
         fcst.predict(3, level=[90], transfer_conformal=tc, ids=["id_0"])
 
 
@@ -874,3 +869,131 @@ def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
     wc = run(_weighted_conformal_transfer, "weighted_conformal")
     assert sa.target_weights is not None
     np.testing.assert_allclose(sa.target_weights, wc.target_weights)
+
+
+# ---------------------------------------------------------------------------
+# routing (#795)
+# ---------------------------------------------------------------------------
+def _sorted(df):
+    df = df.sort_values(["unique_id", "ds"]).reset_index(drop=True)
+    return df.astype({"unique_id": str})
+
+
+def _routing_fit(src, freq="D"):
+    fcst = MLForecast(models=LinearRegression(), freq=freq, lags=[1, 2])
+    fcst.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=3, method="weighted_conformal_error", scale_estimator="std"
+        ),
+    )
+    return fcst
+
+
+@pytest.fixture
+def routing_setup():
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    tgt = generate_daily_series(2, min_length=40, max_length=40, seed=1)
+    tgt["unique_id"] = ("tgt_" + tgt["unique_id"].astype(str)).astype("category")
+    seen = src[src.unique_id.isin(["id_0", "id_1"])]
+    mixed = pd.concat([seen, tgt])
+    mixed["unique_id"] = mixed["unique_id"].astype("category")
+    return _routing_fit(src), src, tgt, seen, mixed
+
+
+def test_rule5a_matches_own_source(routing_setup):
+    fcst, _, _, seen, _ = routing_setup
+    base = fcst.predict(3, level=[90], ids=["id_0", "id_1"])
+    out = fcst.predict(3, new_df=seen, level=[90])
+    pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
+
+
+def test_rule5a_subset_reordered(routing_setup):
+    fcst, src, _, _, _ = routing_setup
+    base = fcst.predict(3, level=[90], ids=["id_1", "id_3"])
+    new_df = pd.concat([src[src.unique_id == "id_3"], src[src.unique_id == "id_1"]])
+    out = fcst.predict(3, new_df=new_df, level=[90])
+    pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
+
+
+def test_rule5a_polars_short_h():
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    src_pl = pl.from_pandas(src.astype({"unique_id": str}))
+    fcst = _routing_fit(src_pl, freq="1d")
+    base = fcst.predict(2, level=[90], ids=["id_0", "id_1"])
+    seen = src_pl.filter(pl.col("unique_id").is_in(["id_0", "id_1"]))
+    out = fcst.predict(2, new_df=seen, level=[90])
+    cols = ["unique_id", "ds"]
+    from polars.testing import assert_frame_equal
+
+    assert_frame_equal(out.sort(cols), base.sort(cols))
+
+
+def test_rule5b_recalibrate_honoured(routing_setup):
+    fcst, src, _, seen, _ = routing_setup
+    base = fcst.predict(3, level=[90], ids=["id_0", "id_1"])
+    out = fcst.predict(3, new_df=seen, level=[90], transfer_conformal="recalibrate")
+    renamed = seen.copy()
+    renamed["unique_id"] = "r_" + renamed["unique_id"].astype(str)
+    ref = _routing_fit(src).predict(
+        3, new_df=renamed, level=[90], transfer_conformal="recalibrate"
+    )
+    cols = [f"{LR}-lo-90", f"{LR}-hi-90"]
+    np.testing.assert_allclose(_sorted(out)[cols], _sorted(ref)[cols])
+    width = lambda d: (d[f"{LR}-hi-90"] - d[f"{LR}-lo-90"]).to_numpy()
+    assert not np.allclose(width(_sorted(out)), width(_sorted(base)))
+
+
+def test_rule5c_not_implemented(routing_setup):
+    fcst, _, _, seen, _ = routing_setup
+    with pytest.raises(NotImplementedError):
+        fcst.predict(3, new_df=seen, level=[90], transfer_conformal="scale_aligned")
+
+
+def test_rule3_ids_seen_in_mixed(routing_setup):
+    fcst, _, _, _, mixed = routing_setup
+    base = fcst.predict(3, level=[90], ids=["id_0"])
+    out = fcst.predict(3, new_df=mixed, level=[90], ids=["id_0"])
+    pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
+
+
+def test_rule4_ids_unseen(routing_setup):
+    fcst, _, _, _, mixed = routing_setup
+    with pytest.raises(ValueError, match="tgt_id_0"):
+        fcst.predict(3, new_df=mixed, level=[90], ids=["tgt_id_0"])
+    out = fcst.predict(3, new_df=mixed, ids=["tgt_id_0"])
+    assert set(out["unique_id"]) == {"tgt_id_0"}
+
+
+def test_rule7_mixed_not_implemented(routing_setup):
+    fcst, _, _, _, mixed = routing_setup
+    with pytest.raises(NotImplementedError):
+        fcst.predict(3, new_df=mixed, level=[90])
+    assert fcst.predict(3, new_df=mixed)["unique_id"].nunique() == 4
+
+
+@pytest.mark.parametrize(
+    "method", ["scale_aligned", "error_scaled", "recalibrate", "weighted_conformal"]
+)
+def test_issue_795_repro(routing_setup, method):
+    fcst, _, tgt, _, _ = routing_setup
+    with pytest.raises(ValueError, match="transfer_conformal"):
+        fcst.predict(
+            3, new_df=tgt, level=[90], ids=["tgt_id_0"], transfer_conformal=method
+        )
+
+
+def test_rule0_tc_without_new_df(routing_setup):
+    fcst = routing_setup[0]
+    tc = TransferConformal(
+        method="weighted_conformal", weights=np.ones(len(fcst._cs_df))
+    )
+    with pytest.raises(ValueError, match="new_df"):
+        fcst.predict(3, level=[90], transfer_conformal=tc)
+
+
+def test_repeat_transfer_call_is_stable(routing_setup):
+    fcst, _, tgt, _, _ = routing_setup
+    first = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
+    second = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
+    pd.testing.assert_frame_equal(first, second)
