@@ -1494,7 +1494,7 @@ class MLForecast:
                 - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``).
                 - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.
 
-                Applies to series in ``new_df`` that were not seen during calibration. If every series in ``new_df`` was seen, intervals come from each series' own source calibration unless ``'recalibrate'`` is passed; other methods raise ``NotImplementedError``. A ``new_df`` mixing seen and unseen series with ``level`` raises ``NotImplementedError``. Requires ``new_df``.
+                Applies to series in ``new_df`` that were not seen during calibration. If every series in ``new_df`` was seen, intervals come from each series' own source calibration unless ``'recalibrate'`` is passed; other methods raise ``NotImplementedError``. A ``new_df`` mixing seen and unseen series with ``level`` raises ``NotImplementedError`` unless ``'recalibrate'`` is passed, which works for mixed ``new_df``. Requires ``new_df``.
 
                 Defaults to ``None`` (``'recalibrate'`` for unseen series).
 
