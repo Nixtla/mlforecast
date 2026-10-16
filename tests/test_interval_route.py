@@ -71,9 +71,6 @@ def test_row7_mixed():
     assert route(level=None, new_ids={"a", "x"}) == "none"
     with pytest.raises(NotImplementedError, match="recalibrate"):
         route(new_ids={"a", "x"}, tc=TC("scale_aligned"))
-
-
-def test_row7b_mixed_recalibrate():
     assert route(new_ids={"a", "x"}, tc=TC("recalibrate")) == "transfer"
 
 

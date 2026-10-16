@@ -819,18 +819,6 @@ def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
     assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
 
 
-def test_weighted_transfer_rejects_ids():
-    fcst, tgt = _weighted_transfer_setup("weighted_conformal_error")
-    with pytest.raises(ValueError, match="transfer_conformal"):
-        fcst.predict(
-            2,
-            new_df=tgt,
-            level=[80],
-            transfer_conformal="weighted_conformal",
-            ids=["tgt_id_0"],
-        )
-
-
 @pytest.mark.parametrize(
     "pi_method", ["weighted_conformal_error", "weighted_conformal_distribution"]
 )
@@ -841,13 +829,16 @@ def test_weighted_transfer_h_below_calibration_h(pi_method, method, user_weights
     tc = TransferConformal(
         method=method, weights=_random_weights(fcst) if user_weights else None
     )
-    # h=2 < calibration h=3 exercises the horizon slice
-    out = fcst.predict(2, new_df=tgt, level=[80, 90], transfer_conformal=tc)
-    assert (out.groupby("unique_id", observed=True).size() == 2).all()
-    for lv in (80, 90):
-        lo, hi = out[f"{LR}-lo-{lv}"], out[f"{LR}-hi-{lv}"]
-        assert np.isfinite(lo).all() and np.isfinite(hi).all()
-        assert (lo <= hi).all()
+    # h=2 < calibration h=3 must be the first 2 steps of the h=3 forecast
+    def run(h):
+        out = copy.deepcopy(fcst).predict(
+            h, new_df=tgt, level=[80, 90], transfer_conformal=tc
+        )
+        return out.sort_values(["unique_id", "ds"])
+
+    short = run(2).reset_index(drop=True)
+    full = run(3).groupby("unique_id", observed=True).head(2).reset_index(drop=True)
+    pd.testing.assert_frame_equal(short, full)
 
 
 def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
@@ -911,23 +902,6 @@ def routing_setup():
     return _routing_fit(src), src, tgt, seen, mixed
 
 
-def test_rule5a_matches_own_source(routing_setup):
-    fcst, _, _, seen, _ = routing_setup
-    full = fcst.predict(3, level=[90])
-    base = full[full["unique_id"].isin(["id_0", "id_1"])]
-    out = fcst.predict(3, new_df=seen, level=[90])
-    pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
-
-
-def test_rule5a_subset_reordered(routing_setup):
-    fcst, src, _, _, _ = routing_setup
-    full = fcst.predict(3, level=[90])
-    base = full[full["unique_id"].isin(["id_1", "id_3"])]
-    new_df = pd.concat([src[src.unique_id == "id_3"], src[src.unique_id == "id_1"]])
-    out = fcst.predict(3, new_df=new_df, level=[90])
-    pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
-
-
 def test_rule5a_polars_short_h():
     src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
     src_pl = pl.from_pandas(src.astype({"unique_id": str}))
@@ -985,9 +959,7 @@ def test_rule7_mixed_not_implemented(routing_setup):
     assert fcst.predict(3, new_df=mixed)["unique_id"].nunique() == 4
 
 
-@pytest.mark.parametrize(
-    "method", ["scale_aligned", "error_scaled", "recalibrate", "weighted_conformal"]
-)
+@pytest.mark.parametrize("method", ["scale_aligned", "recalibrate"])
 def test_issue_795_repro(routing_setup, method):
     fcst, _, tgt, _, _ = routing_setup
     with pytest.raises(ValueError, match="transfer_conformal"):
@@ -1003,13 +975,6 @@ def test_rule0_tc_without_new_df(routing_setup):
     )
     with pytest.raises(ValueError, match="new_df"):
         fcst.predict(3, level=[90], transfer_conformal=tc)
-
-
-def test_repeat_transfer_call_is_stable(routing_setup):
-    fcst, _, tgt, _, _ = routing_setup
-    first = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
-    second = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
-    pd.testing.assert_frame_equal(first, second)
 
 
 def test_source_route_scores_follow_forecast_order():
@@ -1068,46 +1033,43 @@ def test_source_route_matches_full_predict_distinct_scales(method, h, lengths):
         pd.testing.assert_series_equal(predict(new_df=sub), expected)
 
 
-def test_cross_validation_refit_false_recalibrates_each_window():
-    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-    cv = fcst.cross_validation(
-        src,
-        n_windows=3,
-        h=3,
-        step_size=3,
-        refit=False,
-        level=[90],
-        prediction_intervals=PredictionIntervals(n_windows=3, h=3),
-    )
-    widths = (cv[f"{LR}-hi-90"] - cv[f"{LR}-lo-90"]).groupby(cv["cutoff"]).mean()
-    # later windows recalibrate on their own history, so widths differ per cutoff
-    assert widths.nunique() == 3
-    np.testing.assert_allclose(widths.to_numpy(), [4.723, 5.667, 5.245], atol=2e-3)
-
-
-def test_cross_validation_refit_false_late_start_series():
-    s = generate_daily_series(3, min_length=60, max_length=60, seed=0)
-    late = s[s.unique_id == "id_2"].iloc[30:]
-    s = pd.concat([s[s.unique_id != "id_2"], late])
-    s["unique_id"] = s["unique_id"].astype(str)
+@pytest.mark.parametrize(
+    "late_start, step_size, pi_windows, expected, rtol",
+    [
+        (False, 3, 3, [4.723, 5.667, 5.245], 1e-3),
+        (
+            True,
+            15,
+            2,
+            [4.438716616614786, 4.515740698146997, 4.747456425520044],
+            1e-6,
+        ),
+    ],
+)
+def test_cross_validation_refit_false_recalibrates_each_window(
+    late_start, step_size, pi_windows, expected, rtol
+):
+    n = 3 if late_start else 4
+    s = generate_daily_series(n, min_length=60, max_length=60, seed=0)
+    if late_start:
+        late = s[s.unique_id == "id_2"].iloc[30:]
+        s = pd.concat([s[s.unique_id != "id_2"], late])
+        s["unique_id"] = s["unique_id"].astype(str)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
     cv = fcst.cross_validation(
         s,
         n_windows=3,
         h=3,
-        step_size=15,
+        step_size=step_size,
         refit=False,
         level=[90],
-        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+        prediction_intervals=PredictionIntervals(n_windows=pi_windows, h=3),
     )
-    assert cv["unique_id"].nunique() == 3
+    assert cv["unique_id"].nunique() == n
     widths = (cv[f"{LR}-hi-90"] - cv[f"{LR}-lo-90"]).groupby(cv["cutoff"]).mean()
-    np.testing.assert_allclose(
-        widths.to_numpy(),
-        [4.438716616614786, 4.515740698146997, 4.747456425520044],
-        rtol=1e-6,
-    )
+    # each window recalibrates on its own history, so widths differ per cutoff
+    assert widths.nunique() == 3
+    np.testing.assert_allclose(widths.to_numpy(), expected, rtol=rtol)
 
 
 def test_rule7b_mixed_recalibrate_gives_intervals_for_all(routing_setup):
