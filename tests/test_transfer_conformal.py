@@ -1120,3 +1120,28 @@ def test_cross_validation_refit_false_recalibrates_each_window():
     assert widths.nunique() == 3
     np.testing.assert_allclose(widths.to_numpy(), [4.723, 5.667, 5.245], atol=2e-3)
 
+
+def test_cross_validation_refit_false_late_start_series():
+    s = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    late = s[s.unique_id == "id_2"].iloc[30:]
+    s = pd.concat([s[s.unique_id != "id_2"], late])
+    s["unique_id"] = s["unique_id"].astype(str)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    cv = fcst.cross_validation(
+        s,
+        n_windows=3,
+        h=3,
+        step_size=15,
+        refit=False,
+        level=[90],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+    assert cv["unique_id"].nunique() == 3
+    assert cv[[f"{LR}-lo-90", f"{LR}-hi-90"]].notna().all().all()
+
+
+def test_rule7b_mixed_recalibrate_gives_intervals_for_all(routing_setup):
+    fcst, _, _, _, mixed = routing_setup
+    out = fcst.predict(3, new_df=mixed, level=[90], transfer_conformal="recalibrate")
+    assert out["unique_id"].nunique() == 4
+    assert out[[f"{LR}-lo-90", f"{LR}-hi-90"]].notna().all().all()

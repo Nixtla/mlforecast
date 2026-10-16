@@ -1204,12 +1204,14 @@ def _resolve_interval_route(
                 "`ids` must be present in `new_df`."
             )
         return "source"
-    # rows 5a/5b/5c: new_df only has calibrated series
+    # row 5b/7b: recalibrate replaces all scores with target backtest scores,
+    # so it works whether the series were seen or not
+    if transfer_conformal is not None and transfer_conformal.method == "recalibrate":
+        return "transfer"
+    # rows 5a/5c: new_df only has calibrated series
     if new_ids <= cs_ids:
         if transfer_conformal is None:  # 5a
             return "source"
-        if transfer_conformal.method == "recalibrate":  # 5b
-            return "transfer"
         raise NotImplementedError(  # 5c
             f"transfer_conformal method '{transfer_conformal.method}' is not "
             "supported when all `new_df` series were seen during calibration."
@@ -1220,5 +1222,6 @@ def _resolve_interval_route(
     # row 7: mixed seen and unseen series
     raise NotImplementedError(
         "Prediction intervals for a `new_df` mixing seen and unseen series are "
-        "not supported yet; split `new_df` into seen and unseen calls."
+        "not supported yet; split `new_df` into seen and unseen calls, or use "
+        '`transfer_conformal="recalibrate"`, which works for mixed `new_df`.'
     )
