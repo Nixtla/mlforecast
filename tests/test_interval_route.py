@@ -72,8 +72,20 @@ def test_row7_mixed():
 
 
 def test_no_calibration():
-    assert route(cs_ids=None, new_ids={"a"}) == "none"
+    assert route(cs_ids=None) == "none"
 
 
 def test_ids_as_array():
     assert route(ids=np.array(["a"])) == "source"
+
+
+def test_level_new_df_without_calibration():
+    with pytest.raises(ValueError, match="Prediction intervals require"):
+        route(cs_ids=None, new_ids={"a"})
+    assert route(level=None, cs_ids=None, new_ids={"a"}) == "none"
+
+
+def test_row3_seen_id_not_in_new_df():
+    with pytest.raises(ValueError, match="not in `new_df`"):
+        route(ids=["a"], new_ids={"b"})
+    assert route(level=None, ids=["a"], new_ids={"b"}) == "none"

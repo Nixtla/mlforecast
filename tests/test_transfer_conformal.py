@@ -911,14 +911,16 @@ def routing_setup():
 
 def test_rule5a_matches_own_source(routing_setup):
     fcst, _, _, seen, _ = routing_setup
-    base = fcst.predict(3, level=[90], ids=["id_0", "id_1"])
+    full = fcst.predict(3, level=[90])
+    base = full[full["unique_id"].isin(["id_0", "id_1"])]
     out = fcst.predict(3, new_df=seen, level=[90])
     pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
 
 
 def test_rule5a_subset_reordered(routing_setup):
     fcst, src, _, _, _ = routing_setup
-    base = fcst.predict(3, level=[90], ids=["id_1", "id_3"])
+    full = fcst.predict(3, level=[90])
+    base = full[full["unique_id"].isin(["id_1", "id_3"])]
     new_df = pd.concat([src[src.unique_id == "id_3"], src[src.unique_id == "id_1"]])
     out = fcst.predict(3, new_df=new_df, level=[90])
     pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
@@ -960,7 +962,8 @@ def test_rule5c_not_implemented(routing_setup):
 
 def test_rule3_ids_seen_in_mixed(routing_setup):
     fcst, _, _, _, mixed = routing_setup
-    base = fcst.predict(3, level=[90], ids=["id_0"])
+    full = fcst.predict(3, level=[90])
+    base = full[full["unique_id"] == "id_0"]
     out = fcst.predict(3, new_df=mixed, level=[90], ids=["id_0"])
     pd.testing.assert_frame_equal(_sorted(out), _sorted(base))
 
@@ -1019,7 +1022,8 @@ def test_source_route_scores_follow_forecast_order():
         df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
         return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
 
-    base = width(_routing_fit(src).predict(3, level=[90], ids=["a", "b"]))
+    full = width(_routing_fit(src).predict(3, level=[90]))
+    base = full[full.index.get_level_values(0).isin(["a", "b"])]
     sub = src[src["unique_id"].isin(["a", "b"])].astype({"unique_id": str})
     pd.testing.assert_series_equal(
         width(_routing_fit(src).predict(3, new_df=sub, level=[90])), base
@@ -1028,3 +1032,54 @@ def test_source_route_scores_follow_forecast_order():
         width(_routing_fit(src).predict(3, new_df=sub, level=[90], ids=["a", "b"])),
         base,
     )
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["conformal_distribution", "conformal_error", "weighted_conformal_error"],
+)
+def test_source_route_matches_full_predict_with_distinct_scales(method):
+    # strongly different per-series scales expose any window/series misordering
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    src["y"] = src["y"] * np.repeat([1, 10, 100, 1000], 60)
+
+    def fit():
+        fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+        fcst.fit(
+            src,
+            prediction_intervals=PredictionIntervals(n_windows=3, h=3, method=method),
+        )
+        return fcst
+
+    def width(df):
+        df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
+        return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
+
+    ids = ["id_3", "id_1"]
+    full = width(fit().predict(3, level=[90]))
+    expected = full[full.index.get_level_values(0).isin(ids)]
+    pd.testing.assert_series_equal(
+        width(fit().predict(3, level=[90], ids=ids)), expected
+    )
+    sub = pd.concat([src[src.unique_id == i] for i in ids])
+    pd.testing.assert_series_equal(
+        width(fit().predict(3, new_df=sub, level=[90])), expected
+    )
+
+
+def test_cross_validation_refit_false_recalibrates_each_window():
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    cv = fcst.cross_validation(
+        src,
+        n_windows=3,
+        h=3,
+        step_size=3,
+        refit=False,
+        level=[90],
+        prediction_intervals=PredictionIntervals(n_windows=3, h=3),
+    )
+    widths = (cv[f"{LR}-hi-90"] - cv[f"{LR}-lo-90"]).groupby(cv["cutoff"]).mean()
+    # later windows recalibrate on their own history, so widths differ per cutoff
+    assert widths.nunique() == 3
+    np.testing.assert_allclose(widths.to_numpy(), [4.723, 5.667, 5.245], atol=2e-3)

@@ -1485,7 +1485,7 @@ class MLForecast:
             new_df (pandas or polars DataFrame, optional): Series data of new observations for which forecasts are to be generated. This dataframe should have the same structure as the one used to fit the model, including any features and time series data. If `new_df` is not None, the method will generate forecasts for the new observations and, on success, the instance continues from them: `update` and later `predict` calls see this history instead of the one the model was fit on. Defaults to None.
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
-            ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Cannot be combined with `transfer_conformal`. When `level` is given with `new_df`, every id must have source calibration scores. Defaults to None.
+            ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Cannot be combined with `transfer_conformal`. With `new_df`, the ids must also be present in `new_df`; when `level` is given they must also have source calibration scores. Defaults to None.
             transfer_conformal (str or TransferConformal, optional): Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:
 
                 - ``'recalibrate'``: Re-runs cross-validation on ``new_df`` and replaces source calibration scores with target scores. No special fit requirements.
@@ -1545,11 +1545,6 @@ class MLForecast:
             cs_ids=cs_ids,
             transfer_conformal=transfer_conformal,
         )
-        if route == "none" and level is not None and new_df is not None:
-            raise ValueError(
-                "Transfer-learning prediction intervals require that the model was "
-                "fit with `prediction_intervals=PredictionIntervals(...)`."
-            )
 
         new_ts: Optional[TimeSeries] = None
         if new_df is not None:
@@ -1654,11 +1649,7 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                interval_ids = (
-                    ids
-                    if ids is not None
-                    else (list(new_ids) if new_ids is not None else None)
-                )
+                interval_ids = ids if ids is not None else new_ids
                 if (
                     route == "source"
                     and interval_ids is None
@@ -1679,7 +1670,7 @@ class MLForecast:
                         "to prediction intervals."
                     )
                 is_transfer = (
-                    new_df is not None
+                    route == "transfer"
                     and transfer_conformal is not None
                     and transfer_conformal.method != "recalibrate"
                 )
@@ -1735,19 +1726,17 @@ class MLForecast:
                         "'weighted_conformal_distribution'."
                     )
                 if route == "source" and interval_ids is not None:
-                    ids_mask = ufp.is_in(conformity_scores[ts.id_col], interval_ids)
-                    cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
                     # the conformal step matches scores to forecast rows by
-                    # position, so put the series in the forecast's order
+                    # position (window, series, horizon): the inner join keeps
+                    # the forecast's series, ordered like the forecast
                     id_col = ts.id_col
-                    order = nw.from_native(
+                    order = (
                         nw.from_native(forecasts, eager_only=True)
                         .select(nw.col(id_col).cast(nw.String))
                         .unique(maintain_order=True)
                         .with_row_index("__pos")
-                        .to_native()
                     )
-                    cs_nw = nw.from_native(cs_df, eager_only=True)
+                    cs_nw = nw.from_native(conformity_scores, eager_only=True)
                     cs_df = (
                         cs_nw.with_row_index("__row")
                         .with_columns(nw.col(id_col).cast(nw.String).alias("__key"))
@@ -1756,11 +1745,11 @@ class MLForecast:
                             on="__key",
                             how="inner",
                         )
-                        .sort("__pos", "__row")
+                        .sort("cutoff", "__pos", "__row")
                         .drop("__pos", "__row", "__key")
                         .to_native()
                     )
-                    n_series = len(interval_ids)
+                    n_series = len(order)
                 else:
                     cs_df = conformity_scores
                     if is_transfer:
@@ -2010,6 +1999,8 @@ class MLForecast:
                 new_df=train if not should_fit else None,
                 level=level,
                 X_df=X_df,
+                # keep recalibrating on each window's history (pre-routing default)
+                transfer_conformal="recalibrate" if not should_fit else None,
             )
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(

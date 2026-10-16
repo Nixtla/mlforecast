@@ -1171,6 +1171,13 @@ def _resolve_interval_route(
     # row 2
     if ids is not None and transfer_conformal is not None:
         raise ValueError("`ids` cannot be combined with `transfer_conformal`.")
+    # intervals were requested but there is no calibration to take them from
+    # (checked here, not in `predict`, so every route decision lives in one place)
+    if level is not None and cs_ids is None and new_ids is not None:
+        raise ValueError(
+            "Prediction intervals require that the model was fit with "
+            "`prediction_intervals=PredictionIntervals(...)`."
+        )
     if level is None or cs_ids is None:
         return "none"
     # row 1: no new_df, intervals come from the fitted series
@@ -1189,6 +1196,12 @@ def _resolve_interval_route(
             raise ValueError(
                 "Prediction intervals are only available for series seen during "
                 f"interval calibration. Missing ids: {unseen}."
+            )
+        absent = set(ids) - new_ids
+        if absent:
+            raise ValueError(
+                f"`ids` {absent} are not in `new_df`; with `new_df` and `level`, "
+                "`ids` must be present in `new_df`."
             )
         return "source"
     # rows 5a/5b/5c: new_df only has calibrated series
