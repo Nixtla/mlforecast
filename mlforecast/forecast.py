@@ -55,7 +55,7 @@ from .conformal_prediction import (
     TransferConformal,
     TransferResult,
     _add_signed_transfer_intervals,
-    _resolve_user_weights,
+    _resolve_interval_route,
     get_conformal_method,
     get_transfer_method_spec,
     compute_conformity_scores,
@@ -1485,7 +1485,7 @@ class MLForecast:
             new_df (pandas or polars DataFrame, optional): Series data of new observations for which forecasts are to be generated. This dataframe should have the same structure as the one used to fit the model, including any features and time series data. If `new_df` is not None, the method will generate forecasts for the new observations and, on success, the instance continues from them: `update` and later `predict` calls see this history instead of the one the model was fit on. Defaults to None.
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
-            ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Defaults to None.
+            ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Cannot be combined with `transfer_conformal`. With `new_df`, the ids must also be present in `new_df`; when `level` is given they must also have source calibration scores. Defaults to None.
             transfer_conformal (str or TransferConformal, optional): Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:
 
                 - ``'recalibrate'``: Re-runs cross-validation on ``new_df`` and replaces source calibration scores with target scores. No special fit requirements.
@@ -1494,7 +1494,9 @@ class MLForecast:
                 - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``).
                 - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.
 
-                Defaults to ``None`` (equivalent to ``'recalibrate'`` when ``new_df`` and ``level`` are both provided).
+                Applies to series in ``new_df`` that were not seen during calibration. If every series in ``new_df`` was seen, intervals come from each series' own source calibration unless ``'recalibrate'`` is passed; other methods raise ``NotImplementedError``. A ``new_df`` mixing seen and unseen series with ``level`` raises ``NotImplementedError`` unless ``'recalibrate'`` is passed, which works for mixed ``new_df``. Requires ``new_df``.
+
+                Defaults to ``None`` (``'recalibrate'`` for unseen series).
 
         Returns:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
@@ -1530,29 +1532,28 @@ class MLForecast:
         if isinstance(transfer_conformal, str):
             transfer_conformal = TransferConformal(method=transfer_conformal)
 
-        # Same-domain user-supplied weights (no new_df): replaces old covariate_shift_weights.
-        _transfer_result: Optional[TransferResult] = None
-        if (
-            transfer_conformal is not None
-            and transfer_conformal.weights is not None
-            and level is not None
-            and new_df is None
-            and self._cs_df is not None
-        ):
-            non_feat = {self.ts.id_col, self.ts.time_col, "cutoff", *self.models}
-            feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
-            w_arr = _resolve_user_weights(
-                transfer_conformal.weights, self._cs_df, feat_cols
+        def _unique_ids(df):
+            return set(
+                nw.from_native(df, eager_only=True)[self.ts.id_col].unique().to_list()
             )
-            _transfer_result = TransferResult(cs_df=self._cs_df, weights=w_arr)
 
+        cs_ids = (
+            _unique_ids(self._cs_df)
+            if level is not None and self._cs_df is not None
+            else None
+        )
+        new_ids = _unique_ids(new_df) if new_df is not None else None
+        route = _resolve_interval_route(
+            level=level,
+            ids=ids,
+            new_ids=new_ids,
+            cs_ids=cs_ids,
+            transfer_conformal=transfer_conformal,
+        )
+        _transfer_result: Optional[TransferResult] = None
         conformity_scores = self._cs_df
-        if new_df is not None and level is not None:
-            if self._cs_df is None or self.prediction_intervals is None:
-                raise ValueError(
-                    "Transfer-learning prediction intervals require that the model was "
-                    "fit with `prediction_intervals=PredictionIntervals(...)`."
-                )
+        if route == "transfer":
+            assert self.prediction_intervals is not None  # calibration exists
             if transfer_conformal is None:
                 transfer_conformal = TransferConformal()
             transfer_conformal.validate(self.prediction_intervals)
@@ -1645,34 +1646,13 @@ class MLForecast:
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                cs_ids = set(
-                    nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
-                    .unique()
-                    .to_list()
-                )
-                # weighted transfer pools the source scores for every target
-                # series, so `ids` only selects which forecasts to return
-                uses_source_scores = (
-                    new_df is not None
-                    and _transfer_result is not None
-                    and _transfer_result.weights is not None
-                )
-                if ids is None:
-                    active_ids = set(ts.uids)
-                    if cs_ids != active_ids and new_df is None:
-                        raise ValueError(
-                            "Prediction intervals were calibrated on a different set of series "
-                            "than the current forecasting state. Please rerun `fit` before "
-                            "requesting intervals."
-                        )
-                elif not uses_source_scores:
-                    missing_ids = set(ids) - cs_ids
-                    if missing_ids:
-                        raise ValueError(
-                            "Prediction intervals are only available for series seen during "
-                            "interval calibration. Missing ids: "
-                            f"{missing_ids}."
-                        )
+                interval_ids = ids if ids is not None else new_ids
+                if interval_ids is None and cs_ids != set(ts.uids):
+                    raise ValueError(
+                        "Prediction intervals were calibrated on a different set of series "
+                        "than the current forecasting state. Please rerun `fit` before "
+                        "requesting intervals."
+                    )
                 if (self.prediction_intervals.h != 1) and (
                     self.prediction_intervals.h < h
                 ):
@@ -1738,16 +1718,31 @@ class MLForecast:
                         "PredictionIntervals(method='weighted_conformal_error') or "
                         "'weighted_conformal_distribution'."
                     )
-                if ids is not None and not uses_source_scores:
-                    if _cs_weights is not None:
-                        raise ValueError(
-                            "TransferConformal with DRE weights cannot be used together with "
-                            "ids= filtering: the weights array aligns with the full calibration "
-                            "set and would misalign after id-based filtering."
+                if route == "source" and interval_ids is not None:
+                    # conformal matches scores to forecast rows by position:
+                    # keep the forecast's series in its order, window-major
+                    id_col = ts.id_col
+                    order = (
+                        nw.from_native(forecasts, eager_only=True)
+                        .select(nw.col(id_col).cast(nw.String).alias("__key"))
+                        .unique(maintain_order=True)
+                        .with_row_index("__pos")
+                    )
+                    # cutoffs are per series: the window comes from row position
+                    win_size = len(cs_ids) * self.prediction_intervals.h
+                    cs_df = (
+                        nw.from_native(conformity_scores, eager_only=True)
+                        .with_row_index("__row")
+                        .with_columns(
+                            nw.col(id_col).cast(nw.String).alias("__key"),
+                            (nw.col("__row") // win_size).alias("__win"),
                         )
-                    ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
-                    cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
-                    n_series = len(ids)
+                        .join(order, on="__key", how="inner")
+                        .sort("__win", "__pos", "__row")
+                        .drop("__pos", "__row", "__key", "__win")
+                        .to_native()
+                    )
+                    n_series = len(order)
                 else:
                     cs_df = conformity_scores
                     if is_transfer:
@@ -1997,6 +1992,8 @@ class MLForecast:
                 new_df=train if not should_fit else None,
                 level=level,
                 X_df=X_df,
+                # keep recalibrating on each window's history (pre-routing default)
+                transfer_conformal="recalibrate" if not should_fit else None,
             )
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(

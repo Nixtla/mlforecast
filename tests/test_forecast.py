@@ -2481,7 +2481,7 @@ def test_transfer_learning_intervals_no_prediction_intervals_raises():
     fcst.fit(train_ab)
 
     with pytest.raises(
-        ValueError, match="Transfer-learning prediction intervals require"
+        ValueError, match="Prediction intervals require that the model was fit"
     ):
         fcst.predict(h=5, level=[80], new_df=train_ef)
 
