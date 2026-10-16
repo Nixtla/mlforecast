@@ -1531,7 +1531,11 @@ class MLForecast:
                 nw.from_native(df, eager_only=True)[self.ts.id_col].unique().to_list()
             )
 
-        cs_ids = _unique_ids(self._cs_df) if self._cs_df is not None else None
+        cs_ids = (
+            _unique_ids(self._cs_df)
+            if level is not None and self._cs_df is not None
+            else None
+        )
         new_ids = _unique_ids(new_df) if new_df is not None else None
         # decide where the intervals come from before doing any work
         route = _resolve_interval_route(
@@ -1733,6 +1737,29 @@ class MLForecast:
                 if route == "source" and interval_ids is not None:
                     ids_mask = ufp.is_in(conformity_scores[ts.id_col], interval_ids)
                     cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
+                    # the conformal step matches scores to forecast rows by
+                    # position, so put the series in the forecast's order
+                    id_col = ts.id_col
+                    order = nw.from_native(
+                        nw.from_native(forecasts, eager_only=True)
+                        .select(nw.col(id_col).cast(nw.String))
+                        .unique(maintain_order=True)
+                        .with_row_index("__pos")
+                        .to_native()
+                    )
+                    cs_nw = nw.from_native(cs_df, eager_only=True)
+                    cs_df = (
+                        cs_nw.with_row_index("__row")
+                        .with_columns(nw.col(id_col).cast(nw.String).alias("__key"))
+                        .join(
+                            order.rename({id_col: "__key"}),
+                            on="__key",
+                            how="inner",
+                        )
+                        .sort("__pos", "__row")
+                        .drop("__pos", "__row", "__key")
+                        .to_native()
+                    )
                     n_series = len(interval_ids)
                 else:
                     cs_df = conformity_scores

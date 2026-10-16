@@ -817,27 +817,35 @@ def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
     assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
 
 
+def test_weighted_transfer_rejects_ids():
+    fcst, tgt = _weighted_transfer_setup("weighted_conformal_error")
+    with pytest.raises(ValueError, match="transfer_conformal"):
+        fcst.predict(
+            2,
+            new_df=tgt,
+            level=[80],
+            transfer_conformal="weighted_conformal",
+            ids=["tgt_id_0"],
+        )
+
+
 @pytest.mark.parametrize(
     "pi_method", ["weighted_conformal_error", "weighted_conformal_distribution"]
 )
 @pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
 @pytest.mark.parametrize("user_weights", [False, True])
-def test_weighted_transfer_rejects_ids(pi_method, method, user_weights):
+def test_weighted_transfer_h_below_calibration_h(pi_method, method, user_weights):
     fcst, tgt = _weighted_transfer_setup(pi_method)
     tc = TransferConformal(
         method=method, weights=_random_weights(fcst) if user_weights else None
     )
-    with pytest.raises(ValueError, match="transfer_conformal"):
-        fcst.predict(
-            2, new_df=tgt, level=[80, 90], transfer_conformal=tc, ids=["tgt_id_0"]
-        )
-
-
-def test_same_domain_user_weights_reject_ids():
-    fcst, _ = _weighted_transfer_setup("weighted_conformal_error")
-    tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
-    with pytest.raises(ValueError, match="new_df"):
-        fcst.predict(3, level=[90], transfer_conformal=tc, ids=["id_0"])
+    # h=2 < calibration h=3 exercises the horizon slice
+    out = fcst.predict(2, new_df=tgt, level=[80, 90], transfer_conformal=tc)
+    assert (out.groupby("unique_id", observed=True).size() == 2).all()
+    for lv in (80, 90):
+        lo, hi = out[f"{LR}-lo-{lv}"], out[f"{LR}-hi-{lv}"]
+        assert np.isfinite(lo).all() and np.isfinite(hi).all()
+        assert (lo <= hi).all()
 
 
 def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
@@ -997,3 +1005,26 @@ def test_repeat_transfer_call_is_stable(routing_setup):
     first = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
     second = fcst.predict(3, new_df=tgt, level=[90], transfer_conformal="scale_aligned")
     pd.testing.assert_frame_equal(first, second)
+
+
+def test_source_route_scores_follow_forecast_order():
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    names = {"id_0": "b", "id_1": "a", "id_2": "d", "id_3": "c"}
+    src["unique_id"] = pd.Categorical(
+        src["unique_id"].astype(str).map(names), categories=["b", "a", "d", "c"]
+    )
+    src["y"] = src["y"] * np.repeat([1, 10, 100, 1000], 60)
+
+    def width(df):
+        df = df.astype({"unique_id": str}).set_index(["unique_id", "ds"]).sort_index()
+        return df[f"{LR}-hi-90"] - df[f"{LR}-lo-90"]
+
+    base = width(_routing_fit(src).predict(3, level=[90], ids=["a", "b"]))
+    sub = src[src["unique_id"].isin(["a", "b"])].astype({"unique_id": str})
+    pd.testing.assert_series_equal(
+        width(_routing_fit(src).predict(3, new_df=sub, level=[90])), base
+    )
+    pd.testing.assert_series_equal(
+        width(_routing_fit(src).predict(3, new_df=sub, level=[90], ids=["a", "b"])),
+        base,
+    )
