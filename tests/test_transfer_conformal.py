@@ -894,6 +894,14 @@ def test_transfer_chained_after_transfer_without_conformal_raises(
         fcst.transfer(tgt).transfer(tgt, conformal="recalibrate")
 
 
+def test_transferred_predict_rejects_transfer_conformal(weighted_transfer_setup):
+    fcst, tgt = weighted_transfer_setup
+    transferred = fcst.transfer(tgt, conformal="weighted_conformal")
+    tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
+    with pytest.raises(ValueError, match=r"transfer\(df, conformal=\.\.\.\)"):
+        transferred.predict(3, level=[80], transfer_conformal=tc)
+
+
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_save_load(weighted_transfer_setup, method, tmp_path):
     fcst, tgt = weighted_transfer_setup

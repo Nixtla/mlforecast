@@ -1627,14 +1627,18 @@ class MLForecast:
                 "This model has no conformity scores for its series. Create it with "
                 "`transfer(df, conformal=...)` to compute prediction intervals."
             )
+        if transfer_conformal is not None and self._transfer_ is not None:
+            raise ValueError(
+                "This model's conformity scores were already adapted by `transfer`. "
+                "Pass `transfer_conformal` as `transfer(df, conformal=...)` instead."
+            )
         if isinstance(transfer_conformal, str):
             transfer_conformal = TransferConformal(method=transfer_conformal)
 
         transfer_result = self._transfer_
         # Same-domain user-supplied weights: replaces old covariate_shift_weights.
         if (
-            transfer_result is None
-            and transfer_conformal is not None
+            transfer_conformal is not None
             and transfer_conformal.weights is not None
             and level is not None
             and self._cs_df is not None
