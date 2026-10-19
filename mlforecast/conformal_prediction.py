@@ -60,12 +60,11 @@ _VALID_TRANSFER_METHODS = (
 
 @dataclass
 class TransferConformal:
-    """Predict-time configuration for transfer conformal prediction.
+    """Configuration for transfer conformal prediction.
 
-    Pass to ``MLForecast.predict(transfer_conformal=...)`` instead of the
-    removed flat kwargs ``transfer_conformal_method``, ``covariate_shift_weights``,
-    and ``dre_estimator``.  A plain string is shorthand for
-    ``TransferConformal(method=<str>)``.
+    Pass to ``MLForecast.transfer(conformal=...)``, or with ``weights`` to
+    ``MLForecast.predict(transfer_conformal=...)``. A plain string is shorthand
+    for ``TransferConformal(method=<str>)``.
     """
 
     method: str = "recalibrate"
@@ -798,12 +797,7 @@ class _TransferMethodSpec:
 
 @dataclass
 class TransferResult:
-    """Return value from transfer conformal functions.
-
-    Replaces the side-channel pattern where transfer functions mutated
-    ``PredictionIntervals`` attributes.  ``predict()`` consumes this as a
-    local variable — no instance state, no ``finally`` reset needed.
-    """
+    """Return value from transfer conformal functions."""
 
     cs_df: DFType
     weights: Optional[np.ndarray] = None
