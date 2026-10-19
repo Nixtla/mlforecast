@@ -149,8 +149,17 @@ test_fail(lambda: generate_prices_for_series(series), contains='equal ends')
 ### `PredictionIntervals`
 
 ```python
-PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', scale_estimator=None)
+PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', transfer=None)
 ```
 
 Class for storing prediction intervals metadata information.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`n_windows` | <code>[int](#int)</code> | Number of cross validation windows used to compute the conformity scores. Defaults to 2. | <code>2</code>
+`h` | <code>[int](#int)</code> | Forecast horizon of each cross validation window. Defaults to 1. | <code>1</code>
+`method` | <code>[str](#str)</code> | ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'. | <code>'conformal_distribution'</code>
+`transfer` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | How to adapt the intervals to the series of `MLForecast.transfer`. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Runs a frozen-model backtest on the transferred series and uses its scores instead of the source ones. - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on the transferred series. - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest.<br/>Defaults to None (no prediction intervals for transferred series). | <code>None</code>
 

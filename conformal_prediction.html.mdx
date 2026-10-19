@@ -9,60 +9,38 @@ title: Conformal Prediction
 ### `PredictionIntervals`
 
 ```python
-PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', scale_estimator=None)
+PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', transfer=None)
 ```
 
 Class for storing prediction intervals metadata information.
-
-
-### `TransferConformal`
-
-```python
-TransferConformal(method='recalibrate', dre_estimator='logistic', weights=None, n_windows=None, step_size=None, cv=5, clip_quantile=0.99)
-```
-
-Configuration for transfer conformal prediction.
-
-Pass to ``MLForecast.transfer(conformal=...)``. A plain string is shorthand
-for ``TransferConformal(method=<str>)``.
-
-#### `TransferConformal.validate`
-
-```python
-validate(pi)
-```
-
-Cross-validate against the fitted PredictionIntervals config.
-
-
-### `estimate_density_ratio`
-
-```python
-estimate_density_ratio(source_features, target_features, estimator='logistic', cv=5, clip_quantile=0.99, return_target_weights=False)
-```
-
-Estimate w(x) = p_target(x) / p_source(x) for source domain points.
-
-Trains a binary classifier (source=0, target=1) on StandardScaler-
-normalised features and returns the odds ratio p(1|x) / p(0|x) for
-each source point.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`source_features` | <code>[ndarray](#numpy.ndarray)</code> | Feature matrix for source-domain calibration points, shape (n_source, n_features). | *required*
-`target_features` | <code>[ndarray](#numpy.ndarray)</code> | Feature matrix for target-domain points, shape (n_target, n_features). | *required*
-`estimator` | <code>[str](#str)</code> | ``"logistic"`` (default) or ``"gradient_boosting"``. | <code>'logistic'</code>
-`cv` | <code>[int](#int)</code> | Number of stratified K-fold splits for cross-fitting (``cv >= 2``). Source weights are computed from out-of-fold predictions, reducing overfitting from in-sample scoring. ``cv=0`` or ``cv=1`` uses the original in-sample behavior. Defaults to 5. | <code>5</code>
-`clip_quantile` | <code>[Optional](#typing.Optional)[[float](#float)]</code> | Clip source weights above this quantile of the computed weights to prevent extreme values. ``None`` disables clipping. Defaults to 0.99. | <code>0.99</code>
-`return_target_weights` | <code>[bool](#bool)</code> | If ``True``, also return per-target-row weights (averaged across fold models when ``cv >= 2``). Defaults to ``False``. | <code>False</code>
+`n_windows` | <code>[int](#int)</code> | Number of cross validation windows used to compute the conformity scores. Defaults to 2. | <code>2</code>
+`h` | <code>[int](#int)</code> | Forecast horizon of each cross validation window. Defaults to 1. | <code>1</code>
+`method` | <code>[str](#str)</code> | ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'. | <code>'conformal_distribution'</code>
+`transfer` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | How to adapt the intervals to the series of `MLForecast.transfer`. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Runs a frozen-model backtest on the transferred series and uses its scores instead of the source ones. - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on the transferred series. - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest.<br/>Defaults to None (no prediction intervals for transferred series). | <code>None</code>
 
-**Returns:**
 
-Type | Description
----- | -----------
-<code>[Union](#typing.Union)[[ndarray](#numpy.ndarray), [Tuple](#typing.Tuple)[[ndarray](#numpy.ndarray), [ndarray](#numpy.ndarray)]]</code> | np.ndarray of shape (n_source,) if ``return_target_weights=False``, else
-<code>[Union](#typing.Union)[[ndarray](#numpy.ndarray), [Tuple](#typing.Tuple)[[ndarray](#numpy.ndarray), [ndarray](#numpy.ndarray)]]</code> | a tuple ``(source_weights, target_weights)`` where target_weights has
-<code>[Union](#typing.Union)[[ndarray](#numpy.ndarray), [Tuple](#typing.Tuple)[[ndarray](#numpy.ndarray), [ndarray](#numpy.ndarray)]]</code> | shape (n_target,).
+### `TransferConformal`
+
+```python
+TransferConformal(method='recalibrate', n_windows=None, step_size=None, scale_estimator='mad')
+```
+
+Configuration for adapting the prediction intervals to transferred series.
+
+Pass to ``PredictionIntervals(transfer=...)``. A plain string is shorthand
+for ``TransferConformal(method=<str>)``.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`method` | <code>[str](#str)</code> | ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'. | <code>'recalibrate'</code>
+`n_windows` | <code>[int](#int)</code> | Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``. | <code>None</code>
+`step_size` | <code>[int](#int)</code> | Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1. | <code>None</code>
+`scale_estimator` | <code>[str](#str)</code> | Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'. | <code>'mad'</code>
 

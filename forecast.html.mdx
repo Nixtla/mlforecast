@@ -153,17 +153,18 @@ Type | Description
 #### `MLForecast.transfer`
 
 ```python
-transfer(df, conformal=None)
+transfer(df)
 ```
 
 Forecaster that uses the trained models to continue the series in `df`.
+
+If the model was fit with `PredictionIntervals(transfer=...)`, the conformity scores are adapted to `df` so that the result can compute prediction intervals.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `df` | <code>pandas or polars DataFrame</code> | Series data to continue from. Should have the same structure as the one used to fit the model, including any features. | *required*
-`conformal` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | Strategy for adapting the conformity scores to `df`, required to compute prediction intervals with the result. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Runs a frozen-model backtest on ``df`` and uses its scores instead of the source ones. No special fit requirements. - ``'error_scaled'``: Scales source residuals by the ratio of target to source prediction-error spread, estimated via a frozen-model backtest on ``df``. No special fit requirements beyond ``prediction_intervals``. - ``'scale_aligned'``: Zero-shot — scales source residuals by the ratio of target to source y-history scale without a backtest. Requires the source model to have been fit with ``PredictionIntervals(scale_estimator='mad'|'std')``. - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``). - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.<br/>Defaults to None (no prediction intervals). | <code>None</code>
 
 **Returns:**
 
