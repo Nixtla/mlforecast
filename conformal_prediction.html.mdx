@@ -21,12 +21,11 @@ Class for storing prediction intervals metadata information.
 TransferConformal(method='recalibrate', dre_estimator='logistic', weights=None, n_windows=None, step_size=None, cv=5, clip_quantile=0.99)
 ```
 
-Predict-time configuration for transfer conformal prediction.
+Configuration for transfer conformal prediction.
 
-Pass to ``MLForecast.predict(transfer_conformal=...)`` instead of the
-removed flat kwargs ``transfer_conformal_method``, ``covariate_shift_weights``,
-and ``dre_estimator``.  A plain string is shorthand for
-``TransferConformal(method=<str>)``.
+Pass to ``MLForecast.transfer(conformal=...)``, or with ``weights`` to
+``MLForecast.predict(transfer_conformal=...)``. A plain string is shorthand
+for ``TransferConformal(method=<str>)``.
 
 #### `TransferConformal.validate`
 

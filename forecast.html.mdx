@@ -150,13 +150,36 @@ Type | Description
 ---- | -----------
 <code>[DFType](#utilsforecast.compat.DFType)</code> | pandas or polars DataFrame: DataFrame with expected ids and future times missing in `X_df`
 
+#### `MLForecast.transfer`
+
+```python
+transfer(df, conformal=None)
+```
+
+Forecaster that uses the trained models to continue the series in `df`.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`df` | <code>pandas or polars DataFrame</code> | Series data to continue from. Should have the same structure as the one used to fit the model, including any features. | *required*
+`conformal` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | Strategy for adapting the conformity scores to `df`, required to compute prediction intervals with the result. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Runs a frozen-model backtest on ``df`` and uses its scores instead of the source ones. No special fit requirements. - ``'error_scaled'``: Scales source residuals by the ratio of target to source prediction-error spread, estimated via a frozen-model backtest on ``df``. No special fit requirements beyond ``prediction_intervals``. - ``'scale_aligned'``: Zero-shot — scales source residuals by the ratio of target to source y-history scale without a backtest. Requires the source model to have been fit with ``PredictionIntervals(scale_estimator='mad'|'std')``. - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``). - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.<br/>Defaults to None (no prediction intervals). | <code>None</code>
+
+**Returns:**
+
+Name | Type | Description
+---- | ---- | -----------
+`MLForecast` | <code>[MLForecast](#mlforecast.forecast.MLForecast)</code> | Forecast object for the series in `df` that shares the trained models. This instance is not modified.
+
 #### `MLForecast.predict`
 
 ```python
-predict(h, before_predict_callback=None, after_predict_callback=None, new_df=None, level=None, X_df=None, ids=None, transfer_conformal=None)
+predict(h, before_predict_callback=None, after_predict_callback=None, level=None, X_df=None, ids=None, transfer_conformal=None)
 ```
 
 Compute the predictions for the next `h` steps.
+
+To forecast other series with the trained models use `transfer`.
 
 **Parameters:**
 
@@ -165,11 +188,10 @@ Name | Type | Description | Default
 `h` | <code>[int](#int)</code> | Number of periods to predict. | *required*
 `before_predict_callback` | <code>[callable](#callable)</code> | Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
 `after_predict_callback` | <code>[callable](#callable)</code> | Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None. | <code>None</code>
-`new_df` | <code>pandas or polars DataFrame</code> | Series data of new observations for which forecasts are to be generated. This dataframe should have the same structure as the one used to fit the model, including any features and time series data. If `new_df` is not None, the method will generate forecasts for the new observations and, on success, the instance continues from them: `update` and later `predict` calls see this history instead of the one the model was fit on. Defaults to None. | <code>None</code>
 `level` | <code>list of ints or floats</code> | Confidence levels between 0 and 100 for prediction intervals. Defaults to None. | <code>None</code>
 `X_df` | <code>pandas or polars DataFrame</code> | Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None. | <code>None</code>
 `ids` | <code>list of str</code> | List with subset of ids seen during training for which the forecasts should be computed. Defaults to None. | <code>None</code>
-`transfer_conformal` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | Strategy for adapting source conformal scores to the target domain when both ``new_df`` and ``level`` are provided. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Re-runs cross-validation on ``new_df`` and replaces source calibration scores with target scores. No special fit requirements. - ``'error_scaled'``: Scales source residuals by the ratio of target to source prediction-error standard deviation, estimated via CV on ``new_df``. No special fit requirements beyond ``prediction_intervals``. - ``'scale_aligned'``: Zero-shot — scales source residuals by the ratio of target to source y-history variance without running CV. Requires the source model to have been fit with ``PredictionIntervals(scale_estimator='mad'|'std')``. - ``'scale_aligned_weighted'``: Combines scale alignment with density-ratio reweighting (DRE). Requires both ``scale_estimator`` at fit time and a weighted conformal method (``weighted_conformal_error`` or ``weighted_conformal_distribution``). - ``'weighted_conformal'``: Reweights source residuals via density-ratio estimation using model covariates. Requires the source model to have been fit with ``PredictionIntervals(method='weighted_conformal_error'|'weighted_conformal_distribution')`` so that source features are stored.<br/>Defaults to ``None`` (equivalent to ``'recalibrate'`` when ``new_df`` and ``level`` are both provided). | <code>None</code>
+`transfer_conformal` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | ``TransferConformal(weights=...)`` to reweight the conformity scores of the series the model was fit on. To adapt them to other series use ``transfer(df, conformal=...)``. Defaults to None. | <code>None</code>
 
 **Returns:**
 
