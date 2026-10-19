@@ -14,7 +14,7 @@ __all__ = [
 
 import abc
 import copy
-from typing import Any, Callable, Iterable, List, Optional, Sequence, TypeVar
+from typing import Callable, Iterable, List, Optional, Sequence, TypeVar
 
 import coreforecast.scalers as core_scalers
 import numpy as np
@@ -437,7 +437,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
 
 class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
-    scaler_factory: Callable[[], Any]
+    scaler_factory: Callable[[], core_scalers._BaseLocalScaler]
 
     def update(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
