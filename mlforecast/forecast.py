@@ -55,7 +55,6 @@ from .conformal_prediction import (
     TransferConformal,
     TransferResult,
     _add_signed_transfer_intervals,
-    _resolve_user_weights,
     get_conformal_method,
     get_transfer_method_spec,
     compute_conformity_scores,
@@ -1599,7 +1598,6 @@ class MLForecast:
         level: Optional[List[Union[int, float]]] = None,
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
-        transfer_conformal: Optional[Union[str, TransferConformal]] = None,
     ) -> DFType:
         """Compute the predictions for the next `h` steps.
 
@@ -1612,7 +1610,6 @@ class MLForecast:
             level (list of ints or floats, optional): Confidence levels between 0 and 100 for prediction intervals. Defaults to None.
             X_df (pandas or polars DataFrame, optional): Dataframe with the future exogenous features. Should have the id column and the time column. Defaults to None.
             ids (list of str, optional): List with subset of ids seen during training for which the forecasts should be computed. Defaults to None.
-            transfer_conformal (str or TransferConformal, optional): ``TransferConformal(weights=...)`` to reweight the conformity scores of the series the model was fit on. To adapt them to other series use ``transfer(df, conformal=...)``. Defaults to None.
 
         Returns:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
@@ -1627,32 +1624,10 @@ class MLForecast:
                 "This model has no conformity scores for its series. Create it with "
                 "`transfer(df, conformal=...)` to compute prediction intervals."
             )
-        if transfer_conformal is not None and self._transfer_ is not None:
-            raise ValueError(
-                "This model's conformity scores were already adapted by `transfer`. "
-                "Pass `transfer_conformal` as `transfer(df, conformal=...)` instead."
-            )
-        if isinstance(transfer_conformal, str):
-            transfer_conformal = TransferConformal(method=transfer_conformal)
-
         transfer_result = self._transfer_
-        # Same-domain user-supplied weights: replaces old covariate_shift_weights.
-        if (
-            transfer_conformal is not None
-            and transfer_conformal.weights is not None
-            and level is not None
-            and self._cs_df is not None
-        ):
-            non_feat = {self.ts.id_col, self.ts.time_col, "cutoff", *self.models}
-            feat_cols = [c for c in self._cs_df.columns if c not in non_feat]
-            w_arr = _resolve_user_weights(
-                transfer_conformal.weights, self._cs_df, feat_cols
-            )
-            transfer_result = TransferResult(cs_df=self._cs_df, weights=w_arr)
-
         ts = self.ts
         conformity_scores = (
-            self._cs_df if self._transfer_ is None else self._transfer_.cs_df
+            self._cs_df if transfer_result is None else transfer_result.cs_df
         )
         forecasts = ts.predict(
             models=self.models_,
@@ -1672,7 +1647,7 @@ class MLForecast:
             else:
                 # transferred scores are pooled over the calibration set, so
                 # `ids` only selects which forecasts to return
-                if self._transfer_ is None:
+                if transfer_result is None:
                     cs_ids = set(
                         nw.from_native(conformity_scores, eager_only=True)[ts.id_col]
                         .unique()
@@ -1702,7 +1677,7 @@ class MLForecast:
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
-                is_transfer = self._transfer_ is not None and not self._transfer_.signed
+                is_transfer = transfer_result is not None and not transfer_result.signed
                 if self.prediction_intervals.h == 1 and h > 1:
                     if is_transfer:
                         raise ValueError(
@@ -1744,23 +1719,7 @@ class MLForecast:
                             UserWarning,
                             stacklevel=2,
                         )
-                if _cs_weights is not None and self.prediction_intervals.method in (
-                    "conformal_distribution",
-                    "conformal_error",
-                ):
-                    raise ValueError(
-                        "weighted_conformal transfer requires a weighted conformal fit method. "
-                        "Refit the source model with "
-                        "PredictionIntervals(method='weighted_conformal_error') or "
-                        "'weighted_conformal_distribution'."
-                    )
-                if ids is not None and self._transfer_ is None:
-                    if _cs_weights is not None:
-                        raise ValueError(
-                            "TransferConformal with DRE weights cannot be used together with "
-                            "ids= filtering: the weights array aligns with the full calibration "
-                            "set and would misalign after id-based filtering."
-                        )
+                if ids is not None and transfer_result is None:
                     ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
                     cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
                     n_series = len(ids)

@@ -753,8 +753,6 @@ def test_user_weights_length_checked(weighted_transfer_setup):
     )
     msg = "one entry per source calibration row"
     with pytest.raises(ValueError, match=msg):
-        fcst.predict(3, level=[90], transfer_conformal=bad)
-    with pytest.raises(ValueError, match=msg):
         fcst.transfer(tgt, conformal=bad).predict(3, level=[90])
     w = _random_weights(fcst)
     flat = fcst.transfer(
@@ -803,13 +801,6 @@ def test_weighted_transfer_ids_filters_output(pi_method, method, user_weights):
         subset.sort_values(["unique_id", "ds"]).reset_index(drop=True),
         expected.sort_values(["unique_id", "ds"]).reset_index(drop=True),
     )
-
-
-def test_same_domain_user_weights_reject_ids():
-    fcst, _ = _weighted_transfer_setup("weighted_conformal_error")
-    tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
-    with pytest.raises(ValueError, match="cannot be used together with"):
-        fcst.predict(3, level=[90], transfer_conformal=tc, ids=["id_0"])
 
 
 def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
@@ -892,14 +883,6 @@ def test_transfer_chained_after_transfer_without_conformal_raises(
     fcst, tgt = weighted_transfer_setup
     with pytest.raises(ValueError, match="transferred without `conformal`"):
         fcst.transfer(tgt).transfer(tgt, conformal="recalibrate")
-
-
-def test_transferred_predict_rejects_transfer_conformal(weighted_transfer_setup):
-    fcst, tgt = weighted_transfer_setup
-    transferred = fcst.transfer(tgt, conformal="weighted_conformal")
-    tc = TransferConformal(method="weighted_conformal", weights=_random_weights(fcst))
-    with pytest.raises(ValueError, match=r"transfer\(df, conformal=\.\.\.\)"):
-        transferred.predict(3, level=[80], transfer_conformal=tc)
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)

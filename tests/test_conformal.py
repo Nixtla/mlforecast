@@ -161,7 +161,7 @@ def test_weighted_conformal_uniform_weights_matches_standard(weighted_conformal_
     preds_std = fcst.predict(h, level=[80])
 
     uniform_weights = np.ones(n_cal_rows)
-    preds_w = fcst.predict(h, level=[80], transfer_conformal=TransferConformal(method="weighted_conformal", weights=uniform_weights))
+    preds_w = fcst.transfer(series, conformal=TransferConformal(method="weighted_conformal", weights=uniform_weights)).predict(h, level=[80])
 
     pd.testing.assert_series_equal(
         preds_std["LGBMRegressor"], preds_w["LGBMRegressor"]
@@ -172,10 +172,10 @@ def test_weighted_conformal_uniform_weights_matches_standard(weighted_conformal_
 
 def test_weighted_conformal_user_array(weighted_conformal_setup):
     """User-supplied weight array flows through; intervals are finite and ordered."""
-    fcst, _, h, _ = weighted_conformal_setup
+    fcst, series, h, _ = weighted_conformal_setup
     n_cal_rows = len(fcst._cs_df)
     weights = np.random.default_rng(42).exponential(scale=1.0, size=n_cal_rows)
-    preds = fcst.predict(h, level=[80, 95], transfer_conformal=TransferConformal(method="weighted_conformal", weights=weights))
+    preds = fcst.transfer(series, conformal=TransferConformal(method="weighted_conformal", weights=weights)).predict(h, level=[80, 95])
 
     assert "LGBMRegressor-lo-80" in preds.columns
     assert preds["LGBMRegressor-lo-80"].notna().all()
@@ -185,9 +185,9 @@ def test_weighted_conformal_user_array(weighted_conformal_setup):
 
 def test_weighted_conformal_callable_weights(weighted_conformal_setup):
     """Callable receives source feature matrix and returns weights; intervals are valid."""
-    fcst, _, h, _ = weighted_conformal_setup
+    fcst, series, h, _ = weighted_conformal_setup
     weight_fn = lambda X: np.ones(len(X)) if X is not None else np.ones(len(fcst._cs_df))
-    preds = fcst.predict(h, level=[80], transfer_conformal=TransferConformal(method="weighted_conformal", weights=weight_fn))
+    preds = fcst.transfer(series, conformal=TransferConformal(method="weighted_conformal", weights=weight_fn)).predict(h, level=[80])
 
     assert "LGBMRegressor-lo-80" in preds.columns
     assert preds["LGBMRegressor-lo-80"].notna().all()

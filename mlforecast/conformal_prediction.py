@@ -62,8 +62,7 @@ _VALID_TRANSFER_METHODS = (
 class TransferConformal:
     """Configuration for transfer conformal prediction.
 
-    Pass to ``MLForecast.transfer(conformal=...)``, or with ``weights`` to
-    ``MLForecast.predict(transfer_conformal=...)``. A plain string is shorthand
+    Pass to ``MLForecast.transfer(conformal=...)``. A plain string is shorthand
     for ``TransferConformal(method=<str>)``.
     """
 
