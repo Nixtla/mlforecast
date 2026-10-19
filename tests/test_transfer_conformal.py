@@ -1,3 +1,4 @@
+import copy
 from functools import cache
 
 import lightgbm
@@ -776,6 +777,28 @@ def test_load_v1_1_0_weighted_intervals(tmp_path):
     assert loaded.prediction_intervals.method == "conformal_error"
     assert loaded.prediction_intervals.transfer is None
     assert "scale_estimator" not in vars(loaded.prediction_intervals)
+    pd.testing.assert_frame_equal(
+        loaded.predict(3, level=[80]), fcst.predict(3, level=[80])
+    )
+
+
+def test_unpickle_v1_1_0_weighted_intervals():
+    import pickle
+
+    fcst, _ = _transfer_setup(None)
+    old = copy.copy(fcst)
+    # v1.1.0 kept the calibration state in these attributes
+    settings = PredictionIntervals.__new__(PredictionIntervals)
+    settings.__dict__.update(
+        n_windows=5, h=3, method="weighted_conformal_error", scale_estimator="mad"
+    )
+    del old._calibration_
+    old.prediction_intervals = settings
+    old._cs_df = fcst._calibration_.scores
+    old._cs_source_scales_ = None
+    loaded = pickle.loads(pickle.dumps(old))
+    assert loaded.prediction_intervals.method == "conformal_error"
+    assert not hasattr(loaded, "_cs_df")
     pd.testing.assert_frame_equal(
         loaded.predict(3, level=[80]), fcst.predict(3, level=[80])
     )

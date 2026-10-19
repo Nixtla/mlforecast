@@ -108,9 +108,11 @@ def _frozen_backtest(
             for uid, cnt in zip(bad[id_col].to_list(), bad["counts"].to_list())
         )
         raise ValueError(
-            f"_frozen_backtest requires >= {required} time steps per series "
+            "The backtest of the `PredictionIntervals(transfer=...)` method requires "
+            f">= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
-            f"Series too short: {details}."
+            f"Series too short: {details}. Fit without a transfer method or with "
+            "transfer='scale_aligned' to transfer to shorter series."
         )
 
     # future values of dynamic inputs come from each validation window
@@ -149,12 +151,31 @@ def _frozen_backtest(
     return nw.to_native(nw.concat([nw.from_native(r) for r in all_results]))
 
 
+def _calibration_from_v1(
+    settings: PredictionIntervals, scores: DataFrame
+) -> Calibration:
+    """Calibration from the settings and scores stored by v1.1.0."""
+    settings.__dict__.pop("scale_estimator", None)
+    settings.method = settings.method.removeprefix("weighted_")
+    return Calibration(scores=scores)
+
+
 class MLForecast:
     # Calibration state, set by ``fit``, ``load`` and ``transfer``. The defaults
     # are what an instance never fit with intervals holds, so instances pickled
     # before these fields existed keep loading.
     prediction_intervals: Optional[PredictionIntervals] = None
     _calibration_: Optional[Calibration] = None
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        # instances pickled by v1.1.0 keep their scores in `_cs_df`
+        scores = state.pop("_cs_df", None)
+        state.pop("_cs_source_scales_", None)
+        if scores is not None:
+            state["_calibration_"] = _calibration_from_v1(
+                state["prediction_intervals"], scores
+            )
+        self.__dict__.update(state)
 
     def __init__(
         self,
@@ -1988,9 +2009,7 @@ class MLForecast:
         calibration = intervals.get("calibration")
         if "scores" in intervals:
             # layout written by v1.1.0
-            settings.__dict__.pop("scale_estimator", None)
-            settings.method = settings.method.removeprefix("weighted_")
-            calibration = Calibration(scores=intervals["scores"])
+            calibration = _calibration_from_v1(settings, intervals["scores"])
         return MLForecast._from_ts(
             ts,
             models=models,
