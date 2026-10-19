@@ -245,13 +245,21 @@ def test_lightgbmcv_categorical_feature(tmp_path):
     old_cv = pickle.loads(pickle.dumps(cv))
     del old_cv.categorical_feature
     old_model = MLForecast.from_cv(old_cv).models["LGBMRegressor"]
-    assert old_model.categorical_feature == "auto"
+    assert old_model.categorical_feature is None
 
     with pytest.raises(TypeError, match="unknown name"):
         cv.fit(series, **fit_kwargs, categorical_feature=["not_a_feature"])
-    params = {"verbosity": -1, "categorical_feature": ["dayofweek"]}
-    with pytest.warns(UserWarning, match="categorical_feature"):
-        cv.fit(series, **{**fit_kwargs, "params": params})
+    for categorical_feature in ["auto", "dayofweek", [0]]:
+        with pytest.raises(TypeError, match="feature names"):
+            cv.fit(series, **fit_kwargs, categorical_feature=categorical_feature)
+    for alias in ["categorical_feature", "cat_feature"]:
+        params = {"verbosity": -1, alias: ["dayofweek"]}
+        with pytest.warns(UserWarning, match=alias):
+            cv.fit(series, **{**fit_kwargs, "params": params})
+        assert alias in params
+        assert alias not in cv.params
+        fcst = MLForecast.from_cv(cv).fit(series)
+        assert _categories(fcst.models_["LGBMRegressor"].booster_, "dayofweek") == []
 
 
 def test_lightgbmcv_trains_on_features_order():
@@ -274,7 +282,7 @@ def test_lightgbmcv_trains_on_features_order():
         params={"verbosity": -1},
         verbose_eval=False,
         static_features=static_features,
-        categorical_feature=[0],
+        categorical_feature=["unique_id"],
     )
     assert cv.ts.features_order_[0] == "unique_id"
     for bst in cv.cv_models_.values():

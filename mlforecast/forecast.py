@@ -240,9 +240,7 @@ class MLForecast:
         from mlforecast.lgb_cv import _LGBMRegressor
 
         model = _LGBMRegressor(**{**cv.params, "n_estimators": cv.best_iteration_})
-        model.categorical_feature = copy.copy(
-            getattr(cv, "categorical_feature", "auto")
-        )
+        model.categorical_feature = copy.copy(getattr(cv, "categorical_feature", None))
         return cls._from_ts(copy.deepcopy(cv.ts), models={"LGBMRegressor": model})
 
     @classmethod
