@@ -134,7 +134,7 @@ target_ids = rng.choice(finance_ids, size=200, replace=False)
 # Source: use all training data (no test split needed for fitting)
 source_train = m4_train[m4_train['unique_id'].isin(source_ids)].copy()
 
-# Target: training data is passed to transfer; test data is our evaluation ground truth
+# Target: training data goes into new_df; test data is our evaluation ground truth
 target_train = m4_train[m4_train['unique_id'].isin(target_ids)].copy()
 target_test = m4_test[m4_test['unique_id'].isin(target_ids)].copy()
 
@@ -262,10 +262,10 @@ MLForecast(models=[LGBMRegressor], freq=1, lag_features=['lag1', 'lag2', 'lag3',
 
 ## Evaluate Transfer Methods
 
-For each transfer method, we call
-`mlf.transfer(target_train, conformal=method)` to get a forecaster for
-the target domain (Finance series) whose conformity scores are adapted
-with `method`, and then its `predict` method with `level=[80, 90, 95]`.
+For each transfer method, we call `mlf.predict()` with: -
+`new_df=target_train` — the target domain training history (Finance
+series) - `level=[80, 90, 95]` — the requested coverage levels -
+`transfer_conformal=method` — which transfer strategy to use
 
 We then merge predictions with `target_test` and compute the **empirical
 coverage** at each level.
@@ -286,8 +286,11 @@ coverage_results = {}
 
 for method in transfer_methods:
     print(f"Running '{method}'...", end=' ', flush=True)
-    preds = mlf.transfer(target_train, conformal=method).predict(
-        h=HORIZON, level=LEVELS
+    preds = mlf.predict(
+        h=HORIZON,
+        level=LEVELS,
+        new_df=target_train,
+        transfer_conformal=method,
     )
     merged = target_test.merge(preds, on=['unique_id', 'ds'])
     cov = {}
@@ -449,8 +452,11 @@ intervals (lower width) are better, as long as coverage is maintained.
 width_results = {}
 
 for method in transfer_methods:
-    preds = mlf.transfer(target_train, conformal=method).predict(
-        h=HORIZON, level=LEVELS
+    preds = mlf.predict(
+        h=HORIZON,
+        level=LEVELS,
+        new_df=target_train,
+        transfer_conformal=method,
     )
     widths = {}
     for lv in LEVELS:
@@ -516,10 +522,12 @@ EXAMPLE_IDS = target_ids[:4].tolist()
 # Collect predictions for all methods
 all_preds = {}
 for method in transfer_methods:
-    preds = mlf.transfer(
-        target_train[target_train['unique_id'].isin(EXAMPLE_IDS)],
-        conformal=method,
-    ).predict(h=HORIZON, level=[PLOT_LEVEL])
+    preds = mlf.predict(
+        h=HORIZON,
+        level=[PLOT_LEVEL],
+        new_df=target_train[target_train['unique_id'].isin(EXAMPLE_IDS)],
+        transfer_conformal=method,
+    )
     all_preds[method] = preds
 ```
 
@@ -581,10 +589,9 @@ target domain in M4 Monthly data.
     removes the systematic point-forecast bias, and is what allows the
     weighted methods to reach near-nominal coverage. With raw
     differences, every method under-covers by several percentage points.
--   `recalibrate` backtests the trained models on the target data and
-    uses those residuals — it tends to be the most directly calibrated
-    but requires enough target history for the backtest windows (no
-    model is retrained).
+-   `recalibrate` runs cross-validation on the target data — it tends to
+    be the most directly calibrated but requires running CV
+    (computationally equivalent to retraining).
 -   `scale_aligned` uses the scale of the *y* signal (MAD of
     differences) to align source residuals — zero-shot, no CV needed.
 -   `error_scaled` runs CV on the target data to estimate prediction
