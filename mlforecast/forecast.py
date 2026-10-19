@@ -141,7 +141,7 @@ def _frozen_backtest(
         if len(nw.from_native(joined)) != expected_rows:
             raise ValueError(
                 "Frozen-model backtest predictions did not align with the "
-                "validation windows. This usually means some series in `new_df` "
+                "validation windows. This usually means some series "
                 "have gaps in their time index; please fill the gaps and retry."
             )
         sort_idxs = ufp.maybe_compute_sort_indices(joined, id_col, time_col)
@@ -1705,9 +1705,15 @@ class MLForecast:
 
                     fcst_uid_arr = forecasts[ts.id_col].to_numpy()
                     codes, uniques = pd.factorize(fcst_uid_arr)
+                    missing = [uid for uid in uniques if uid not in _target_scales]
+                    if missing:
+                        raise ValueError(
+                            f"Series {missing} were added after `transfer`, so they "
+                            "have no scale estimate. Call `transfer` with their "
+                            "history to compute their prediction intervals."
+                        )
                     sigma_tgt = np.array(
-                        [_target_scales.get(uid, 1.0) for uid in uniques],
-                        dtype=float,
+                        [_target_scales[uid] for uid in uniques], dtype=float
                     )[codes]
                     forecasts = _rescale_interval_columns(
                         forecasts, list(model_names), level_, sigma_tgt

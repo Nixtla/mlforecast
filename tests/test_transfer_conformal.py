@@ -767,3 +767,13 @@ def test_transfer_without_transfer_method_save_load(tmp_path):
     fcst.transfer(tgt).save(tmp_path)
     with pytest.raises(ValueError, match=r"PredictionIntervals\(transfer=\.\.\.\)"):
         MLForecast.load(tmp_path).predict(3, level=[80])
+
+
+def test_scale_aligned_series_added_after_transfer_raises():
+    fcst, tgt = _transfer_setup("scale_aligned")
+    new = tgt[tgt["unique_id"] == "tgt_id_3"]
+    transferred = fcst.transfer(tgt[tgt["unique_id"] != "tgt_id_3"])
+    transferred.update(new)
+    transferred.predict(3)
+    with pytest.raises(ValueError, match=r"\['tgt_id_3'\] were added after `transfer`"):
+        transferred.predict(3, level=[80])
