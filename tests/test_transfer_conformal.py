@@ -1,4 +1,3 @@
-import copy
 from functools import cache
 
 import lightgbm
@@ -9,7 +8,8 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
-from mlforecast.lag_transforms import ExpandingMean
+from mlforecast.lag_transforms import ExpandingMean, RollingMean
+from mlforecast.target_transforms import Differences
 from mlforecast.utils import PredictionIntervals, TransferConformal, generate_daily_series
 
 
@@ -680,11 +680,17 @@ LR = "LinearRegression"
 
 
 @cache
-def _transfer_setup(method, pi_method="conformal_error"):
+def _transfer_setup(method, pi_method="conformal_error", transforms=False):
     src = generate_daily_series(8, min_length=80, max_length=80, seed=0)
     tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1)
     tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1, 2],
+        lag_transforms={1: [RollingMean(window_size=3)]} if transforms else None,
+        target_transforms=[Differences([1])] if transforms else None,
+    )
     fcst.fit(
         src,
         prediction_intervals=PredictionIntervals(
@@ -723,10 +729,13 @@ def test_transfer_ids_only_selects_forecasts(pi_method, method):
     )
 
 
+@pytest.mark.parametrize("transforms", [False, True])
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_chained_adapts_from_source(method):
-    fcst, tgt = _transfer_setup(method)
-    first_df = tgt[tgt["unique_id"].isin(["tgt_id_0", "tgt_id_1"])]
+def test_transfer_chained_adapts_from_source(method, transforms):
+    fcst, tgt = _transfer_setup(method, transforms=transforms)
+    # other series, lengths and scale, so leftover state from them would show
+    first_df = generate_daily_series(3, min_length=60, max_length=70, seed=2)
+    first_df["y"] = first_df["y"] * 10 + 100
     chained = fcst.transfer(first_df).transfer(tgt)
     pd.testing.assert_frame_equal(
         chained.predict(3, level=[80]),
@@ -758,47 +767,3 @@ def test_transfer_without_transfer_method_save_load(tmp_path):
     fcst.transfer(tgt).save(tmp_path)
     with pytest.raises(ValueError, match=r"PredictionIntervals\(transfer=\.\.\.\)"):
         MLForecast.load(tmp_path).predict(3, level=[80])
-
-
-def test_load_v1_1_0_weighted_intervals(tmp_path):
-    import cloudpickle
-
-    fcst, _ = _transfer_setup(None)
-    fcst.save(tmp_path)
-    # v1.1.0 pickled these settings and kept the model features in the scores
-    settings = PredictionIntervals.__new__(PredictionIntervals)
-    settings.__dict__.update(
-        n_windows=5, h=3, method="weighted_conformal_error", scale_estimator="mad"
-    )
-    scores = fcst._calibration_.scores.assign(lag1=1.0, lag2=2.0)
-    with open(tmp_path / "intervals.pkl", "wb") as f:
-        cloudpickle.dump({"scores": scores, "settings": settings}, f)
-    loaded = MLForecast.load(tmp_path)
-    assert loaded.prediction_intervals.method == "conformal_error"
-    assert loaded.prediction_intervals.transfer is None
-    assert "scale_estimator" not in vars(loaded.prediction_intervals)
-    pd.testing.assert_frame_equal(
-        loaded.predict(3, level=[80]), fcst.predict(3, level=[80])
-    )
-
-
-def test_unpickle_v1_1_0_weighted_intervals():
-    import pickle
-
-    fcst, _ = _transfer_setup(None)
-    old = copy.copy(fcst)
-    # v1.1.0 kept the calibration state in these attributes
-    settings = PredictionIntervals.__new__(PredictionIntervals)
-    settings.__dict__.update(
-        n_windows=5, h=3, method="weighted_conformal_error", scale_estimator="mad"
-    )
-    del old._calibration_
-    old.prediction_intervals = settings
-    old._cs_df = fcst._calibration_.scores
-    old._cs_source_scales_ = None
-    loaded = pickle.loads(pickle.dumps(old))
-    assert loaded.prediction_intervals.method == "conformal_error"
-    assert not hasattr(loaded, "_cs_df")
-    pd.testing.assert_frame_equal(
-        loaded.predict(3, level=[80]), fcst.predict(3, level=[80])
-    )

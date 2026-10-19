@@ -69,9 +69,6 @@ class TransferConformal:
 class PredictionIntervals:
     """Class for storing prediction intervals metadata information."""
 
-    # instances pickled before `transfer` existed don't set it
-    transfer: Optional[TransferConformal] = None
-
     def __init__(
         self,
         n_windows: int = 2,
