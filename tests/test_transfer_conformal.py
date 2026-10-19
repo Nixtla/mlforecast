@@ -1,3 +1,5 @@
+from functools import cache
+
 import lightgbm
 import numpy as np
 import pandas as pd
@@ -15,13 +17,7 @@ N_WINDOWS = 10
 N_SOURCE_SERIES = 45
 N_TARGET_SERIES = 35
 LEVELS = [80, 90, 95]
-TRANSFER_METHODS = [
-    "recalibrate",
-    "scale_aligned",
-    "error_scaled",
-    "weighted_conformal",
-    "scale_aligned_weighted",
-]
+TRANSFER_METHODS = ["recalibrate", "scale_aligned", "error_scaled"]
 MODEL = "LGBMRegressor"
 _PREDICTION_CACHE: dict[tuple, pd.DataFrame] = {}
 
@@ -80,29 +76,31 @@ def transfer_cp_setup():
     target_test = target.groupby("unique_id", observed=True).tail(HORIZON)
     target_train = target.drop(target_test.index)
 
-    mlf = MLForecast(
-        models=lightgbm.LGBMRegressor(
-            n_estimators=20,
-            random_state=0,
-            verbosity=-1,
-        ),
-        lags=[1, 7, 14],
-        lag_transforms={1: [ExpandingMean()]},
-        freq="D",
-        num_threads=1,
-    )
-    mlf.fit(
-        source_train,
-        prediction_intervals=PredictionIntervals(
-            n_windows=N_WINDOWS,
-            h=HORIZON,
-            method="weighted_conformal_error",
-            scale_estimator="mad",
-        ),
-    )
+    @cache
+    def fit(method):
+        mlf = MLForecast(
+            models=lightgbm.LGBMRegressor(
+                n_estimators=20,
+                random_state=0,
+                verbosity=-1,
+            ),
+            lags=[1, 7, 14],
+            lag_transforms={1: [ExpandingMean()]},
+            freq="D",
+            num_threads=1,
+        )
+        return mlf.fit(
+            source_train,
+            prediction_intervals=PredictionIntervals(
+                n_windows=N_WINDOWS,
+                h=HORIZON,
+                method="conformal_error",
+                transfer=method,
+            ),
+        )
 
     return (
-        mlf,
+        fit,
         target_train.reset_index(drop=True),
         target_test.reset_index(drop=True),
     )
@@ -134,16 +132,13 @@ def compute_coverage(
     return coverage
 
 
-def _predict_transfer(
-    transfer_cp_setup: tuple[MLForecast, pd.DataFrame, pd.DataFrame],
-    method: str,
-) -> pd.DataFrame:
-    mlf, target_train, _ = transfer_cp_setup
-    cache_key = (id(mlf), method)
+def _predict_transfer(transfer_cp_setup, method: str) -> pd.DataFrame:
+    fit, target_train, _ = transfer_cp_setup
+    cache_key = (id(fit), method)
     if cache_key not in _PREDICTION_CACHE:
-        _PREDICTION_CACHE[cache_key] = mlf.transfer(
-            target_train, conformal=method
-        ).predict(h=HORIZON, level=[*LEVELS])
+        _PREDICTION_CACHE[cache_key] = (
+            fit(method).transfer(target_train).predict(h=HORIZON, level=[*LEVELS])
+        )
     return _PREDICTION_CACHE[cache_key].copy()
 
 
@@ -217,12 +212,12 @@ def test_equal_counts_pooled_uniform_widths():
     )
     mlf.fit(
         source_train,
-        prediction_intervals=PredictionIntervals(n_windows=3, h=7),
+        prediction_intervals=PredictionIntervals(
+            n_windows=3, h=7, transfer="error_scaled"
+        ),
     )
 
-    preds = mlf.transfer(target_train, conformal="error_scaled").predict(
-        h=7, level=[90]
-    )
+    preds = mlf.transfer(target_train).predict(h=7, level=[90])
     # For each forecast date (horizon step), all target series must share the same
     # interval width (pooled quantile is the same scalar for every series at that step).
     for ds, group in preds.groupby("ds", sort=False):
@@ -250,11 +245,13 @@ def test_h1_transfer_raises():
     )
     mlf.fit(
         source_train,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=1),
+        prediction_intervals=PredictionIntervals(
+            n_windows=2, h=1, transfer="error_scaled"
+        ),
     )
 
     with pytest.raises(ValueError, match="requires PredictionIntervals"):
-        mlf.transfer(target_train, conformal="error_scaled").predict(h=7, level=[90])
+        mlf.transfer(target_train).predict(h=7, level=[90])
 
 
 def test_methods_produce_different_widths(transfer_cp_setup):
@@ -288,10 +285,12 @@ def test_error_scaled_n_windows_1_works():
         freq="D",
         num_threads=1,
     )
-    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
-    preds = mlf.transfer(
-        target, conformal=TransferConformal(method="error_scaled", n_windows=1)
-    ).predict(h=h, level=[90])
+    tc = TransferConformal(method="error_scaled", n_windows=1)
+    mlf.fit(
+        source,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
+    )
+    preds = mlf.transfer(target).predict(h=h, level=[90])
     assert f"{MODEL}-lo-90" in preds.columns
     assert np.isfinite(preds[f"{MODEL}-lo-90"].to_numpy()).all()
 
@@ -311,40 +310,13 @@ def test_recalibrate_n_windows_1_raises():
         freq="D",
         num_threads=1,
     )
-    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    tc = TransferConformal(method="recalibrate", n_windows=1)
+    mlf.fit(
+        source,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
+    )
     with pytest.raises(ValueError, match="requires at least 2"):
-        mlf.transfer(
-            target, conformal=TransferConformal(method="recalibrate", n_windows=1)
-        ).predict(h=h, level=[90])
-
-
-def test_recalibrate_n_windows_default_unchanged(transfer_cp_setup):
-    """Omitting n_windows uses pi.n_windows (same result as explicit None)."""
-    mlf, target_train, _ = transfer_cp_setup
-    preds_default = mlf.transfer(
-        target_train, conformal=TransferConformal(method="recalibrate")
-    ).predict(h=HORIZON, level=[90])
-    preds_none = mlf.transfer(
-        target_train, conformal=TransferConformal(method="recalibrate", n_windows=None)
-    ).predict(h=HORIZON, level=[90])
-    pd.testing.assert_frame_equal(preds_default, preds_none)
-
-
-# ---------------------------------------------------------------------------
-# Item 4: ESS warning test
-# ---------------------------------------------------------------------------
-
-def test_ess_no_warning_identical_distributions(transfer_cp_setup):
-    """Identical source/target distributions should not trigger ESS warning."""
-    import warnings as _warnings
-    mlf, target_train, _ = transfer_cp_setup
-    with _warnings.catch_warnings(record=True) as record:
-        _warnings.simplefilter("always")
-        mlf.transfer(
-            target_train, conformal=TransferConformal(method="weighted_conformal")
-        ).predict(h=HORIZON, level=[90])
-    ess_warnings = [w for w in record if "ESS" in str(w.message)]
-    assert len(ess_warnings) == 0, f"Unexpected ESS warnings: {ess_warnings}"
+        mlf.transfer(target)
 
 
 # ---------------------------------------------------------------------------
@@ -364,12 +336,14 @@ def test_frozen_backtest_min_length_validation():
         freq="D",
         num_threads=1,
     )
-    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    tc = TransferConformal(method="recalibrate", n_windows=2)
+    mlf.fit(
+        source,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
+    )
     # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
     with pytest.raises(ValueError, match="time steps"):
-        mlf.transfer(
-            target, conformal=TransferConformal(method="recalibrate", n_windows=2)
-        ).predict(h=h, level=[90])
+        mlf.transfer(target)
 
 
 def test_frozen_backtest_uses_source_model():
@@ -393,14 +367,19 @@ def test_frozen_backtest_uses_source_model():
         freq="D",
         num_threads=1,
     )
-    mlf.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(
+            n_windows=2, h=h, transfer="recalibrate"
+        ),
+    )
 
     src_preds = mlf.predict(h=h, level=[90])
     src_width = float(
         (src_preds["LGBMRegressor-hi-90"] - src_preds["LGBMRegressor-lo-90"]).mean()
     )
 
-    tgt_preds = mlf.transfer(tgt, conformal="recalibrate").predict(h=h, level=[90])
+    tgt_preds = mlf.transfer(tgt).predict(h=h, level=[90])
     tgt_width = float(
         (tgt_preds["LGBMRegressor-hi-90"] - tgt_preds["LGBMRegressor-lo-90"]).mean()
     )
@@ -436,9 +415,12 @@ def test_frozen_backtest_unequal_length_series(method):
         freq="D",
         num_threads=1,
     )
-    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    mlf.fit(
+        source,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=method),
+    )
 
-    preds = mlf.transfer(target, conformal=method).predict(h=h, level=[90])
+    preds = mlf.transfer(target).predict(h=h, level=[90])
     lo = preds["LGBMRegressor-lo-90"].to_numpy()
     hi = preds["LGBMRegressor-hi-90"].to_numpy()
     assert np.isfinite(lo).all(), f"{method}: lower bounds contain non-finite values"
@@ -465,7 +447,7 @@ def test_point_forecasts_invariant_across_transfer_methods():
     # Strong trend so a clobbered Differences restore produces a visible shift.
     target["y"] = target["y"] + target.groupby("unique_id").cumcount() * 2.0
 
-    def fresh_fit():
+    def fresh_fit(method):
         mlf = MLForecast(
             models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
             lags=[1, 2],
@@ -476,17 +458,14 @@ def test_point_forecasts_invariant_across_transfer_methods():
         mlf.fit(
             source,
             prediction_intervals=PredictionIntervals(
-                n_windows=2, h=h,
-                method="weighted_conformal_error",
-                scale_estimator="mad",
+                n_windows=2, h=h, method="conformal_error", transfer=method
             ),
         )
         return mlf
 
-    baseline = fresh_fit().transfer(target).predict(h=h)["LGBMRegressor"].to_numpy()
-    mlf = fresh_fit()
+    baseline = fresh_fit(None).transfer(target).predict(h=h)["LGBMRegressor"].to_numpy()
     for method in TRANSFER_METHODS:
-        preds = mlf.transfer(target, conformal=method).predict(h=h, level=[90])
+        preds = fresh_fit(method).transfer(target).predict(h=h, level=[90])
         np.testing.assert_allclose(
             preds["LGBMRegressor"].to_numpy(),
             baseline,
@@ -606,17 +585,19 @@ def test_recalibrate_step_size_param():
         freq="D",
         num_threads=1,
     )
-    mlf.fit(src, prediction_intervals=PredictionIntervals(n_windows=3, h=h))
+    tc = TransferConformal(method="recalibrate", step_size=2)
+    mlf.fit(
+        src,
+        prediction_intervals=PredictionIntervals(n_windows=3, h=h, transfer=tc),
+    )
 
-    preds = mlf.transfer(
-        tgt, conformal=TransferConformal(method="recalibrate", step_size=2)
-    ).predict(h=h, level=[90])
+    preds = mlf.transfer(tgt).predict(h=h, level=[90])
     assert "LGBMRegressor-lo-90" in preds.columns
     assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
 
 
-def _dynamic_exog_setup(case="dynamic", engine="pandas"):
+def _dynamic_exog_setup(method, case="dynamic", engine="pandas"):
     """Source model fit with a dynamic exog `u`, plus target history and future X_df."""
     rng = np.random.default_rng(0)
     n = 60
@@ -653,9 +634,7 @@ def _dynamic_exog_setup(case="dynamic", engine="pandas"):
     mlf.fit(
         train,
         static_features=static_features,
-        prediction_intervals=PredictionIntervals(
-            n_windows=5, h=5, method="weighted_conformal_error", scale_estimator="mad"
-        ),
+        prediction_intervals=PredictionIntervals(n_windows=5, h=5, transfer=method),
         **cols,
     )
     return mlf, new_df, X_df
@@ -673,39 +652,34 @@ def _check_dynamic_exog_preds(preds):
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_with_dynamic_exog(case, method):
     """Transfer intervals work when the source model uses a dynamic exog (#721)."""
-    mlf, new_df, X_df = _dynamic_exog_setup(case)
-    preds = mlf.transfer(new_df, conformal=method).predict(h=5, X_df=X_df, level=[90])
+    mlf, new_df, X_df = _dynamic_exog_setup(method, case)
+    preds = mlf.transfer(new_df).predict(h=5, X_df=X_df, level=[90])
     _check_dynamic_exog_preds(preds)
 
 
-@pytest.mark.parametrize("method", ["recalibrate", "weighted_conformal"])
+@pytest.mark.parametrize("method", ["recalibrate", "scale_aligned"])
 def test_transfer_with_dynamic_exog_polars(method):
-    mlf, new_df, X_df = _dynamic_exog_setup(engine="polars")
-    preds = mlf.transfer(new_df, conformal=method).predict(h=5, X_df=X_df, level=[90])
+    mlf, new_df, X_df = _dynamic_exog_setup(method, engine="polars")
+    preds = mlf.transfer(new_df).predict(h=5, X_df=X_df, level=[90])
     assert isinstance(preds, pl.DataFrame)
     _check_dynamic_exog_preds(preds)
 
 
-@pytest.mark.parametrize(
-    "method",
-    ["recalibrate", "error_scaled", "weighted_conformal", "scale_aligned_weighted"],
-)
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
 def test_transfer_df_missing_dynamic_exog_raises(method):
-    mlf, new_df, X_df = _dynamic_exog_setup()
+    mlf, new_df, _ = _dynamic_exog_setup(method)
     with pytest.raises(ValueError, match=r"`df` must contain .*\['u'\]"):
-        mlf.transfer(new_df.drop(columns="u"), conformal=method).predict(
-            h=5, X_df=X_df, level=[90]
-        )
+        mlf.transfer(new_df.drop(columns="u"))
 
 
 # ---------------------------------------------------------------------------
-# #762: weighted transfer methods
+# MLForecast.transfer
 # ---------------------------------------------------------------------------
-WEIGHTED_TRANSFER_METHODS = ["weighted_conformal", "scale_aligned_weighted"]
 LR = "LinearRegression"
 
 
-def _weighted_transfer_setup(pi_method):
+@cache
+def _transfer_setup(method, pi_method="conformal_error"):
     src = generate_daily_series(8, min_length=80, max_length=80, seed=0)
     tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1)
     tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
@@ -713,137 +687,19 @@ def _weighted_transfer_setup(pi_method):
     fcst.fit(
         src,
         prediction_intervals=PredictionIntervals(
-            n_windows=5, h=3, method=pi_method, scale_estimator="std"
+            n_windows=5, h=3, method=pi_method, transfer=method
         ),
     )
     return fcst, tgt
 
 
-@pytest.fixture(scope="module")
-def weighted_transfer_setup():
-    return _weighted_transfer_setup("weighted_conformal_error")
-
-
-def _feature_cols(fcst):
-    non_feat = {fcst.ts.id_col, fcst.ts.time_col, "cutoff", *fcst.models.keys()}
-    return [c for c in fcst._cs_df.columns if c not in non_feat]
-
-
-def _random_weights(fcst):
-    return np.random.default_rng(0).exponential(size=len(fcst._cs_df))
-
-
-@pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
-def test_user_weights_used_with_new_df(weighted_transfer_setup, method):
-    fcst, tgt = weighted_transfer_setup
-    auto = fcst.transfer(tgt, conformal=method).predict(3, level=[90])
-    user = fcst.transfer(
-        tgt, conformal=TransferConformal(
-            method=method, weights=_random_weights(fcst)
-        )
-    ).predict(3, level=[90])
-    pd.testing.assert_series_equal(auto[LR], user[LR])
-    assert not np.allclose(auto[f"{LR}-hi-90"], user[f"{LR}-hi-90"])
-
-
-def test_user_weights_length_checked(weighted_transfer_setup):
-    fcst, tgt = weighted_transfer_setup
-    bad = TransferConformal(
-        method="weighted_conformal", weights=np.ones(len(fcst._cs_df) + 1)
-    )
-    msg = "one entry per source calibration row"
-    with pytest.raises(ValueError, match=msg):
-        fcst.transfer(tgt, conformal=bad).predict(3, level=[90])
-    w = _random_weights(fcst)
-    flat = fcst.transfer(
-        tgt, conformal=TransferConformal(method="weighted_conformal", weights=w)
-    ).predict(3, level=[90])
-    column = fcst.transfer(
-        tgt, conformal=TransferConformal(
-            method="weighted_conformal", weights=w[:, None]
-        )
-    ).predict(3, level=[90])
-    pd.testing.assert_frame_equal(flat, column)
-
-
-def test_user_weights_callable_gets_source_features(weighted_transfer_setup):
-    fcst, tgt = weighted_transfer_setup
-    seen = []
-
-    def weight_fn(X):
-        seen.append(X.shape)
-        return np.ones(len(X))
-
-    fcst.transfer(
-        tgt, conformal=TransferConformal(
-            method="weighted_conformal", weights=weight_fn
-        )
-    ).predict(3, level=[90])
-    assert seen == [(len(fcst._cs_df), len(_feature_cols(fcst)))]
-
-
-@pytest.mark.parametrize(
-    "pi_method", ["weighted_conformal_error", "weighted_conformal_distribution"]
-)
-@pytest.mark.parametrize("method", WEIGHTED_TRANSFER_METHODS)
-@pytest.mark.parametrize("user_weights", [False, True])
-def test_weighted_transfer_ids_filters_output(pi_method, method, user_weights):
-    fcst, tgt = _weighted_transfer_setup(pi_method)
-    ids = ["tgt_id_2", "tgt_id_0"]
-    tc = TransferConformal(
-        method=method, weights=_random_weights(fcst) if user_weights else None
-    )
-    # h=2 < calibration h=3 also checks the horizon slice
-    full = fcst.transfer(tgt, conformal=tc).predict(2, level=[80, 90])
-    subset = fcst.transfer(tgt, conformal=tc).predict(2, level=[80, 90], ids=ids)
-    expected = full[full["unique_id"].isin(ids)]
-    pd.testing.assert_frame_equal(
-        subset.sort_values(["unique_id", "ds"]).reset_index(drop=True),
-        expected.sort_values(["unique_id", "ds"]).reset_index(drop=True),
-    )
-
-
-def test_scale_aligned_weighted_keeps_target_weights(weighted_transfer_setup):
-    from functools import partial
-
-    from mlforecast.conformal_prediction import (
-        _scale_aligned_weighted_transfer,
-        _weighted_conformal_transfer,
-    )
-
-    fcst, tgt = weighted_transfer_setup
-
-    def run(fn, method):
-        scratch = fcst._with_ts(fcst.ts._clone_cold())
-        return fn(
-            new_df=tgt,
-            prediction_intervals=fcst.prediction_intervals,
-            tc=TransferConformal(method=method),
-            model_names=list(fcst.models.keys()),
-            target_col=fcst.ts.target_col,
-            id_col=fcst.ts.id_col,
-            time_col=fcst.ts.time_col,
-            preprocess_fn=partial(scratch.preprocess, **fcst.ts._feature_settings()),
-            source_cs_df=fcst._cs_df,
-            source_scales=fcst._cs_source_scales_,
-        )
-
-    sa = run(_scale_aligned_weighted_transfer, "scale_aligned_weighted")
-    wc = run(_weighted_conformal_transfer, "weighted_conformal")
-    assert sa.target_weights is not None
-    np.testing.assert_allclose(sa.target_weights, wc.target_weights)
-
-
-# ---------------------------------------------------------------------------
-# MLForecast.transfer
-# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_update_keeps_source(weighted_transfer_setup, method):
-    fcst, tgt = weighted_transfer_setup
+def test_transfer_update_keeps_source(method):
+    fcst, tgt = _transfer_setup(method)
     obs = tgt.groupby("unique_id", observed=True).tail(2)
     train = tgt.drop(obs.index)
     expected = fcst.predict(3, level=[80])
-    transferred = fcst.transfer(train, conformal=method)
+    transferred = fcst.transfer(train)
     transferred.update(obs)
     preds = transferred.predict(3, level=[80])
     assert preds["ds"].min() > obs["ds"].max()
@@ -851,10 +707,11 @@ def test_transfer_update_keeps_source(weighted_transfer_setup, method):
     pd.testing.assert_frame_equal(fcst.predict(3, level=[80]), expected)
 
 
+@pytest.mark.parametrize("pi_method", ["conformal_error", "conformal_distribution"])
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_ids_only_selects_forecasts(weighted_transfer_setup, method):
-    fcst, tgt = weighted_transfer_setup
-    transferred = fcst.transfer(tgt, conformal=method)
+def test_transfer_ids_only_selects_forecasts(pi_method, method):
+    fcst, tgt = _transfer_setup(method, pi_method)
+    transferred = fcst.transfer(tgt)
     ids = ["tgt_id_2", "tgt_id_0"]
     full = transferred.predict(3, level=[80, 90])
     subset = transferred.predict(3, level=[80, 90], ids=ids)
@@ -865,30 +722,29 @@ def test_transfer_ids_only_selects_forecasts(weighted_transfer_setup, method):
     )
 
 
-@pytest.mark.parametrize("first", TRANSFER_METHODS)
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_chained_adapts_from_source(weighted_transfer_setup, first, method):
-    fcst, tgt = weighted_transfer_setup
+def test_transfer_chained_adapts_from_source(method):
+    fcst, tgt = _transfer_setup(method)
     first_df = tgt[tgt["unique_id"].isin(["tgt_id_0", "tgt_id_1"])]
-    chained = fcst.transfer(first_df, conformal=first).transfer(tgt, conformal=method)
+    chained = fcst.transfer(first_df).transfer(tgt)
     pd.testing.assert_frame_equal(
         chained.predict(3, level=[80]),
-        fcst.transfer(tgt, conformal=method).predict(3, level=[80]),
+        fcst.transfer(tgt).predict(3, level=[80]),
     )
 
 
-def test_transfer_chained_after_transfer_without_conformal_raises(
-    weighted_transfer_setup,
-):
-    fcst, tgt = weighted_transfer_setup
-    with pytest.raises(ValueError, match="transferred without `conformal`"):
-        fcst.transfer(tgt).transfer(tgt, conformal="recalibrate")
+def test_transfer_models_are_not_shared():
+    fcst, tgt = _transfer_setup("recalibrate")
+    expected = fcst.predict(3)
+    transferred = fcst.transfer(tgt)
+    transferred.models_[LR] = LinearRegression().fit(np.ones((2, 2)), [0.0, 0.0])
+    pd.testing.assert_frame_equal(fcst.predict(3), expected)
 
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
-def test_transfer_save_load(weighted_transfer_setup, method, tmp_path):
-    fcst, tgt = weighted_transfer_setup
-    transferred = fcst.transfer(tgt, conformal=method)
+def test_transfer_save_load(method, tmp_path):
+    fcst, tgt = _transfer_setup(method)
+    transferred = fcst.transfer(tgt)
     transferred.save(tmp_path)
     loaded = MLForecast.load(tmp_path)
     pd.testing.assert_frame_equal(
@@ -896,24 +752,30 @@ def test_transfer_save_load(weighted_transfer_setup, method, tmp_path):
     )
 
 
-def test_transfer_without_conformal_save_load(weighted_transfer_setup, tmp_path):
-    fcst, tgt = weighted_transfer_setup
+def test_transfer_without_transfer_method_save_load(tmp_path):
+    fcst, tgt = _transfer_setup(None)
     fcst.transfer(tgt).save(tmp_path)
-    with pytest.raises(ValueError, match=r"transfer\(df, conformal=\.\.\.\)"):
+    with pytest.raises(ValueError, match=r"PredictionIntervals\(transfer=\.\.\.\)"):
         MLForecast.load(tmp_path).predict(3, level=[80])
 
 
-def test_load_intervals_without_transfer_key(weighted_transfer_setup, tmp_path):
+def test_load_v1_1_0_weighted_intervals(tmp_path):
     import cloudpickle
 
-    fcst, _ = weighted_transfer_setup
+    fcst, _ = _transfer_setup(None)
     fcst.save(tmp_path)
+    # v1.1.0 pickled these settings and kept the model features in the scores
+    settings = PredictionIntervals.__new__(PredictionIntervals)
+    settings.__dict__.update(
+        n_windows=5, h=3, method="weighted_conformal_error", scale_estimator="mad"
+    )
+    scores = fcst._calibration_.scores.assign(lag1=1.0, lag2=2.0)
     with open(tmp_path / "intervals.pkl", "wb") as f:
-        cloudpickle.dump(
-            {"scores": fcst._cs_df, "settings": fcst.prediction_intervals}, f
-        )
+        cloudpickle.dump({"scores": scores, "settings": settings}, f)
     loaded = MLForecast.load(tmp_path)
-    assert loaded._transfer_ is None
+    assert loaded.prediction_intervals.method == "conformal_error"
+    assert loaded.prediction_intervals.transfer is None
+    assert "scale_estimator" not in vars(loaded.prediction_intervals)
     pd.testing.assert_frame_equal(
         loaded.predict(3, level=[80]), fcst.predict(3, level=[80])
     )

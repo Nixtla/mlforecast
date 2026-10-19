@@ -1,8 +1,8 @@
-__all__ = ["PredictionIntervals", "TransferConformal", "estimate_density_ratio"]
+__all__ = ["PredictionIntervals", "TransferConformal"]
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import narwhals as nw
 import numpy as np
@@ -11,68 +11,27 @@ import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
 
 
-class PredictionIntervals:
-    """Class for storing prediction intervals metadata information."""
-
-    def __init__(
-        self,
-        n_windows: int = 2,
-        h: int = 1,
-        method: str = "conformal_distribution",
-        scale_estimator: Optional[Literal["mad", "std"]] = None,
-    ):
-        if n_windows < 2:
-            raise ValueError(
-                "You need at least two windows to compute conformal intervals"
-            )
-        allowed_methods = [
-            "conformal_error",
-            "conformal_distribution",
-            "weighted_conformal_error",
-            "weighted_conformal_distribution",
-        ]
-        if method not in allowed_methods:
-            raise ValueError(f"method must be one of {allowed_methods}")
-        if scale_estimator is not None and scale_estimator not in ("mad", "std"):
-            raise ValueError(
-                f"scale_estimator must be 'mad', 'std', or None, got '{scale_estimator}'"
-            )
-        self.n_windows = n_windows
-        self.h = h
-        self.method = method
-        self.scale_estimator = scale_estimator
-
-    def __repr__(self):
-        return (
-            f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, "
-            f"method='{self.method}', scale_estimator={self.scale_estimator!r})"
-        )
-
-
-_VALID_TRANSFER_METHODS = (
-    "recalibrate",
-    "weighted_conformal",
-    "scale_aligned",
-    "scale_aligned_weighted",
-    "error_scaled",
-)
+_VALID_TRANSFER_METHODS = ("recalibrate", "scale_aligned", "error_scaled")
 
 
 @dataclass
 class TransferConformal:
-    """Configuration for transfer conformal prediction.
+    """Configuration for adapting the prediction intervals to transferred series.
 
-    Pass to ``MLForecast.transfer(conformal=...)``. A plain string is shorthand
+    Pass to ``PredictionIntervals(transfer=...)``. A plain string is shorthand
     for ``TransferConformal(method=<str>)``.
+
+    Args:
+        method (str): ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'.
+        n_windows (int, optional): Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``.
+        step_size (int, optional): Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1.
+        scale_estimator (str): Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'.
     """
 
     method: str = "recalibrate"
-    dre_estimator: str = "logistic"
-    weights: Optional[Union[np.ndarray, Callable]] = None
     n_windows: Optional[int] = None
     step_size: Optional[int] = None
-    cv: int = 5
-    clip_quantile: Optional[float] = 0.99
+    scale_estimator: Literal["mad", "std"] = "mad"
 
     def __post_init__(self) -> None:
         if self.method not in _VALID_TRANSFER_METHODS:
@@ -80,18 +39,10 @@ class TransferConformal:
                 f"TransferConformal.method must be one of {_VALID_TRANSFER_METHODS}, "
                 f"got '{self.method}'"
             )
-        if self.dre_estimator not in ("logistic", "gradient_boosting"):
+        if self.scale_estimator not in ("mad", "std"):
             raise ValueError(
-                f"TransferConformal.dre_estimator must be 'logistic' or "
-                f"'gradient_boosting', got '{self.dre_estimator}'"
-            )
-        if self.weights is not None and self.method not in (
-            "weighted_conformal",
-            "scale_aligned_weighted",
-        ):
-            raise ValueError(
-                f"TransferConformal.weights is only valid with method='weighted_conformal' "
-                f"or 'scale_aligned_weighted', got method='{self.method}'"
+                "TransferConformal.scale_estimator must be 'mad' or 'std', "
+                f"got '{self.scale_estimator}'"
             )
         if self.n_windows is not None and self.n_windows < 1:
             raise ValueError(
@@ -101,22 +52,65 @@ class TransferConformal:
             raise ValueError(
                 f"TransferConformal.step_size must be >= 1, got {self.step_size}"
             )
+        if not get_transfer_method_spec(self.method).runs_target_cv and (
+            self.n_windows is not None or self.step_size is not None
+        ):
+            raise ValueError(
+                "TransferConformal.n_windows and step_size are only valid with "
+                f"method='recalibrate' or 'error_scaled', got method='{self.method}'"
+            )
+        if self.method != "scale_aligned" and self.scale_estimator != "mad":
+            raise ValueError(
+                "TransferConformal.scale_estimator is only valid with "
+                f"method='scale_aligned', got method='{self.method}'"
+            )
 
-    def validate(self, pi: PredictionIntervals) -> None:
-        """Cross-validate against the fitted PredictionIntervals config."""
-        if self.method in ("scale_aligned", "scale_aligned_weighted"):
-            if pi.scale_estimator is None:
-                raise ValueError(
-                    f"TransferConformal(method='{self.method}') requires the source model "
-                    "to have been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
-                )
-        if self.method in ("weighted_conformal", "scale_aligned_weighted"):
-            if not pi.method.startswith("weighted_conformal"):
-                raise ValueError(
-                    f"TransferConformal(method='{self.method}') requires the source model "
-                    "to have been fit with PredictionIntervals(method='weighted_conformal_error') "
-                    "or 'weighted_conformal_distribution'."
-                )
+
+class PredictionIntervals:
+    """Class for storing prediction intervals metadata information."""
+
+    # instances pickled before `transfer` existed don't set it
+    transfer: Optional[TransferConformal] = None
+
+    def __init__(
+        self,
+        n_windows: int = 2,
+        h: int = 1,
+        method: str = "conformal_distribution",
+        transfer: Optional[Union[str, TransferConformal]] = None,
+    ):
+        """
+        Args:
+            n_windows (int): Number of cross validation windows used to compute the conformity scores. Defaults to 2.
+            h (int): Forecast horizon of each cross validation window. Defaults to 1.
+            method (str): ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'.
+            transfer (str or TransferConformal, optional): How to adapt the intervals to the series of `MLForecast.transfer`. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:
+
+                - ``'recalibrate'``: Runs a frozen-model backtest on the transferred series and uses its scores instead of the source ones.
+                - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on the transferred series.
+                - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest.
+
+                Defaults to None (no prediction intervals for transferred series).
+        """
+        if n_windows < 2:
+            raise ValueError(
+                "You need at least two windows to compute conformal intervals"
+            )
+        allowed_methods = ["conformal_error", "conformal_distribution"]
+        if method not in allowed_methods:
+            raise ValueError(f"method must be one of {allowed_methods}")
+        if isinstance(transfer, str):
+            transfer = TransferConformal(method=transfer)
+        self.n_windows = n_windows
+        self.h = h
+        self.method = method
+        self.transfer = transfer
+
+    def __repr__(self):
+        return (
+            f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, "
+            f"method='{self.method}', transfer={self.transfer!r})"
+        )
 
 
 def _compute_series_scales(
@@ -251,7 +245,6 @@ def _add_conformal_distribution_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    weights: Optional[np.ndarray] = None,  # noqa: ARG001
     is_transfer: bool = False,
 ) -> DFType:
     """
@@ -302,7 +295,6 @@ def _add_conformal_error_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    weights: Optional[np.ndarray] = None,  # noqa: ARG001
     is_transfer: bool = False,
 ) -> DFType:
     """
@@ -432,315 +424,9 @@ def _add_signed_transfer_intervals(
     return fcst_df
 
 
-def _weighted_quantiles(
-    values: np.ndarray,
-    weights: np.ndarray,
-    alphas: np.ndarray,
-    w_test: float = 1.0,
-) -> np.ndarray:
-    """Tibshirani et al. (2019) Eq. (1) weighted (1-alpha) quantiles, vectorized
-    over alphas.
-
-    Sorts once, cumsums once, and answers every alpha with a single
-    ``searchsorted`` — preserving the scalar version's ``side='left'``
-    tie-breaking exactly. Returns an array aligned with ``alphas``.
-    """
-    total = weights.sum() + w_test
-    sort_idx = np.argsort(values)
-    sorted_vals = np.append(values[sort_idx], np.inf)
-    sorted_w = np.append(weights[sort_idx] / total, w_test / total)
-    cum_w = np.cumsum(sorted_w)
-    # NOTE: callers pass alphas (= 1 - cuts), not cuts; the 1.0 - alphas
-    # round-trip reproduces the reference's exact float rounding, which is
-    # load-bearing for tie-boundary index selection. Don't "simplify" it.
-    idx = np.searchsorted(cum_w, 1.0 - np.asarray(alphas, dtype=float), side="left")
-    return sorted_vals[idx]
-
-
-def _weighted_quantile(
-    values: np.ndarray,
-    weights: np.ndarray,
-    alpha: float,
-    w_test: float = 1.0,
-) -> float:
-    """Scalar wrapper over :func:`_weighted_quantiles`."""
-    return float(_weighted_quantiles(values, weights, np.array([alpha]), w_test)[0])
-
-
-def _add_weighted_conformal_error_intervals(
-    fcst_df: DFType,
-    cs_df: DFType,
-    model_names: List[str],
-    level: List[Union[int, float]],
-    cs_n_windows: int,
-    cs_h: int,
-    n_series: int,
-    horizon: int,
-    weights: Optional[np.ndarray] = None,
-    is_transfer: bool = False,
-    target_weights: Optional[np.ndarray] = None,
-) -> DFType:
-    """Weighted conformal error intervals per Tibshirani et al. (2019).
-
-    When weights is None falls back to np.quantile (identical to unweighted).
-    When weights are provided computes a global weighted quantile per horizon
-    step across all n_windows * n_series calibration points, applied uniformly
-    to all target-domain series.
-    """
-    fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
-    cuts = [lv / 100 for lv in level]
-    for model in model_names:
-        mean = fcst_df[model].to_numpy().ravel()
-        scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
-        scores = scores[:, :, :horizon]
-        n_target = len(mean) // horizon
-        if is_transfer:
-            # Transfer scenario: pool all source calibration points globally.
-            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
-            if weights is None:
-                quantiles = np.quantile(
-                    scores_pooled, cuts, axis=0
-                )  # (n_levels, horizon)
-                quantiles = np.tile(
-                    quantiles, (1, n_target)
-                )  # (n_levels, n_target * horizon)
-            else:
-                w_pooled = weights.reshape(cs_n_windows * n_series, cs_h)[:, :horizon]
-                w_test = (
-                    float(target_weights.mean())
-                    if target_weights is not None
-                    else float(w_pooled.mean())
-                )
-                alphas = 1.0 - np.asarray(cuts)
-                quantiles = np.empty((len(cuts), n_target * horizon))
-                for h_i in range(horizon):
-                    q = _weighted_quantiles(
-                        scores_pooled[:, h_i], w_pooled[:, h_i], alphas, w_test
-                    )
-                    quantiles[:, h_i::horizon] = q[:, np.newaxis]
-        elif weights is None:
-            quantiles = np.quantile(scores, cuts, axis=0)
-            quantiles = quantiles.reshape(len(cuts), -1)
-        else:
-            w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
-            w_test = float(w.mean())
-            alphas = 1.0 - np.asarray(cuts)
-            quantiles = np.empty((len(cuts), n_series * horizon))
-            for h_i in range(horizon):
-                q = _weighted_quantiles(
-                    scores[:, :, h_i].ravel(), w[:, :, h_i].ravel(), alphas, w_test
-                )
-                quantiles[:, h_i::horizon] = q[:, np.newaxis]
-        lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
-        hi_cols = [f"{model}-hi-{lv}" for lv in level]
-        quantiles_out = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
-        fcst_df = ufp.assign_columns(fcst_df, lo_cols + hi_cols, quantiles_out)
-    return fcst_df
-
-
-def _add_weighted_conformal_distribution_intervals(
-    fcst_df: DFType,
-    cs_df: DFType,
-    model_names: List[str],
-    level: List[Union[int, float]],
-    cs_n_windows: int,
-    cs_h: int,
-    n_series: int,
-    horizon: int,
-    weights: Optional[np.ndarray] = None,
-    is_transfer: bool = False,
-    target_weights: Optional[np.ndarray] = None,
-) -> DFType:
-    """Weighted conformal distribution intervals per Tibshirani et al. (2019).
-
-    When weights is None falls back to np.quantile (identical to unweighted).
-    When weights are provided applies _weighted_quantile over synthetic paths.
-    """
-    fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
-    alphas = [100 - lv for lv in level]
-    cuts = [alpha / 200 for alpha in reversed(alphas)]
-    cuts.extend(1 - alpha / 200 for alpha in alphas)
-    for model in model_names:
-        scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
-        scores = scores[:, :, :horizon]
-        mean_flat = fcst_df[model].to_numpy().ravel()
-        n_target = len(mean_flat) // horizon
-        if is_transfer:
-            # Transfer scenario: pool all source calibration points globally.
-            # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
-            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
-            mean_2d = mean_flat.reshape(n_target, horizon)
-            if weights is None:
-                sym_scores = np.vstack([-scores_pooled, scores_pooled])
-                global_q = np.quantile(sym_scores, cuts, axis=0)  # (n_cuts, horizon)
-                quantiles = (
-                    (global_q[:, np.newaxis, :] + mean_2d[np.newaxis, :, :])
-                    .reshape(len(cuts), -1)
-                    .T
-                )  # (n_target * horizon, n_cuts)
-            else:
-                w_pooled = weights.reshape(cs_n_windows * n_series, cs_h)[:, :horizon]
-                w_double = np.vstack([w_pooled, w_pooled])
-                w_test = (
-                    float(target_weights.mean())
-                    if target_weights is not None
-                    else float(w_pooled.mean())
-                )
-                # Offsets: {-s_i, +s_i} for each horizon step
-                sym_scores = np.vstack([-scores_pooled, scores_pooled])
-                cut_alphas = 1.0 - np.asarray(cuts)
-                quantiles = np.empty((n_target * horizon, len(cuts)))
-                for h_i in range(horizon):
-                    q_offsets = _weighted_quantiles(
-                        sym_scores[:, h_i], w_double[:, h_i], cut_alphas, w_test
-                    )
-                    quantiles[h_i::horizon, :] = (
-                        mean_2d[:, h_i][:, np.newaxis] + q_offsets[np.newaxis, :]
-                    )
-        else:
-            mean = mean_flat.reshape(1, n_series, -1)
-            paths = np.vstack(
-                [mean - scores, mean + scores]
-            )  # (2*n_windows, n_series, horizon)
-            if weights is None:
-                quantiles = np.quantile(paths, cuts, axis=0)
-                quantiles = quantiles.reshape(len(cuts), -1).T
-            else:
-                w = weights.reshape(cs_n_windows, n_series, cs_h)[:, :, :horizon]
-                w_double = np.vstack([w, w])  # replicate for both path directions
-                w_test = float(w.mean())
-                cut_alphas = 1.0 - np.asarray(cuts)
-                quantiles = np.empty((n_series * horizon, len(cuts)))
-                for h_i in range(horizon):
-                    q = _weighted_quantiles(
-                        paths[:, :, h_i].ravel(),
-                        w_double[:, :, h_i].ravel(),
-                        cut_alphas,
-                        w_test,
-                    )
-                    quantiles[h_i::horizon, :] = q[np.newaxis, :]
-        lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
-        hi_cols = [f"{model}-hi-{lv}" for lv in level]
-        fcst_df = ufp.assign_columns(fcst_df, lo_cols + hi_cols, quantiles)
-    return fcst_df
-
-
-def _build_clf(estimator: str):
-    """Build an sklearn classifier for density-ratio estimation."""
-    if estimator == "logistic":
-        from sklearn.linear_model import LogisticRegression
-
-        return LogisticRegression(max_iter=1000)
-    elif estimator == "gradient_boosting":
-        from sklearn.ensemble import GradientBoostingClassifier
-
-        return GradientBoostingClassifier()
-    else:
-        raise ValueError(
-            f"estimator must be 'logistic' or 'gradient_boosting', got '{estimator}'"
-        )
-
-
-def estimate_density_ratio(
-    source_features: np.ndarray,
-    target_features: np.ndarray,
-    estimator: str = "logistic",
-    cv: int = 5,
-    clip_quantile: Optional[float] = 0.99,
-    return_target_weights: bool = False,
-) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
-    """Estimate w(x) = p_target(x) / p_source(x) for source domain points.
-
-    Trains a binary classifier (source=0, target=1) on StandardScaler-
-    normalised features and returns the odds ratio p(1|x) / p(0|x) for
-    each source point.
-
-    Args:
-        source_features: Feature matrix for source-domain calibration points,
-            shape (n_source, n_features).
-        target_features: Feature matrix for target-domain points,
-            shape (n_target, n_features).
-        estimator: ``"logistic"`` (default) or ``"gradient_boosting"``.
-        cv: Number of stratified K-fold splits for cross-fitting (``cv >= 2``).
-            Source weights are computed from out-of-fold predictions, reducing
-            overfitting from in-sample scoring. ``cv=0`` or ``cv=1`` uses the
-            original in-sample behavior. Defaults to 5.
-        clip_quantile: Clip source weights above this quantile of the computed
-            weights to prevent extreme values. ``None`` disables clipping.
-            Defaults to 0.99.
-        return_target_weights: If ``True``, also return per-target-row weights
-            (averaged across fold models when ``cv >= 2``). Defaults to ``False``.
-
-    Returns:
-        np.ndarray of shape (n_source,) if ``return_target_weights=False``, else
-        a tuple ``(source_weights, target_weights)`` where target_weights has
-        shape (n_target,).
-    """
-    from sklearn.preprocessing import StandardScaler
-
-    n_src = len(source_features)
-    n_tgt = len(target_features)
-    if cv >= 2 and (n_src < cv or n_tgt < cv):
-        raise ValueError(
-            f"cv={cv} requires at least {cv} samples in both source ({n_src}) "
-            f"and target ({n_tgt}). Reduce cv or provide more data."
-        )
-    X = np.vstack([source_features, target_features])
-    y = np.array([0] * n_src + [1] * n_tgt)
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    if cv >= 2:
-        from sklearn.model_selection import StratifiedKFold
-
-        source_weights = np.zeros(n_src)
-        fold_probas_tgt: List[np.ndarray] = []
-        skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=0)
-        for train_idx, val_idx in skf.split(X_scaled, y):
-            clf = _build_clf(estimator)
-            clf.fit(X_scaled[train_idx], y[train_idx])
-            src_val_mask = val_idx < n_src
-            val_src_idx = val_idx[src_val_mask]
-            if len(val_src_idx):
-                proba = clf.predict_proba(X_scaled[val_src_idx])
-                source_weights[val_src_idx] = proba[:, 1] / np.clip(
-                    proba[:, 0], 1e-10, None
-                )
-            if return_target_weights:
-                proba_tgt = clf.predict_proba(X_scaled[n_src:])
-                fold_probas_tgt.append(proba_tgt)
-        source_weights = np.clip(source_weights, 1e-10, None)
-        if return_target_weights:
-            avg_tgt = np.mean(fold_probas_tgt, axis=0)
-            target_weights = avg_tgt[:, 1] / np.clip(avg_tgt[:, 0], 1e-10, None)
-    else:
-        clf = _build_clf(estimator)
-        clf.fit(X_scaled, y)
-        proba = clf.predict_proba(X_scaled[:n_src])
-        source_weights = np.clip(
-            proba[:, 1] / np.clip(proba[:, 0], 1e-10, None), 1e-10, None
-        )
-        if return_target_weights:
-            proba_tgt = clf.predict_proba(X_scaled[n_src:])
-            target_weights = proba_tgt[:, 1] / np.clip(proba_tgt[:, 0], 1e-10, None)
-
-    if clip_quantile is not None:
-        clip_val = float(np.quantile(source_weights, clip_quantile))
-        source_weights = np.minimum(source_weights, clip_val)
-        if return_target_weights:
-            target_weights = np.minimum(target_weights, clip_val)
-
-    if return_target_weights:
-        return source_weights, target_weights
-    return source_weights
-
-
 _INTERVAL_METHODS: Dict[str, Callable[..., Any]] = {
     "conformal_distribution": _add_conformal_distribution_intervals,
     "conformal_error": _add_conformal_error_intervals,
-    "weighted_conformal_distribution": _add_weighted_conformal_distribution_intervals,
-    "weighted_conformal_error": _add_weighted_conformal_error_intervals,
 }
 
 
@@ -757,7 +443,6 @@ def compute_conformity_scores(
     cv_results: DFType,
     model_names: List[str],
     target_col: str,
-    feature_cols: Optional[List[str]] = None,
     signed: bool = False,
 ) -> DFType:
     """Compute conformity scores over CV folds.
@@ -766,8 +451,6 @@ def compute_conformity_scores(
         cv_results: Cross-validation output with actual and predicted columns.
         model_names: Names of model columns to convert to errors.
         target_col: Name of the target column (dropped from output).
-        feature_cols: Optional list of extra feature columns to keep alongside
-            the error columns. Used by the weighted conformal DRE logic.
         signed: If True, compute signed errors (y - pred). If False (default),
             compute absolute errors |pred - target|.
     """
@@ -777,11 +460,7 @@ def compute_conformity_scores(
         else:
             err = abs(cv_results[model] - cv_results[target_col])
         cv_results = ufp.assign_columns(cv_results, model, err)
-    result = ufp.drop_columns(cv_results, target_col)
-    if feature_cols is not None:
-        keep = [c for c in result.columns if c not in feature_cols] + feature_cols
-        result = result[keep]
-    return result
+    return ufp.drop_columns(cv_results, target_col)
 
 
 @dataclass
@@ -789,7 +468,6 @@ class _TransferMethodSpec:
     """Capability flags for a transfer conformal method."""
 
     fn: Callable
-    needs_preprocess: bool = False
     needs_source_cs: bool = False
     runs_target_cv: bool = False
 
@@ -799,10 +477,17 @@ class TransferResult:
     """Return value from transfer conformal functions."""
 
     cs_df: DFType
-    weights: Optional[np.ndarray] = None
     target_scales: Optional[Dict[str, float]] = None  # uid -> sigma_tgt
-    target_weights: Optional[np.ndarray] = None
     signed: bool = False
+
+
+@dataclass
+class Calibration:
+    """Conformity scores computed at fit and their adaptation to transferred series."""
+
+    scores: DFType
+    source_scales: Optional[Dict] = None
+    adapted: Optional[TransferResult] = None
 
 
 def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
@@ -841,7 +526,6 @@ def _recalibrate_transfer(
     backtest_results: Optional[DFType] = None,
     id_col: str = "unique_id",  # noqa: ARG001
     time_col: str = "ds",  # noqa: ARG001
-    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
     source_cs_df: Optional[DFType] = None,  # noqa: ARG001
     source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
@@ -866,198 +550,36 @@ def _recalibrate_transfer(
     )
 
 
-def _resolve_user_weights(
-    weights: Union[np.ndarray, Callable], cs_df: DFType, feature_cols: List[str]
-) -> np.ndarray:
-    """Evaluate ``TransferConformal.weights`` on the rows of ``cs_df``."""
-    if callable(weights):
-        X = (
-            np.column_stack([cs_df[c].to_numpy() for c in feature_cols]).astype(float)
-            if feature_cols
-            else None
-        )
-        weights = weights(X)
-    weights = np.asarray(weights, dtype=float)
-    if weights.size != len(cs_df):
-        raise ValueError(
-            "TransferConformal.weights must have one entry per source calibration "
-            f"row ({len(cs_df)},), got shape {weights.shape}."
-        )
-    # accept column vectors such as predict_proba(X)[:, 1:]
-    return weights.ravel()
-
-
-def _weighted_conformal_transfer(
+def _scale_aligned_transfer(
     new_df: DFType,
     prediction_intervals: PredictionIntervals,  # noqa: ARG001
     tc: TransferConformal,
-    model_names: List[str],
-    target_col: str,  # noqa: ARG001
-    backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    id_col: str = "unique_id",
-    time_col: str = "ds",
-    preprocess_fn: Optional[Callable] = None,
-    source_cs_df: Optional[DFType] = None,
-    source_scales: Optional[Dict] = None,  # noqa: ARG001
-) -> TransferResult:
-    """Compute DRE weights for source conformity scores under covariate shift.
-
-    Unlike ``_recalibrate_transfer``, this method does NOT replace the source
-    conformity scores. Instead it trains a logistic classifier to distinguish
-    source from target features, computes likelihood-ratio weights for each
-    source calibration point, and returns them in a ``TransferResult``.  The
-    original ``source_cs_df`` is returned unchanged so the caller can continue
-    using source residuals with weighted quantiles.
-
-    Requires ``preprocess_fn`` (``MLForecast.preprocess``) and
-    ``source_cs_df`` (the existing ``_cs_df``) to be provided.
-    """
-    if preprocess_fn is None or source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='weighted_conformal' requires the model "
-            "to have been fit with a weighted_conformal method so that source "
-            "features are stored, and preprocess_fn must be supplied."
-        )
-
-    non_feature_cols = set(list(model_names) + [id_col, time_col, "cutoff"])
-    feature_cols = [c for c in source_cs_df.columns if c not in non_feature_cols]
-
-    if tc.weights is not None:
-        # user weights replace the density ratio
-        weights = _resolve_user_weights(tc.weights, source_cs_df, feature_cols)
-        return TransferResult(cs_df=source_cs_df, weights=weights)
-
-    if not feature_cols:
-        raise ValueError(
-            "No feature columns found in source conformity scores. "
-            "Refit the model with PredictionIntervals(method='weighted_conformal_error') "
-            "or 'weighted_conformal_distribution' so that source features are stored."
-        )
-
-    tgt_preprocessed = preprocess_fn(new_df, validate_data=False)
-    tgt_feature_cols = [c for c in feature_cols if c in tgt_preprocessed.columns]
-
-    dropped = set(feature_cols) - set(tgt_feature_cols)
-    if dropped:
-        warnings.warn(
-            f"Target data is missing {len(dropped)} feature column(s) used during source fit "
-            f"({sorted(dropped)}). Density ratio estimation will use the common subset only.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    src_np = np.column_stack(
-        [source_cs_df[c].to_numpy() for c in tgt_feature_cols]
-    ).astype(float)
-    tgt_np = np.column_stack(
-        [tgt_preprocessed[c].to_numpy() for c in tgt_feature_cols]
-    ).astype(float)
-
-    weights, target_weights = estimate_density_ratio(
-        src_np,
-        tgt_np,
-        estimator=tc.dre_estimator,
-        cv=tc.cv,
-        clip_quantile=tc.clip_quantile,
-        return_target_weights=True,
-    )
-    return TransferResult(
-        cs_df=source_cs_df, weights=weights, target_weights=target_weights
-    )
-
-
-def _scale_aligned_transfer(
-    new_df: DFType,
-    prediction_intervals: PredictionIntervals,
-    tc: TransferConformal,  # noqa: ARG001
     model_names: List[str],  # noqa: ARG001
     target_col: str,
     backtest_results: Optional[DFType] = None,  # noqa: ARG001
     id_col: str = "unique_id",
     time_col: str = "ds",
-    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
     source_cs_df: Optional[DFType] = None,
     source_scales: Optional[Dict] = None,
 ) -> TransferResult:
     """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
 
-    Requires the model to have been fit with
-    ``PredictionIntervals(scale_estimator='mad' or 'std')``.
     Returns source conformity scores unchanged together with per-series
     target scales in ``TransferResult.target_scales``.
     """
-    if (
-        source_scales is None
-        or prediction_intervals.scale_estimator is None
-        or source_cs_df is None
-    ):
+    if source_scales is None or source_cs_df is None:
         raise ValueError(
-            "transfer_conformal_method='scale_aligned' requires the model to have "
-            "been fit with PredictionIntervals(scale_estimator='mad' or 'std')."
+            "transfer method 'scale_aligned' requires the model to have been fit "
+            "with PredictionIntervals(transfer='scale_aligned')."
         )
     target_scale_dict = _compute_series_scales(
         new_df,
         id_col=id_col,
         time_col=time_col,
         target_col=target_col,
-        method=prediction_intervals.scale_estimator,
+        method=tc.scale_estimator,
     )
     return TransferResult(cs_df=source_cs_df, target_scales=target_scale_dict)
-
-
-def _scale_aligned_weighted_transfer(
-    new_df: DFType,
-    prediction_intervals: PredictionIntervals,
-    tc: TransferConformal,
-    model_names: List[str],
-    target_col: str,
-    backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    id_col: str = "unique_id",
-    time_col: str = "ds",
-    preprocess_fn: Optional[Callable] = None,
-    source_cs_df: Optional[DFType] = None,
-    source_scales: Optional[Dict] = None,
-) -> TransferResult:
-    """Compose scale alignment with DRE weighting.
-
-    Requires fitting with ``weighted_conformal_error`` or
-    ``weighted_conformal_distribution`` (for feature columns) AND
-    ``scale_estimator`` set on ``PredictionIntervals``.
-    """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='scale_aligned_weighted' requires source_cs_df."
-        )
-    wc_result = _weighted_conformal_transfer(
-        new_df=new_df,
-        prediction_intervals=prediction_intervals,
-        tc=tc,
-        model_names=model_names,
-        target_col=target_col,
-        id_col=id_col,
-        time_col=time_col,
-        preprocess_fn=preprocess_fn,
-        source_cs_df=source_cs_df,
-        source_scales=source_scales,
-    )
-    sa_result = _scale_aligned_transfer(
-        new_df=new_df,
-        prediction_intervals=prediction_intervals,
-        tc=tc,
-        model_names=model_names,
-        target_col=target_col,
-        id_col=id_col,
-        time_col=time_col,
-        preprocess_fn=preprocess_fn,
-        source_cs_df=source_cs_df,
-        source_scales=source_scales,
-    )
-    return TransferResult(
-        cs_df=source_cs_df,
-        weights=wc_result.weights,
-        target_scales=sa_result.target_scales,
-        target_weights=wc_result.target_weights,
-    )
 
 
 def _error_scaled_transfer(
@@ -1069,7 +591,6 @@ def _error_scaled_transfer(
     backtest_results: Optional[DFType] = None,
     id_col: str = "unique_id",  # noqa: ARG001
     time_col: str = "ds",  # noqa: ARG001
-    preprocess_fn: Optional[Callable] = None,  # noqa: ARG001
     source_cs_df: Optional[DFType] = None,
     source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
@@ -1102,18 +623,8 @@ _TRANSFER_METHODS: Dict[str, _TransferMethodSpec] = {
         fn=_recalibrate_transfer,
         runs_target_cv=True,
     ),
-    "weighted_conformal": _TransferMethodSpec(
-        fn=_weighted_conformal_transfer,
-        needs_preprocess=True,
-        needs_source_cs=True,
-    ),
     "scale_aligned": _TransferMethodSpec(
         fn=_scale_aligned_transfer,
-        needs_source_cs=True,
-    ),
-    "scale_aligned_weighted": _TransferMethodSpec(
-        fn=_scale_aligned_weighted_transfer,
-        needs_preprocess=True,
         needs_source_cs=True,
     ),
     "error_scaled": _TransferMethodSpec(

@@ -131,90 +131,20 @@ def test_apply_scale_alignment_equiv(backend):
 
 
 # ---------------------------------------------------------------------------
-# 3. weighted quantiles (vectorized vs scalar reference)
+# 3. interval functions (transfer and non-transfer)
 # ---------------------------------------------------------------------------
 
-def test_weighted_quantiles_matches_scalar_reference():
-    rng = np.random.default_rng(2)
-    values = rng.normal(size=200)
-    values[::7] = values[0]  # ties exercise searchsorted side='left' tie-breaking
-    weights = rng.uniform(0.1, 3.0, size=200)
-    alphas = np.array([0.025, 0.05, 0.1, 0.5, 0.9, 0.95, 0.975])
-    got = cp._weighted_quantiles(values, weights, alphas, w_test=1.3)
-    expected = np.array(
-        [ref._weighted_quantile(values, weights, a, w_test=1.3) for a in alphas]
-    )
-    np.testing.assert_array_equal(got, expected)
-
-
-def test_weighted_quantile_wrapper_unchanged():
-    rng = np.random.default_rng(7)
-    values = rng.normal(size=50)
-    weights = rng.uniform(0.1, 2.0, size=50)
-    for alpha in (0.05, 0.5, 0.95):
-        assert cp._weighted_quantile(values, weights, alpha, 0.7) == ref._weighted_quantile(
-            values, weights, alpha, 0.7
-        )
-
-
-# ---------------------------------------------------------------------------
-# 4. interval functions (all four, transfer and non-transfer)
-# ---------------------------------------------------------------------------
-
-WEIGHTED_FNS = [
-    "_add_weighted_conformal_error_intervals",
-    "_add_weighted_conformal_distribution_intervals",
-]
-UNWEIGHTED_FNS = [
+INTERVAL_FNS = [
     "_add_conformal_error_intervals",
     "_add_conformal_distribution_intervals",
 ]
 
 
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
-@pytest.mark.parametrize("fn_name", WEIGHTED_FNS)
-@pytest.mark.parametrize("is_transfer", [False, True])
-@pytest.mark.parametrize("use_weights", [False, True])
-@pytest.mark.parametrize("horizon", [5, 6])  # truncated (h < cs_h) and full (h == cs_h)
-def test_weighted_interval_equiv(backend, fn_name, is_transfer, use_weights, horizon):
-    n_windows, n_series, cs_h = 2, 8, 6
-    models = ["m1", "m2"]
-    level = [80, 95]
-    cs_df = make_cs_df(n_windows, n_series, cs_h, models, backend=backend)
-    n_target = 4 if is_transfer else n_series
-    fcst_df = make_fcst_df(n_target, horizon, models, backend=backend)
-    rng = np.random.default_rng(4)
-    weights = (
-        rng.uniform(0.1, 2.0, size=n_windows * n_series * cs_h)
-        if use_weights
-        else None
-    )
-    target_weights = (
-        rng.uniform(0.1, 2.0, size=n_target * horizon)
-        if (use_weights and is_transfer)
-        else None
-    )
-    kwargs = dict(
-        model_names=models,
-        level=level,
-        cs_n_windows=n_windows,
-        cs_h=cs_h,
-        n_series=n_series,
-        horizon=horizon,
-        weights=weights,
-        is_transfer=is_transfer,
-        target_weights=target_weights,
-    )
-    expected = getattr(ref, fn_name)(fcst_df, cs_df, **kwargs)
-    actual = getattr(cp, fn_name)(fcst_df, cs_df, **kwargs)
-    assert_frames_close(actual, expected)
-
-
-@pytest.mark.parametrize("backend", ["pandas", "polars"])
-@pytest.mark.parametrize("fn_name", UNWEIGHTED_FNS)
+@pytest.mark.parametrize("fn_name", INTERVAL_FNS)
 @pytest.mark.parametrize("is_transfer", [False, True])
 @pytest.mark.parametrize("horizon", [5, 6])  # truncated (h < cs_h) and full (h == cs_h)
-def test_unweighted_interval_equiv(backend, fn_name, is_transfer, horizon):
+def test_interval_equiv(backend, fn_name, is_transfer, horizon):
     n_windows, n_series, cs_h = 2, 8, 6
     models = ["m1", "m2"]
     level = [80, 95]
@@ -236,7 +166,7 @@ def test_unweighted_interval_equiv(backend, fn_name, is_transfer, horizon):
 
 
 # ---------------------------------------------------------------------------
-# 5. interval rescaling helper (replaces forecast.py triple loop)
+# 4. interval rescaling helper (replaces forecast.py triple loop)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("backend", ["pandas", "polars"])

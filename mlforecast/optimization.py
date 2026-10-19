@@ -160,7 +160,7 @@ def mlforecast_objective(
                 keep_cols = list(train.columns)
                 if weight_col is not None:
                     keep_cols.remove(weight_col)
-                fcst = mlf.transfer(train[keep_cols])
+                fcst = mlf._transfer(train[keep_cols], None)
             preds = fcst.predict(h=h, X_df=X_df)
             result = ufp.join(
                 valid[id_cols],

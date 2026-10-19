@@ -346,5 +346,5 @@ class _MLForecastModelWrapper:
         if X_df is not None:
             X_df = pd.DataFrame(X_df).astype(col_types)
         ids = attrs.get("ids")
-        model = self.model if new_df is None else self.model.transfer(new_df)
+        model = self.model if new_df is None else self.model._transfer(new_df, None)
         return model.predict(h=h, level=level, X_df=X_df, ids=ids)
