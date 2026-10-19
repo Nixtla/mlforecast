@@ -1,4 +1,4 @@
-import time
+from unittest.mock import patch
 
 import optuna
 import pandas as pd
@@ -17,6 +17,7 @@ from mlforecast.auto import (
     AutoModel,
     AutoRidge,
     PredictionIntervals,
+    lightgbm_space,
     ridge_space,
 )
 from mlforecast.lag_transforms import ExpandingMean
@@ -60,7 +61,16 @@ def test_automlforecast_pipeline(weekly_data):
     auto_mlf = AutoMLForecast(
         freq=1,
         season_length=season_length,
-        models={"lgb": AutoLightGBM(), "ridge": auto_ridge},
+        models={
+            "lgb": AutoLightGBM(
+                config=lambda trial: {
+                    **lightgbm_space(trial),
+                    "n_estimators": 20,
+                    "num_leaves": 31,
+                }
+            ),
+            "ridge": auto_ridge,
+        },
         fit_config=lambda trial: {"static_features": ["unique_id"]},
         num_threads=2,
     )
@@ -251,30 +261,32 @@ def test_nonstandard_column_names(weekly_data):
     )
 
 
-def test_input_size_speedup(weekly_data):
+@pytest.mark.parametrize("reuse_cv_splits", [False, True])
+def test_input_size_limits_training_rows(weekly_data, reuse_cv_splits):
     train, _, info = weekly_data
-    h = info.horizon
-    season_length = info.seasonality
+    input_size = 50
+    rows = []
+    original_fit = Ridge.fit
+
+    def spy(self, X, y, *args, **kwargs):
+        rows.append(X.shape[0])
+        return original_fit(self, X, y, *args, **kwargs)
+
     model = AutoMLForecast(
-        freq=1, season_length=season_length, models={"ridge": AutoRidge()}
+        freq=1,
+        models={"ridge": AutoModel(Ridge(), config=lambda trial: {})},  # noqa: ARG005
+        init_config=lambda trial: {"lags": [1, 2, 3]},  # noqa: ARG005
+        reuse_cv_splits=reuse_cv_splits,
     )
-    fit_kwargs = dict(
-        n_windows=3,
-        h=h,
-        num_samples=5,
-        optimize_kwargs={"timeout": 60},
-    )
+    with patch.object(Ridge, "fit", spy):
+        model.fit(
+            df=train, n_windows=2, h=info.horizon, num_samples=1, input_size=input_size
+        )
 
-    start = time.perf_counter()
-    model.fit(df=train, **fit_kwargs)
-    time_no_limit = time.perf_counter() - start
+    # one search fit: every serie keeps input_size rows minus the 3 dropped by the lags.
+    # the last fit is the best model refit on the full data, which input_size doesn't cap
+    assert rows[:-1] == [train["unique_id"].nunique() * (input_size - 3)]
 
-    start = time.perf_counter()
-    model.fit(df=train, input_size=50, **fit_kwargs)
-    time_with_limit = time.perf_counter() - start
-
-    assert time_with_limit < time_no_limit
-    
 
 def test_reuse_cv_splits_same_predictions(weekly_data):
     train, valid, info = weekly_data
