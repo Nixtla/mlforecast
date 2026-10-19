@@ -874,6 +874,26 @@ def test_transfer_ids_only_selects_forecasts(weighted_transfer_setup, method):
     )
 
 
+@pytest.mark.parametrize("first", TRANSFER_METHODS)
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_chained_adapts_from_source(weighted_transfer_setup, first, method):
+    fcst, tgt = weighted_transfer_setup
+    first_df = tgt[tgt["unique_id"].isin(["tgt_id_0", "tgt_id_1"])]
+    chained = fcst.transfer(first_df, conformal=first).transfer(tgt, conformal=method)
+    pd.testing.assert_frame_equal(
+        chained.predict(3, level=[80]),
+        fcst.transfer(tgt, conformal=method).predict(3, level=[80]),
+    )
+
+
+def test_transfer_chained_after_transfer_without_conformal_raises(
+    weighted_transfer_setup,
+):
+    fcst, tgt = weighted_transfer_setup
+    with pytest.raises(ValueError, match="transferred without `conformal`"):
+        fcst.transfer(tgt).transfer(tgt, conformal="recalibrate")
+
+
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_save_load(weighted_transfer_setup, method, tmp_path):
     fcst, tgt = weighted_transfer_setup

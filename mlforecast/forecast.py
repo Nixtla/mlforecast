@@ -1514,14 +1514,19 @@ class MLForecast:
         """
         self._check_fitted()
         out = self._with_ts(self.ts._clone_warm(df))
-        out._cs_df = None
         out._transfer_ = None
         if conformal is None:
+            out._cs_df = None
             return out
-        if self._cs_df is None or self.prediction_intervals is None:
+        if self.prediction_intervals is None:
             raise ValueError(
                 "Transfer-learning prediction intervals require that the model was "
                 "fit with `prediction_intervals=PredictionIntervals(...)`."
+            )
+        if self._cs_df is None:
+            raise ValueError(
+                "This model was transferred without `conformal`, so it has no "
+                "conformity scores to adapt. Call `transfer` on the fitted model instead."
             )
         if isinstance(conformal, str):
             conformal = TransferConformal(method=conformal)
@@ -1584,7 +1589,6 @@ class MLForecast:
             source_cs_df=(self._cs_df if spec.needs_source_cs else None),
             source_scales=(self._cs_source_scales_ if spec.needs_source_cs else None),
         )
-        out._cs_df = out._transfer_.cs_df
         return out
 
     def predict(
@@ -1643,7 +1647,9 @@ class MLForecast:
             transfer_result = TransferResult(cs_df=self._cs_df, weights=w_arr)
 
         ts = self.ts
-        conformity_scores = self._cs_df
+        conformity_scores = (
+            self._cs_df if self._transfer_ is None else self._transfer_.cs_df
+        )
         forecasts = ts.predict(
             models=self.models_,
             horizon=h,
