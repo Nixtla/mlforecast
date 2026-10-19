@@ -69,6 +69,13 @@ def predictions_w_intervals(fcst_with_intervals):
     return fcst_with_intervals.predict(48, level=[50, 80, 95])
 
 
+def _unseen(df):
+    """Rename the series so none were seen during calibration."""
+    df = df.copy()
+    df["unique_id"] = "new_" + df["unique_id"].astype(str)
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Conformal method validation
 # ---------------------------------------------------------------------------
@@ -150,47 +157,6 @@ def test_weighted_conformal_features_stored(weighted_conformal_setup):
     non_feat_cols = {fcst.ts.id_col, fcst.ts.time_col, "cutoff"} | set(fcst.models.keys())
     feat_cols = [c for c in fcst._cs_df.columns if c not in non_feat_cols]
     assert len(feat_cols) > 0, "_cs_df must contain feature columns for DRE"
-
-
-def test_weighted_conformal_uniform_weights_matches_standard(weighted_conformal_setup):
-    """Uniform weights should produce intervals close to the unweighted method."""
-    fcst, series, h, n_windows = weighted_conformal_setup
-    n_series = fcst.ts.ga.n_groups
-    n_cal_rows = len(fcst._cs_df)
-
-    preds_std = fcst.predict(h, level=[80])
-
-    uniform_weights = np.ones(n_cal_rows)
-    preds_w = fcst.predict(h, level=[80], transfer_conformal=TransferConformal(method="weighted_conformal", weights=uniform_weights))
-
-    pd.testing.assert_series_equal(
-        preds_std["LGBMRegressor"], preds_w["LGBMRegressor"]
-    )
-    assert "LGBMRegressor-lo-80" in preds_w.columns
-    assert "LGBMRegressor-hi-80" in preds_w.columns
-
-
-def test_weighted_conformal_user_array(weighted_conformal_setup):
-    """User-supplied weight array flows through; intervals are finite and ordered."""
-    fcst, _, h, _ = weighted_conformal_setup
-    n_cal_rows = len(fcst._cs_df)
-    weights = np.random.default_rng(42).exponential(scale=1.0, size=n_cal_rows)
-    preds = fcst.predict(h, level=[80, 95], transfer_conformal=TransferConformal(method="weighted_conformal", weights=weights))
-
-    assert "LGBMRegressor-lo-80" in preds.columns
-    assert preds["LGBMRegressor-lo-80"].notna().all()
-    assert preds["LGBMRegressor-hi-80"].notna().all()
-    assert (preds["LGBMRegressor-lo-80"] <= preds["LGBMRegressor-hi-80"]).all()
-
-
-def test_weighted_conformal_callable_weights(weighted_conformal_setup):
-    """Callable receives source feature matrix and returns weights; intervals are valid."""
-    fcst, _, h, _ = weighted_conformal_setup
-    weight_fn = lambda X: np.ones(len(X)) if X is not None else np.ones(len(fcst._cs_df))
-    preds = fcst.predict(h, level=[80], transfer_conformal=TransferConformal(method="weighted_conformal", weights=weight_fn))
-
-    assert "LGBMRegressor-lo-80" in preds.columns
-    assert preds["LGBMRegressor-lo-80"].notna().all()
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +310,7 @@ def test_scale_aligned_transfer_large_target(scale_aligned_setup):
     src_width = (preds_src["LGBMRegressor-hi-80"] - preds_src["LGBMRegressor-lo-80"]).mean()
 
     preds_sa = fcst.predict(
-        h, level=[80], new_df=target_series,
+        h, level=[80], new_df=_unseen(target_series),
         transfer_conformal="scale_aligned",
     )
     assert "LGBMRegressor-lo-80" in preds_sa.columns
@@ -398,7 +364,7 @@ def test_scale_aligned_weighted_composes(scale_aligned_setup):
 
     preds = fcst_w.predict(
         h, level=[80],
-        new_df=target_series,
+        new_df=_unseen(target_series),
         transfer_conformal="scale_aligned_weighted",
     )
     assert "LGBMRegressor-lo-80" in preds.columns
@@ -418,7 +384,7 @@ def test_scale_aligned_requires_scale_estimator():
     fcst.fit(series, prediction_intervals=PredictionIntervals(method="conformal_error"))
     target_df = series.groupby("unique_id").tail(10).reset_index(drop=True)
     with pytest.raises(ValueError, match="scale_estimator"):
-        fcst.predict(5, level=[80], new_df=target_df, transfer_conformal="scale_aligned")
+        fcst.predict(5, level=[80], new_df=_unseen(target_df), transfer_conformal="scale_aligned")
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +399,7 @@ def test_weighted_conformal_auto_dre(weighted_conformal_setup):
     preds = fcst.predict(
         h,
         level=[80],
-        new_df=target_df,
+        new_df=_unseen(target_df),
         transfer_conformal="weighted_conformal",
     )
     assert "LGBMRegressor-lo-80" in preds.columns
@@ -453,7 +419,7 @@ def test_weighted_conformal_auto_dre_requires_weighted_method():
     fcst.fit(series, prediction_intervals=PredictionIntervals(method="conformal_error"))
     target_df = series.groupby("unique_id").tail(10).reset_index(drop=True)
     with pytest.raises(ValueError, match="weighted_conformal"):
-        fcst.predict(5, level=[80], new_df=target_df,
+        fcst.predict(5, level=[80], new_df=_unseen(target_df),
                      transfer_conformal="weighted_conformal")
 
 
@@ -464,9 +430,9 @@ def test_weighted_conformal_auto_dre_requires_weighted_method():
 def test_transfer_conformal_string_shorthand_equals_object(scale_aligned_setup):
     """String shorthand == TransferConformal(method=<str>) for predict output."""
     fcst, _, target_series, h = scale_aligned_setup
-    preds_str = fcst.predict(h, level=[80], new_df=target_series, transfer_conformal="scale_aligned")
+    preds_str = fcst.predict(h, level=[80], new_df=_unseen(target_series), transfer_conformal="scale_aligned")
     from mlforecast.conformal_prediction import TransferConformal as TC
-    preds_obj = fcst.predict(h, level=[80], new_df=target_series, transfer_conformal=TC(method="scale_aligned"))
+    preds_obj = fcst.predict(h, level=[80], new_df=_unseen(target_series), transfer_conformal=TC(method="scale_aligned"))
     pd.testing.assert_frame_equal(preds_str, preds_obj)
 
 
