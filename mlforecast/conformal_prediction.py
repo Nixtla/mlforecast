@@ -52,12 +52,17 @@ class TransferConformal:
             raise ValueError(
                 f"TransferConformal.step_size must be >= 1, got {self.step_size}"
             )
-        if not get_transfer_method_spec(self.method).runs_target_cv and (
+        if self.method == "scale_aligned" and (
             self.n_windows is not None or self.step_size is not None
         ):
             raise ValueError(
                 "TransferConformal.n_windows and step_size are only valid with "
                 f"method='recalibrate' or 'error_scaled', got method='{self.method}'"
+            )
+        if self.method == "recalibrate" and self.n_windows == 1:
+            raise ValueError(
+                "TransferConformal(method='recalibrate') requires at least 2 "
+                "windows, got n_windows=1"
             )
         if self.method != "scale_aligned" and self.scale_estimator != "mad":
             raise ValueError(
@@ -215,11 +220,7 @@ def _rescale_interval_columns(
     level: List[Union[int, float]],
     sigma_tgt: np.ndarray,
 ) -> DFType:
-    """Multiply interval half-widths by per-row σ̂_tgt, one assignment per column.
-
-    Replaces the per-(model, level, direction) loop previously inlined in
-    ``MLForecast.predict()``.
-    """
+    """Multiply interval half-widths by per-row σ̂_tgt, one assignment per column."""
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
     for model_name in model_names:
         mean_arr = fcst_df[model_name].to_numpy().astype(float)
@@ -350,35 +351,18 @@ def _add_signed_transfer_intervals(
     target domain.
     """
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
-    # Determine the effective horizon stored in cs_df. If cs_h=1 but horizon>1,
-    # the calibration set only has 1-step scores; broadcast constant intervals.
-    effective_cs_h = cs_h if cs_h > 1 else 1
-    use_flat_pool = effective_cs_h == 1 and horizon > 1
-    n_cal_flat = len(cs_df[model_names[0]].to_numpy())
-    n_cal_series = n_cal_flat // effective_cs_h  # n_windows * n_target_series
+    # level is pre-sorted ascending (e.g. [80, 90, 95])
+    # lo cols: reversed levels (widest first) → [lo-95, lo-90, lo-80]
+    # hi cols: ascending levels (narrowest first) → [hi-80, hi-90, hi-95]
+    lo_cuts = [((100 - lv) / 100) / 2 for lv in reversed(level)]
+    hi_cuts = [1 - ((100 - lv) / 100) / 2 for lv in level]
+    all_cuts = lo_cuts + hi_cuts
 
     for model in model_names:
         mean = fcst_df[model].to_numpy().ravel()
-        scores = cs_df[model].to_numpy().astype(float)
-
-        # level is pre-sorted ascending (e.g. [80, 90, 95])
-        # lo cols: reversed levels (widest first) → [lo-95, lo-90, lo-80]
-        # hi cols: ascending levels (narrowest first) → [hi-80, hi-90, hi-95]
-        lo_cuts = [((100 - lv) / 100) / 2 for lv in reversed(level)]
-        hi_cuts = [1 - ((100 - lv) / 100) / 2 for lv in level]
-        all_cuts = lo_cuts + hi_cuts
-
-        if use_flat_pool:
-            # cs_h=1: compute a single quantile over all scores, broadcast to all steps.
-            # Shape: (n_cuts,) -> (n_cuts, horizon) via broadcasting.
-            q_flat = np.quantile(scores, all_cuts)  # (n_cuts,)
-            q_per_horizon = np.tile(
-                q_flat[:, np.newaxis], (1, horizon)
-            )  # (n_cuts, horizon)
-        else:
-            scores_2d = scores.reshape(n_cal_series, effective_cs_h)
-            # q_per_horizon: (n_cuts, horizon) — per-step quantiles
-            q_per_horizon = np.quantile(scores_2d, all_cuts, axis=0)
+        scores = cs_df[model].to_numpy().astype(float).reshape(-1, cs_h)
+        # (n_cuts, horizon), or (n_cuts, 1) broadcast to every step when cs_h=1
+        q_per_horizon = np.quantile(scores[:, :horizon], all_cuts, axis=0)
 
         # Bias warnings
         n_lo = len(lo_cuts)
@@ -461,15 +445,6 @@ def compute_conformity_scores(
 
 
 @dataclass
-class _TransferMethodSpec:
-    """Capability flags for a transfer conformal method."""
-
-    fn: Callable
-    needs_source_cs: bool = False
-    runs_target_cv: bool = False
-
-
-@dataclass
 class TransferResult:
     """Return value from transfer conformal functions."""
 
@@ -515,30 +490,15 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
 
 
 def _recalibrate_transfer(
-    new_df: DFType,  # noqa: ARG001
-    prediction_intervals: PredictionIntervals,
-    tc: TransferConformal,
+    backtest_results: DFType,
     model_names: List[str],
     target_col: str,
-    backtest_results: Optional[DFType] = None,
-    id_col: str = "unique_id",  # noqa: ARG001
-    time_col: str = "ds",  # noqa: ARG001
-    source_cs_df: Optional[DFType] = None,  # noqa: ARG001
-    source_scales: Optional[Dict] = None,  # noqa: ARG001
 ) -> TransferResult:
     """Recompute conformity scores from frozen-model backtest on new_df.
 
     Uses signed residuals (y − pred) so systematic bias shifts the interval
     instead of merely widening it.
     """
-    effective_n = (
-        tc.n_windows if tc.n_windows is not None else prediction_intervals.n_windows
-    )
-    if effective_n < 2:
-        raise ValueError(
-            f"transfer method 'recalibrate' requires at least 2 window(s), "
-            f"got n_windows={effective_n}."
-        )
     return TransferResult(
         cs_df=compute_conformity_scores(
             backtest_results, model_names, target_col, signed=True
@@ -549,47 +509,37 @@ def _recalibrate_transfer(
 
 def _scale_aligned_transfer(
     new_df: DFType,
-    prediction_intervals: PredictionIntervals,  # noqa: ARG001
-    tc: TransferConformal,
-    model_names: List[str],  # noqa: ARG001
+    model_names: List[str],
+    id_col: str,
+    time_col: str,
     target_col: str,
-    backtest_results: Optional[DFType] = None,  # noqa: ARG001
-    id_col: str = "unique_id",
-    time_col: str = "ds",
-    source_cs_df: Optional[DFType] = None,
-    source_scales: Optional[Dict] = None,
+    scale_estimator: str,
+    source_cs_df: DFType,
+    source_scales: Dict,
 ) -> TransferResult:
     """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
 
-    Returns source conformity scores unchanged together with per-series
-    target scales in ``TransferResult.target_scales``.
+    Returns the source conformity scores normalized by σ̂_source together with
+    per-series target scales in ``TransferResult.target_scales``.
     """
-    if source_scales is None or source_cs_df is None:
-        raise ValueError(
-            "transfer method 'scale_aligned' requires the model to have been fit "
-            "with PredictionIntervals(transfer='scale_aligned')."
-        )
     target_scale_dict = _compute_series_scales(
         new_df,
         id_col=id_col,
         time_col=time_col,
         target_col=target_col,
-        method=tc.scale_estimator,
+        method=scale_estimator,
     )
-    return TransferResult(cs_df=source_cs_df, target_scales=target_scale_dict)
+    return TransferResult(
+        cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
+        target_scales=target_scale_dict,
+    )
 
 
 def _error_scaled_transfer(
-    new_df: DFType,  # noqa: ARG001
-    prediction_intervals: PredictionIntervals,  # noqa: ARG001
-    tc: TransferConformal,  # noqa: ARG001
+    backtest_results: DFType,
     model_names: List[str],
     target_col: str,
-    backtest_results: Optional[DFType] = None,
-    id_col: str = "unique_id",  # noqa: ARG001
-    time_col: str = "ds",  # noqa: ARG001
-    source_cs_df: Optional[DFType] = None,
-    source_scales: Optional[Dict] = None,  # noqa: ARG001
+    source_cs_df: DFType,
 ) -> TransferResult:
     """Scale source conformity scores by a single global IQR ratio (target / source).
 
@@ -598,11 +548,6 @@ def _error_scaled_transfer(
     target but does not account for series-level heterogeneity within the target domain.
     For per-series scale correction use ``scale_aligned`` instead.
     """
-    if source_cs_df is None:
-        raise ValueError(
-            "transfer_conformal_method='error_scaled' requires source_cs_df; "
-            "ensure the model was fit with prediction_intervals."
-        )
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 
     scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
@@ -613,29 +558,3 @@ def _error_scaled_transfer(
         scaled = ufp.assign_columns(scaled, model, src * scale)
 
     return TransferResult(cs_df=scaled)
-
-
-_TRANSFER_METHODS: Dict[str, _TransferMethodSpec] = {
-    "recalibrate": _TransferMethodSpec(
-        fn=_recalibrate_transfer,
-        runs_target_cv=True,
-    ),
-    "scale_aligned": _TransferMethodSpec(
-        fn=_scale_aligned_transfer,
-        needs_source_cs=True,
-    ),
-    "error_scaled": _TransferMethodSpec(
-        fn=_error_scaled_transfer,
-        needs_source_cs=True,
-        runs_target_cv=True,
-    ),
-}
-
-
-def get_transfer_method_spec(method: str) -> _TransferMethodSpec:
-    if method not in _TRANSFER_METHODS:
-        raise ValueError(
-            f"transfer conformal method {method} not supported "
-            f"please choose one of {', '.join(_TRANSFER_METHODS.keys())}"
-        )
-    return _TRANSFER_METHODS[method]

@@ -298,26 +298,8 @@ def test_error_scaled_n_windows_1_works():
 
 def test_recalibrate_n_windows_1_raises():
     """recalibrate with n_windows=1 raises a clear ValueError."""
-    n = 5
-    h = 4
-    source = generate_daily_series(n, min_length=60, max_length=60, seed=32)
-    source["unique_id"] = "src_" + source["unique_id"].astype(str)
-    target = generate_daily_series(n, min_length=60, max_length=60, seed=33)
-    target["unique_id"] = "tgt_" + target["unique_id"].astype(str)
-
-    mlf = MLForecast(
-        models=lightgbm.LGBMRegressor(n_estimators=5, random_state=0, verbosity=-1),
-        lags=[1],
-        freq="D",
-        num_threads=1,
-    )
-    tc = TransferConformal(method="recalibrate", n_windows=1)
-    mlf.fit(
-        source,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
-    )
     with pytest.raises(ValueError, match="requires at least 2"):
-        mlf.transfer(target)
+        TransferConformal(method="recalibrate", n_windows=1)
 
 
 # ---------------------------------------------------------------------------
@@ -518,9 +500,7 @@ def test_add_signed_transfer_intervals_shape_and_nesting():
 def test_recalibrate_transfer_result_is_signed():
     """_recalibrate_transfer must return TransferResult(signed=True) with signed scores."""
     import pandas as pd
-    from mlforecast.conformal_prediction import (
-        _recalibrate_transfer, PredictionIntervals, TransferConformal,
-    )
+    from mlforecast.conformal_prediction import _recalibrate_transfer
     backtest = pd.DataFrame({
         "unique_id": ["a", "a", "a", "a"],
         "ds":        [2, 3, 1, 2],
@@ -528,15 +508,8 @@ def test_recalibrate_transfer_result_is_signed():
         "y":         [3.0, 5.0, 2.0, 4.0],
         "m":         [1.0, 7.0, 3.0, 3.0],
     })
-    pi = PredictionIntervals(n_windows=2, h=1)
-    tc = TransferConformal(method="recalibrate")
     result = _recalibrate_transfer(
-        new_df=backtest,
-        prediction_intervals=pi,
-        tc=tc,
-        backtest_results=backtest,
-        model_names=["m"],
-        target_col="y",
+        backtest_results=backtest, model_names=["m"], target_col="y"
     )
     assert result.signed is True
     # Signed residuals: y - pred = [3-1, 5-7, 2-3, 4-3] = [2, -2, -1, 1]
@@ -596,6 +569,24 @@ def test_recalibrate_step_size_param():
     assert "LGBMRegressor-lo-90" in preds.columns
     assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
+
+
+@pytest.mark.parametrize("method", TRANSFER_METHODS)
+def test_transfer_intervals_horizon_shorter_than_calibration(method):
+    series = generate_daily_series(6, min_length=60, max_length=60, seed=0)
+    src_ids = ["id_0", "id_1", "id_2"]
+    src = series[series["unique_id"].isin(src_ids)]
+    tgt = series[~series["unique_id"].isin(src_ids)]
+    mlf = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7]).fit(
+        src,
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3, transfer=method),
+    )
+    tgt_fcst = mlf.transfer(tgt)
+    full = tgt_fcst.predict(3, level=[80])
+    for h in (1, 2):
+        preds = tgt_fcst.predict(h, level=[80])
+        expected = full.groupby("unique_id").head(h).reset_index(drop=True)
+        pd.testing.assert_frame_equal(preds, expected)
 
 
 def _dynamic_exog_setup(method, case="dynamic", engine="pandas"):

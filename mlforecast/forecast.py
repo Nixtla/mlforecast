@@ -55,13 +55,16 @@ from .conformal_prediction import (
     PredictionIntervals,
     TransferConformal,
     _add_signed_transfer_intervals,
+    _compute_series_scales,
+    _error_scaled_transfer,
+    _recalibrate_transfer,
+    _rescale_interval_columns,
+    _scale_aligned_transfer,
     get_conformal_method,
-    get_transfer_method_spec,
     compute_conformity_scores,
 )
 
 _get_conformal_method = get_conformal_method  # backward compat
-_get_transfer_method_spec = get_transfer_method_spec
 
 
 def _ensure_h_int64(res):
@@ -1183,8 +1186,6 @@ class MLForecast:
             source_scales = None
             tc = prediction_intervals.transfer
             if tc is not None and tc.method == "scale_aligned":
-                from .conformal_prediction import _compute_series_scales
-
                 source_scales = _compute_series_scales(
                     df=df,
                     id_col=id_col,
@@ -1497,9 +1498,21 @@ class MLForecast:
                 "fit with `prediction_intervals=PredictionIntervals(...)`."
             )
 
-        spec = get_transfer_method_spec(conformal.method)
-        backtest_results = None
-        if spec.runs_target_cv:
+        calibration = self._calibration_
+        model_names = list(self.models.keys())
+        if conformal.method == "scale_aligned":
+            assert calibration.source_scales is not None
+            adapted = _scale_aligned_transfer(
+                new_df=df,
+                model_names=model_names,
+                id_col=self.ts.id_col,
+                time_col=self.ts.time_col,
+                target_col=self.ts.target_col,
+                scale_estimator=conformal.scale_estimator,
+                source_cs_df=calibration.scores,
+                source_scales=calibration.source_scales,
+            )
+        else:
             # the backtest needs the future values of the dynamic features
             new_cols = nw.from_native(df).columns
             missing = [c for c in self.ts._future_input_cols if c not in new_cols]
@@ -1527,20 +1540,17 @@ class MLForecast:
                 time_col=self.ts.time_col,
                 target_col=self.ts.target_col,
             )
-
-        calibration = self._calibration_
-        adapted = spec.fn(
-            new_df=df,
-            prediction_intervals=self.prediction_intervals,
-            tc=conformal,
-            backtest_results=backtest_results,
-            model_names=list(self.models.keys()),
-            target_col=self.ts.target_col,
-            id_col=self.ts.id_col,
-            time_col=self.ts.time_col,
-            source_cs_df=(calibration.scores if spec.needs_source_cs else None),
-            source_scales=(calibration.source_scales if spec.needs_source_cs else None),
-        )
+            if conformal.method == "recalibrate":
+                adapted = _recalibrate_transfer(
+                    backtest_results, model_names, self.ts.target_col
+                )
+            else:
+                adapted = _error_scaled_transfer(
+                    backtest_results,
+                    model_names,
+                    self.ts.target_col,
+                    calibration.scores,
+                )
         out._calibration_ = dataclasses.replace(calibration, adapted=adapted)
         return out
 
@@ -1667,15 +1677,6 @@ class MLForecast:
                     else:
                         n_series = ts.ga.n_groups
                 _target_scales = adapted.target_scales if adapted is not None else None
-                if _target_scales is not None and calibration.source_scales is not None:
-                    from .conformal_prediction import _apply_scale_alignment
-
-                    cs_df = _apply_scale_alignment(
-                        cs_df=cs_df,
-                        model_names=list(model_names),
-                        id_col=ts.id_col,
-                        source_scales=calibration.source_scales,
-                    )
                 if adapted is not None and adapted.signed:
                     forecasts = _add_signed_transfer_intervals(
                         forecasts,
@@ -1701,8 +1702,6 @@ class MLForecast:
                 # Scores are already normalized by σ_src_i, so quantiles are on the
                 # normalized scale; rescaling by σ_tgt_j gives per-series correct widths.
                 if _target_scales is not None:
-                    from .conformal_prediction import _rescale_interval_columns
-
                     fcst_uid_arr = forecasts[ts.id_col].to_numpy()
                     codes, uniques = pd.factorize(fcst_uid_arr)
                     missing = [uid for uid in uniques if uid not in _target_scales]
