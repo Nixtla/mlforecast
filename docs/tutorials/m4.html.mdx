@@ -354,14 +354,14 @@ fig
 ### Forecast using a pretrained model
 
 MLForecast allows you to use a pretrained model to generate forecasts
-for a new dataset. Simply provide a pandas dataframe containing the new
-observations as the value for the `new_df` argument when calling the
-`predict` method. The dataframe should have the same structure as the
-one used to fit the model, including any features and time series data.
-The function will then use the pretrained model to generate forecasts
-for the new observations. This allows you to easily apply a pretrained
-model to a new dataset and generate forecasts without the need to
-retrain the model.
+for a new dataset. Simply pass a pandas dataframe containing the new
+observations to the `transfer` method and call `predict` on the
+forecaster it returns. The dataframe should have the same structure as
+the one used to fit the model, including any features and time series
+data. The function will then use the pretrained model to generate
+forecasts for the new observations. This allows you to easily apply a
+pretrained model to a new dataset and generate forecasts without the
+need to retrain the model.
 
 ```python
 ercot_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/ERCOT-clean.csv')
@@ -370,8 +370,8 @@ ercot_df = pd.read_csv('https://datasets-nixtla.s3.amazonaws.com/ERCOT-clean.csv
 # since MLForecast was trained with that structure
 
 ercot_df['ds'] = np.arange(1, len(ercot_df) + 1)
-# use the `new_df` argument to pass the ercot dataset
-ercot_fcsts = fcst.predict(horizon, new_df=ercot_df)
+# use the `transfer` method to continue from the ercot dataset
+ercot_fcsts = fcst.transfer(ercot_df).predict(horizon)
 fig = plot_series(ercot_df, ercot_fcsts, max_insample_length=48 * 2)
 fig
 ```

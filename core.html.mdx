@@ -129,7 +129,7 @@ Name | Type | Description | Default
 `horizons` | <code>[Optional](#typing.Optional)[[List](#typing.List)[[int](#int)]]</code> | Specific 1-indexed horizons the models were trained for. Mutually exclusive with max_horizon. | <code>None</code>
 `as_numpy` | <code>[Optional](#typing.Optional)[[bool](#bool)]</code> | Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). | <code>None</code>
 `horizon_features` | <code>[Optional](#typing.Optional)[[Dict](#typing.Dict)[[int](#int), [List](#typing.List)[[str](#str)]]]</code> | Mapping of 1-indexed horizons to the dynamic exogenous columns the models were trained with. When None, any mapping from a previous fit is preserved. | <code>None</code>
-`trim` | <code>[bool](#bool)</code> | Apply the `keep_last_n` trim after warming the transform state. `predict(new_df=...)` disables this to keep the full provided history. | <code>True</code>
+`trim` | <code>[bool](#bool)</code> | Apply the `keep_last_n` trim after warming the transform state. `MLForecast.transfer` disables this to keep the full provided history. | <code>True</code>
 
 #### `TimeSeries.predict`
 
