@@ -2080,22 +2080,22 @@ class TimeSeries:
         targ_tfms = copy.copy(self.target_transforms)
         lag_tfms = copy.deepcopy(self.transforms)
 
-        if idxs is not None:
-            # assign subsets
-            self.ga = self.ga.take(idxs)
-            self.uids = uids[idxs]
-            self.static_features_ = ufp.take_rows(statics, idxs)
-            self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
-            self.last_dates = last_dates[idxs]
-            if self.target_transforms is not None:
-                for i, tfm in enumerate(self.target_transforms):
-                    if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                        self.target_transforms[i] = tfm.take(idxs)
-            for name, lag_tfm in self.transforms.items():
-                if isinstance(lag_tfm, _BaseLagTransform):
-                    lag_tfm = lag_tfm.take(idxs)
-                self.transforms[name] = lag_tfm
         try:
+            if idxs is not None:
+                # assign subsets
+                self.ga = self.ga.take(idxs)
+                self.uids = uids[idxs]
+                self.static_features_ = ufp.take_rows(statics, idxs)
+                self.static_features_ = ufp.drop_index_if_pandas(self.static_features_)
+                self.last_dates = last_dates[idxs]
+                if self.target_transforms is not None:
+                    for i, tfm in enumerate(self.target_transforms):
+                        if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                            self.target_transforms[i] = tfm.take(idxs)
+                for name, lag_tfm in self.transforms.items():
+                    if isinstance(lag_tfm, _BaseLagTransform):
+                        lag_tfm = lag_tfm.take(idxs)
+                    self.transforms[name] = lag_tfm
             yield
         finally:
             self.ga = ga

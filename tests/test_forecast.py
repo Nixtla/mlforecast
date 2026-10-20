@@ -2367,6 +2367,47 @@ def test_transfer_learning_then_intervals_raises_with_same_series_count():
         fcst.predict(h=5, level=[90])
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("failing_transform", [LocalStandardScaler, RollingMean])
+def test_subset_predict_restores_state_when_take_fails(
+    monkeypatch, engine, failing_transform
+):
+    series = generate_daily_series(
+        3, min_length=30, max_length=30, n_static_features=1, equal_ends=True
+    )
+    if engine == "polars":
+        series = pl.from_pandas(series)
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D" if engine == "pandas" else "1d",
+        lags=[1],
+        lag_transforms={1: [ExpandingMean(), RollingMean(3)]},
+        target_transforms=[Differences([1]), LocalStandardScaler()],
+    )
+    fcst.fit(series)
+    expected = fcst.predict(h=3)
+    ids = ["id_1", "id_2"]
+    expected_subset = fcst.predict(h=3, ids=ids)
+
+    def fail(*_):
+        raise RuntimeError("take failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(failing_transform, "take", fail)
+        with pytest.raises(RuntimeError, match="take failed"):
+            fcst.predict(h=3, ids=ids)
+
+    actual = fcst.predict(h=3)
+    actual_subset = fcst.predict(h=3, ids=ids)
+    if engine == "polars":
+        expected = expected.to_pandas()
+        expected_subset = expected_subset.to_pandas()
+        actual = actual.to_pandas()
+        actual_subset = actual_subset.to_pandas()
+    pd.testing.assert_frame_equal(actual, expected)
+    pd.testing.assert_frame_equal(actual_subset, expected_subset)
+
+
 def test_transfer_learning_subset_predict_keeps_full_transform_state():
     """Subset forecasts after transfer learning shouldn't persist subset-mutated transforms."""
     train_a = generate_daily_series(
