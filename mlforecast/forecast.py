@@ -1535,55 +1535,54 @@ class MLForecast:
         check_in_sample: bool = True,
     ) -> "MLForecast":
         self._check_fitted()
+        if method is not None:
+            pi = self.prediction_intervals
+            if method.method != "recalibrate" and (
+                pi is None or self._calibration_ is None
+            ):
+                raise ValueError(
+                    f"The '{method.method}' transfer method requires that the model was "
+                    "fit with `prediction_intervals=PredictionIntervals(...)`."
+                )
+            if method.h is not None:
+                h = method.h
+            elif pi is not None:
+                h = pi.h
+            else:
+                raise ValueError(
+                    "The 'recalibrate' transfer method requires that the model was fit "
+                    "with `prediction_intervals=PredictionIntervals(...)` or an explicit "
+                    "`TransferConformal(method='recalibrate', h=...)`."
+                )
+            if method.method == "scale_aligned":
+                n_windows = None
+            elif method.n_windows is not None:
+                n_windows = method.n_windows
+            else:
+                n_windows = pi.n_windows if pi is not None else 2
+            if method.method != "recalibrate":
+                assert pi is not None
+                if h != pi.h:
+                    raise ValueError(
+                        f"The '{method.method}' transfer method reuses the source "
+                        "conformity scores, so `TransferConformal.h` must equal the `h` "
+                        f"of `PredictionIntervals` ({pi.h}), got {h}."
+                    )
+            if method.method != "scale_aligned":
+                # the backtest needs the future values of the dynamic features
+                new_cols = nw.from_native(df).columns
+                missing = [c for c in self.ts._future_input_cols if c not in new_cols]
+                if missing:
+                    raise ValueError(
+                        f"`df` must contain the future values of {missing} "
+                        "to compute transfer intervals."
+                    )
+            method = dataclasses.replace(method, h=h, n_windows=n_windows)
         out = self._with_ts(self.ts._clone_warm(df))
         out.models_ = dict(self.models_)
-        if method is None:
-            out._transfer_ = TransferState()
-            return out
-        pi = self.prediction_intervals
-        if method.method != "recalibrate" and (
-            pi is None or self._calibration_ is None
-        ):
-            raise ValueError(
-                f"The '{method.method}' transfer method requires that the model was "
-                "fit with `prediction_intervals=PredictionIntervals(...)`."
-            )
-        if method.h is not None:
-            h = method.h
-        elif pi is not None:
-            h = pi.h
-        else:
-            raise ValueError(
-                "The 'recalibrate' transfer method requires that the model was fit "
-                "with `prediction_intervals=PredictionIntervals(...)` or an explicit "
-                "`TransferConformal(method='recalibrate', h=...)`."
-            )
-        if method.method == "scale_aligned":
-            n_windows = None
-        elif method.n_windows is not None:
-            n_windows = method.n_windows
-        else:
-            n_windows = pi.n_windows if pi is not None else 2
-        if method.method != "recalibrate":
-            assert pi is not None
-            if h != pi.h:
-                raise ValueError(
-                    f"The '{method.method}' transfer method reuses the source "
-                    "conformity scores, so `TransferConformal.h` must equal the `h` "
-                    f"of `PredictionIntervals` ({pi.h}), got {h}."
-                )
-        if method.method != "scale_aligned":
-            # the backtest needs the future values of the dynamic features
-            new_cols = nw.from_native(df).columns
-            missing = [c for c in self.ts._future_input_cols if c not in new_cols]
-            if missing:
-                raise ValueError(
-                    f"`df` must contain the future values of {missing} "
-                    "to compute transfer intervals."
-                )
-        resolved = dataclasses.replace(method, h=h, n_windows=n_windows)
         out._transfer_ = TransferState(
-            method=resolved, result=self._adapt(df, resolved, check_in_sample)
+            method=method,
+            result=None if method is None else self._adapt(df, method, check_in_sample),
         )
         return out
 
