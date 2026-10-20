@@ -888,6 +888,23 @@ def test_cross_validation_refit_false_overlapping_windows():
     assert res[f"{LR}-lo-80"].notna().all()
 
 
+def test_cross_validation_refit_false_one_step_warning():
+    src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    with pytest.warns(UserWarning, match="1-step") as record:
+        fcst.cross_validation(
+            src,
+            n_windows=3,
+            h=3,
+            refit=False,
+            level=[80],
+            prediction_intervals=PredictionIntervals(),
+        )
+    messages = [str(w.message) for w in record if "1-step" in str(w.message)]
+    assert len(messages) == 1
+    assert "PredictionIntervals(h=h)" in messages[0]
+
+
 def test_predict_does_not_adapt(monkeypatch):
     import mlforecast.forecast as forecast_mod
 

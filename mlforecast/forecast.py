@@ -2002,13 +2002,21 @@ class MLForecast:
                     else None,
                     check_in_sample=False,
                 )
-            y_pred = fcst.predict(
-                h=h,
-                before_predict_callback=before_predict_callback,
-                after_predict_callback=after_predict_callback,
-                level=level,
-                X_df=X_df,
-            )
+            with warnings.catch_warnings():
+                if not should_fit:
+                    # window 0 already warned with the hint for cross_validation
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Prediction intervals are calculated using 1-step",
+                        category=UserWarning,
+                    )
+                y_pred = fcst.predict(
+                    h=h,
+                    before_predict_callback=before_predict_callback,
+                    after_predict_callback=after_predict_callback,
+                    level=level,
+                    X_df=X_df,
+                )
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(
                 valid[[id_col, time_col, target_col]],
