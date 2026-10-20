@@ -1724,13 +1724,20 @@ class MLForecast:
                                 "interval calibration. Missing ids: "
                                 f"{missing_ids}."
                             )
+                if adapted is not None and adapted.signed:
+                    fix_h = (
+                        "pass `TransferConformal(method='recalibrate', h=h)` "
+                        "to `transfer`"
+                    )
+                else:
+                    fix_h = (
+                        "pass PredictionIntervals(h=h) to the `prediction_intervals` "
+                        "argument when refitting the model"
+                    )
                 if cs_h != 1 and cs_h < h:
                     raise ValueError(
-                        "The `h` argument of PredictionIntervals (or of "
-                        "TransferConformal for transferred series) "
-                        "should be equal to one or greater or equal to `h`. "
-                        "Please rerun the `fit` method passing a proper value "
-                        "to prediction intervals."
+                        "The `h` of the conformity scores should be equal to one or "
+                        f"greater or equal to `h`. To fix it, {fix_h}."
                     )
                 is_transfer = adapted is not None and not adapted.signed
                 if cs_h == 1 and h > 1:
@@ -1743,8 +1750,7 @@ class MLForecast:
                     warn_msg = (
                         "Prediction intervals are calculated using 1-step ahead cross-validation, "
                         "with a constant width for all horizons. To vary the error by horizon, "
-                        "pass PredictionIntervals(h=h) to the `prediction_intervals` "
-                        "argument when refitting the model."
+                        f"{fix_h}."
                     )
                     warnings.warn(warn_msg, UserWarning)
                 level_ = sorted(level)

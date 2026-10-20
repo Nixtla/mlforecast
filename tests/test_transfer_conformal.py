@@ -772,6 +772,19 @@ def test_recalibrate_without_intervals_at_fit():
             plain.transfer(tgt, method)
 
 
+def test_recalibrate_horizon_messages_point_to_transfer_conformal():
+    _, tgt = _transfer_setup()
+    plain = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    plain.fit(generate_daily_series(8, min_length=80, max_length=80, seed=0))
+    for h, expectation in (
+        (1, pytest.warns(UserWarning, match=r"TransferConformal\(method='recalibrate', h=h\)")),
+        (2, pytest.raises(ValueError, match=r"TransferConformal\(method='recalibrate', h=h\)")),
+    ):
+        transferred = plain.transfer(tgt, TransferConformal(method="recalibrate", h=h))
+        with expectation:
+            transferred.predict(3, level=[80])
+
+
 @pytest.mark.parametrize("method", ["error_scaled", "scale_aligned"])
 def test_transfer_h_must_match_source_scores(method):
     fcst, tgt = _transfer_setup()
