@@ -89,6 +89,6 @@ def scale_aligned_setup():
         date_features=["dayofweek"],
         num_threads=1,
     )
-    pi = PredictionIntervals(method="conformal_error", n_windows=n_windows, h=h, transfer="scale_aligned")
+    pi = PredictionIntervals(method="conformal_error", n_windows=n_windows, h=h)
     fcst.fit(source_series, prediction_intervals=pi)
     return fcst, source_series, target_series, h

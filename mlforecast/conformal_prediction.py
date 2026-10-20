@@ -18,17 +18,19 @@ _VALID_TRANSFER_METHODS = ("recalibrate", "scale_aligned", "error_scaled")
 class TransferConformal:
     """Configuration for adapting the prediction intervals to transferred series.
 
-    Pass to ``PredictionIntervals(transfer=...)``. A plain string is shorthand
-    for ``TransferConformal(method=<str>)``.
+    Pass to ``MLForecast.transfer``. A plain string is shorthand for
+    ``TransferConformal(method=<str>)``.
 
     Args:
         method (str): ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'.
-        n_windows (int, optional): Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``.
+        h (int, optional): Forecast horizon of the conformity scores. Defaults to the ``h`` of ``PredictionIntervals``. Required for ``'recalibrate'`` on a model fit without prediction intervals.
+        n_windows (int, optional): Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them.
         step_size (int, optional): Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1.
         scale_estimator (str): Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'.
     """
 
     method: str = "recalibrate"
+    h: Optional[int] = None
     n_windows: Optional[int] = None
     step_size: Optional[int] = None
     scale_estimator: Literal["mad", "std"] = "mad"
@@ -44,6 +46,8 @@ class TransferConformal:
                 "TransferConformal.scale_estimator must be 'mad' or 'std', "
                 f"got '{self.scale_estimator}'"
             )
+        if self.h is not None and self.h < 1:
+            raise ValueError(f"TransferConformal.h must be >= 1, got {self.h}")
         if self.n_windows is not None and self.n_windows < 1:
             raise ValueError(
                 f"TransferConformal.n_windows must be >= 1, got {self.n_windows}"
@@ -79,20 +83,12 @@ class PredictionIntervals:
         n_windows: int = 2,
         h: int = 1,
         method: str = "conformal_distribution",
-        transfer: Optional[Union[str, TransferConformal]] = None,
     ):
         """
         Args:
             n_windows (int): Number of cross validation windows used to compute the conformity scores. Defaults to 2.
             h (int): Forecast horizon of each cross validation window. Defaults to 1.
             method (str): ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'.
-            transfer (str or TransferConformal, optional): How to adapt the intervals to the series of `MLForecast.transfer`. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:
-
-                - ``'recalibrate'``: Runs a frozen-model backtest on the transferred series and uses its scores instead of the source ones.
-                - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on the transferred series.
-                - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest.
-
-                Defaults to None (no prediction intervals for transferred series).
         """
         if n_windows < 2:
             raise ValueError(
@@ -101,17 +97,14 @@ class PredictionIntervals:
         allowed_methods = ["conformal_error", "conformal_distribution"]
         if method not in allowed_methods:
             raise ValueError(f"method must be one of {allowed_methods}")
-        if isinstance(transfer, str):
-            transfer = TransferConformal(method=transfer)
         self.n_windows = n_windows
         self.h = h
         self.method = method
-        self.transfer = transfer
 
     def __repr__(self):
         return (
             f"PredictionIntervals(n_windows={self.n_windows}, h={self.h}, "
-            f"method='{self.method}', transfer={self.transfer!r})"
+            f"method='{self.method}')"
         )
 
 
@@ -129,6 +122,18 @@ def _compute_series_scales(
     with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
     short series.
     """
+    raw = _raw_series_scales(df, id_col, time_col, target_col, method)
+    return _floor_series_scales(raw, floor_factor)
+
+
+def _raw_series_scales(
+    df: DFType,
+    id_col: str,
+    time_col: str,
+    target_col: str,
+    method: str,
+) -> Dict:
+    """MAD(Δy) or std(Δy) per series, before the floor of `_floor_series_scales`."""
     ndf = nw.from_native(df, eager_only=True)
     ndf = ndf.select([id_col, time_col, target_col]).with_columns(
         nw.col(target_col)
@@ -172,7 +177,10 @@ def _compute_series_scales(
             raw[uid] = float(max_abs_dy)
         else:
             raw[uid] = float(scale)
+    return raw
 
+
+def _floor_series_scales(raw: Dict, floor_factor: float = 1e-3) -> Dict:
     vals = np.array(list(raw.values()), dtype=float)
     global_median = float(np.median(vals)) if len(vals) > 0 else 1.0
     floor = max(floor_factor * global_median, 1e-8)
@@ -455,11 +463,25 @@ class TransferResult:
 
 @dataclass
 class Calibration:
-    """Conformity scores computed at fit and their adaptation to transferred series."""
+    """Conformity scores and per-series scales of the training series, computed at fit."""
 
     scores: DFType
-    source_scales: Optional[Dict] = None
-    adapted: Optional[TransferResult] = None
+    source_scales: Optional[Dict[str, Dict]] = None  # estimator -> uid -> raw scale
+
+
+@dataclass
+class TransferState:
+    """Transfer method chosen in ``MLForecast.transfer`` and its adaptation to `df`.
+
+    `result` is computed from `df` on the first ``predict(level=...)``.
+    """
+
+    method: Optional[TransferConformal] = None
+    h: int = 1
+    n_windows: int = 2
+    df: Optional[DFType] = None
+    train_ends: Optional[DFType] = None
+    result: Optional[TransferResult] = None
 
 
 def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
@@ -529,6 +551,7 @@ def _scale_aligned_transfer(
         target_col=target_col,
         method=scale_estimator,
     )
+    source_scales = _floor_series_scales(source_scales)
     return TransferResult(
         cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
         target_scales=target_scale_dict,

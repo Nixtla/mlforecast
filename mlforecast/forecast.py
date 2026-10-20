@@ -54,8 +54,10 @@ from .conformal_prediction import (
     Calibration,
     PredictionIntervals,
     TransferConformal,
+    TransferResult,
+    TransferState,
     _add_signed_transfer_intervals,
-    _compute_series_scales,
+    _raw_series_scales,
     _error_scaled_transfer,
     _recalibrate_transfer,
     _rescale_interval_columns,
@@ -82,6 +84,30 @@ def _ensure_h_int64(res):
     return ufp.copy_if_pandas(res, deep=True)
 
 
+def _check_out_of_sample(
+    cutoffs: DataFrame, train_ends: DataFrame, id_col: str
+) -> None:
+    overlap = nw.from_native(
+        ufp.join(cutoffs, train_ends, on=id_col), eager_only=True
+    ).filter(nw.col("cutoff") < nw.col("train_end"))
+    if len(overlap):
+        details = "; ".join(
+            f"'{uid}' was trained up to {end} but its first window starts after {cutoff}"
+            for uid, end, cutoff in zip(
+                overlap[id_col].to_list(),
+                overlap["train_end"].to_list(),
+                overlap["cutoff"].to_list(),
+            )
+        )
+        raise ValueError(
+            "The backtest windows of series seen during training must start after "
+            "the end of their training data, otherwise the intervals are computed "
+            "on in-sample forecasts and are too narrow. Pass more observations after "
+            "the training end or reduce `n_windows`, `h` or `step_size` of "
+            f"`TransferConformal`. Series with in-sample windows: {details}."
+        )
+
+
 def _frozen_backtest(
     fcst: "MLForecast",
     new_df: DFType,
@@ -92,6 +118,7 @@ def _frozen_backtest(
     id_col: str = "unique_id",
     time_col: str = "ds",
     target_col: str = "y",
+    train_ends: Optional[DataFrame] = None,
 ) -> DFType:
     """Run inference-only backtesting windows using already-fitted models.
 
@@ -99,6 +126,8 @@ def _frozen_backtest(
     step_size=1 is safe here (no refitting means no leakage from overlapping windows).
     Windows are computed per series (``ufp.backtest_splits``) so that series with
     unaligned ends each get cutoffs relative to their own last timestamp.
+    If `train_ends` is given, the windows of the series in it must start after
+    their training end.
     """
     required = h + (n_windows - 1) * step_size + max_lag + 1
     counts_df = ufp.counts_by_id(new_df, id_col)
@@ -112,9 +141,8 @@ def _frozen_backtest(
         )
         raise ValueError(
             "Adapting the prediction intervals to new series with a frozen-model "
-            "backtest (the 'recalibrate' and 'error_scaled' methods of "
-            "`PredictionIntervals(transfer=...)`, and `cross_validation(refit=False, "
-            f"level=...)`) requires >= {required} time steps per series "
+            "backtest (the 'recalibrate' and 'error_scaled' methods of `transfer`, "
+            "and `cross_validation(refit=False, level=...)`) requires >= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
             f"Series too short: {details}."
         )
@@ -131,7 +159,9 @@ def _frozen_backtest(
         freq=fcst.freq,
         step_size=step_size,
     )
-    for cutoffs, train, valid in splits:
+    for i, (cutoffs, train, valid) in enumerate(splits):
+        if i == 0 and train_ends is not None:
+            _check_out_of_sample(cutoffs, train_ends, id_col)
         X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
         preds = fcst._transfer(train, None).predict(h=h, X_df=X_df)
         preds = ufp.join(preds, cutoffs, on=id_col, how="left")
@@ -160,6 +190,8 @@ class MLForecast:
     # are what an instance never fit with intervals holds.
     prediction_intervals: Optional[PredictionIntervals] = None
     _calibration_: Optional[Calibration] = None
+    _train_ends_: Optional[DataFrame] = None
+    _transfer_: Optional[TransferState] = None
 
     def __init__(
         self,
@@ -244,6 +276,8 @@ class MLForecast:
         models_: Optional[Dict[str, Any]] = None,
         prediction_intervals: Optional[PredictionIntervals] = None,
         calibration: Optional[Calibration] = None,
+        train_ends: Optional[DataFrame] = None,
+        transfer_: Optional[TransferState] = None,
     ) -> "MLForecast":
         """A forecaster around an already-built `TimeSeries`."""
         fcst = cls(models=models, freq=ts.freq)
@@ -252,6 +286,8 @@ class MLForecast:
             fcst.models_ = models_
         fcst.prediction_intervals = prediction_intervals
         fcst._calibration_ = calibration
+        fcst._train_ends_ = train_ends
+        fcst._transfer_ = transfer_
         return fcst
 
     def _with_ts(self, ts: Optional[TimeSeries] = None) -> "MLForecast":
@@ -707,6 +743,13 @@ class MLForecast:
                 self.models_[name] = fit_model(
                     model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
+        df_constructor = (
+            pl_DataFrame if isinstance(self.ts.uids, pl_Series) else pd.DataFrame
+        )
+        self._train_ends_ = df_constructor(
+            {self.ts.id_col: self.ts.uids, "train_end": self.ts.last_dates}
+        )
+        self._transfer_ = None
         return self
 
     def _conformity_scores(
@@ -1183,16 +1226,16 @@ class MLForecast:
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
-            source_scales = None
-            tc = prediction_intervals.transfer
-            if tc is not None and tc.method == "scale_aligned":
-                source_scales = _compute_series_scales(
+            source_scales = {
+                estimator: _raw_series_scales(
                     df=df,
                     id_col=id_col,
                     time_col=time_col,
                     target_col=target_col,
-                    method=tc.scale_estimator,
+                    method=estimator,
                 )
+                for estimator in ("mad", "std")
+            }
             self._calibration_ = Calibration(scores=scores, source_scales=source_scales)
         # When max_horizon or horizons is set, use generator factory approach
         if max_horizon is not None or horizons is not None:
@@ -1465,54 +1508,75 @@ class MLForecast:
                 "If you ran preprocess after fit please run fit again."
             )
 
-    def transfer(self, df: DFType) -> "MLForecast":
+    def transfer(
+        self,
+        df: DFType,
+        method: Optional[Union[str, TransferConformal]] = None,
+    ) -> "MLForecast":
         """Forecaster that uses the trained models to continue the series in `df`.
-
-        If the model was fit with `PredictionIntervals(transfer=...)`, the conformity scores are adapted to `df` so that the result can compute prediction intervals.
 
         Args:
             df (pandas or polars DataFrame): Series data to continue from. Should have the same structure as the one used to fit the model, including any features.
+            method (str or TransferConformal, optional): How to compute the prediction intervals of the series in `df`. A plain string is shorthand for ``TransferConformal(method=<str>)``. The intervals are computed from `df` on the first call to ``predict`` with ``level``. Supported methods:
+
+                - ``'recalibrate'``: Runs a frozen-model backtest on `df` and uses its scores. Works on models fit without prediction intervals.
+                - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on `df`. Requires prediction intervals at fit.
+                - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest. Requires prediction intervals at fit.
+
+                The backtest windows of series seen during training must start after the end of their training data. Defaults to None (no prediction intervals).
 
         Returns:
             MLForecast: Forecast object for the series in `df` that shares the trained models. This instance is not modified.
         """
-        conformal = (
-            None
-            if self.prediction_intervals is None
-            else self.prediction_intervals.transfer
-        )
-        return self._transfer(df, conformal)
+        if isinstance(method, str):
+            method = TransferConformal(method=method)
+        return self._transfer(df, method)
 
     def _transfer(
-        self, df: DFType, conformal: Optional[TransferConformal]
+        self,
+        df: DFType,
+        method: Optional[TransferConformal],
+        check_in_sample: bool = True,
     ) -> "MLForecast":
         self._check_fitted()
         out = self._with_ts(self.ts._clone_warm(df))
         out.models_ = dict(self.models_)
-        if conformal is None:
-            out._calibration_ = None
+        if method is None:
+            out._transfer_ = TransferState()
             return out
-        if self.prediction_intervals is None or self._calibration_ is None:
+        pi = self.prediction_intervals
+        if method.method != "recalibrate" and (
+            pi is None or self._calibration_ is None
+        ):
             raise ValueError(
-                "Transfer-learning prediction intervals require that the model was "
+                f"The '{method.method}' transfer method requires that the model was "
                 "fit with `prediction_intervals=PredictionIntervals(...)`."
             )
-
-        calibration = self._calibration_
-        model_names = list(self.models.keys())
-        if conformal.method == "scale_aligned":
-            assert calibration.source_scales is not None
-            adapted = _scale_aligned_transfer(
-                new_df=df,
-                model_names=model_names,
-                id_col=self.ts.id_col,
-                time_col=self.ts.time_col,
-                target_col=self.ts.target_col,
-                scale_estimator=conformal.scale_estimator,
-                source_cs_df=calibration.scores,
-                source_scales=calibration.source_scales,
-            )
+        if method.h is not None:
+            h = method.h
+        elif pi is not None:
+            h = pi.h
         else:
+            raise ValueError(
+                "The 'recalibrate' transfer method requires that the model was fit "
+                "with `prediction_intervals=PredictionIntervals(...)` or an explicit "
+                "`TransferConformal(method='recalibrate', h=...)`."
+            )
+        if method.method == "scale_aligned":
+            n_windows = None
+        elif method.n_windows is not None:
+            n_windows = method.n_windows
+        else:
+            n_windows = pi.n_windows if pi is not None else 2
+        if method.method != "recalibrate":
+            assert pi is not None
+            if h != pi.h:
+                raise ValueError(
+                    f"The '{method.method}' transfer method reuses the source "
+                    "conformity scores, so `TransferConformal.h` must equal the `h` "
+                    f"of `PredictionIntervals` ({pi.h}), got {h}."
+                )
+        if method.method != "scale_aligned":
             # the backtest needs the future values of the dynamic features
             new_cols = nw.from_native(df).columns
             missing = [c for c in self.ts._future_input_cols if c not in new_cols]
@@ -1521,38 +1585,58 @@ class MLForecast:
                     f"`df` must contain the future values of {missing} "
                     "to compute transfer intervals."
                 )
-            effective_n = (
-                conformal.n_windows
-                if conformal.n_windows is not None
-                else self.prediction_intervals.n_windows
-            )
-            max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
-            backtest_results = _frozen_backtest(
-                fcst=self,
-                new_df=df,
-                n_windows=effective_n,
-                h=self.prediction_intervals.h,
-                step_size=(
-                    conformal.step_size if conformal.step_size is not None else 1
-                ),
-                max_lag=max_lag,
+        out._transfer_ = TransferState(
+            method=dataclasses.replace(method, h=h, n_windows=n_windows),
+            df=df,
+            train_ends=self._train_ends_ if check_in_sample else None,
+        )
+        return out
+
+    def _adapt(self) -> TransferResult:
+        """Adapt the source calibration to the `df` passed to `transfer`."""
+        state = self._transfer_
+        assert state is not None and state.method is not None and state.df is not None
+        method = state.method
+        assert method.h is not None
+        model_names = list(self.models.keys())
+        if method.method == "scale_aligned":
+            calibration = self._calibration_
+            assert calibration is not None and calibration.source_scales is not None
+            return _scale_aligned_transfer(
+                new_df=state.df,
+                model_names=model_names,
                 id_col=self.ts.id_col,
                 time_col=self.ts.time_col,
                 target_col=self.ts.target_col,
+                scale_estimator=method.scale_estimator,
+                source_cs_df=calibration.scores,
+                source_scales=calibration.source_scales[method.scale_estimator],
             )
-            if conformal.method == "recalibrate":
-                adapted = _recalibrate_transfer(
-                    backtest_results, model_names, self.ts.target_col
-                )
-            else:
-                adapted = _error_scaled_transfer(
-                    backtest_results,
-                    model_names,
-                    self.ts.target_col,
-                    calibration.scores,
-                )
-        out._calibration_ = dataclasses.replace(calibration, adapted=adapted)
-        return out
+        assert method.n_windows is not None
+        max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
+        backtest_results = _frozen_backtest(
+            fcst=self,
+            new_df=state.df,
+            n_windows=method.n_windows,
+            h=method.h,
+            step_size=method.step_size if method.step_size is not None else 1,
+            max_lag=max_lag,
+            id_col=self.ts.id_col,
+            time_col=self.ts.time_col,
+            target_col=self.ts.target_col,
+            train_ends=state.train_ends,
+        )
+        if method.method == "recalibrate":
+            return _recalibrate_transfer(
+                backtest_results, model_names, self.ts.target_col
+            )
+        assert self._calibration_ is not None
+        return _error_scaled_transfer(
+            backtest_results,
+            model_names,
+            self.ts.target_col,
+            self._calibration_.scores,
+        )
 
     def predict(
         self,
@@ -1579,17 +1663,17 @@ class MLForecast:
             pandas or polars DataFrame: Predictions for each serie and timestep, with one column per model.
         """
         self._check_fitted()
-        calibration = self._calibration_
-        if (
-            level is not None
-            and self.prediction_intervals is not None
-            and calibration is None
-        ):
-            raise ValueError(
-                "This model has no conformity scores for its series. Fit the source "
-                "model with `PredictionIntervals(transfer=...)` to compute prediction "
-                "intervals for transferred series."
-            )
+        state = self._transfer_
+        if level is not None and state is not None:
+            if state.method is None:
+                raise ValueError(
+                    "This model was transferred without a method. Call "
+                    "`transfer(df, method=...)` to compute prediction intervals for "
+                    "its series."
+                )
+            if state.result is None:
+                state.result = self._adapt()
+                state.df = None
         ts = self.ts
         forecasts = ts.predict(
             models=self.models_,
@@ -1600,17 +1684,27 @@ class MLForecast:
             ids=ids,
         )
         if level is not None:
-            if calibration is None or self.prediction_intervals is None:
+            if state is None and (
+                self._calibration_ is None or self.prediction_intervals is None
+            ):
                 warn_msg = (
                     "Please rerun the `fit` method passing a proper value "
                     "to prediction intervals to compute them."
                 )
                 warnings.warn(warn_msg, UserWarning)
             else:
-                adapted = calibration.adapted
-                conformity_scores = (
-                    calibration.scores if adapted is None else adapted.cs_df
-                )
+                if state is not None:
+                    assert state.method is not None and state.method.h is not None
+                    adapted: Optional[TransferResult] = state.result
+                    assert adapted is not None
+                    conformity_scores = adapted.cs_df
+                    cs_h = state.method.h
+                else:
+                    assert self._calibration_ is not None
+                    assert self.prediction_intervals is not None
+                    adapted = None
+                    conformity_scores = self._calibration_.scores
+                    cs_h = self.prediction_intervals.h
                 # transferred scores are pooled over the calibration set, so
                 # `ids` only selects which forecasts to return
                 if adapted is None:
@@ -1634,17 +1728,16 @@ class MLForecast:
                                 "interval calibration. Missing ids: "
                                 f"{missing_ids}."
                             )
-                if (self.prediction_intervals.h != 1) and (
-                    self.prediction_intervals.h < h
-                ):
+                if cs_h != 1 and cs_h < h:
                     raise ValueError(
-                        "The `h` argument of PredictionIntervals "
+                        "The `h` argument of PredictionIntervals (or of "
+                        "TransferConformal for transferred series) "
                         "should be equal to one or greater or equal to `h`. "
                         "Please rerun the `fit` method passing a proper value "
                         "to prediction intervals."
                     )
                 is_transfer = adapted is not None and not adapted.signed
-                if self.prediction_intervals.h == 1 and h > 1:
+                if cs_h == 1 and h > 1:
                     if is_transfer:
                         raise ValueError(
                             "Transfer conformal prediction requires PredictionIntervals(h=h). "
@@ -1660,22 +1753,13 @@ class MLForecast:
                     warnings.warn(warn_msg, UserWarning)
                 level_ = sorted(level)
                 model_names = self.models.keys()
-                conformal_method = _get_conformal_method(
-                    self.prediction_intervals.method
-                )
                 if ids is not None and adapted is None:
                     ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
                     cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
                     n_series = len(ids)
                 else:
                     cs_df = conformity_scores
-                    if is_transfer:
-                        n_series = len(cs_df) // (
-                            self.prediction_intervals.n_windows
-                            * self.prediction_intervals.h
-                        )
-                    else:
-                        n_series = ts.ga.n_groups
+                    n_series = ts.ga.n_groups
                 _target_scales = adapted.target_scales if adapted is not None else None
                 if adapted is not None and adapted.signed:
                     forecasts = _add_signed_transfer_intervals(
@@ -1684,16 +1768,20 @@ class MLForecast:
                         model_names=list(model_names),
                         level=level_,
                         horizon=h,
-                        cs_h=self.prediction_intervals.h,
+                        cs_h=cs_h,
                     )
                 else:
-                    forecasts = conformal_method(
+                    pi = self.prediction_intervals
+                    assert pi is not None
+                    if is_transfer:
+                        n_series = len(cs_df) // (pi.n_windows * cs_h)
+                    forecasts = _get_conformal_method(pi.method)(
                         forecasts,
                         cs_df,
                         model_names=list(model_names),
                         level=level_,
-                        cs_h=self.prediction_intervals.h,
-                        cs_n_windows=self.prediction_intervals.n_windows,
+                        cs_h=cs_h,
+                        cs_n_windows=pi.n_windows,
                         n_series=n_series,
                         horizon=h,
                         is_transfer=is_transfer,
@@ -1899,6 +1987,7 @@ class MLForecast:
                     TransferConformal(method="recalibrate")
                     if level is not None
                     else None,
+                    check_in_sample=False,
                 )
             y_pred = fcst.predict(
                 h=h,
@@ -1966,15 +2055,16 @@ class MLForecast:
         self.ts.save(f"{path}/ts.pkl")
         with fsspec.open(f"{path}/models.pkl", "wb") as f:
             cloudpickle.dump(self.models_, f)
-        if self.prediction_intervals is not None:
-            with fsspec.open(f"{path}/intervals.pkl", "wb") as f:
-                cloudpickle.dump(
-                    {
-                        "settings": self.prediction_intervals,
-                        "calibration": self._calibration_,
-                    },
-                    f,
-                )
+        with fsspec.open(f"{path}/intervals.pkl", "wb") as f:
+            cloudpickle.dump(
+                {
+                    "settings": self.prediction_intervals,
+                    "calibration": self._calibration_,
+                    "train_ends": self._train_ends_,
+                    "transfer": self._transfer_,
+                },
+                f,
+            )
 
     @staticmethod
     def load(path: Union[str, Path]) -> "MLForecast":
@@ -1990,13 +2080,20 @@ class MLForecast:
             with fsspec.open(f"{path}/intervals.pkl", "rb") as f:
                 intervals = cloudpickle.load(f)
         except FileNotFoundError:
-            intervals = {"settings": None, "calibration": None}
+            intervals = {}
+        if "train_ends" not in intervals:
+            raise ValueError(
+                f"{path} was saved by an older version of mlforecast. Refit the "
+                "model and save it again."
+            )
         return MLForecast._from_ts(
             ts,
             models=models,
             models_=models,
             prediction_intervals=intervals["settings"],
             calibration=intervals["calibration"],
+            train_ends=intervals["train_ends"],
+            transfer_=intervals["transfer"],
         )
 
     def update(self, df: DataFrame, validate_new_data: bool = False) -> None:

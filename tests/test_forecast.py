@@ -2341,7 +2341,7 @@ def test_transfer_learning_failed_predict_keeps_original_state():
 
 
 @pytest.mark.parametrize("n_source", [2, 3])
-def test_transfer_without_transfer_method_then_intervals_raises(n_source):
+def test_transfer_without_method_then_intervals_raises(n_source):
     train_a = generate_daily_series(
         n_source, min_length=50, max_length=50, n_static_features=0
     )
@@ -2363,7 +2363,7 @@ def test_transfer_without_transfer_method_then_intervals_raises(n_source):
     tgt.predict(h=5)
 
     pd.testing.assert_frame_equal(fcst.predict(h=5, level=[90]), expected)
-    with pytest.raises(ValueError, match=r"PredictionIntervals\(transfer=\.\.\.\)"):
+    with pytest.raises(ValueError, match="transferred without a method"):
         tgt.predict(h=5, level=[90])
 
 
@@ -2439,16 +2439,11 @@ def test_transfer_learning_intervals():
     )
 
     fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
-    fcst.fit(
-        train_ab,
-        prediction_intervals=PredictionIntervals(
-            n_windows=2, h=1, transfer="recalibrate"
-        ),
-    )
+    fcst.fit(train_ab, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
 
     saved_calibration = fcst._calibration_
 
-    preds = fcst.transfer(train_ef).predict(h=5, level=[80, 95])
+    preds = fcst.transfer(train_ef, "recalibrate").predict(h=5, level=[80, 95])
 
     # interval columns exist
     assert "LinearRegression-lo-80" in preds.columns
@@ -2461,12 +2456,12 @@ def test_transfer_learning_intervals():
     assert (pd_preds["LinearRegression-lo-80"] <= pd_preds["LinearRegression"]).all()
     assert (pd_preds["LinearRegression"] <= pd_preds["LinearRegression-hi-80"]).all()
 
-    # the source calibration is not adapted in place
+    # the source state is not adapted in place
     assert fcst._calibration_ is saved_calibration
-    assert fcst._calibration_.adapted is None
+    assert fcst._transfer_ is None
 
     with pytest.raises(ValueError, match="TransferConformal.method must be one of"):
-        PredictionIntervals(transfer="bogus")
+        fcst.transfer(train_ef, "bogus")
 
 
 def test_transfer_learning_intervals_no_prediction_intervals_raises():
@@ -2475,9 +2470,7 @@ def test_transfer_learning_intervals_no_prediction_intervals_raises():
         3, min_length=50, max_length=50, n_static_features=0
     )
     fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
-    with pytest.raises(
-        ValueError, match="Transfer-learning prediction intervals require"
-    ):
+    with pytest.raises(ValueError, match="requires that the model was fit with"):
         fcst.cross_validation(train_ab, n_windows=2, h=5, refit=False, level=[80])
 
 
@@ -2835,21 +2828,18 @@ def test_fit_with_intervals_leaves_no_cv_state():
 def test_transfer_keeps_source_state():
     df = generate_daily_series(3, min_length=30, max_length=30)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-    fcst.fit(
-        df,
-        prediction_intervals=PredictionIntervals(
-            n_windows=2, h=1, transfer="recalibrate"
-        ),
-    )
+    fcst.fit(df, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
+    new_df = fcst.make_future_dataframe(5).assign(y=1.0)
+    new_df = pd.concat([df, new_df]).sort_values(["unique_id", "ds"])
     original_ts = fcst.ts
     original_calibration = fcst._calibration_
     with pytest.raises(ValueError, match="range"):
-        fcst.transfer(df).predict(1, level=[150])
+        fcst.transfer(new_df, "recalibrate").predict(1, level=[150])
     assert fcst.ts is original_ts
-    fcst.transfer(df).predict(1, level=[80])
+    fcst.transfer(new_df, "recalibrate").predict(1, level=[80])
     assert fcst.ts is original_ts
     assert fcst._calibration_ is original_calibration
-    assert fcst._calibration_.adapted is None
+    assert fcst._transfer_ is None
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])

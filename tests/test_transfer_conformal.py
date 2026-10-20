@@ -78,7 +78,7 @@ def transfer_cp_setup():
     target_train = target.drop(target_test.index)
 
     @cache
-    def fit(method):
+    def fit():
         mlf = MLForecast(
             models=lightgbm.LGBMRegressor(
                 n_estimators=20,
@@ -96,7 +96,6 @@ def transfer_cp_setup():
                 n_windows=N_WINDOWS,
                 h=HORIZON,
                 method="conformal_error",
-                transfer=method,
             ),
         )
 
@@ -138,7 +137,7 @@ def _predict_transfer(transfer_cp_setup, method: str) -> pd.DataFrame:
     cache_key = (id(fit), method)
     if cache_key not in _PREDICTION_CACHE:
         _PREDICTION_CACHE[cache_key] = (
-            fit(method).transfer(target_train).predict(h=HORIZON, level=[*LEVELS])
+            fit().transfer(target_train, method).predict(h=HORIZON, level=[*LEVELS])
         )
     return _PREDICTION_CACHE[cache_key].copy()
 
@@ -213,12 +212,10 @@ def test_equal_counts_pooled_uniform_widths():
     )
     mlf.fit(
         source_train,
-        prediction_intervals=PredictionIntervals(
-            n_windows=3, h=7, transfer="error_scaled"
-        ),
+        prediction_intervals=PredictionIntervals(n_windows=3, h=7),
     )
 
-    preds = mlf.transfer(target_train).predict(h=7, level=[90])
+    preds = mlf.transfer(target_train, "error_scaled").predict(h=7, level=[90])
     # For each forecast date (horizon step), all target series must share the same
     # interval width (pooled quantile is the same scalar for every series at that step).
     for ds, group in preds.groupby("ds", sort=False):
@@ -246,13 +243,11 @@ def test_h1_transfer_raises():
     )
     mlf.fit(
         source_train,
-        prediction_intervals=PredictionIntervals(
-            n_windows=2, h=1, transfer="error_scaled"
-        ),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=1),
     )
 
     with pytest.raises(ValueError, match="requires PredictionIntervals"):
-        mlf.transfer(target_train).predict(h=7, level=[90])
+        mlf.transfer(target_train, "error_scaled").predict(h=7, level=[90])
 
 
 def test_methods_produce_different_widths(transfer_cp_setup):
@@ -287,11 +282,8 @@ def test_error_scaled_n_windows_1_works():
         num_threads=1,
     )
     tc = TransferConformal(method="error_scaled", n_windows=1)
-    mlf.fit(
-        source,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
-    )
-    preds = mlf.transfer(target).predict(h=h, level=[90])
+    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    preds = mlf.transfer(target, tc).predict(h=h, level=[90])
     assert f"{MODEL}-lo-90" in preds.columns
     assert np.isfinite(preds[f"{MODEL}-lo-90"].to_numpy()).all()
 
@@ -320,13 +312,12 @@ def test_frozen_backtest_min_length_validation():
         num_threads=1,
     )
     tc = TransferConformal(method="recalibrate", n_windows=2)
-    mlf.fit(
-        source,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=tc),
-    )
+    mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
+    transferred = mlf.transfer(target, tc)
+    assert len(transferred.predict(h=h)) == n * h
     # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
     with pytest.raises(ValueError, match="time steps"):
-        mlf.transfer(target)
+        transferred.predict(h=h, level=[90])
 
 
 def test_frozen_backtest_uses_source_model():
@@ -352,9 +343,7 @@ def test_frozen_backtest_uses_source_model():
     )
     mlf.fit(
         src,
-        prediction_intervals=PredictionIntervals(
-            n_windows=2, h=h, transfer="recalibrate"
-        ),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h),
     )
 
     src_preds = mlf.predict(h=h, level=[90])
@@ -362,7 +351,7 @@ def test_frozen_backtest_uses_source_model():
         (src_preds["LGBMRegressor-hi-90"] - src_preds["LGBMRegressor-lo-90"]).mean()
     )
 
-    tgt_preds = mlf.transfer(tgt).predict(h=h, level=[90])
+    tgt_preds = mlf.transfer(tgt, "recalibrate").predict(h=h, level=[90])
     tgt_width = float(
         (tgt_preds["LGBMRegressor-hi-90"] - tgt_preds["LGBMRegressor-lo-90"]).mean()
     )
@@ -400,10 +389,10 @@ def test_frozen_backtest_unequal_length_series(method):
     )
     mlf.fit(
         source,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=h, transfer=method),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=h),
     )
 
-    preds = mlf.transfer(target).predict(h=h, level=[90])
+    preds = mlf.transfer(target, method).predict(h=h, level=[90])
     lo = preds["LGBMRegressor-lo-90"].to_numpy()
     hi = preds["LGBMRegressor-hi-90"].to_numpy()
     assert np.isfinite(lo).all(), f"{method}: lower bounds contain non-finite values"
@@ -430,7 +419,7 @@ def test_point_forecasts_invariant_across_transfer_methods():
     # Strong trend so a clobbered Differences restore produces a visible shift.
     target["y"] = target["y"] + target.groupby("unique_id").cumcount() * 2.0
 
-    def fresh_fit(method):
+    def fresh_fit():
         mlf = MLForecast(
             models=lightgbm.LGBMRegressor(n_estimators=10, random_state=0, verbosity=-1),
             lags=[1, 2],
@@ -441,14 +430,14 @@ def test_point_forecasts_invariant_across_transfer_methods():
         mlf.fit(
             source,
             prediction_intervals=PredictionIntervals(
-                n_windows=2, h=h, method="conformal_error", transfer=method
+                n_windows=2, h=h, method="conformal_error"
             ),
         )
         return mlf
 
-    baseline = fresh_fit(None).transfer(target).predict(h=h)["LGBMRegressor"].to_numpy()
+    baseline = fresh_fit().transfer(target).predict(h=h)["LGBMRegressor"].to_numpy()
     for method in TRANSFER_METHODS:
-        preds = fresh_fit(method).transfer(target).predict(h=h, level=[90])
+        preds = fresh_fit().transfer(target, method).predict(h=h, level=[90])
         np.testing.assert_allclose(
             preds["LGBMRegressor"].to_numpy(),
             baseline,
@@ -560,12 +549,9 @@ def test_recalibrate_step_size_param():
         num_threads=1,
     )
     tc = TransferConformal(method="recalibrate", step_size=2)
-    mlf.fit(
-        src,
-        prediction_intervals=PredictionIntervals(n_windows=3, h=h, transfer=tc),
-    )
+    mlf.fit(src, prediction_intervals=PredictionIntervals(n_windows=3, h=h))
 
-    preds = mlf.transfer(tgt).predict(h=h, level=[90])
+    preds = mlf.transfer(tgt, tc).predict(h=h, level=[90])
     assert "LGBMRegressor-lo-90" in preds.columns
     assert np.isfinite(preds["LGBMRegressor-lo-90"].to_numpy()).all()
     assert (preds["LGBMRegressor-lo-90"] <= preds["LGBMRegressor-hi-90"]).all()
@@ -579,9 +565,9 @@ def test_transfer_intervals_horizon_shorter_than_calibration(method):
     tgt = series[~series["unique_id"].isin(src_ids)]
     mlf = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7]).fit(
         src,
-        prediction_intervals=PredictionIntervals(n_windows=2, h=3, transfer=method),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
     )
-    tgt_fcst = mlf.transfer(tgt)
+    tgt_fcst = mlf.transfer(tgt, method)
     full = tgt_fcst.predict(3, level=[80])
     for h in (1, 2):
         preds = tgt_fcst.predict(h, level=[80])
@@ -589,7 +575,7 @@ def test_transfer_intervals_horizon_shorter_than_calibration(method):
         pd.testing.assert_frame_equal(preds, expected)
 
 
-def _dynamic_exog_setup(method, case="dynamic", engine="pandas"):
+def _dynamic_exog_setup(case="dynamic", engine="pandas"):
     """Source model fit with a dynamic exog `u`, plus target history and future X_df."""
     rng = np.random.default_rng(0)
     n = 60
@@ -626,7 +612,7 @@ def _dynamic_exog_setup(method, case="dynamic", engine="pandas"):
     mlf.fit(
         train,
         static_features=static_features,
-        prediction_intervals=PredictionIntervals(n_windows=5, h=5, transfer=method),
+        prediction_intervals=PredictionIntervals(n_windows=5, h=5),
         **cols,
     )
     return mlf, new_df, X_df
@@ -644,24 +630,24 @@ def _check_dynamic_exog_preds(preds):
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_with_dynamic_exog(case, method):
     """Transfer intervals work when the source model uses a dynamic exog (#721)."""
-    mlf, new_df, X_df = _dynamic_exog_setup(method, case)
-    preds = mlf.transfer(new_df).predict(h=5, X_df=X_df, level=[90])
+    mlf, new_df, X_df = _dynamic_exog_setup(case)
+    preds = mlf.transfer(new_df, method).predict(h=5, X_df=X_df, level=[90])
     _check_dynamic_exog_preds(preds)
 
 
 @pytest.mark.parametrize("method", ["recalibrate", "scale_aligned"])
 def test_transfer_with_dynamic_exog_polars(method):
-    mlf, new_df, X_df = _dynamic_exog_setup(method, engine="polars")
-    preds = mlf.transfer(new_df).predict(h=5, X_df=X_df, level=[90])
+    mlf, new_df, X_df = _dynamic_exog_setup(engine="polars")
+    preds = mlf.transfer(new_df, method).predict(h=5, X_df=X_df, level=[90])
     assert isinstance(preds, pl.DataFrame)
     _check_dynamic_exog_preds(preds)
 
 
 @pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
 def test_transfer_df_missing_dynamic_exog_raises(method):
-    mlf, new_df, _ = _dynamic_exog_setup(method)
+    mlf, new_df, _ = _dynamic_exog_setup()
     with pytest.raises(ValueError, match=r"`df` must contain .*\['u'\]"):
-        mlf.transfer(new_df.drop(columns="u"))
+        mlf.transfer(new_df.drop(columns="u"), method)
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +657,7 @@ LR = "LinearRegression"
 
 
 @cache
-def _transfer_setup(method, pi_method="conformal_error", transforms=False):
+def _transfer_setup(pi_method="conformal_error", transforms=False):
     src = generate_daily_series(8, min_length=80, max_length=80, seed=0)
     tgt = generate_daily_series(4, min_length=50, max_length=50, seed=1)
     tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
@@ -685,7 +671,7 @@ def _transfer_setup(method, pi_method="conformal_error", transforms=False):
     fcst.fit(
         src,
         prediction_intervals=PredictionIntervals(
-            n_windows=5, h=3, method=pi_method, transfer=method
+            n_windows=5, h=3, method=pi_method
         ),
     )
     return fcst, tgt
@@ -693,11 +679,11 @@ def _transfer_setup(method, pi_method="conformal_error", transforms=False):
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_update_keeps_source(method):
-    fcst, tgt = _transfer_setup(method)
+    fcst, tgt = _transfer_setup()
     obs = tgt.groupby("unique_id", observed=True).tail(2)
     train = tgt.drop(obs.index)
     expected = fcst.predict(3, level=[80])
-    transferred = fcst.transfer(train)
+    transferred = fcst.transfer(train, method)
     transferred.update(obs)
     preds = transferred.predict(3, level=[80])
     assert preds["ds"].min() > obs["ds"].max()
@@ -708,8 +694,8 @@ def test_transfer_update_keeps_source(method):
 @pytest.mark.parametrize("pi_method", ["conformal_error", "conformal_distribution"])
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_ids_only_selects_forecasts(pi_method, method):
-    fcst, tgt = _transfer_setup(method, pi_method)
-    transferred = fcst.transfer(tgt)
+    fcst, tgt = _transfer_setup(pi_method)
+    transferred = fcst.transfer(tgt, method)
     ids = ["tgt_id_2", "tgt_id_0"]
     full = transferred.predict(3, level=[80, 90])
     subset = transferred.predict(3, level=[80, 90], ids=ids)
@@ -723,19 +709,18 @@ def test_transfer_ids_only_selects_forecasts(pi_method, method):
 @pytest.mark.parametrize("transforms", [False, True])
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_chained_adapts_from_source(method, transforms):
-    fcst, tgt = _transfer_setup(method, transforms=transforms)
+    fcst, tgt = _transfer_setup(transforms=transforms)
     # other series, lengths and scale, so leftover state from them would show
     first_df = generate_daily_series(3, min_length=60, max_length=70, seed=2)
     first_df["y"] = first_df["y"] * 10 + 100
-    chained = fcst.transfer(first_df).transfer(tgt)
-    pd.testing.assert_frame_equal(
-        chained.predict(3, level=[80]),
-        fcst.transfer(tgt).predict(3, level=[80]),
-    )
+    expected = fcst.transfer(tgt, method).predict(3, level=[80])
+    for first_method in (None, method):
+        chained = fcst.transfer(first_df, first_method).transfer(tgt, method)
+        pd.testing.assert_frame_equal(chained.predict(3, level=[80]), expected)
 
 
 def test_transfer_models_are_not_shared():
-    fcst, tgt = _transfer_setup("recalibrate")
+    fcst, tgt = _transfer_setup()
     expected = fcst.predict(3)
     transferred = fcst.transfer(tgt)
     transferred.models_[LR] = LinearRegression().fit(np.ones((2, 2)), [0.0, 0.0])
@@ -744,27 +729,130 @@ def test_transfer_models_are_not_shared():
 
 @pytest.mark.parametrize("method", TRANSFER_METHODS)
 def test_transfer_save_load(method, tmp_path):
-    fcst, tgt = _transfer_setup(method)
-    transferred = fcst.transfer(tgt)
-    transferred.save(tmp_path)
-    loaded = MLForecast.load(tmp_path)
-    pd.testing.assert_frame_equal(
-        loaded.predict(3, level=[80]), transferred.predict(3, level=[80])
-    )
+    fcst, tgt = _transfer_setup()
+    transferred = fcst.transfer(tgt, method)
+    transferred.save(tmp_path / "pending")
+    expected = transferred.predict(3, level=[80])
+    transferred.save(tmp_path / "adapted")
+    for name in ("pending", "adapted"):
+        loaded = MLForecast.load(tmp_path / name)
+        pd.testing.assert_frame_equal(loaded.predict(3, level=[80]), expected)
 
 
-def test_transfer_without_transfer_method_save_load(tmp_path):
-    fcst, tgt = _transfer_setup(None)
+def test_transfer_without_method_save_load(tmp_path):
+    fcst, tgt = _transfer_setup()
     fcst.transfer(tgt).save(tmp_path)
-    with pytest.raises(ValueError, match=r"PredictionIntervals\(transfer=\.\.\.\)"):
+    with pytest.raises(ValueError, match="transferred without a method"):
         MLForecast.load(tmp_path).predict(3, level=[80])
 
 
 def test_scale_aligned_series_added_after_transfer_raises():
-    fcst, tgt = _transfer_setup("scale_aligned")
+    fcst, tgt = _transfer_setup()
     new = tgt[tgt["unique_id"] == "tgt_id_3"]
-    transferred = fcst.transfer(tgt[tgt["unique_id"] != "tgt_id_3"])
+    transferred = fcst.transfer(tgt[tgt["unique_id"] != "tgt_id_3"], "scale_aligned")
     transferred.update(new)
     transferred.predict(3)
     with pytest.raises(ValueError, match=r"\['tgt_id_3'\] were added after `transfer`"):
         transferred.predict(3, level=[80])
+
+
+def test_recalibrate_without_intervals_at_fit():
+    fcst, tgt = _transfer_setup()
+    plain = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    plain.fit(generate_daily_series(8, min_length=80, max_length=80, seed=0))
+    tc = TransferConformal(method="recalibrate", h=3, n_windows=5)
+    pd.testing.assert_frame_equal(
+        plain.transfer(tgt, tc).predict(3, level=[80]),
+        fcst.transfer(tgt, "recalibrate").predict(3, level=[80]),
+    )
+    with pytest.raises(ValueError, match=r"TransferConformal\(method='recalibrate', h"):
+        plain.transfer(tgt, "recalibrate")
+    for method in ("error_scaled", "scale_aligned"):
+        with pytest.raises(ValueError, match=f"'{method}' transfer method requires"):
+            plain.transfer(tgt, method)
+
+
+@pytest.mark.parametrize("method", ["error_scaled", "scale_aligned"])
+def test_transfer_h_must_match_source_scores(method):
+    fcst, tgt = _transfer_setup()
+    with pytest.raises(ValueError, match=r"must equal the `h` of `PredictionIntervals` \(3\)"):
+        fcst.transfer(tgt, TransferConformal(method=method, h=2))
+
+
+def test_scale_aligned_scale_estimators_on_one_fit():
+    fcst, tgt = _transfer_setup()
+    preds = {
+        est: fcst.transfer(
+            tgt, TransferConformal(method="scale_aligned", scale_estimator=est)
+        ).predict(3, level=[80])
+        for est in ("mad", "std")
+    }
+    assert not np.allclose(preds["mad"][f"{LR}-lo-80"], preds["std"][f"{LR}-lo-80"])
+
+
+@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
+def test_transfer_in_sample_windows_raise(method):
+    src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    fcst.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=3))
+    transferred = fcst.transfer(src, method)
+    transferred.predict(3)
+    with pytest.raises(ValueError, match="'id_0' was trained up to"):
+        transferred.predict(3, level=[80])
+    # windows after the training end, and new ids regardless of their times
+    future = fcst.make_future_dataframe(4).assign(y=1.0)
+    seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
+    new = src.assign(unique_id="new_" + src["unique_id"].astype(str))
+    for df in (seen, new):
+        preds = fcst.transfer(df, method).predict(3, level=[80])
+        assert preds[f"{LR}-lo-80"].notna().all()
+
+
+def test_cross_validation_refit_false_overlapping_windows():
+    src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    res = fcst.cross_validation(
+        src,
+        n_windows=3,
+        h=2,
+        step_size=1,
+        refit=False,
+        level=[80],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=2),
+    )
+    assert res[f"{LR}-lo-80"].notna().all()
+
+
+def test_transfer_adapts_once(monkeypatch):
+    import mlforecast.forecast as forecast_mod
+
+    fcst, tgt = _transfer_setup()
+    calls = []
+    original = forecast_mod._frozen_backtest
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(forecast_mod, "_frozen_backtest", counting)
+    transferred = fcst.transfer(tgt, "recalibrate")
+    transferred.predict(3)
+    assert not calls
+    first = transferred.predict(3, level=[80])
+    second = transferred.predict(3, level=[80])
+    assert len(calls) == 1
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_load_older_layout_raises(tmp_path):
+    import cloudpickle
+
+    fcst, _ = _transfer_setup()
+    fcst.save(tmp_path)
+    with open(tmp_path / "intervals.pkl", "wb") as f:
+        cloudpickle.dump(
+            {"scores": fcst._calibration_.scores, "settings": fcst.prediction_intervals},
+            f,
+        )
+    with pytest.raises(ValueError, match="saved by an older version"):
+        MLForecast.load(tmp_path)
