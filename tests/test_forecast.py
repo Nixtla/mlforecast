@@ -2470,7 +2470,7 @@ def test_transfer_learning_intervals_no_prediction_intervals_raises():
         3, min_length=50, max_length=50, n_static_features=0
     )
     fcst = MLForecast(models=[LinearRegression()], freq="D", lags=[1, 2, 3])
-    with pytest.raises(ValueError, match="requires that the model was fit with"):
+    with pytest.raises(ValueError, match="windows that aren.t refit require"):
         fcst.cross_validation(train_ab, n_windows=2, h=5, refit=False, level=[80])
 
 

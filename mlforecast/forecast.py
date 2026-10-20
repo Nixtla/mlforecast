@@ -87,18 +87,14 @@ def _ensure_h_int64(res):
 def _check_out_of_sample(
     cutoffs: DataFrame, train_ends: DataFrame, id_col: str
 ) -> None:
-    overlap = nw.from_native(
-        ufp.join(cutoffs, train_ends, on=id_col), eager_only=True
-    ).filter(nw.col("cutoff") < nw.col("train_end"))
-    if len(overlap):
-        details = "; ".join(
-            f"'{uid}' was trained up to {end} but its first window starts after {cutoff}"
-            for uid, end, cutoff in zip(
-                overlap[id_col].to_list(),
-                overlap["train_end"].to_list(),
-                overlap["cutoff"].to_list(),
-            )
-        )
+    # compared in python because the ids of `df` may have another dtype
+    ends = dict(zip(train_ends[id_col].to_list(), train_ends["train_end"].to_list()))
+    details = "; ".join(
+        f"'{uid}' was trained up to {ends[uid]} but its first window starts after {cutoff}"
+        for uid, cutoff in zip(cutoffs[id_col].to_list(), cutoffs["cutoff"].to_list())
+        if uid in ends and cutoff < ends[uid]
+    )
+    if details:
         raise ValueError(
             "The backtest windows of series seen during training must start after "
             "the end of their training data, otherwise the intervals are computed "
@@ -142,7 +138,8 @@ def _frozen_backtest(
         raise ValueError(
             "Adapting the prediction intervals to new series with a frozen-model "
             "backtest (the 'recalibrate' and 'error_scaled' methods of `transfer`, "
-            "and `cross_validation(refit=False, level=...)`) requires >= {required} time steps per series "
+            "and `cross_validation(refit=False, level=...)`) requires "
+            f">= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
             f"Series too short: {details}."
         )
@@ -1226,16 +1223,13 @@ class MLForecast:
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
             )
-            source_scales = {
-                estimator: _raw_series_scales(
-                    df=df,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    method=estimator,
-                )
-                for estimator in ("mad", "std")
-            }
+            source_scales = _raw_series_scales(
+                df=df,
+                id_col=id_col,
+                time_col=time_col,
+                target_col=target_col,
+                methods=("mad", "std"),
+            )
             self._calibration_ = Calibration(scores=scores, source_scales=source_scales)
         # When max_horizon or horizons is set, use generator factory approach
         if max_horizon is not None or horizons is not None:
@@ -1982,6 +1976,11 @@ class MLForecast:
             if should_fit:
                 fcst = self
             else:
+                if level is not None and self.prediction_intervals is None:
+                    raise ValueError(
+                        "Prediction intervals for the windows that aren't refit "
+                        "require `prediction_intervals=PredictionIntervals(...)`."
+                    )
                 fcst = self._transfer(
                     train,
                     TransferConformal(method="recalibrate")

@@ -2,7 +2,7 @@ __all__ = ["PredictionIntervals", "TransferConformal"]
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
 
 import narwhals as nw
 import numpy as np
@@ -122,8 +122,8 @@ def _compute_series_scales(
     with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
     short series.
     """
-    raw = _raw_series_scales(df, id_col, time_col, target_col, method)
-    return _floor_series_scales(raw, floor_factor)
+    raw = _raw_series_scales(df, id_col, time_col, target_col, (method,))
+    return _floor_series_scales(raw[method], floor_factor)
 
 
 def _raw_series_scales(
@@ -131,9 +131,9 @@ def _raw_series_scales(
     id_col: str,
     time_col: str,
     target_col: str,
-    method: str,
-) -> Dict:
-    """MAD(Δy) or std(Δy) per series, before the floor of `_floor_series_scales`."""
+    methods: Sequence[str],
+) -> Dict[str, Dict]:
+    """MAD(Δy) and/or std(Δy) per series, before the floor of `_floor_series_scales`."""
     ndf = nw.from_native(df, eager_only=True)
     ndf = ndf.select([id_col, time_col, target_col]).with_columns(
         nw.col(target_col)
@@ -148,35 +148,38 @@ def _raw_series_scales(
         nw.col(target_col).abs().alias("_abs_y"),
         nw.col("_dy").abs().alias("_abs_dy_col"),
     )
-    if method == "mad":
+    scale_exprs = []
+    if "mad" in methods:
         ndf = ndf.with_columns(
             (nw.col("_dy") - nw.col("_dy").median().over(id_col)).abs().alias("_ady")
         )
-        scale_expr = nw.col("_ady").median()
-    else:  # "std"
-        scale_expr = nw.col("_dy").std(ddof=1)
+        scale_exprs.append(nw.col("_ady").median().alias("mad"))
+    if "std" in methods:
+        scale_exprs.append(nw.col("_dy").std(ddof=1).alias("std"))
     stats = ndf.group_by(id_col).agg(
-        scale_expr.alias("_scale"),
+        *scale_exprs,
         nw.col("_dy").count().alias("_n_dy"),
         nw.col("_abs_y").mean().alias("_abs_mean"),
         nw.col("_abs_dy_col").max().alias("_max_abs_dy"),
     )
-    raw: Dict = {}
-    for uid, scale, n_dy, abs_mean, max_abs_dy in zip(
-        stats[id_col].to_list(),
-        stats["_scale"].to_list(),
-        stats["_n_dy"].to_list(),
-        stats["_abs_mean"].to_list(),
-        stats["_max_abs_dy"].to_list(),
-    ):
-        if n_dy == 0:
-            # single-observation series: no diffs available
-            raw[uid] = float(abs_mean) if abs_mean is not None else 1.0
-        elif method == "std" and n_dy == 1:
-            # std(ddof=1) of a single diff is NaN; use |dy[0]| = max(|dy|) as before
-            raw[uid] = float(max_abs_dy)
-        else:
-            raw[uid] = float(scale)
+    uids = stats[id_col].to_list()
+    n_dys = stats["_n_dy"].to_list()
+    abs_means = stats["_abs_mean"].to_list()
+    max_abs_dys = stats["_max_abs_dy"].to_list()
+    raw: Dict[str, Dict] = {}
+    for method in methods:
+        raw[method] = {}
+        for uid, scale, n_dy, abs_mean, max_abs_dy in zip(
+            uids, stats[method].to_list(), n_dys, abs_means, max_abs_dys
+        ):
+            if n_dy == 0:
+                # single-observation series: no diffs available
+                raw[method][uid] = float(abs_mean) if abs_mean is not None else 1.0
+            elif method == "std" and n_dy == 1:
+                # std(ddof=1) of a single diff is NaN; use |dy[0]| = max(|dy|) as before
+                raw[method][uid] = float(max_abs_dy)
+            else:
+                raw[method][uid] = float(scale)
     return raw
 
 
@@ -477,8 +480,6 @@ class TransferState:
     """
 
     method: Optional[TransferConformal] = None
-    h: int = 1
-    n_windows: int = 2
     df: Optional[DFType] = None
     train_ends: Optional[DFType] = None
     result: Optional[TransferResult] = None

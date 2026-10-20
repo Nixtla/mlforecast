@@ -316,7 +316,7 @@ def test_frozen_backtest_min_length_validation():
     transferred = mlf.transfer(target, tc)
     assert len(transferred.predict(h=h)) == n * h
     # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
-    with pytest.raises(ValueError, match="time steps"):
+    with pytest.raises(ValueError, match=">= 8 time steps"):
         transferred.predict(h=h, level=[90])
 
 
@@ -806,6 +806,21 @@ def test_transfer_in_sample_windows_raise(method):
     for df in (seen, new):
         preds = fcst.transfer(df, method).predict(3, level=[80])
         assert preds[f"{LR}-lo-80"].notna().all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_transfer_target_ids_of_other_dtype(engine):
+    src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
+    src["unique_id"] = src["unique_id"].cat.codes.astype("int64")
+    tgt = generate_daily_series(3, min_length=60, max_length=60, seed=1)
+    tgt["unique_id"] = "tgt_" + tgt["unique_id"].astype(str)
+    freq = "D"
+    if engine == "polars":
+        src, tgt, freq = pl.from_pandas(src), pl.from_pandas(tgt), "1d"
+    fcst = MLForecast(models=LinearRegression(), freq=freq, lags=[1])
+    fcst.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=3))
+    preds = fcst.transfer(tgt, "recalibrate").predict(3, level=[80])
+    assert len(preds) == 9
 
 
 def test_cross_validation_refit_false_overlapping_windows():
