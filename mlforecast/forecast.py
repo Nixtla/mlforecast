@@ -100,7 +100,9 @@ def _check_out_of_sample(
             "the end of their training data, otherwise the intervals are computed "
             "on in-sample forecasts and are too narrow. Pass more observations after "
             "the training end or reduce `n_windows`, `h` or `step_size` of "
-            f"`TransferConformal`. Series with in-sample windows: {details}."
+            "`TransferConformal`. Series are matched to the training series by id, "
+            "so rename the ids of unrelated series that reuse them. "
+            f"Series with in-sample windows: {details}."
         )
 
 
@@ -1517,7 +1519,7 @@ class MLForecast:
                 - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on `df`. Requires prediction intervals at fit.
                 - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest. Requires prediction intervals at fit.
 
-                The backtest windows of series seen during training must start after the end of their training data. Defaults to None (no prediction intervals).
+                The backtest windows of series seen during training (matched by id) must start after the end of their training data. Defaults to None (no prediction intervals).
 
         Returns:
             MLForecast: Forecast object for the series in `df` that shares the trained models. This instance is not modified.

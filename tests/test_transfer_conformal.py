@@ -797,6 +797,8 @@ def test_transfer_in_sample_windows_raise(method):
     fcst.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=3))
     transferred = fcst.transfer(src, method)
     transferred.predict(3)
+    with pytest.raises(ValueError, match="matched to the training series by id"):
+        transferred.predict(3, level=[80])
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
         transferred.predict(3, level=[80])
     # windows after the training end, and new ids regardless of their times
@@ -844,7 +846,8 @@ def test_scale_floor_warning_points_at_caller(flat):
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
     fcst.fit(src, prediction_intervals=PredictionIntervals(h=3))
     transferred = fcst.transfer(tgt, "scale_aligned")
-    with pytest.warns(UserWarning, match="near-zero scale") as record:
+    kind = "Training series" if flat == "source" else "Series 'new_"
+    with pytest.warns(UserWarning, match=f"{kind}.*near-zero scale") as record:
         transferred.predict(3, level=[80])
     assert any(w.filename == __file__ for w in record if "near-zero" in str(w.message))
 

@@ -183,7 +183,9 @@ def _raw_series_scales(
     return raw
 
 
-def _floor_series_scales(raw: Dict, floor_factor: float, stacklevel: int) -> Dict:
+def _floor_series_scales(
+    raw: Dict, floor_factor: float, stacklevel: int, kind: str = "Series"
+) -> Dict:
     vals = np.array(list(raw.values()), dtype=float)
     global_median = float(np.median(vals)) if len(vals) > 0 else 1.0
     floor = max(floor_factor * global_median, 1e-8)
@@ -192,7 +194,7 @@ def _floor_series_scales(raw: Dict, floor_factor: float, stacklevel: int) -> Dic
         effective = max(v, floor)
         if effective > v:
             warnings.warn(
-                f"Series '{uid}' has near-zero scale estimate ({v:.2e}); "
+                f"{kind} '{uid}' has near-zero scale estimate ({v:.2e}); "
                 f"applying floor {floor:.2e}. Check for flat or constant series.",
                 UserWarning,
                 stacklevel=stacklevel,
@@ -552,7 +554,9 @@ def _scale_aligned_transfer(
     target_scale_dict = _floor_series_scales(
         raw_target[scale_estimator], floor_factor=1e-3, stacklevel=5
     )
-    source_scales = _floor_series_scales(source_scales, floor_factor=1e-3, stacklevel=5)
+    source_scales = _floor_series_scales(
+        source_scales, floor_factor=1e-3, stacklevel=5, kind="Training series"
+    )
     return TransferResult(
         cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
         target_scales=target_scale_dict,
