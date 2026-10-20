@@ -208,18 +208,21 @@ We therefore model **log-returns** instead of raw differences:
 
 ### Prediction interval configuration
 
-The transfer method is part of the interval configuration set at fit
-time: `PredictionIntervals(transfer=method)`. A plain string is
-shorthand for `TransferConformal(method=method)`, which also holds the
-method’s options (the backtest `n_windows` and `step_size` for
-`recalibrate` and `error_scaled`, and the `scale_estimator` for
-`scale_aligned`, which defaults to the MAD of first differences).
+`PredictionIntervals` only calibrates the intervals of the Macro series.
+The transfer method is chosen when transferring:
+`mlf.transfer(df, method)`. A plain string is shorthand for
+`TransferConformal(method=method)`, which also holds the method’s
+options (the backtest `n_windows` and `step_size` for `recalibrate` and
+`error_scaled`, and the `scale_estimator` for `scale_aligned`, which
+defaults to the MAD of first differences).
 
-Comparing methods therefore means fitting one model per method on the
-Macro series.
+`recalibrate` only uses the target backtest, so it also works on a model
+fit without `prediction_intervals` when given
+`TransferConformal(method='recalibrate', h=...)`. `error_scaled` and
+`scale_aligned` reuse the source conformity scores and need them at fit.
 
 ```python
-def fit_source(method):
+def fit_source():
     mlf = MLForecast(
         models=lgb.LGBMRegressor(n_estimators=100, verbosity=-1, random_state=0),
         freq=1,
@@ -245,18 +248,17 @@ def fit_source(method):
             n_windows=2,
             h=HORIZON,
             method='conformal_error',
-            transfer=method,
         ),
     )
 ```
 
 ## Evaluate Transfer Methods
 
-For each transfer method, we fit on the source domain with
-`PredictionIntervals(transfer=method)` and call
-`mlf.transfer(target_train)` to get a forecaster for the target domain
-(Finance series) whose conformity scores are adapted with `method`, and
-then its `predict` method with `level=[80, 90, 95]`.
+We fit once on the source domain and, for each transfer method, call
+`mlf.transfer(target_train, method)` to get a forecaster for the target
+domain (Finance series), and then its `predict` method with
+`level=[80, 90, 95]`. `transfer` adapts the conformity scores to
+`target_train`, so `predict` only reads them.
 
 We then merge predictions with `target_test` and compute the **empirical
 coverage** at each level.
@@ -267,14 +269,13 @@ MODEL = 'LGBMRegressor'
 
 transfer_methods = ['recalibrate', 'scale_aligned', 'error_scaled']
 
-source_models = {}
+source_model = fit_source()
 preds_by_method = {}
 coverage_results = {}
 
 for method in transfer_methods:
     print(f"Running '{method}'...", end=' ', flush=True)
-    source_models[method] = fit_source(method)
-    preds = source_models[method].transfer(target_train).predict(
+    preds = source_model.transfer(target_train, method).predict(
         h=HORIZON, level=LEVELS
     )
     preds_by_method[method] = preds
@@ -485,8 +486,8 @@ EXAMPLE_IDS = target_ids[:4].tolist()
 # Collect predictions for all methods
 all_preds = {}
 for method in transfer_methods:
-    preds = source_models[method].transfer(
-        target_train[target_train['unique_id'].isin(EXAMPLE_IDS)]
+    preds = source_model.transfer(
+        target_train[target_train['unique_id'].isin(EXAMPLE_IDS)], method
     ).predict(h=HORIZON, level=[PLOT_LEVEL])
     all_preds[method] = preds
 ```

@@ -9,7 +9,7 @@ title: Conformal Prediction
 ### `PredictionIntervals`
 
 ```python
-PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', transfer=None)
+PredictionIntervals(n_windows=2, h=1, method='conformal_distribution')
 ```
 
 Class for storing prediction intervals metadata information.
@@ -21,26 +21,26 @@ Name | Type | Description | Default
 `n_windows` | <code>[int](#int)</code> | Number of cross validation windows used to compute the conformity scores. Defaults to 2. | <code>2</code>
 `h` | <code>[int](#int)</code> | Forecast horizon of each cross validation window. Defaults to 1. | <code>1</code>
 `method` | <code>[str](#str)</code> | ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'. | <code>'conformal_distribution'</code>
-`transfer` | <code>[str](#str) or [TransferConformal](#mlforecast.conformal_prediction.TransferConformal)</code> | How to adapt the intervals to the series of `MLForecast.transfer`. A plain string is shorthand for ``TransferConformal(method=<str>)``. Supported methods:<br/>- ``'recalibrate'``: Runs a frozen-model backtest on the transferred series and uses its scores instead of the source ones. - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on the transferred series. - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest.<br/>Defaults to None (no prediction intervals for transferred series). | <code>None</code>
 
 
 ### `TransferConformal`
 
 ```python
-TransferConformal(method='recalibrate', n_windows=None, step_size=None, scale_estimator='mad')
+TransferConformal(method='recalibrate', h=None, n_windows=None, step_size=None, scale_estimator='mad')
 ```
 
 Configuration for adapting the prediction intervals to transferred series.
 
-Pass to ``PredictionIntervals(transfer=...)``. A plain string is shorthand
-for ``TransferConformal(method=<str>)``.
+Pass to ``MLForecast.transfer``. A plain string is shorthand for
+``TransferConformal(method=<str>)``.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `method` | <code>[str](#str)</code> | ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'. | <code>'recalibrate'</code>
-`n_windows` | <code>[int](#int)</code> | Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``. | <code>None</code>
+`h` | <code>[int](#int)</code> | Forecast horizon of the conformity scores. Defaults to the ``h`` of ``PredictionIntervals``. Required for ``'recalibrate'`` on a model fit without prediction intervals. | <code>None</code>
+`n_windows` | <code>[int](#int)</code> | Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them. | <code>None</code>
 `step_size` | <code>[int](#int)</code> | Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1. | <code>None</code>
 `scale_estimator` | <code>[str](#str)</code> | Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'. | <code>'mad'</code>
 
