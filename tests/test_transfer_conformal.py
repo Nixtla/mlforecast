@@ -811,6 +811,8 @@ def test_transfer_in_sample_windows_raise(method):
         fcst.transfer(src, method)
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
         fcst.transfer(src, method)
+    with pytest.raises(ValueError, match="or its `h` for 'recalibrate'"):
+        fcst.transfer(src, method)
     # windows after the training end, and new ids regardless of their times
     future = fcst.make_future_dataframe(4).assign(y=1.0)
     seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])

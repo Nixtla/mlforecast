@@ -99,8 +99,8 @@ def _check_out_of_sample(
             "The backtest windows of series seen during training must start after "
             "the end of their training data, otherwise the intervals are computed "
             "on in-sample forecasts and are too narrow. Pass more observations after "
-            "the training end or reduce `n_windows`, `h` or `step_size` of "
-            "`TransferConformal`. Series are matched to the training series by id, "
+            "the training end or reduce `n_windows` or `step_size` of "
+            "`TransferConformal`, or its `h` for 'recalibrate'. Series are matched to the training series by id, "
             "so rename the ids of unrelated series that reuse them. "
             f"Series with in-sample windows: {details}."
         )
