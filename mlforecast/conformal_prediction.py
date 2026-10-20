@@ -123,7 +123,7 @@ def _compute_series_scales(
     short series.
     """
     raw = _raw_series_scales(df, id_col, time_col, target_col, (method,))
-    return _floor_series_scales(raw[method], floor_factor)
+    return _floor_series_scales(raw[method], floor_factor, stacklevel=3)
 
 
 def _raw_series_scales(
@@ -153,9 +153,9 @@ def _raw_series_scales(
         ndf = ndf.with_columns(
             (nw.col("_dy") - nw.col("_dy").median().over(id_col)).abs().alias("_ady")
         )
-        scale_exprs.append(nw.col("_ady").median().alias("mad"))
+        scale_exprs.append(nw.col("_ady").median().alias("_mad"))
     if "std" in methods:
-        scale_exprs.append(nw.col("_dy").std(ddof=1).alias("std"))
+        scale_exprs.append(nw.col("_dy").std(ddof=1).alias("_std"))
     stats = ndf.group_by(id_col).agg(
         *scale_exprs,
         nw.col("_dy").count().alias("_n_dy"),
@@ -170,7 +170,7 @@ def _raw_series_scales(
     for method in methods:
         raw[method] = {}
         for uid, scale, n_dy, abs_mean, max_abs_dy in zip(
-            uids, stats[method].to_list(), n_dys, abs_means, max_abs_dys
+            uids, stats[f"_{method}"].to_list(), n_dys, abs_means, max_abs_dys
         ):
             if n_dy == 0:
                 # single-observation series: no diffs available
@@ -183,7 +183,7 @@ def _raw_series_scales(
     return raw
 
 
-def _floor_series_scales(raw: Dict, floor_factor: float = 1e-3) -> Dict:
+def _floor_series_scales(raw: Dict, floor_factor: float, stacklevel: int) -> Dict:
     vals = np.array(list(raw.values()), dtype=float)
     global_median = float(np.median(vals)) if len(vals) > 0 else 1.0
     floor = max(floor_factor * global_median, 1e-8)
@@ -195,7 +195,7 @@ def _floor_series_scales(raw: Dict, floor_factor: float = 1e-3) -> Dict:
                 f"Series '{uid}' has near-zero scale estimate ({v:.2e}); "
                 f"applying floor {floor:.2e}. Check for flat or constant series.",
                 UserWarning,
-                stacklevel=4,
+                stacklevel=stacklevel,
             )
         floored[uid] = effective
     return floored
@@ -545,14 +545,14 @@ def _scale_aligned_transfer(
     Returns the source conformity scores normalized by σ̂_source together with
     per-series target scales in ``TransferResult.target_scales``.
     """
-    target_scale_dict = _compute_series_scales(
-        new_df,
-        id_col=id_col,
-        time_col=time_col,
-        target_col=target_col,
-        method=scale_estimator,
+    # called from MLForecast.predict through _adapt, warn at the user's call
+    raw_target = _raw_series_scales(
+        new_df, id_col, time_col, target_col, (scale_estimator,)
     )
-    source_scales = _floor_series_scales(source_scales)
+    target_scale_dict = _floor_series_scales(
+        raw_target[scale_estimator], floor_factor=1e-3, stacklevel=5
+    )
+    source_scales = _floor_series_scales(source_scales, floor_factor=1e-3, stacklevel=5)
     return TransferResult(
         cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
         target_scales=target_scale_dict,

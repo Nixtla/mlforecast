@@ -823,6 +823,32 @@ def test_transfer_target_ids_of_other_dtype(engine):
     assert len(preds) == 9
 
 
+@pytest.mark.parametrize("id_col", ["mad", "std"])
+def test_fit_intervals_with_id_col_named_like_estimator(id_col):
+    df = generate_daily_series(3, min_length=60, max_length=60)
+    df = df.rename(columns={"unique_id": id_col})
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, id_col=id_col, prediction_intervals=PredictionIntervals(h=3))
+    tgt = df.assign(**{id_col: "new_" + df[id_col].astype(str)})
+    preds = fcst.transfer(tgt, "scale_aligned").predict(3, level=[80])
+    assert preds[f"{LR}-lo-80"].notna().all()
+
+
+@pytest.mark.parametrize("flat", ["source", "target"])
+def test_scale_floor_warning_points_at_caller(flat):
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    tgt = generate_daily_series(4, min_length=60, max_length=60, seed=1)
+    tgt["unique_id"] = "new_" + tgt["unique_id"].astype(str)
+    df = src if flat == "source" else tgt
+    df.loc[df["unique_id"] == df["unique_id"].iloc[0], "y"] = 1.0
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(src, prediction_intervals=PredictionIntervals(h=3))
+    transferred = fcst.transfer(tgt, "scale_aligned")
+    with pytest.warns(UserWarning, match="near-zero scale") as record:
+        transferred.predict(3, level=[80])
+    assert any(w.filename == __file__ for w in record if "near-zero" in str(w.message))
+
+
 def test_cross_validation_refit_false_overlapping_windows():
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
