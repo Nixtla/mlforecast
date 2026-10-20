@@ -462,8 +462,10 @@ class TransferResult:
     """Return value from transfer conformal functions."""
 
     cs_df: DFType
-    target_scales: Optional[Dict[str, float]] = None  # uid -> sigma_tgt
+    h: int
+    n_windows: int
     signed: bool = False
+    target_scales: Optional[Dict[str, float]] = None  # uid -> sigma_tgt
 
 
 @dataclass
@@ -476,14 +478,9 @@ class Calibration:
 
 @dataclass
 class TransferState:
-    """Transfer method chosen in ``MLForecast.transfer`` and its adaptation to `df`.
-
-    `result` is computed from `df` on the first ``predict(level=...)``.
-    """
+    """Transfer method chosen in ``MLForecast.transfer`` and its adaptation to `df`, computed there."""
 
     method: Optional[TransferConformal] = None
-    df: Optional[DFType] = None
-    train_ends: Optional[DFType] = None
     result: Optional[TransferResult] = None
 
 
@@ -502,14 +499,14 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
         warnings.warn(
             "IQR of residuals near zero; falling back to std ratio for scale estimation.",
             UserWarning,
-            stacklevel=4,
+            stacklevel=6,
         )
         return std_tgt / max(std_src, 1e-10)
     # Fallback 2: constant
     warnings.warn(
         "Both IQR and std of residuals near zero; scale ratio defaulting to 1.0.",
         UserWarning,
-        stacklevel=4,
+        stacklevel=6,
     )
     return 1.0
 
@@ -518,6 +515,8 @@ def _recalibrate_transfer(
     backtest_results: DFType,
     model_names: List[str],
     target_col: str,
+    h: int,
+    n_windows: int,
 ) -> TransferResult:
     """Recompute conformity scores from frozen-model backtest on new_df.
 
@@ -528,6 +527,8 @@ def _recalibrate_transfer(
         cs_df=compute_conformity_scores(
             backtest_results, model_names, target_col, signed=True
         ),
+        h=h,
+        n_windows=n_windows,
         signed=True,
     )
 
@@ -541,24 +542,28 @@ def _scale_aligned_transfer(
     scale_estimator: str,
     source_cs_df: DFType,
     source_scales: Dict,
+    h: int,
+    n_windows: int,
 ) -> TransferResult:
     """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
 
     Returns the source conformity scores normalized by σ̂_source together with
     per-series target scales in ``TransferResult.target_scales``.
     """
-    # called from MLForecast.predict through _adapt, warn at the user's call
+    # called from MLForecast.transfer through _transfer and _adapt, warn at the user's call
     raw_target = _raw_series_scales(
         new_df, id_col, time_col, target_col, (scale_estimator,)
     )
     target_scale_dict = _floor_series_scales(
-        raw_target[scale_estimator], floor_factor=1e-3, stacklevel=5
+        raw_target[scale_estimator], floor_factor=1e-3, stacklevel=6
     )
     source_scales = _floor_series_scales(
-        source_scales, floor_factor=1e-3, stacklevel=5, kind="Training series"
+        source_scales, floor_factor=1e-3, stacklevel=6, kind="Training series"
     )
     return TransferResult(
         cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
+        h=h,
+        n_windows=n_windows,
         target_scales=target_scale_dict,
     )
 
@@ -568,6 +573,8 @@ def _error_scaled_transfer(
     model_names: List[str],
     target_col: str,
     source_cs_df: DFType,
+    h: int,
+    n_windows: int,
 ) -> TransferResult:
     """Scale source conformity scores by a single global IQR ratio (target / source).
 
@@ -585,4 +592,4 @@ def _error_scaled_transfer(
         scale = _robust_scale_ratio(src, tgt)
         scaled = ufp.assign_columns(scaled, model, src * scale)
 
-    return TransferResult(cs_df=scaled)
+    return TransferResult(cs_df=scaled, h=h, n_windows=n_windows)

@@ -38,9 +38,9 @@ def test_transfer_conformal_step_size_validation():
 def test_transfer_result_signed_default():
     from mlforecast.conformal_prediction import TransferResult
     dummy = pd.DataFrame({"unique_id": ["a"], "ds": [1], "m": [0.0]})
-    tr = TransferResult(cs_df=dummy)
+    tr = TransferResult(cs_df=dummy, h=1, n_windows=1)
     assert tr.signed is False
-    tr2 = TransferResult(cs_df=dummy, signed=True)
+    tr2 = TransferResult(cs_df=dummy, h=1, n_windows=1, signed=True)
     assert tr2.signed is True
 
 
@@ -313,11 +313,10 @@ def test_frozen_backtest_min_length_validation():
     )
     tc = TransferConformal(method="recalibrate", n_windows=2)
     mlf.fit(source, prediction_intervals=PredictionIntervals(n_windows=2, h=h))
-    transferred = mlf.transfer(target, tc)
-    assert len(transferred.predict(h=h)) == n * h
+    assert len(mlf.transfer(target).predict(h=h)) == n * h
     # need h + (2-1)*1 + 1 + 1 = 8 time steps; target only has 6
     with pytest.raises(ValueError, match=">= 8 time steps"):
-        transferred.predict(h=h, level=[90])
+        mlf.transfer(target, tc)
 
 
 def test_frozen_backtest_uses_source_model():
@@ -498,7 +497,7 @@ def test_recalibrate_transfer_result_is_signed():
         "m":         [1.0, 7.0, 3.0, 3.0],
     })
     result = _recalibrate_transfer(
-        backtest_results=backtest, model_names=["m"], target_col="y"
+        backtest_results=backtest, model_names=["m"], target_col="y", h=2, n_windows=2
     )
     assert result.signed is True
     # Signed residuals: y - pred = [3-1, 5-7, 2-3, 4-3] = [2, -2, -1, 1]
@@ -713,6 +712,7 @@ def test_transfer_chained_adapts_from_source(method, transforms):
     # other series, lengths and scale, so leftover state from them would show
     first_df = generate_daily_series(3, min_length=60, max_length=70, seed=2)
     first_df["y"] = first_df["y"] * 10 + 100
+    first_df["unique_id"] = "first_" + first_df["unique_id"].astype(str)
     expected = fcst.transfer(tgt, method).predict(3, level=[80])
     for first_method in (None, method):
         chained = fcst.transfer(first_df, first_method).transfer(tgt, method)
@@ -731,12 +731,11 @@ def test_transfer_models_are_not_shared():
 def test_transfer_save_load(method, tmp_path):
     fcst, tgt = _transfer_setup()
     transferred = fcst.transfer(tgt, method)
-    transferred.save(tmp_path / "pending")
-    expected = transferred.predict(3, level=[80])
-    transferred.save(tmp_path / "adapted")
-    for name in ("pending", "adapted"):
-        loaded = MLForecast.load(tmp_path / name)
-        pd.testing.assert_frame_equal(loaded.predict(3, level=[80]), expected)
+    transferred.save(tmp_path)
+    loaded = MLForecast.load(tmp_path)
+    pd.testing.assert_frame_equal(
+        loaded.predict(3, level=[80]), transferred.predict(3, level=[80])
+    )
 
 
 def test_transfer_without_method_save_load(tmp_path):
@@ -808,12 +807,10 @@ def test_transfer_in_sample_windows_raise(method):
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
     fcst.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=3))
-    transferred = fcst.transfer(src, method)
-    transferred.predict(3)
     with pytest.raises(ValueError, match="matched to the training series by id"):
-        transferred.predict(3, level=[80])
+        fcst.transfer(src, method)
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
-        transferred.predict(3, level=[80])
+        fcst.transfer(src, method)
     # windows after the training end, and new ids regardless of their times
     future = fcst.make_future_dataframe(4).assign(y=1.0)
     seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
@@ -858,11 +855,20 @@ def test_scale_floor_warning_points_at_caller(flat):
     df.loc[df["unique_id"] == df["unique_id"].iloc[0], "y"] = 1.0
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
     fcst.fit(src, prediction_intervals=PredictionIntervals(h=3))
-    transferred = fcst.transfer(tgt, "scale_aligned")
     kind = "Training series" if flat == "source" else "Series 'new_"
     with pytest.warns(UserWarning, match=f"{kind}.*near-zero scale") as record:
-        transferred.predict(3, level=[80])
+        fcst.transfer(tgt, "scale_aligned")
     assert any(w.filename == __file__ for w in record if "near-zero" in str(w.message))
+
+
+def test_error_scaled_iqr_warning_points_at_caller():
+    src = generate_daily_series(4, min_length=60, max_length=60, seed=0)
+    tgt = src.assign(unique_id="new_" + src["unique_id"].astype(str), y=1.0)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(src, prediction_intervals=PredictionIntervals(h=1))
+    with pytest.warns(UserWarning, match="IQR of residuals near zero") as record:
+        fcst.transfer(tgt, "error_scaled")
+    assert any(w.filename == __file__ for w in record if "IQR" in str(w.message))
 
 
 def test_cross_validation_refit_false_overlapping_windows():
@@ -880,7 +886,7 @@ def test_cross_validation_refit_false_overlapping_windows():
     assert res[f"{LR}-lo-80"].notna().all()
 
 
-def test_transfer_adapts_once(monkeypatch):
+def test_predict_does_not_adapt(monkeypatch):
     import mlforecast.forecast as forecast_mod
 
     fcst, tgt = _transfer_setup()
@@ -893,8 +899,7 @@ def test_transfer_adapts_once(monkeypatch):
 
     monkeypatch.setattr(forecast_mod, "_frozen_backtest", counting)
     transferred = fcst.transfer(tgt, "recalibrate")
-    transferred.predict(3)
-    assert not calls
+    assert len(calls) == 1
     first = transferred.predict(3, level=[80])
     second = transferred.predict(3, level=[80])
     assert len(calls) == 1
