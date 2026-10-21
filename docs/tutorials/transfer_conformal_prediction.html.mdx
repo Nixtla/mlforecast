@@ -17,11 +17,11 @@ conformity scores may be miscalibrated for the target domain. Transfer
 conformal methods attempt to correct for this shift using different
 strategies:
 
-| Method          | Strategy                                                              | Needs CV on target? |
+| Method           | Strategy                                                              | Needs CV on target? |
 |------------------------|------------------------|------------------------|
-| `recalibrate`   | Re-run cross-validation on target data                                | Yes                 |
-| `scale_aligned` | Rescale source errors by target/source scale ratio (from *y* history) | No                  |
-| `error_scaled`  | Rescale source errors by target/source prediction error ratio         | Yes                 |
+| `Recalibration`  | Re-run cross-validation on target data                                | Yes                 |
+| `ScaleAlignment` | Rescale source errors by target/source scale ratio (from *y* history) | No                  |
+| `ErrorScaling`   | Rescale source errors by target/source prediction error ratio         | Yes                 |
 
 We evaluate each method’s **empirical coverage** — the fraction of test
 observations that fall inside the predicted interval — and compare it to
@@ -48,7 +48,12 @@ from mlforecast.lag_transforms import (
     SeasonalRollingMean,
 )
 from mlforecast.target_transforms import Differences, GlobalSklearnTransformer
-from mlforecast.utils import PredictionIntervals
+from mlforecast.utils import (
+    ErrorScaling,
+    PredictionIntervals,
+    Recalibration,
+    ScaleAlignment,
+)
 ```
 
 ## Load M4 Monthly Data
@@ -210,16 +215,16 @@ We therefore model **log-returns** instead of raw differences:
 
 `PredictionIntervals` only calibrates the intervals of the Macro series.
 The transfer method is chosen when transferring:
-`mlf.transfer(df, method)`. A plain string is shorthand for
-`TransferConformal(method=method)`, which also holds the method’s
-options (the backtest `n_windows` and `step_size` for `recalibrate` and
-`error_scaled`, and the `scale_estimator` for `scale_aligned`, which
+`mlf.transfer(df, method)`, where `method` is a `Recalibration`,
+`ErrorScaling` or `ScaleAlignment` instance holding the method’s options
+(the backtest `n_windows` and `step_size` for `Recalibration` and
+`ErrorScaling`, and the `scale_estimator` for `ScaleAlignment`, which
 defaults to the MAD of first differences).
 
-`recalibrate` only uses the target backtest, so it also works on a model
-fit without `prediction_intervals` when given
-`TransferConformal(method='recalibrate', h=...)`. `error_scaled` and
-`scale_aligned` reuse the source conformity scores and need them at fit.
+`Recalibration` only uses the target backtest, so it also works on a
+model fit without `prediction_intervals` when given
+`Recalibration(h=...)`. `ErrorScaling` and `ScaleAlignment` reuse the
+source conformity scores and need them at fit.
 
 ```python
 def fit_source():
@@ -267,18 +272,22 @@ coverage** at each level.
 LEVELS = [80, 90, 95]
 MODEL = 'LGBMRegressor'
 
-transfer_methods = ['recalibrate', 'scale_aligned', 'error_scaled']
+transfer_methods = {
+    'Recalibration': Recalibration(),
+    'ScaleAlignment': ScaleAlignment(),
+    'ErrorScaling': ErrorScaling(),
+}
 
 source_model = fit_source()
 preds_by_method = {}
 coverage_results = {}
 
-for method in transfer_methods:
-    print(f"Running '{method}'...", end=' ', flush=True)
+for name, method in transfer_methods.items():
+    print(f"Running {name}...", end=' ', flush=True)
     preds = source_model.transfer(target_train, method).predict(
         h=HORIZON, level=LEVELS
     )
-    preds_by_method[method] = preds
+    preds_by_method[name] = preds
     merged = target_test.merge(preds, on=['unique_id', 'ds'])
     cov = {}
     for lv in LEVELS:
@@ -286,16 +295,16 @@ for method in transfer_methods:
         hi_col = f'{MODEL}-hi-{lv}'
         covered = (merged['y'] >= merged[lo_col]) & (merged['y'] <= merged[hi_col])
         cov[lv] = float(covered.mean())
-    coverage_results[method] = cov
+    coverage_results[name] = cov
     print(f"done. Coverage: { {k: f'{v:.1%}' for k,v in cov.items()} }")
 
 print("\nAll methods evaluated.")
 ```
 
 ``` text
-Running 'recalibrate'... done. Coverage: {80: '76.6%', 90: '85.9%', 95: '92.4%'}
-Running 'scale_aligned'... done. Coverage: {80: '75.6%', 90: '87.2%', 95: '92.9%'}
-Running 'error_scaled'... done. Coverage: {80: '76.3%', 90: '86.3%', 95: '91.7%'}
+Running Recalibration... done. Coverage: {80: '76.6%', 90: '85.9%', 95: '92.4%'}
+Running ScaleAlignment... done. Coverage: {80: '75.6%', 90: '87.2%', 95: '92.9%'}
+Running ErrorScaling... done. Coverage: {80: '76.3%', 90: '86.3%', 95: '91.7%'}
 
 All methods evaluated.
 ```
@@ -336,9 +345,9 @@ Empirical Coverage by Transfer Method (nominal levels: 80%, 90%, 95%)
 ======================================================================
 Empirical Coverage @    80%    90%    95%
 Method                                   
-error_scaled          76.3%  86.3%  91.7%
-recalibrate           76.6%  85.9%  92.4%
-scale_aligned         75.6%  87.2%  92.9%
+ErrorScaling          76.3%  86.3%  91.7%
+Recalibration         76.6%  85.9%  92.4%
+ScaleAlignment        75.6%  87.2%  92.9%
 ```
 
 ```python
@@ -403,16 +412,16 @@ Coverage gap (Empirical − Nominal) in percentage points:
   Positive = over-coverage (wider intervals than needed)
   Negative = under-coverage (intervals too narrow)
 
-Nominal Level   80%   90%   95%
-Method                         
-error_scaled  -3.72 -3.72 -3.33
-recalibrate   -3.36 -4.14 -2.61
-scale_aligned -4.44 -2.83 -2.06
+Nominal Level    80%   90%   95%
+Method                          
+ErrorScaling   -3.72 -3.72 -3.33
+Recalibration  -3.36 -4.14 -2.61
+ScaleAlignment -4.44 -2.83 -2.06
 
 Methods ranked by mean |gap| across all levels:
-  scale_aligned: 3.11 pp
-  recalibrate: 3.37 pp
-  error_scaled: 3.59 pp
+  ScaleAlignment: 3.11 pp
+  Recalibration: 3.37 pp
+  ErrorScaling: 3.59 pp
 ```
 
 ## Interval Width Analysis
@@ -440,10 +449,10 @@ print(width_df.round(2).to_string())
 
 ``` text
 Mean interval width by method and level:
-                   80%      90%      95%
-recalibrate    1596.68  3038.93  5199.22
-scale_aligned  3410.02  5759.49  9812.96
-error_scaled   1469.70  2755.49  4186.24
+                    80%      90%      95%
+Recalibration   1596.68  3038.93  5199.22
+ScaleAlignment  3410.02  5759.49  9812.96
+ErrorScaling    1469.70  2755.49  4186.24
 ```
 
 ```python
@@ -485,11 +494,11 @@ EXAMPLE_IDS = target_ids[:4].tolist()
 
 # Collect predictions for all methods
 all_preds = {}
-for method in transfer_methods:
+for name, method in transfer_methods.items():
     preds = source_model.transfer(
         target_train[target_train['unique_id'].isin(EXAMPLE_IDS)], method
     ).predict(h=HORIZON, level=[PLOT_LEVEL])
-    all_preds[method] = preds
+    all_preds[name] = preds
 ```
 
 
@@ -549,22 +558,22 @@ target domain in M4 Monthly data.
     differences makes the features scale-invariant across domains and
     removes the systematic point-forecast bias. With raw differences,
     every method under-covers by a wider margin.
--   `recalibrate` backtests the trained models on the target data and
+-   `Recalibration` backtests the trained models on the target data and
     uses those residuals — it tends to be the most directly calibrated
     but requires enough target history for the backtest windows (no
     model is retrained).
--   `scale_aligned` uses the scale of the *y* signal (MAD of
+-   `ScaleAlignment` uses the scale of the *y* signal (MAD of
     differences) to align source residuals — zero-shot, no CV needed.
--   `error_scaled` runs CV on the target data to estimate prediction
+-   `ErrorScaling` runs CV on the target data to estimate prediction
     error magnitude — a middle ground between full recalibration and
     scale alignment.
 -   All three methods under-cover by 2–4 percentage points here. Pooling
     conformity scores across heterogeneous series makes intervals too
     wide for calm series and too narrow for volatile ones; the
-    per-series scaling of `scale_aligned` targets this, at the cost of
+    per-series scaling of `ScaleAlignment` targets this, at the cost of
     wider intervals.
 
 The right method to use depends on your constraints: - If you can run CV
-on the target: `recalibrate` or `error_scaled` - If you need zero-shot
-transfer: `scale_aligned`
+on the target: `Recalibration` or `ErrorScaling` - If you need zero-shot
+transfer: `ScaleAlignment`
 

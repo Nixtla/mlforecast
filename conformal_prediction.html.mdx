@@ -23,24 +23,54 @@ Name | Type | Description | Default
 `method` | <code>[str](#str)</code> | ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'. | <code>'conformal_distribution'</code>
 
 
-### `TransferConformal`
+### `Recalibration`
 
 ```python
-TransferConformal(method='recalibrate', h=None, n_windows=None, step_size=None, scale_estimator='mad')
+Recalibration(h=None, n_windows=None, step_size=1)
 ```
 
-Configuration for adapting the prediction intervals to transferred series.
-
-Pass to ``MLForecast.transfer``. A plain string is shorthand for
-``TransferConformal(method=<str>)``.
+Transfer method that computes the conformity scores from a backtest of the trained models on the transferred series.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`method` | <code>[str](#str)</code> | ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'. | <code>'recalibrate'</code>
-`h` | <code>[int](#int)</code> | Forecast horizon of the conformity scores. Defaults to the ``h`` of ``PredictionIntervals``. Required for ``'recalibrate'`` on a model fit without prediction intervals. | <code>None</code>
-`n_windows` | <code>[int](#int)</code> | Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them. | <code>None</code>
-`step_size` | <code>[int](#int)</code> | Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1. | <code>None</code>
-`scale_estimator` | <code>[str](#str)</code> | Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'. | <code>'mad'</code>
+`h` | <code>[int](#int)</code> | Forecast horizon of the backtest windows. Defaults to the ``h`` of ``PredictionIntervals``. Required if the model was fit without prediction intervals. | <code>None</code>
+`n_windows` | <code>[int](#int)</code> | Number of backtest windows, at least 2. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them. | <code>None</code>
+`step_size` | <code>[int](#int)</code> | Step size between the backtest windows. Defaults to 1. | <code>1</code>
+
+
+### `ErrorScaling`
+
+```python
+ErrorScaling(n_windows=None, step_size=1)
+```
+
+Transfer method that scales the training conformity scores by the ratio of the backtest errors on the transferred series to the training errors.
+
+Requires prediction intervals at fit. The backtest uses the ``h`` of ``PredictionIntervals``.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`n_windows` | <code>[int](#int)</code> | Number of backtest windows. Defaults to the ``n_windows`` of ``PredictionIntervals``. | <code>None</code>
+`step_size` | <code>[int](#int)</code> | Step size between the backtest windows. Defaults to 1. | <code>1</code>
+
+
+### `ScaleAlignment`
+
+```python
+ScaleAlignment(scale_estimator='mad')
+```
+
+Transfer method that scales the training conformity scores by the ratio of each transferred series' scale to the training series' scale.
+
+Requires prediction intervals at fit.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`scale_estimator` | <code>[str](#str)</code> | Per-series scale estimator, ``'mad'`` or ``'std'``. Defaults to 'mad'. | <code>'mad'</code>
 
