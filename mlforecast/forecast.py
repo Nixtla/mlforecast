@@ -56,10 +56,9 @@ from .conformal_prediction import (
     TransferConformal,
     TransferResult,
     TransferState,
-    _add_signed_transfer_intervals,
+    _add_transfer_intervals,
     _raw_series_scales,
     _error_scaled_transfer,
-    _recalibrate_transfer,
     _rescale_interval_columns,
     _scale_aligned_transfer,
     get_conformal_method,
@@ -1597,9 +1596,7 @@ class MLForecast:
         model_names = list(self.models.keys())
         if method.method == "scale_aligned":
             calibration = self._calibration_
-            pi = self.prediction_intervals
             assert calibration is not None and calibration.source_scales is not None
-            assert pi is not None
             return _scale_aligned_transfer(
                 new_df=df,
                 model_names=model_names,
@@ -1609,8 +1606,7 @@ class MLForecast:
                 scale_estimator=method.scale_estimator,
                 source_cs_df=calibration.scores,
                 source_scales=calibration.source_scales[method.scale_estimator],
-                h=pi.h,
-                n_windows=pi.n_windows,
+                h=method.h,
             )
         assert method.n_windows is not None
         max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
@@ -1627,22 +1623,20 @@ class MLForecast:
             train_ends=self._train_ends_ if check_in_sample else None,
         )
         if method.method == "recalibrate":
-            return _recalibrate_transfer(
-                backtest_results,
-                model_names,
-                self.ts.target_col,
+            return TransferResult(
+                cs_df=compute_conformity_scores(
+                    backtest_results, model_names, self.ts.target_col, signed=True
+                ),
                 h=method.h,
-                n_windows=method.n_windows,
+                signed=True,
             )
-        pi = self.prediction_intervals
-        assert self._calibration_ is not None and pi is not None
+        assert self._calibration_ is not None
         return _error_scaled_transfer(
             backtest_results,
             model_names,
             self.ts.target_col,
             self._calibration_.scores,
-            h=pi.h,
-            n_windows=pi.n_windows,
+            h=method.h,
         )
 
     def predict(
@@ -1700,7 +1694,6 @@ class MLForecast:
                     assert adapted is not None
                     conformity_scores = adapted.cs_df
                     cs_h = adapted.h
-                    cs_n_windows = adapted.n_windows
                 else:
                     assert self._calibration_ is not None
                     assert self.prediction_intervals is not None
@@ -1746,9 +1739,8 @@ class MLForecast:
                         "The `h` of the conformity scores should be equal to one or "
                         f"greater or equal to `h`. To fix it, {fix_h}."
                     )
-                is_transfer = adapted is not None and not adapted.signed
                 if cs_h == 1 and h > 1:
-                    if is_transfer:
+                    if adapted is not None and not adapted.signed:
                         raise ValueError(
                             "Transfer conformal prediction requires PredictionIntervals(h=h). "
                             "Refit the source model with PredictionIntervals(h=h) to use "
@@ -1762,29 +1754,30 @@ class MLForecast:
                     warnings.warn(warn_msg, UserWarning)
                 level_ = sorted(level)
                 model_names = self.models.keys()
-                if ids is not None and adapted is None:
-                    ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
-                    cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
-                    n_series = len(ids)
-                else:
-                    cs_df = conformity_scores
-                    n_series = ts.ga.n_groups
-                _target_scales = adapted.target_scales if adapted is not None else None
                 if adapted is not None and adapted.signed:
-                    forecasts = _add_signed_transfer_intervals(
+                    interval_method = "signed"
+                else:
+                    assert self.prediction_intervals is not None
+                    interval_method = self.prediction_intervals.method
+                if adapted is not None:
+                    forecasts = _add_transfer_intervals(
                         forecasts,
-                        cs_df,
+                        conformity_scores,
                         model_names=list(model_names),
                         level=level_,
                         horizon=h,
                         cs_h=cs_h,
+                        method=interval_method,
                     )
                 else:
-                    pi = self.prediction_intervals
-                    assert pi is not None
-                    if is_transfer:
-                        n_series = len(cs_df) // (cs_n_windows * cs_h)
-                    forecasts = _get_conformal_method(pi.method)(
+                    if ids is not None:
+                        ids_mask = ufp.is_in(conformity_scores[ts.id_col], ids)
+                        cs_df = ufp.filter_with_mask(conformity_scores, ids_mask)
+                        n_series = len(ids)
+                    else:
+                        cs_df = conformity_scores
+                        n_series = ts.ga.n_groups
+                    forecasts = _get_conformal_method(interval_method)(
                         forecasts,
                         cs_df,
                         model_names=list(model_names),
@@ -1793,8 +1786,8 @@ class MLForecast:
                         cs_n_windows=cs_n_windows,
                         n_series=n_series,
                         horizon=h,
-                        is_transfer=is_transfer,
                     )
+                _target_scales = adapted.target_scales if adapted is not None else None
                 # Per-series σ_tgt scaling: multiply interval half-widths by σ_tgt_j.
                 # Scores are already normalized by σ_src_i, so quantiles are on the
                 # normalized scale; rescaling by σ_tgt_j gives per-series correct widths.

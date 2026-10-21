@@ -159,10 +159,20 @@ def test_interval_equiv(backend, fn_name, is_transfer, horizon):
         cs_h=cs_h,
         n_series=n_series,
         horizon=horizon,
-        is_transfer=is_transfer,
     )
-    expected = getattr(ref, fn_name)(fcst_df, cs_df, **kwargs)
-    actual = getattr(cp, fn_name)(fcst_df, cs_df, **kwargs)
+    expected = getattr(ref, fn_name)(fcst_df, cs_df, is_transfer=is_transfer, **kwargs)
+    if is_transfer:
+        actual = cp._add_transfer_intervals(
+            fcst_df,
+            cs_df,
+            model_names=models,
+            level=level,
+            horizon=horizon,
+            cs_h=cs_h,
+            method=fn_name.removeprefix("_add_").removesuffix("_intervals"),
+        )
+    else:
+        actual = getattr(cp, fn_name)(fcst_df, cs_df, **kwargs)
     assert_frames_close(actual, expected)
 
 

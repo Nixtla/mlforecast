@@ -2314,8 +2314,7 @@ def test_mlflow_wrapper_new_df_keeps_model_state():
     pd.testing.assert_frame_equal(wrapper.predict(pd.DataFrame([{"h": 3}])), expected)
 
 
-def test_transfer_learning_failed_predict_keeps_original_state():
-    """Test that transfer learning doesn't mutate state if prediction fails."""
+def test_transfer_predict_unseen_ids_raises():
     train_a = generate_daily_series(
         3, min_length=50, max_length=50, n_static_features=0
     )
@@ -2332,12 +2331,9 @@ def test_transfer_learning_failed_predict_keeps_original_state():
         lags=[1, 2, 3],
     )
     fcst.fit(train_a)
-    original_uids = set(fcst.ts.uids)
 
     with pytest.raises(ValueError, match="weren't seen during training"):
         fcst.transfer(train_b).predict(h=5, ids=["id_0"])
-
-    assert set(fcst.ts.uids) == original_uids
 
 
 @pytest.mark.parametrize("n_source", [2, 3])

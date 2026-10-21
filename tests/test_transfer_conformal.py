@@ -35,15 +35,6 @@ def test_transfer_conformal_step_size_validation():
     assert tc.step_size == 2
 
 
-def test_transfer_result_signed_default():
-    from mlforecast.conformal_prediction import TransferResult
-    dummy = pd.DataFrame({"unique_id": ["a"], "ds": [1], "m": [0.0]})
-    tr = TransferResult(cs_df=dummy, h=1, n_windows=1)
-    assert tr.signed is False
-    tr2 = TransferResult(cs_df=dummy, h=1, n_windows=1, signed=True)
-    assert tr2.signed is True
-
-
 def test_compute_conformity_scores_signed():
     from mlforecast.conformal_prediction import compute_conformity_scores
     cv = pd.DataFrame({
@@ -445,11 +436,11 @@ def test_point_forecasts_invariant_across_transfer_methods():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: _add_signed_transfer_intervals
+# Task 3: _add_transfer_intervals
 # ---------------------------------------------------------------------------
-def test_add_signed_transfer_intervals_shape_and_nesting():
+def test_add_transfer_intervals_shape_and_nesting():
     import pandas as pd
-    from mlforecast.conformal_prediction import _add_signed_transfer_intervals
+    from mlforecast.conformal_prediction import _add_transfer_intervals
 
     n_series, horizon = 3, 2
     n_cal = 5  # windows * series (pooled)
@@ -463,8 +454,14 @@ def test_add_signed_transfer_intervals_shape_and_nesting():
         "m": rng.normal(5, 1, n_series * horizon),
     })
 
-    result = _add_signed_transfer_intervals(
-        fcst_df, cs_df, model_names=["m"], level=[80, 90], horizon=horizon
+    result = _add_transfer_intervals(
+        fcst_df,
+        cs_df,
+        model_names=["m"],
+        level=[80, 90],
+        horizon=horizon,
+        cs_h=1,
+        method="signed",
     )
 
     # Columns present
@@ -482,33 +479,10 @@ def test_add_signed_transfer_intervals_shape_and_nesting():
     assert (result["m-hi-80"] <= result["m-hi-90"]).all()
 
 
-# ---------------------------------------------------------------------------
-# Task 4: _recalibrate_transfer signed residuals
-# ---------------------------------------------------------------------------
-def test_recalibrate_transfer_result_is_signed():
-    """_recalibrate_transfer must return TransferResult(signed=True) with signed scores."""
-    import pandas as pd
-    from mlforecast.conformal_prediction import _recalibrate_transfer
-    backtest = pd.DataFrame({
-        "unique_id": ["a", "a", "a", "a"],
-        "ds":        [2, 3, 1, 2],
-        "cutoff":    [1, 1, 0, 0],
-        "y":         [3.0, 5.0, 2.0, 4.0],
-        "m":         [1.0, 7.0, 3.0, 3.0],
-    })
-    result = _recalibrate_transfer(
-        backtest_results=backtest, model_names=["m"], target_col="y", h=2, n_windows=2
-    )
-    assert result.signed is True
-    # Signed residuals: y - pred = [3-1, 5-7, 2-3, 4-3] = [2, -2, -1, 1]
-    vals = list(result.cs_df["m"])
-    assert any(v < 0 for v in vals), "Signed residuals should include negative values"
-
-
-def test_add_signed_transfer_intervals_bias_warning():
+def test_add_transfer_intervals_bias_warning():
     import pandas as pd
     import warnings as _warnings
-    from mlforecast.conformal_prediction import _add_signed_transfer_intervals
+    from mlforecast.conformal_prediction import _add_transfer_intervals
 
     horizon = 2
     # All-negative scores → interval entirely below point forecast
@@ -521,8 +495,14 @@ def test_add_signed_transfer_intervals_bias_warning():
 
     with _warnings.catch_warnings(record=True) as caught:
         _warnings.simplefilter("always")
-        _add_signed_transfer_intervals(
-            fcst_df, cs_df, model_names=["m"], level=[90], horizon=horizon
+        _add_transfer_intervals(
+            fcst_df,
+            cs_df,
+            model_names=["m"],
+            level=[90],
+            horizon=horizon,
+            cs_h=1,
+            method="signed",
         )
 
     assert any("over-predicts" in str(w.message) for w in caught), (

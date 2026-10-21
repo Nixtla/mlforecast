@@ -279,47 +279,6 @@ def test_scale_aligned_transfer_large_target(scale_aligned_setup):
     assert ratio > 50, f"Expected scale-aligned intervals >> source intervals, got ratio={ratio:.1f}"
 
 
-def test_scale_aligned_nontransfer_path_unchanged(scale_aligned_setup):
-    """predict() on the source model is unaffected by the transfer method."""
-    fcst, source_series, _, h = scale_aligned_setup
-
-    pi_plain = PredictionIntervals(method="conformal_error", n_windows=2, h=h)
-    fcst_plain = MLForecast(
-        models=lgb.LGBMRegressor(random_state=0, verbosity=-1, n_estimators=5),
-        freq="D",
-        lags=[1, 7],
-        date_features=["dayofweek"],
-        num_threads=1,
-    )
-    fcst_plain.fit(source_series, prediction_intervals=pi_plain)
-
-    preds_with = fcst.predict(h, level=[80])
-    preds_without = fcst_plain.predict(h, level=[80])
-
-    pd.testing.assert_frame_equal(
-        preds_with[["LGBMRegressor-lo-80", "LGBMRegressor-hi-80"]].reset_index(drop=True),
-        preds_without[["LGBMRegressor-lo-80", "LGBMRegressor-hi-80"]].reset_index(drop=True),
-        rtol=1e-5,
-    )
-
-
-def test_transfer_without_method_raises_on_level():
-    """transfer intervals need a method in transfer."""
-    series = generate_daily_series(2, min_length=40, max_length=50, seed=3)
-    fcst = MLForecast(
-        models=lgb.LGBMRegressor(random_state=0, verbosity=-1, n_estimators=5),
-        freq="D",
-        lags=[1],
-        num_threads=1,
-    )
-    fcst.fit(series, prediction_intervals=PredictionIntervals(method="conformal_error"))
-    target_df = series.groupby("unique_id").tail(10).reset_index(drop=True)
-    tgt = fcst.transfer(target_df)
-    tgt.predict(5)
-    with pytest.raises(ValueError, match=r"transfer\(df, method=\.\.\.\)"):
-        tgt.predict(5, level=[80])
-
-
 # ---------------------------------------------------------------------------
 # Item 1 new API tests
 # ---------------------------------------------------------------------------

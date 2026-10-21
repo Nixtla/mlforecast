@@ -238,7 +238,6 @@ def _add_conformal_distribution_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    is_transfer: bool = False,
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -253,25 +252,10 @@ def _add_conformal_distribution_intervals(
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
-        mean_flat = fcst_df[model].to_numpy().ravel()
-        n_target = len(mean_flat) // horizon
-        if is_transfer:
-            # Transfer scenario: pool all source calibration points globally.
-            # quantile(mean_t + {-s_i, +s_i}) = mean_t + quantile({-s_i, +s_i})
-            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
-            sym_scores = np.vstack([-scores_pooled, scores_pooled])
-            global_q = np.quantile(sym_scores, cuts, axis=0)  # (n_cuts, horizon)
-            mean_2d = mean_flat.reshape(n_target, horizon)
-            quantiles = (
-                (global_q[:, np.newaxis, :] + mean_2d[np.newaxis, :, :])
-                .reshape(len(cuts), -1)
-                .T
-            )  # (n_target * horizon, n_cuts)
-        else:
-            mean = mean_flat.reshape(1, n_series, -1)
-            paths = np.vstack([mean - scores, mean + scores])
-            quantiles = np.quantile(paths, cuts, axis=0)
-            quantiles = quantiles.reshape(len(cuts), -1).T
+        mean = fcst_df[model].to_numpy().reshape(1, n_series, -1)
+        paths = np.vstack([mean - scores, mean + scores])
+        quantiles = np.quantile(paths, cuts, axis=0)
+        quantiles = quantiles.reshape(len(cuts), -1).T
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         out_cols = lo_cols + hi_cols
@@ -288,7 +272,6 @@ def _add_conformal_error_intervals(
     cs_h: int,
     n_series: int,
     horizon: int,
-    is_transfer: bool = False,
 ) -> DFType:
     """
     Adds conformal intervals to a `fcst_df` based on conformal scores `cs_df`.
@@ -302,18 +285,8 @@ def _add_conformal_error_intervals(
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
-        n_target = len(mean) // horizon
-        if is_transfer:
-            # Transfer scenario: pool all source calibration points globally.
-            # Compute a single quantile per horizon step, then tile to all target series.
-            scores_pooled = scores.reshape(cs_n_windows * n_series, horizon)
-            quantiles = np.quantile(scores_pooled, cuts, axis=0)  # (n_levels, horizon)
-            quantiles = np.tile(
-                quantiles, (1, n_target)
-            )  # (n_levels, n_target * horizon)
-        else:
-            quantiles = np.quantile(scores, cuts, axis=0)
-            quantiles = quantiles.reshape(len(cuts), -1)
+        quantiles = np.quantile(scores, cuts, axis=0)
+        quantiles = quantiles.reshape(len(cuts), -1)
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
         quantiles = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
@@ -322,28 +295,30 @@ def _add_conformal_error_intervals(
     return fcst_df
 
 
-def _add_signed_transfer_intervals(
+def _add_transfer_intervals(
     fcst_df: DFType,
     cs_df: DFType,
     model_names: List[str],
     level: List[Union[int, float]],
     horizon: int,
-    cs_h: int = 1,
+    cs_h: int,
+    method: str,
 ) -> DFType:
-    """Add asymmetric prediction intervals from signed conformity scores (y − pred).
+    """Add prediction intervals from conformity scores pooled over every calibration series.
 
-    Unlike the symmetric conformal methods, uses separate lower and upper quantiles
-    so that a systematically biased transferred model shifts the interval rather than
-    merely widening it.
+    `method` is ``'signed'`` for signed scores (y − pred), or the
+    ``PredictionIntervals.method`` of absolute scores. Signed scores use separate
+    lower and upper quantiles, so that a systematically biased transferred model
+    shifts the interval rather than merely widening it.
 
     When ``cs_h == 1`` but ``horizon > 1`` (calibration was done with 1-step ahead
     cross-validation), the same constant-width interval is broadcast across all
     horizon steps, matching the behaviour of the regular conformal methods in that
     case.
 
-    Emits UserWarning when the interval lies entirely above or below the point forecast
-    (both quantiles have the same sign), indicating severe source-model bias on the
-    target domain.
+    With signed scores, emits UserWarning when the interval lies entirely above or
+    below the point forecast (both quantiles have the same sign), indicating severe
+    source-model bias on the target domain.
     """
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
     # level is pre-sorted ascending (e.g. [80, 90, 95])
@@ -355,33 +330,37 @@ def _add_signed_transfer_intervals(
 
     for model in model_names:
         mean = fcst_df[model].to_numpy().ravel()
-        scores = cs_df[model].to_numpy().astype(float).reshape(-1, cs_h)
+        scores = cs_df[model].to_numpy().astype(float).reshape(-1, cs_h)[:, :horizon]
         # (n_cuts, horizon), or (n_cuts, 1) broadcast to every step when cs_h=1
-        q_per_horizon = np.quantile(scores[:, :horizon], all_cuts, axis=0)
-
-        # Bias warnings
-        n_lo = len(lo_cuts)
-        q_hi_vals = q_per_horizon[n_lo:]  # (n_hi_cuts, horizon)
-        q_lo_vals = q_per_horizon[:n_lo]  # (n_lo_cuts, horizon)
-        for i, lv in enumerate(level):
-            q_hi_lv = q_hi_vals[i]  # upper quantile for this level
-            q_lo_lv = q_lo_vals[-(i + 1)]  # matching lower quantile
-            if np.all(q_hi_lv < 0):
-                warnings.warn(
-                    f"Transfer recalibrate level={lv}: upper quantile is negative across "
-                    "all horizon steps — interval lies entirely below point forecasts. "
-                    "The transferred model systematically over-predicts on the target domain.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-            elif np.all(q_lo_lv > 0):
-                warnings.warn(
-                    f"Transfer recalibrate level={lv}: lower quantile is positive across "
-                    "all horizon steps — interval lies entirely above point forecasts. "
-                    "The transferred model systematically under-predicts on the target domain.",
-                    UserWarning,
-                    stacklevel=3,
-                )
+        if method == "signed":
+            q_per_horizon = np.quantile(scores, all_cuts, axis=0)
+            n_lo = len(lo_cuts)
+            q_hi_vals = q_per_horizon[n_lo:]  # (n_hi_cuts, horizon)
+            q_lo_vals = q_per_horizon[:n_lo]  # (n_lo_cuts, horizon)
+            for i, lv in enumerate(level):
+                q_hi_lv = q_hi_vals[i]  # upper quantile for this level
+                q_lo_lv = q_lo_vals[-(i + 1)]  # matching lower quantile
+                if np.all(q_hi_lv < 0):
+                    warnings.warn(
+                        f"Transfer recalibrate level={lv}: upper quantile is negative across "
+                        "all horizon steps — interval lies entirely below point forecasts. "
+                        "The transferred model systematically over-predicts on the target domain.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                elif np.all(q_lo_lv > 0):
+                    warnings.warn(
+                        f"Transfer recalibrate level={lv}: lower quantile is positive across "
+                        "all horizon steps — interval lies entirely above point forecasts. "
+                        "The transferred model systematically under-predicts on the target domain.",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+        elif method == "conformal_distribution":
+            q_per_horizon = np.quantile(np.vstack([-scores, scores]), all_cuts, axis=0)
+        else:
+            q = np.quantile(scores, [lv / 100 for lv in level], axis=0)
+            q_per_horizon = np.vstack([-q[::-1], q])
 
         # Apply: lo = pred + q_lo, hi = pred + q_hi, broadcast per horizon step
         n_target = len(mean) // horizon
@@ -445,7 +424,6 @@ class TransferResult:
 
     cs_df: DFType
     h: int
-    n_windows: int
     signed: bool = False
     target_scales: Optional[Dict[str, float]] = None  # uid -> sigma_tgt
 
@@ -492,28 +470,6 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
     return 1.0
 
 
-def _recalibrate_transfer(
-    backtest_results: DFType,
-    model_names: List[str],
-    target_col: str,
-    h: int,
-    n_windows: int,
-) -> TransferResult:
-    """Recompute conformity scores from frozen-model backtest on new_df.
-
-    Uses signed residuals (y − pred) so systematic bias shifts the interval
-    instead of merely widening it.
-    """
-    return TransferResult(
-        cs_df=compute_conformity_scores(
-            backtest_results, model_names, target_col, signed=True
-        ),
-        h=h,
-        n_windows=n_windows,
-        signed=True,
-    )
-
-
 def _scale_aligned_transfer(
     new_df: DFType,
     model_names: List[str],
@@ -524,7 +480,6 @@ def _scale_aligned_transfer(
     source_cs_df: DFType,
     source_scales: Dict,
     h: int,
-    n_windows: int,
 ) -> TransferResult:
     """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
 
@@ -544,7 +499,6 @@ def _scale_aligned_transfer(
     return TransferResult(
         cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
         h=h,
-        n_windows=n_windows,
         target_scales=target_scale_dict,
     )
 
@@ -555,7 +509,6 @@ def _error_scaled_transfer(
     target_col: str,
     source_cs_df: DFType,
     h: int,
-    n_windows: int,
 ) -> TransferResult:
     """Scale source conformity scores by a single global IQR ratio (target / source).
 
@@ -573,4 +526,4 @@ def _error_scaled_transfer(
         scale = _robust_scale_ratio(src, tgt)
         scaled = ufp.assign_columns(scaled, model, src * scale)
 
-    return TransferResult(cs_df=scaled, h=h, n_windows=n_windows)
+    return TransferResult(cs_df=scaled, h=h)
