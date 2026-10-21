@@ -28,6 +28,19 @@ class Recorder(Hook):
         return [stage for h, stage, _ in self.events if h == hook]
 
 
+class Raiser(Hook):
+    """Raise once in ``on_end`` of ``stage``."""
+
+    def __init__(self, stage):
+        self.stage = stage
+        self.raised = False
+
+    def on_end(self, stage, fcst, result, **kwargs):  # noqa: ARG002
+        if stage == self.stage and not self.raised:
+            self.raised = True
+            raise RuntimeError("end failed")
+
+
 class Boom(BaseEstimator):
     def fit(self, X, y):  # noqa: ARG002
         raise RuntimeError("boom")
@@ -300,6 +313,21 @@ def test_cv_window_start_failure_unwinds_profiler(series):
         fcst.cross_validation(series, n_windows=2, h=1)
     assert profiler._stack == []
     assert profiler.spans[0].children[0].error == "RuntimeError: window start failed"
+
+
+def test_cv_window_on_end_error_not_reported_as_error(series):
+    recorder = Recorder()
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        hooks=[recorder, Raiser(stage="cv_window")],
+    )
+    with pytest.raises(RuntimeError, match="end failed"):
+        fcst.cross_validation(series, n_windows=2, h=1)
+    windows = [h for h, stage, _ in recorder.events if stage == "cv_window"]
+    assert windows == ["start", "end"]
+    assert recorder.stages("error") == ["cross_validation"]
 
 
 def test_custom_callback_scores_every_window(series):

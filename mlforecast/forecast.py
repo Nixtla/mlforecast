@@ -42,7 +42,7 @@ from mlforecast.core import (
 )
 
 from .grouped_array import GroupedArray
-from .hooks import Hook, _emit, _stage
+from .hooks import Hook, _span, _stage
 from ._warnings import _user_warning_stacklevel
 
 if TYPE_CHECKING:
@@ -641,19 +641,6 @@ class MLForecast:
         )
         return self
 
-    @_stage("fit_model")
-    def _fit_model(
-        self,
-        name: str,  # noqa: ARG002
-        model: BaseEstimator,
-        X: Union[DataFrame, np.ndarray],
-        y: np.ndarray,
-        h: Optional[int],  # noqa: ARG002
-        fit_kwargs: dict[str, Any],
-    ) -> BaseEstimator:
-        # name and h are only here so the fit_model stage reports them
-        return clone(model).fit(X, y, **fit_kwargs)
-
     @_stage("fit_models")
     def fit_models(
         self,
@@ -706,7 +693,18 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            return self._fit_model(name, model, X, y, h, fit_kwargs)
+            with _span(
+                self,
+                "fit_model",
+                name=name,
+                model=model,
+                X=X,
+                y=y,
+                fit_kwargs=fit_kwargs,
+                h=h,
+            ) as span:
+                span.result = clone(model).fit(X, y, **fit_kwargs)
+            return span.result
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
@@ -1917,10 +1915,7 @@ class MLForecast:
             input_size=input_size,
         )
         for i_window, (cutoffs, train, valid) in enumerate(splits):
-            window_started = False
-            try:
-                _emit(self, "on_start", "cv_window", i_window=i_window, cutoffs=cutoffs)
-                window_started = True
+            with _span(self, "cv_window", i_window=i_window, cutoffs=cutoffs) as span:
                 should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
                 if should_fit:
                     with warnings.catch_warnings():
@@ -2056,25 +2051,7 @@ class MLForecast:
                         "Please verify that the frequency set on the MLForecast constructor matches your series' "
                         "and that there aren't any missing periods."
                     )
-                _emit(
-                    self,
-                    "on_end",
-                    "cv_window",
-                    result=result,
-                    i_window=i_window,
-                    cutoffs=cutoffs,
-                )
-            except BaseException as error:
-                if window_started:
-                    _emit(
-                        self,
-                        "on_error",
-                        "cv_window",
-                        error=error,
-                        i_window=i_window,
-                        cutoffs=cutoffs,
-                    )
-                raise
+                span.result = result
             results.append(result)
         del self.models_
         self.cv_models_ = cv_models

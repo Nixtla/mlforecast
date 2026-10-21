@@ -3,6 +3,7 @@ __all__ = ["Hook", "Profiler"]
 
 import functools
 import inspect
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import (
@@ -10,6 +11,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterator,
     List,
     Optional,
     ParamSpec,
@@ -75,6 +77,28 @@ def _emit(obj: Any, hook: str, stage: str, **kwargs: Any) -> None:
         getattr(hook_obj, hook)(stage, obj, **kwargs)
 
 
+class _SpanResult:
+    __slots__ = ("result",)
+
+    def __init__(self) -> None:
+        self.result: Any = None
+
+
+@contextmanager
+def _span(obj: Any, stage: str, **kwargs: Any) -> Iterator[_SpanResult]:
+    span = _SpanResult()
+    if not getattr(obj, "hooks", ()):
+        yield span
+        return
+    _emit(obj, "on_start", stage, **kwargs)
+    try:
+        yield span
+    except BaseException as error:
+        _emit(obj, "on_error", stage, error=error, **kwargs)
+        raise
+    _emit(obj, "on_end", stage, result=span.result, **kwargs)
+
+
 def _stage(name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Notify ``self.hooks`` when the decorated method starts, ends or fails."""
 
@@ -90,14 +114,9 @@ def _stage(name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
             bound.apply_defaults()
             info = dict(bound.arguments)
             del info["self"]
-            _emit(self, "on_start", name, **info)
-            try:
-                result = method(*args, **kwargs)
-            except BaseException as error:
-                _emit(self, "on_error", name, error=error, **info)
-                raise
-            _emit(self, "on_end", name, result=result, **info)
-            return result
+            with _span(self, name, **info) as span:
+                span.result = method(*args, **kwargs)
+            return span.result
 
         return wrapper
 
