@@ -315,6 +315,21 @@ def test_cv_window_start_failure_unwinds_profiler(series):
     assert profiler.spans[0].children[0].error == "RuntimeError: window start failed"
 
 
+@pytest.mark.parametrize("raiser_first", [True, False])
+def test_raising_on_end_does_not_break_later_hooks(series, raiser_first):
+    raiser = Raiser(stage="fit_model")
+    profiler = Profiler()
+    hooks = [raiser, profiler] if raiser_first else [profiler, raiser]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=hooks)
+    with pytest.raises(RuntimeError, match="end failed"):
+        fcst.fit(series)
+    fcst.fit(series)
+    assert profiler._stack == []
+    assert [span.stage for span in profiler.spans] == ["fit", "fit"]
+    assert profiler.spans[0].error == "RuntimeError: end failed"
+    assert profiler.spans[1].error is None
+
+
 def test_cv_window_on_end_error_not_reported_as_error(series):
     recorder = Recorder()
     fcst = MLForecast(

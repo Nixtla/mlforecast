@@ -11,6 +11,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     Iterator,
     List,
     Optional,
@@ -45,6 +46,9 @@ class Hook:
     - ``preprocess``, ``fit``, ``fit_models``, ``predict``, ``cross_validation``: the bound arguments of the method call.
     - ``fit_model``: ``name``, ``model``, ``X``, ``y``, ``fit_kwargs`` and ``h`` (0-indexed horizon for direct models, None otherwise). Emitted once per estimator ``fit`` call.
     - ``cv_window``: ``i_window`` and ``cutoffs``.
+
+    Every hook gets every event even if another one raises, and the first error propagates: a stage whose
+    ``on_end`` raises still ended, and the error reaches the enclosing stages as their ``on_error``.
     """
 
     def on_start(self, stage: str, fcst: "MLForecast", **kwargs: Any) -> None:
@@ -61,20 +65,18 @@ class Hook:
         """Called when ``stage`` raises ``error``, right before it propagates."""
 
 
-def _emit(obj: Any, hook: str, stage: str, **kwargs: Any) -> None:
-    if hook == "on_start":
-        started = []
+def _notify(
+    hooks: Iterable[Hook], hook: str, stage: str, obj: Any, **kwargs: Any
+) -> None:
+    first: Optional[BaseException] = None
+    for hook_obj in hooks:
         try:
-            for hook_obj in getattr(obj, "hooks", ()):
-                hook_obj.on_start(stage, obj, **kwargs)
-                started.append(hook_obj)
+            getattr(hook_obj, hook)(stage, obj, **kwargs)
         except BaseException as error:
-            for hook_obj in reversed(started):
-                hook_obj.on_error(stage, obj, error=error, **kwargs)
-            raise
-        return
-    for hook_obj in getattr(obj, "hooks", ()):
-        getattr(hook_obj, hook)(stage, obj, **kwargs)
+            if first is None:
+                first = error
+    if first is not None:
+        raise first
 
 
 class _SpanResult:
@@ -87,16 +89,24 @@ class _SpanResult:
 @contextmanager
 def _span(obj: Any, stage: str, **kwargs: Any) -> Iterator[_SpanResult]:
     span = _SpanResult()
-    if not getattr(obj, "hooks", ()):
+    hooks = getattr(obj, "hooks", ())
+    if not hooks:
         yield span
         return
-    _emit(obj, "on_start", stage, **kwargs)
+    started = []
+    try:
+        for hook_obj in hooks:
+            hook_obj.on_start(stage, obj, **kwargs)
+            started.append(hook_obj)
+    except BaseException as error:
+        _notify(reversed(started), "on_error", stage, obj, error=error, **kwargs)
+        raise
     try:
         yield span
     except BaseException as error:
-        _emit(obj, "on_error", stage, error=error, **kwargs)
+        _notify(hooks, "on_error", stage, obj, error=error, **kwargs)
         raise
-    _emit(obj, "on_end", stage, result=span.result, **kwargs)
+    _notify(hooks, "on_end", stage, obj, result=span.result, **kwargs)
 
 
 def _stage(name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
