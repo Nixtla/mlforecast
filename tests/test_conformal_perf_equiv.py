@@ -95,12 +95,38 @@ def assert_frames_close(actual, expected, skip=("unique_id", "ds", "cutoff")):
 # 1. _raw_series_scales + _floor_series_scales
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("backend", ["pandas", "polars"])
-@pytest.mark.parametrize("method", ["mad", "std"])
-def test_series_scales_equiv(backend, method):
+def make_scales_df(backend, id_dtype, shuffle):
     df = make_series_df()
+    if id_dtype == "int":
+        df["unique_id"] = pd.factorize(df["unique_id"])[0]
+    if shuffle:
+        df = df.sample(frac=1.0, random_state=0)
     if backend == "polars":
         df = pl.from_pandas(df)
+        if id_dtype == "categorical":
+            df = df.with_columns(pl.col("unique_id").cast(pl.Categorical))
+    elif id_dtype == "categorical":
+        df["unique_id"] = df["unique_id"].astype("category")
+    return df
+
+
+SCALES_DF_PARAMS = [
+    pytest.mark.parametrize("shuffle", [False, True]),
+    pytest.mark.parametrize("id_dtype", ["str", "categorical", "int"]),
+    pytest.mark.parametrize("backend", ["pandas", "polars"]),
+]
+
+
+def scales_df_params(fn):
+    for mark in SCALES_DF_PARAMS:
+        fn = mark(fn)
+    return fn
+
+
+@scales_df_params
+@pytest.mark.parametrize("method", ["mad", "std"])
+def test_series_scales_equiv(backend, id_dtype, shuffle, method):
+    df = make_scales_df(backend, id_dtype, shuffle)
     expected = ref._compute_series_scales(df, "unique_id", "ds", "y", method=method)
     raw = cp._raw_series_scales(df, "unique_id", "ds", "y", (method,))
     actual = cp._floor_series_scales(raw[method], floor_factor=1e-3, stacklevel=2)
@@ -109,6 +135,33 @@ def test_series_scales_equiv(backend, method):
         np.testing.assert_allclose(
             actual[uid], expected[uid], rtol=RTOL, err_msg=str(uid)
         )
+
+
+@scales_df_params
+def test_raw_series_scales(backend, id_dtype, shuffle):
+    df = make_scales_df(backend, id_dtype, shuffle)
+    raw = cp._raw_series_scales(df, "unique_id", "ds", "y", ("mad", "std"))
+    pdf = df.to_pandas() if backend == "polars" else df
+    expected = {"mad": {}, "std": {}}
+    for uid, g in pdf.groupby("unique_id", observed=True):
+        y = g.sort_values("ds")["y"].to_numpy()
+        dy = np.diff(y)
+        if dy.size == 0:
+            expected["mad"][uid] = expected["std"][uid] = abs(y[0])
+            continue
+        expected["mad"][uid] = np.median(np.abs(dy - np.median(dy)))
+        expected["std"][uid] = abs(dy[0]) if dy.size == 1 else np.std(dy, ddof=1)
+    assert raw.keys() == expected.keys()
+    for method in expected:
+        assert raw[method].keys() == expected[method].keys()
+        for uid, value in expected[method].items():
+            np.testing.assert_allclose(
+                raw[method][uid], value, rtol=RTOL, atol=1e-12, err_msg=str(uid)
+            )
+    single, pair, flat = make_scales_df("pandas", id_dtype, False)["unique_id"].unique()[-3:]
+    assert raw["mad"][single] == raw["std"][single] == 3.5
+    assert raw["std"][pair] == 3.0
+    assert raw["mad"][flat] == raw["std"][flat] == 0.0
 
 
 # ---------------------------------------------------------------------------

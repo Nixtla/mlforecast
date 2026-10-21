@@ -10,10 +10,11 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
 
-import narwhals as nw
+import coreforecast.scalers as core_scalers
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
+from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from utilsforecast.compat import DFType
 
 
@@ -128,53 +129,27 @@ def _raw_series_scales(
     methods: Sequence[str],
 ) -> Dict[str, Dict]:
     """MAD(Δy) and/or std(Δy) per series, before the floor of `_floor_series_scales`."""
-    ndf = nw.from_native(df, eager_only=True)
-    ndf = ndf.select([id_col, time_col, target_col]).with_columns(
-        nw.col(target_col)
-        .cast(nw.Float64)
-        .diff()
-        .over(id_col, order_by=time_col)
-        .alias("_dy")
+    uids, _, data, indptr, _ = ufp.process_df(
+        df[[id_col, time_col, target_col]], id_col, time_col, target_col
     )
-    # Precompute abs columns so every agg below is a plain column aggregation
-    # (avoids narwhals' "complex group-by expression" pandas warning/fallback).
-    ndf = ndf.with_columns(
-        nw.col(target_col).abs().alias("_abs_y"),
-        nw.col("_dy").abs().alias("_abs_dy_col"),
-    )
-    scale_exprs = []
+    y = data[:, 0].astype(np.float64)
+    dy = core_scalers.Difference(1).fit_transform(CoreGroupedArray(y, indptr))
+    dy_ga = CoreGroupedArray(dy, indptr)
+    n_dy = np.diff(indptr) - 1
+    single = np.abs(y[indptr[:-1]])
+    raw = {}
     if "mad" in methods:
-        ndf = ndf.with_columns(
-            (nw.col("_dy") - nw.col("_dy").median().over(id_col)).abs().alias("_ady")
-        )
-        scale_exprs.append(nw.col("_ady").median().alias("_mad"))
+        mad = core_scalers.LocalRobustScaler("mad").fit(dy_ga).stats_[:, 1]
+        raw["mad"] = np.where(n_dy == 0, single, mad)
     if "std" in methods:
-        scale_exprs.append(nw.col("_dy").std(ddof=1).alias("_std"))
-    stats = ndf.group_by(id_col).agg(
-        *scale_exprs,
-        nw.col("_dy").count().alias("_n_dy"),
-        nw.col("_abs_y").mean().alias("_abs_mean"),
-        nw.col("_abs_dy_col").max().alias("_max_abs_dy"),
-    )
-    uids = stats[id_col].to_list()
-    n_dys = stats["_n_dy"].to_list()
-    abs_means = stats["_abs_mean"].to_list()
-    max_abs_dys = stats["_max_abs_dy"].to_list()
-    raw: Dict[str, Dict] = {}
-    for method in methods:
-        raw[method] = {}
-        for uid, scale, n_dy, abs_mean, max_abs_dy in zip(
-            uids, stats[f"_{method}"].to_list(), n_dys, abs_means, max_abs_dys
-        ):
-            if n_dy == 0:
-                # single-observation series: no diffs available
-                raw[method][uid] = float(abs_mean) if abs_mean is not None else 1.0
-            elif method == "std" and n_dy == 1:
-                # std(ddof=1) of a single diff is NaN; use |dy[0]| = max(|dy|) as before
-                raw[method][uid] = float(max_abs_dy)
-            else:
-                raw[method][uid] = float(scale)
-    return raw
+        # coreforecast's std has ddof=0
+        std = core_scalers.LocalStandardScaler().fit(dy_ga).stats_[:, 1]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            std = std * np.sqrt(n_dy / (n_dy - 1))
+        first_dy = np.abs(dy[np.minimum(indptr[:-1] + 1, y.size - 1)])
+        raw["std"] = np.select([n_dy == 0, n_dy == 1], [single, first_dy], std)
+    uid_list = uids.to_list()
+    return {m: dict(zip(uid_list, v.tolist())) for m, v in raw.items()}
 
 
 def _floor_series_scales(
