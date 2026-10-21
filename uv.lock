@@ -2802,7 +2802,7 @@ requires-dist = [
     { name = "lightgbm", marker = "sys_platform != 'win32' and extra == 'ray'", specifier = ">=4.6" },
     { name = "lightgbm", marker = "extra == 'dask'" },
     { name = "lightgbm", marker = "extra == 'spark'" },
-    { name = "narwhals" },
+    { name = "narwhals", specifier = ">=2.0.0" },
     { name = "optuna" },
     { name = "pandas", specifier = "<3.0" },
     { name = "polars", extras = ["numpy"], marker = "extra == 'polars'" },
