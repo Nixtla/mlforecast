@@ -551,7 +551,7 @@ class MLForecast:
             weight_col=weight_col,
         )
 
-        return self.ts.fit_transform(
+        prep = self.ts.fit_transform(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -566,6 +566,8 @@ class MLForecast:
             weight_col=weight_col,
             horizon_features=resolved_horizon_features,
         )
+        self._drop_transfer_intervals()
+        return prep
 
     def history_warmup(
         self,
@@ -675,10 +677,13 @@ class MLForecast:
             as_numpy=as_numpy,
             horizon_features=resolved_horizon_features,
         )
-        if self._transfer_ is not None:
-            # the transfer intervals were computed for the previous series
-            self._transfer_ = TransferState()
+        self._drop_transfer_intervals()
         return self
+
+    def _drop_transfer_intervals(self) -> None:
+        # they were computed for the previous series
+        if self._transfer_ is not None:
+            self._transfer_ = TransferState()
 
     def fit_models(
         self,

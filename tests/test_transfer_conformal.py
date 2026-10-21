@@ -729,10 +729,11 @@ def test_transfer_without_method_save_load(tmp_path):
         MLForecast.load(tmp_path).predict(3, level=[80])
 
 
-def test_history_warmup_drops_transfer_intervals():
+@pytest.mark.parametrize("rebuild", ["history_warmup", "preprocess"])
+def test_rebuilding_series_drops_transfer_intervals(rebuild):
     fcst, tgt = _transfer_setup()
     transferred = fcst.transfer(tgt, Recalibration())
-    transferred.history_warmup(tgt.assign(y=tgt["y"] * 1000))
+    getattr(transferred, rebuild)(tgt.assign(y=tgt["y"] * 1000))
     transferred.predict(3)
     with pytest.raises(ValueError, match="has no prediction intervals for its"):
         transferred.predict(3, level=[80])
