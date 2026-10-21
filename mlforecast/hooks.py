@@ -189,17 +189,18 @@ class Profiler(Hook):
         self.memory = memory
         if memory:
             try:
-                import psutil
+                import psutil  # noqa: F401
             except ImportError as error:
                 raise ImportError("Profiler(memory=True) requires psutil") from error
-            self._process = psutil.Process()
         self.spans: List[Span] = []
         self._stack: List[Tuple[str, float, Optional[int], List[Span]]] = []
 
     def _rss(self) -> Optional[int]:
         if not self.memory:
             return None
-        return self._process.memory_info().rss
+        import psutil
+
+        return psutil.Process().memory_info().rss
 
     def on_start(self, stage: str, fcst: "MLForecast", **kwargs: Any) -> None:  # noqa: ARG002
         self._stack.append((stage, perf_counter(), self._rss(), []))

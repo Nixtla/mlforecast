@@ -1,3 +1,5 @@
+import copy
+import pickle
 import sys
 
 import pytest
@@ -258,6 +260,19 @@ def test_profiler_can_record_memory(series):
 
     assert isinstance(profiler.spans[0].rss_delta_bytes, int)
     assert Profiler().on_start("fit", fcst) is None
+
+
+def test_profiler_memory_forecaster_is_picklable(series):
+    pytest.importorskip("psutil")
+    fcst = MLForecast(
+        models=LinearRegression(), freq="D", lags=[1], hooks=[Profiler(memory=True)]
+    )
+    fcst.fit(series)
+    copy.deepcopy(fcst)
+    loaded = pickle.loads(pickle.dumps(fcst))
+    loaded.fit(series)
+    assert [span.stage for span in loaded.hooks[0].spans] == ["fit", "fit"]
+    assert isinstance(loaded.hooks[0].spans[1].rss_delta_bytes, int)
 
 
 def test_errors_are_reported_and_profiler_recovers(series):
