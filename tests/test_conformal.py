@@ -13,7 +13,6 @@ from mlforecast.target_transforms import Differences
 from mlforecast.utils import (
     PredictionIntervals,
     ScaleAlignment,
-    generate_daily_series,
 )
 
 warnings.simplefilter('ignore', UserWarning)

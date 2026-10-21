@@ -1597,7 +1597,6 @@ class MLForecast:
                 calibration.scores,
                 h=pi.h,
             )
-        assert calibration.source_scales is not None
         return _scale_aligned_transfer(
             new_df=df,
             model_names=model_names,

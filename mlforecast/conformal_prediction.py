@@ -445,7 +445,7 @@ class Calibration:
     """Conformity scores and per-series scales of the training series, computed at fit."""
 
     scores: DFType
-    source_scales: Optional[Dict[str, Dict]] = None  # estimator -> uid -> raw scale
+    source_scales: Dict[str, Dict]  # estimator -> uid -> raw scale
 
 
 @dataclass

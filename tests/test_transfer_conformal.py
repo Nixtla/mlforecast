@@ -145,7 +145,7 @@ def test_coverage_within_tolerance(transfer_cp_setup, method):
 
     for level, empirical in coverage.items():
         nominal = level / 100
-        # error_scaled uses a robust IQR ratio (more conservative than std) so
+        # ErrorScaling uses a robust IQR ratio (more conservative than std) so
         # slight over-coverage is expected; allow up to 0.06 deviation.
         tol = 0.06 if method is ErrorScaling else 0.05
         assert abs(empirical - nominal) <= tol, (
@@ -401,7 +401,7 @@ def test_point_forecasts_invariant_across_transfer_methods():
     transform objects, which used to be shared between self.ts and the new_df
     TimeSeries. The frozen backtest's nested predict calls then re-fitted that
     state on truncated windows, shifting the outer point forecasts for the
-    runs_target_cv methods (recalibrate, error_scaled).
+    backtest methods (Recalibration, ErrorScaling).
     """
     from mlforecast.target_transforms import Differences
 
