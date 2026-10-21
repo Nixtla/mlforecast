@@ -137,7 +137,7 @@ def _raw_series_scales(
         .to_native()
     )
     uids, _, data, indptr, _ = ufp.process_df(df, id_col, time_col, target_col)
-    y = data[:, 0].astype(np.float64)
+    y = data[:, 0]
     dy = core_scalers.Difference(1).fit_transform(CoreGroupedArray(y, indptr))
     dy_ga = CoreGroupedArray(dy, indptr)
     n_dy = np.diff(indptr) - 1

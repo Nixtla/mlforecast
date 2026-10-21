@@ -110,20 +110,9 @@ def make_scales_df(backend, id_dtype, shuffle):
     return df
 
 
-SCALES_DF_PARAMS = [
-    pytest.mark.parametrize("shuffle", [False, True]),
-    pytest.mark.parametrize("id_dtype", ["str", "categorical", "int"]),
-    pytest.mark.parametrize("backend", ["pandas", "polars"]),
-]
-
-
-def scales_df_params(fn):
-    for mark in SCALES_DF_PARAMS:
-        fn = mark(fn)
-    return fn
-
-
-@scales_df_params
+@pytest.mark.parametrize("backend", ["pandas", "polars"])
+@pytest.mark.parametrize("id_dtype", ["str", "categorical", "int"])
+@pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.parametrize("method", ["mad", "std"])
 def test_series_scales_equiv(backend, id_dtype, shuffle, method):
     df = make_scales_df(backend, id_dtype, shuffle)
@@ -137,7 +126,9 @@ def test_series_scales_equiv(backend, id_dtype, shuffle, method):
         )
 
 
-@scales_df_params
+@pytest.mark.parametrize("backend", ["pandas", "polars"])
+@pytest.mark.parametrize("id_dtype", ["str", "categorical", "int"])
+@pytest.mark.parametrize("shuffle", [False, True])
 def test_raw_series_scales(backend, id_dtype, shuffle):
     df = make_scales_df(backend, id_dtype, shuffle)
     raw = cp._raw_series_scales(df, "unique_id", "ds", "y", ("mad", "std"))
