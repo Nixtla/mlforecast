@@ -470,72 +470,13 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
         warnings.warn(
             "IQR of residuals near zero; falling back to std ratio for scale estimation.",
             UserWarning,
-            stacklevel=6,
+            stacklevel=5,
         )
         return std_tgt / max(std_src, 1e-10)
     # Fallback 2: constant
     warnings.warn(
         "Both IQR and std of residuals near zero; scale ratio defaulting to 1.0.",
         UserWarning,
-        stacklevel=6,
+        stacklevel=5,
     )
     return 1.0
-
-
-def _scale_aligned_transfer(
-    new_df: DFType,
-    model_names: List[str],
-    id_col: str,
-    time_col: str,
-    target_col: str,
-    scale_estimator: str,
-    source_cs_df: DFType,
-    source_scales: Dict,
-    h: int,
-) -> TransferResult:
-    """Zero-shot scale alignment: compute σ̂_target per series from new_df y history.
-
-    Returns the source conformity scores normalized by σ̂_source together with
-    per-series target scales in ``TransferResult.target_scales``.
-    """
-    # called from MLForecast.transfer through _transfer and _adapt, warn at the user's call
-    raw_target = _raw_series_scales(
-        new_df, id_col, time_col, target_col, (scale_estimator,)
-    )
-    target_scale_dict = _floor_series_scales(
-        raw_target[scale_estimator], floor_factor=1e-3, stacklevel=6
-    )
-    source_scales = _floor_series_scales(
-        source_scales, floor_factor=1e-3, stacklevel=6, kind="Training series"
-    )
-    return TransferResult(
-        cs_df=_apply_scale_alignment(source_cs_df, model_names, id_col, source_scales),
-        h=h,
-        target_scales=target_scale_dict,
-    )
-
-
-def _error_scaled_transfer(
-    backtest_results: DFType,
-    model_names: List[str],
-    target_col: str,
-    source_cs_df: DFType,
-    h: int,
-) -> TransferResult:
-    """Scale source conformity scores by a single global IQR ratio (target / source).
-
-    The ratio is computed from the pooled residuals of all series combined — not
-    per-series. This corrects for domain-level scale differences between source and
-    target but does not account for series-level heterogeneity within the target domain.
-    For per-series scale correction use ``ScaleAlignment`` instead.
-    """
-    target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
-
-    scaled = ufp.copy_if_pandas(source_cs_df, deep=False)
-    for model in model_names:
-        src = source_cs_df[model].to_numpy().astype(float)
-        tgt = target_cs_df[model].to_numpy().astype(float)
-        scale = _robust_scale_ratio(src, tgt)
-        scaled = ufp.assign_columns(scaled, model, src * scale)
-
-    return TransferResult(cs_df=scaled, h=h)

@@ -222,8 +222,9 @@ def test_equal_counts_pooled_uniform_widths():
         )
 
 
-def test_h1_transfer_raises():
-    """PredictionIntervals(h=1) + transfer + h > 1 must raise ValueError (item 2 bug fix)."""
+@pytest.mark.parametrize("method", [ErrorScaling, ScaleAlignment])
+def test_h1_transfer_constant_width(method):
+    """PredictionIntervals(h=1) + transfer + h > 1 warns and repeats the 1-step width."""
     n = 5
     source_train = generate_daily_series(n, min_length=100, max_length=100, seed=20)
     target_train = generate_daily_series(n, min_length=100, max_length=100, seed=21)
@@ -241,8 +242,11 @@ def test_h1_transfer_raises():
         prediction_intervals=PredictionIntervals(n_windows=2, h=1),
     )
 
-    with pytest.raises(ValueError, match="requires PredictionIntervals"):
-        mlf.transfer(target_train, ErrorScaling()).predict(h=7, level=[90])
+    with pytest.warns(UserWarning, match="constant width for all horizons"):
+        preds = mlf.transfer(target_train, method()).predict(h=7, level=[90])
+    widths = (preds[f"{MODEL}-hi-90"] - preds[f"{MODEL}-lo-90"]).to_numpy()
+    for uid_widths in widths.reshape(n, 7):
+        np.testing.assert_allclose(uid_widths, uid_widths[0])
 
 
 def test_methods_produce_different_widths(transfer_cp_setup):
