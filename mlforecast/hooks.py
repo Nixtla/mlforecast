@@ -47,8 +47,9 @@ class Hook:
     - ``fit_model``: ``name``, ``model``, ``X``, ``y``, ``fit_kwargs`` and ``h`` (0-indexed horizon for direct models, None otherwise). Emitted once per estimator ``fit`` call.
     - ``cv_window``: ``i_window`` and ``cutoffs``.
 
-    Every hook gets every event even if another one raises, and the first error propagates: a stage whose
-    ``on_end`` raises still ended, and the error reaches the enclosing stages as their ``on_error``.
+    Hooks that started a stage get its ``on_end`` or ``on_error`` even if another one raises, and the first
+    hook error then propagates in place of the stage's own: a stage whose ``on_end`` raises still ended, and the
+    error reaches the enclosing stages as their ``on_error``.
     """
 
     def on_start(self, stage: str, fcst: "MLForecast", **kwargs: Any) -> None:

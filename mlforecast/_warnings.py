@@ -1,12 +1,13 @@
 """Helpers for warnings that should point to the user's call site."""
 
+import os
 import sys
 from pathlib import Path
 from types import FrameType
 from typing import Optional
 
 
-_PACKAGE_DIR = str(Path(__file__).parent)
+_PACKAGE_DIR = str(Path(__file__).parent) + os.sep
 
 
 def _user_warning_stacklevel() -> int:

@@ -1,4 +1,5 @@
 import copy
+import os
 import pickle
 import sys
 
@@ -7,6 +8,7 @@ from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
 from utilsforecast.losses import smape
 
+import mlforecast
 from mlforecast import MLForecast
 from mlforecast.hooks import Hook, Profiler
 from mlforecast.lag_transforms import RollingMean
@@ -90,6 +92,15 @@ def test_direct_conformal_warning_points_to_caller(series):
     with pytest.warns(UserWarning, match="near-zero scale") as caught:
         _compute_series_scales(frame, "unique_id", "ds", "y", method="mad")
     assert caught[0].filename == __file__
+
+
+def test_warning_stacklevel_stops_at_dirs_sharing_the_package_prefix():
+    package_dir = os.path.dirname(mlforecast.__file__)
+    caller = os.path.join(package_dir + "_ext", "run.py")
+    code = "from mlforecast._warnings import _user_warning_stacklevel\nlevel = _user_warning_stacklevel()"
+    namespace = {}
+    exec(compile(code, caller, "exec"), namespace)
+    assert namespace["level"] == 1
 
 
 @pytest.mark.parametrize("with_hooks", [False, True])
