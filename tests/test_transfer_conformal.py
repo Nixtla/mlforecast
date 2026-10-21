@@ -741,8 +741,17 @@ def test_transfer_save_load(method, tmp_path):
 def test_transfer_without_method_save_load(tmp_path):
     fcst, tgt = _transfer_setup()
     fcst.transfer(tgt).save(tmp_path)
-    with pytest.raises(ValueError, match="transferred without a method"):
+    with pytest.raises(ValueError, match="has no prediction intervals for its"):
         MLForecast.load(tmp_path).predict(3, level=[80])
+
+
+def test_history_warmup_drops_transfer_intervals():
+    fcst, tgt = _transfer_setup()
+    transferred = fcst.transfer(tgt, "recalibrate")
+    transferred.history_warmup(tgt.assign(y=tgt["y"] * 1000))
+    transferred.predict(3)
+    with pytest.raises(ValueError, match="has no prediction intervals for its"):
+        transferred.predict(3, level=[80])
 
 
 def test_scale_aligned_series_added_after_transfer_raises():

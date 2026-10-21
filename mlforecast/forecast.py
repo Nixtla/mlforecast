@@ -674,6 +674,9 @@ class MLForecast:
             as_numpy=as_numpy,
             horizon_features=resolved_horizon_features,
         )
+        if self._transfer_ is not None:
+            # the transfer intervals were computed for the previous series
+            self._transfer_ = TransferState()
         return self
 
     def fit_models(
@@ -1670,9 +1673,8 @@ class MLForecast:
         state = self._transfer_
         if level is not None and state is not None and state.result is None:
             raise ValueError(
-                "This model was transferred without a method. Call "
-                "`transfer(df, method=...)` to compute prediction intervals for "
-                "its series."
+                "This transferred model has no prediction intervals for its "
+                "current series. Call `transfer(df, method=...)` to compute them."
             )
         ts = self.ts
         forecasts = ts.predict(

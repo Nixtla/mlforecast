@@ -2363,7 +2363,7 @@ def test_transfer_without_method_then_intervals_raises(n_source):
     tgt.predict(h=5)
 
     pd.testing.assert_frame_equal(fcst.predict(h=5, level=[90]), expected)
-    with pytest.raises(ValueError, match="transferred without a method"):
+    with pytest.raises(ValueError, match="has no prediction intervals for its"):
         tgt.predict(h=5, level=[90])
 
 
