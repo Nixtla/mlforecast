@@ -84,6 +84,11 @@ def _ensure_h_int64(res):
     return ufp.copy_if_pandas(res, deep=True)
 
 
+def _train_ends(ts: TimeSeries) -> DataFrame:
+    df_constructor = pl_DataFrame if isinstance(ts.uids, pl_Series) else pd.DataFrame
+    return df_constructor({ts.id_col: ts.uids, "train_end": ts.last_dates})
+
+
 def _check_out_of_sample(
     cutoffs: DataFrame, train_ends: DataFrame, id_col: str
 ) -> None:
@@ -143,7 +148,8 @@ def _frozen_backtest(
             "and `cross_validation(refit=False, level=...)`) requires "
             f">= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
-            f"Series too short: {details}."
+            f"Series too short: {details}. For point forecasts only, use "
+            "`transfer(df)` without a method or `cross_validation` without `level`."
         )
 
     # future values of dynamic inputs come from each validation window
@@ -742,12 +748,7 @@ class MLForecast:
                 self.models_[name] = fit_model(
                     model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
-        df_constructor = (
-            pl_DataFrame if isinstance(self.ts.uids, pl_Series) else pd.DataFrame
-        )
-        self._train_ends_ = df_constructor(
-            {self.ts.id_col: self.ts.uids, "train_end": self.ts.last_dates}
-        )
+        self._train_ends_ = _train_ends(self.ts)
         self._transfer_ = None
         return self
 
@@ -1581,7 +1582,6 @@ class MLForecast:
         out = self._with_ts(self.ts._clone_warm(df))
         out.models_ = dict(self.models_)
         out._transfer_ = TransferState(
-            method=method,
             result=None if method is None else self._adapt(df, method, check_in_sample),
         )
         return out

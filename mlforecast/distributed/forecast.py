@@ -48,7 +48,7 @@ from mlforecast.core import (
     _name_models,
 )
 
-from ..forecast import MLForecast
+from ..forecast import MLForecast, _train_ends
 from ..grouped_array import GroupedArray
 from ..utils import _resolve_num_threads
 
@@ -1041,4 +1041,6 @@ class DistributedMLForecast:
         ts.static_features_ = statics
         ts.transforms.update(combined_core_lag_tfms)
         ts.target_transforms = combined_target_tfms
-        return MLForecast._from_ts(ts, models=self.models_, models_=self.models_)
+        return MLForecast._from_ts(
+            ts, models=self.models_, models_=self.models_, train_ends=_train_ends(ts)
+        )

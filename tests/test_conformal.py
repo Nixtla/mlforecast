@@ -156,67 +156,67 @@ def test_transfer_conformal_backtest_args_validation(kwargs):
         TransferConformal(method="scale_aligned", **kwargs)
 
 
-def test_compute_series_scales_mad():
-    """_compute_series_scales returns correct MAD for a known signal."""
-    from mlforecast.conformal_prediction import _compute_series_scales
+def _series_scales(df, method):
+    from mlforecast.conformal_prediction import (
+        _floor_series_scales,
+        _raw_series_scales,
+    )
 
+    raw = _raw_series_scales(df, "unique_id", "ds", "y", (method,))
+    return _floor_series_scales(raw[method], floor_factor=1e-3, stacklevel=2)
+
+
+def test_series_scales_mad():
+    """The MAD scale is correct for a known signal."""
     df = pd.DataFrame({"unique_id": ["s1"] * 5, "ds": range(5), "y": [0.0, 1, 3, 6, 10]})
-    scales = _compute_series_scales(df, "unique_id", "ds", "y", method="mad")
+    scales = _series_scales(df, "mad")
     assert "s1" in scales
     assert scales["s1"] > 0
 
 
-def test_compute_series_scales_std():
-    """_compute_series_scales returns correct std for a known signal."""
-    from mlforecast.conformal_prediction import _compute_series_scales
-
+def test_series_scales_std():
+    """The std scale is correct for a known signal."""
     rng = np.random.default_rng(0)
     y = rng.standard_normal(50).cumsum()
     df = pd.DataFrame({"unique_id": ["s1"] * 50, "ds": range(50), "y": y})
-    scales = _compute_series_scales(df, "unique_id", "ds", "y", method="std")
+    scales = _series_scales(df, "std")
     dy = np.diff(y)
     expected = float(np.std(dy, ddof=1))
     assert abs(scales["s1"] - expected) < 1e-10
 
 
-def test_compute_series_scales_flat_series():
+def test_series_scales_flat_series():
     """Flat series gets a positive floor rather than zero."""
-    from mlforecast.conformal_prediction import _compute_series_scales
-
     df = pd.DataFrame({
         "unique_id": ["flat"] * 10 + ["noisy"] * 10,
         "ds": list(range(10)) * 2,
         "y": [5.0] * 10 + list(np.random.default_rng(0).standard_normal(10)),
     })
-    scales = _compute_series_scales(df, "unique_id", "ds", "y", method="mad")
+    scales = _series_scales(df, "mad")
     assert scales["flat"] > 0
 
 
-def test_compute_series_scales_short_series():
+def test_series_scales_short_series():
     """Single-observation series gets a positive scale without crashing."""
-    from mlforecast.conformal_prediction import _compute_series_scales
-
     df = pd.DataFrame({
         "unique_id": ["short", "normal"] + ["normal"] * 9,
         "ds": [0] + list(range(10)),
         "y": [42.0] + list(np.arange(10, dtype=float)),
     })
-    scales = _compute_series_scales(df, "unique_id", "ds", "y", method="mad")
+    scales = _series_scales(df, "mad")
     assert scales["short"] > 0
 
 
-def test_compute_series_scales_polars():
-    """_compute_series_scales works on a polars DataFrame."""
-    from mlforecast.conformal_prediction import _compute_series_scales
-
+def test_series_scales_polars():
+    """The per-series scales work on a polars DataFrame."""
     df_pd = pd.DataFrame({
         "unique_id": ["s1"] * 20,
         "ds": range(20),
         "y": np.arange(20, dtype=float) + np.random.default_rng(7).standard_normal(20),
     })
     df_pl = pl.from_pandas(df_pd)
-    scales_pd = _compute_series_scales(df_pd, "unique_id", "ds", "y", method="mad")
-    scales_pl = _compute_series_scales(df_pl, "unique_id", "ds", "y", method="mad")
+    scales_pd = _series_scales(df_pd, "mad")
+    scales_pl = _series_scales(df_pl, "mad")
     assert abs(scales_pd["s1"] - scales_pl["s1"]) < 1e-10
 
 

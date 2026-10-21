@@ -92,17 +92,18 @@ def assert_frames_close(actual, expected, skip=("unique_id", "ds", "cutoff")):
 
 
 # ---------------------------------------------------------------------------
-# 1. _compute_series_scales
+# 1. _raw_series_scales + _floor_series_scales
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 @pytest.mark.parametrize("method", ["mad", "std"])
-def test_compute_series_scales_equiv(backend, method):
+def test_series_scales_equiv(backend, method):
     df = make_series_df()
     if backend == "polars":
         df = pl.from_pandas(df)
     expected = ref._compute_series_scales(df, "unique_id", "ds", "y", method=method)
-    actual = cp._compute_series_scales(df, "unique_id", "ds", "y", method=method)
+    raw = cp._raw_series_scales(df, "unique_id", "ds", "y", (method,))
+    actual = cp._floor_series_scales(raw[method], floor_factor=1e-3, stacklevel=2)
     assert set(actual) == set(expected)
     for uid in expected:
         np.testing.assert_allclose(

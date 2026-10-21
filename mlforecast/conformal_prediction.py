@@ -108,24 +108,6 @@ class PredictionIntervals:
         )
 
 
-def _compute_series_scales(
-    df: DFType,
-    id_col: str,
-    time_col: str,
-    target_col: str,
-    method: str,
-    floor_factor: float = 1e-3,
-) -> Dict:
-    """Compute per-series scale estimates on first differences for trend invariance.
-
-    Uses MAD(Δy) or std(Δy). A data-relative floor (floor_factor × global median)
-    with an absolute backstop of 1e-8 prevents zero-scale collapse for flat or very
-    short series.
-    """
-    raw = _raw_series_scales(df, id_col, time_col, target_col, (method,))
-    return _floor_series_scales(raw[method], floor_factor, stacklevel=3)
-
-
 def _raw_series_scales(
     df: DFType,
     id_col: str,
@@ -478,9 +460,8 @@ class Calibration:
 
 @dataclass
 class TransferState:
-    """Transfer method chosen in ``MLForecast.transfer`` and its adaptation to `df`, computed there."""
+    """Adaptation to `df` of the transfer method chosen in ``MLForecast.transfer``."""
 
-    method: Optional[TransferConformal] = None
     result: Optional[TransferResult] = None
 
 
