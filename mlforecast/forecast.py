@@ -1990,12 +1990,15 @@ class MLForecast:
                 )
             with warnings.catch_warnings():
                 if not should_fit:
-                    # window 0 already warned with the hint for cross_validation
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Prediction intervals are calculated using 1-step",
-                        category=UserWarning,
-                    )
+                    # window 0 already warned with the hint for cross_validation,
+                    # and the bias warnings name a transfer the user didn't call
+                    for message in (
+                        "Prediction intervals are calculated using 1-step",
+                        "Recalibration level=",
+                    ):
+                        warnings.filterwarnings(
+                            "ignore", message=message, category=UserWarning
+                        )
                 y_pred = fcst.predict(
                     h=h,
                     before_predict_callback=before_predict_callback,

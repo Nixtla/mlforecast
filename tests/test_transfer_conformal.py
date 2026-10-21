@@ -1,3 +1,4 @@
+import warnings
 from functools import cache
 
 import lightgbm
@@ -883,6 +884,24 @@ def test_cross_validation_refit_false_overlapping_windows():
         prediction_intervals=PredictionIntervals(n_windows=2, h=2),
     )
     assert res[f"{LR}-lo-80"].notna().all()
+
+
+def test_cross_validation_refit_false_no_bias_warning():
+    src = generate_daily_series(3, min_length=80, max_length=80, seed=0)
+    shifted = src.groupby("unique_id", observed=True).cumcount() > 65
+    src.loc[shifted, "y"] += 500
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        fcst.cross_validation(
+            src,
+            n_windows=5,
+            h=3,
+            refit=False,
+            level=[80],
+            prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+        )
+    assert not [w for w in record if "Recalibration level=" in str(w.message)]
 
 
 def test_cross_validation_refit_false_one_step_warning():
