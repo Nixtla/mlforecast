@@ -444,7 +444,7 @@ class DistributedMLForecast:
             raise NotImplementedError(
                 "Only spark, dask, and ray engines are supported."
             )
-        self._train_ends_ = self._collect_train_ends()
+        self._train_ends_ = None
         return self
 
     @staticmethod
@@ -494,7 +494,7 @@ class DistributedMLForecast:
         Returns:
             (DistributedMLForecast): Forecast object with series values and trained models.
         """
-        return self._fit(
+        self._fit(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -504,6 +504,8 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             weight_col=weight_col,
         )
+        self._train_ends_ = self._collect_train_ends()
+        return self
 
     @staticmethod
     def _attach_x_df(part: pd.DataFrame, uid_to_xdf: dict) -> Iterable[pd.DataFrame]:

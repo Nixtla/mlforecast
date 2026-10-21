@@ -139,12 +139,8 @@ def _frozen_backtest(
     new_df: DFType,
     n_windows: int,
     h: int,
-    step_size: int = 1,
-    max_lag: int = 0,
-    id_col: str = "unique_id",
-    time_col: str = "ds",
-    target_col: str = "y",
-    train_ends: Optional[DataFrame] = None,
+    step_size: int,
+    train_ends: Optional[DataFrame],
 ) -> DFType:
     """Run inference-only backtesting windows using already-fitted models.
 
@@ -155,6 +151,17 @@ def _frozen_backtest(
     If `train_ends` is given, the windows of the series in it must start after
     their training end.
     """
+    ts = fcst.ts
+    id_col, time_col, target_col = ts.id_col, ts.time_col, ts.target_col
+    # future values of dynamic inputs come from each validation window
+    future_cols = ts._future_input_cols
+    missing = [c for c in future_cols if c not in nw.from_native(new_df).columns]
+    if missing:
+        raise ValueError(
+            f"`df` must contain the future values of {missing} "
+            "to compute transfer intervals."
+        )
+    max_lag = ts.keep_last_n or (max(ts.lags) if ts.lags else 0)
     required = h + (n_windows - 1) * step_size + max_lag + 1
     counts_df = ufp.counts_by_id(new_df, id_col)
     nw_counts = nw.from_native(counts_df)
@@ -175,8 +182,6 @@ def _frozen_backtest(
             "`transfer(df)` without a method or `cross_validation` without `level`."
         )
 
-    # future values of dynamic inputs come from each validation window
-    future_cols = fcst.ts._future_input_cols
     all_results = []
     splits = ufp.backtest_splits(
         new_df,
@@ -818,9 +823,8 @@ class MLForecast:
                 f"settings are: {min_samples}, shortest serie has: {min_size}. "
                 "Please reduce the number of windows, horizon or remove those series."
             )
-        # cross-validation and preprocessing fit the TimeSeries they run on and
-        # leave CV state behind; run them on a copy so `self` only carries what
-        # `fit` sets afterwards
+        # cross-validation fits the TimeSeries it runs on and leaves CV state
+        # behind; run it on a copy so `self` only carries what `fit` sets afterwards
         scratch = self._with_ts(self.ts._clone_cold())
         cv_results = scratch.cross_validation(
             df=df,
@@ -1580,6 +1584,7 @@ class MLForecast:
     ) -> TransferResult:
         """Adapt the source calibration to `df`."""
         pi = self.prediction_intervals
+        train_ends = self._train_ends_ if check_in_sample else None
         model_names = list(self.models.keys())
         if isinstance(method, Recalibration):
             if method.h is not None:
@@ -1593,8 +1598,8 @@ class MLForecast:
                     "`Recalibration(h=...)`."
                 )
             n_windows = method.n_windows or (pi.n_windows if pi is not None else 2)
-            backtest_results = self._transfer_backtest(
-                df, h, n_windows, method.step_size, check_in_sample
+            backtest_results = _frozen_backtest(
+                self, df, n_windows, h, method.step_size, train_ends
             )
             return TransferResult(
                 cs_df=compute_conformity_scores(
@@ -1610,12 +1615,13 @@ class MLForecast:
                 "`prediction_intervals=PredictionIntervals(...)`."
             )
         if isinstance(method, ErrorScaling):
-            backtest_results = self._transfer_backtest(
+            backtest_results = _frozen_backtest(
+                self,
                 df,
-                pi.h,
                 method.n_windows or pi.n_windows,
+                pi.h,
                 method.step_size,
-                check_in_sample,
+                train_ends,
             )
             target_cs_df = compute_conformity_scores(
                 backtest_results, model_names, self.ts.target_col
@@ -1647,36 +1653,6 @@ class MLForecast:
             ),
             h=pi.h,
             target_scales=target_scales,
-        )
-
-    def _transfer_backtest(
-        self,
-        df: DFType,
-        h: int,
-        n_windows: int,
-        step_size: int,
-        check_in_sample: bool,
-    ) -> DFType:
-        # the backtest needs the future values of the dynamic features
-        new_cols = nw.from_native(df).columns
-        missing = [c for c in self.ts._future_input_cols if c not in new_cols]
-        if missing:
-            raise ValueError(
-                f"`df` must contain the future values of {missing} "
-                "to compute transfer intervals."
-            )
-        max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
-        return _frozen_backtest(
-            fcst=self,
-            new_df=df,
-            n_windows=n_windows,
-            h=h,
-            step_size=step_size,
-            max_lag=max_lag,
-            id_col=self.ts.id_col,
-            time_col=self.ts.time_col,
-            target_col=self.ts.target_col,
-            train_ends=self._train_ends_ if check_in_sample else None,
         )
 
     def predict(
@@ -1711,8 +1687,7 @@ class MLForecast:
                 "current series. Call `transfer(df, method)` with a `Recalibration`, "
                 "`ErrorScaling` or `ScaleAlignment` method to compute them."
             )
-        ts = self.ts
-        forecasts = ts.predict(
+        forecasts = self.ts.predict(
             models=self.models_,
             horizon=h,
             before_predict_callback=before_predict_callback,

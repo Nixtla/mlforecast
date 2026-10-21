@@ -358,7 +358,7 @@ def _add_transfer_intervals(
                         "all horizon steps — interval lies entirely below point forecasts. "
                         "The transferred model systematically over-predicts on the target domain.",
                         UserWarning,
-                        stacklevel=3,
+                        stacklevel=4,
                     )
                 elif np.all(q_lo_lv > 0):
                     warnings.warn(
@@ -366,7 +366,7 @@ def _add_transfer_intervals(
                         "all horizon steps — interval lies entirely above point forecasts. "
                         "The transferred model systematically under-predicts on the target domain.",
                         UserWarning,
-                        stacklevel=3,
+                        stacklevel=4,
                     )
         elif method == "conformal_distribution":
             q_per_horizon = np.quantile(np.vstack([-scores, scores]), all_cuts, axis=0)
@@ -432,7 +432,7 @@ def compute_conformity_scores(
 
 @dataclass
 class TransferResult:
-    """Return value from transfer conformal functions."""
+    """Calibration adapted to the series passed to ``MLForecast.transfer``."""
 
     cs_df: DFType
     h: int

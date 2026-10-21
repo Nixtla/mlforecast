@@ -798,12 +798,10 @@ def test_transfer_in_sample_windows_raise(method):
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
     fcst.fit(src, prediction_intervals=PredictionIntervals(n_windows=2, h=3))
-    with pytest.raises(ValueError, match="matched to the training series by id"):
+    with pytest.raises(ValueError, match="'id_0' was trained up to") as exc:
         fcst.transfer(src, method())
-    with pytest.raises(ValueError, match="'id_0' was trained up to"):
-        fcst.transfer(src, method())
-    with pytest.raises(ValueError, match="or the `h` of `Recalibration`"):
-        fcst.transfer(src, method())
+    assert "matched to the training series by id" in str(exc.value)
+    assert "or the `h` of `Recalibration`" in str(exc.value)
     # windows after the training end, and new ids regardless of their times
     future = fcst.make_future_dataframe(4).assign(y=1.0)
     seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
@@ -862,6 +860,14 @@ def test_error_scaled_iqr_warning_points_at_caller():
     with pytest.warns(UserWarning, match="IQR of residuals near zero") as record:
         fcst.transfer(tgt, ErrorScaling())
     assert any(w.filename == __file__ for w in record if "IQR" in str(w.message))
+
+
+def test_recalibration_bias_warning_points_at_caller():
+    fcst, tgt = _transfer_setup()
+    transferred = fcst.transfer(tgt.assign(y=tgt["y"] * 100), Recalibration())
+    with pytest.warns(UserWarning, match="under-predicts") as record:
+        transferred.predict(3, level=[80])
+    assert any(w.filename == __file__ for w in record if "predicts" in str(w.message))
 
 
 def test_cross_validation_refit_false_overlapping_windows():

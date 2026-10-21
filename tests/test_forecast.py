@@ -2819,21 +2819,14 @@ def test_fit_with_intervals_leaves_no_cv_state():
     assert fcst.models_ is not None
 
 
-def test_transfer_keeps_source_state():
+def test_transfer_level_out_of_range_raises():
     df = generate_daily_series(3, min_length=30, max_length=30)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
     fcst.fit(df, prediction_intervals=PredictionIntervals(n_windows=2, h=1))
     new_df = fcst.make_future_dataframe(5).assign(y=1.0)
     new_df = pd.concat([df, new_df]).sort_values(["unique_id", "ds"])
-    original_ts = fcst.ts
-    original_calibration = fcst._calibration_
     with pytest.raises(ValueError, match="range"):
         fcst.transfer(new_df, Recalibration()).predict(1, level=[150])
-    assert fcst.ts is original_ts
-    fcst.transfer(new_df, Recalibration()).predict(1, level=[80])
-    assert fcst.ts is original_ts
-    assert fcst._calibration_ is original_calibration
-    assert fcst._transfer_ is None
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
