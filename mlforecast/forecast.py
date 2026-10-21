@@ -2,7 +2,6 @@ __all__ = ["MLForecast"]
 
 
 import copy
-import dataclasses
 import warnings
 import re
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    get_args,
 )
 
 import cloudpickle
@@ -53,7 +53,9 @@ from .utils import _resolve_num_threads
 from .conformal_prediction import (
     Calibration,
     PredictionIntervals,
-    TransferConformal,
+    ErrorScaling,
+    Recalibration,
+    TransferMethod,
     TransferResult,
     TransferState,
     _add_transfer_intervals,
@@ -103,8 +105,8 @@ def _check_out_of_sample(
             "The backtest windows of series seen during training must start after "
             "the end of their training data, otherwise the intervals are computed "
             "on in-sample forecasts and are too narrow. Pass more observations after "
-            "the training end or reduce `n_windows` or `step_size` of "
-            "`TransferConformal`, or its `h` for 'recalibrate'. Series are matched to the training series by id, "
+            "the training end or reduce the `n_windows` or `step_size` of the transfer "
+            "method, or the `h` of `Recalibration`. Series are matched to the training series by id, "
             "so rename the ids of unrelated series that reuse them. "
             f"Series with in-sample windows: {details}."
         )
@@ -143,7 +145,7 @@ def _frozen_backtest(
         )
         raise ValueError(
             "Adapting the prediction intervals to new series with a frozen-model "
-            "backtest (the 'recalibrate' and 'error_scaled' methods of `transfer`, "
+            "backtest (the `Recalibration` and `ErrorScaling` methods of `transfer`, "
             "and `cross_validation(refit=False, level=...)`) requires "
             f">= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
@@ -1510,133 +1512,132 @@ class MLForecast:
     def transfer(
         self,
         df: DFType,
-        method: Optional[Union[str, TransferConformal]] = None,
+        method: Optional[TransferMethod] = None,
     ) -> "MLForecast":
         """Forecaster that uses the trained models to continue the series in `df`.
 
         Args:
             df (pandas or polars DataFrame): Series data to continue from. Should have the same structure as the one used to fit the model, including any features.
-            method (str or TransferConformal, optional): How to compute the prediction intervals of the series in `df`. A plain string is shorthand for ``TransferConformal(method=<str>)``. The intervals are computed from `df` when `transfer` is called. Supported methods:
-
-                - ``'recalibrate'``: Runs a frozen-model backtest on `df` and uses its scores. Works on models fit without prediction intervals.
-                - ``'error_scaled'``: Scales the source scores by the ratio of target to source prediction-error spread, estimated with a frozen-model backtest on `df`. Requires prediction intervals at fit.
-                - ``'scale_aligned'``: Scales the source scores by the ratio of target to source per-series scale, without a backtest. Requires prediction intervals at fit.
-
-                The backtest windows of series seen during training (matched by id) must start after the end of their training data. Defaults to None (no prediction intervals).
+            method (Recalibration, ErrorScaling or ScaleAlignment, optional): How to compute the prediction intervals of the series in `df`, from `df` when `transfer` is called. The backtest windows of series seen during training (matched by id) must start after the end of their training data. Defaults to None (no prediction intervals).
 
         Returns:
             MLForecast: Forecast object for the series in `df` that shares the trained models. This instance is not modified.
         """
-        if isinstance(method, str):
-            method = TransferConformal(method=method)
+        if method is not None and not isinstance(method, get_args(TransferMethod)):
+            hint = (
+                f" Pass an instance, e.g. `{method.__name__}()`."
+                if isinstance(method, type)
+                else ""
+            )
+            raise TypeError(
+                "`method` must be a `Recalibration`, `ErrorScaling` or `ScaleAlignment` "
+                f"from `mlforecast.conformal_prediction`, got {method!r}.{hint}"
+            )
         return self._transfer(df, method)
 
     def _transfer(
         self,
         df: DFType,
-        method: Optional[TransferConformal],
+        method: Optional[TransferMethod],
         check_in_sample: bool = True,
     ) -> "MLForecast":
         self._check_fitted()
-        if method is not None:
-            pi = self.prediction_intervals
-            if method.method != "recalibrate" and (
-                pi is None or self._calibration_ is None
-            ):
-                raise ValueError(
-                    f"The '{method.method}' transfer method requires that the model was "
-                    "fit with `prediction_intervals=PredictionIntervals(...)`."
-                )
+        result = None if method is None else self._adapt(df, method, check_in_sample)
+        out = self._with_ts(self.ts._clone_warm(df))
+        out.models_ = dict(self.models_)
+        out._transfer_ = TransferState(result=result)
+        return out
+
+    def _adapt(
+        self, df: DFType, method: TransferMethod, check_in_sample: bool
+    ) -> TransferResult:
+        """Adapt the source calibration to `df`."""
+        pi = self.prediction_intervals
+        model_names = list(self.models.keys())
+        if isinstance(method, Recalibration):
             if method.h is not None:
                 h = method.h
             elif pi is not None:
                 h = pi.h
             else:
                 raise ValueError(
-                    "The 'recalibrate' transfer method requires that the model was fit "
-                    "with `prediction_intervals=PredictionIntervals(...)` or an explicit "
-                    "`TransferConformal(method='recalibrate', h=...)`."
+                    "`Recalibration` requires that the model was fit with "
+                    "`prediction_intervals=PredictionIntervals(...)` or an explicit "
+                    "`Recalibration(h=...)`."
                 )
-            if method.method == "scale_aligned":
-                n_windows = None
-            elif method.n_windows is not None:
-                n_windows = method.n_windows
-            else:
-                n_windows = pi.n_windows if pi is not None else 2
-            if method.method != "recalibrate":
-                assert pi is not None
-                if h != pi.h:
-                    raise ValueError(
-                        f"The '{method.method}' transfer method reuses the source "
-                        "conformity scores, so `TransferConformal.h` must equal the `h` "
-                        f"of `PredictionIntervals` ({pi.h}), got {h}."
-                    )
-            if method.method != "scale_aligned":
-                # the backtest needs the future values of the dynamic features
-                new_cols = nw.from_native(df).columns
-                missing = [c for c in self.ts._future_input_cols if c not in new_cols]
-                if missing:
-                    raise ValueError(
-                        f"`df` must contain the future values of {missing} "
-                        "to compute transfer intervals."
-                    )
-            method = dataclasses.replace(method, h=h, n_windows=n_windows)
-        out = self._with_ts(self.ts._clone_warm(df))
-        out.models_ = dict(self.models_)
-        out._transfer_ = TransferState(
-            result=None if method is None else self._adapt(df, method, check_in_sample),
-        )
-        return out
-
-    def _adapt(
-        self, df: DFType, method: TransferConformal, check_in_sample: bool
-    ) -> TransferResult:
-        """Adapt the source calibration to `df`."""
-        assert method.h is not None
-        model_names = list(self.models.keys())
-        if method.method == "scale_aligned":
-            calibration = self._calibration_
-            assert calibration is not None and calibration.source_scales is not None
-            return _scale_aligned_transfer(
-                new_df=df,
-                model_names=model_names,
-                id_col=self.ts.id_col,
-                time_col=self.ts.time_col,
-                target_col=self.ts.target_col,
-                scale_estimator=method.scale_estimator,
-                source_cs_df=calibration.scores,
-                source_scales=calibration.source_scales[method.scale_estimator],
-                h=method.h,
+            n_windows = method.n_windows or (pi.n_windows if pi is not None else 2)
+            backtest_results = self._transfer_backtest(
+                df, h, n_windows, method.step_size, check_in_sample
             )
-        assert method.n_windows is not None
+            return TransferResult(
+                cs_df=compute_conformity_scores(
+                    backtest_results, model_names, self.ts.target_col, signed=True
+                ),
+                h=h,
+                signed=True,
+            )
+        calibration = self._calibration_
+        if pi is None or calibration is None:
+            raise ValueError(
+                f"`{type(method).__name__}` requires that the model was fit with "
+                "`prediction_intervals=PredictionIntervals(...)`."
+            )
+        if isinstance(method, ErrorScaling):
+            backtest_results = self._transfer_backtest(
+                df,
+                pi.h,
+                method.n_windows or pi.n_windows,
+                method.step_size,
+                check_in_sample,
+            )
+            return _error_scaled_transfer(
+                backtest_results,
+                model_names,
+                self.ts.target_col,
+                calibration.scores,
+                h=pi.h,
+            )
+        assert calibration.source_scales is not None
+        return _scale_aligned_transfer(
+            new_df=df,
+            model_names=model_names,
+            id_col=self.ts.id_col,
+            time_col=self.ts.time_col,
+            target_col=self.ts.target_col,
+            scale_estimator=method.scale_estimator,
+            source_cs_df=calibration.scores,
+            source_scales=calibration.source_scales[method.scale_estimator],
+            h=pi.h,
+        )
+
+    def _transfer_backtest(
+        self,
+        df: DFType,
+        h: int,
+        n_windows: int,
+        step_size: int,
+        check_in_sample: bool,
+    ) -> DFType:
+        # the backtest needs the future values of the dynamic features
+        new_cols = nw.from_native(df).columns
+        missing = [c for c in self.ts._future_input_cols if c not in new_cols]
+        if missing:
+            raise ValueError(
+                f"`df` must contain the future values of {missing} "
+                "to compute transfer intervals."
+            )
         max_lag = self.ts.keep_last_n or (max(self.ts.lags) if self.ts.lags else 0)
-        backtest_results = _frozen_backtest(
+        return _frozen_backtest(
             fcst=self,
             new_df=df,
-            n_windows=method.n_windows,
-            h=method.h,
-            step_size=method.step_size if method.step_size is not None else 1,
+            n_windows=n_windows,
+            h=h,
+            step_size=step_size,
             max_lag=max_lag,
             id_col=self.ts.id_col,
             time_col=self.ts.time_col,
             target_col=self.ts.target_col,
             train_ends=self._train_ends_ if check_in_sample else None,
-        )
-        if method.method == "recalibrate":
-            return TransferResult(
-                cs_df=compute_conformity_scores(
-                    backtest_results, model_names, self.ts.target_col, signed=True
-                ),
-                h=method.h,
-                signed=True,
-            )
-        assert self._calibration_ is not None
-        return _error_scaled_transfer(
-            backtest_results,
-            model_names,
-            self.ts.target_col,
-            self._calibration_.scores,
-            h=method.h,
         )
 
     def predict(
@@ -1668,7 +1669,8 @@ class MLForecast:
         if level is not None and state is not None and state.result is None:
             raise ValueError(
                 "This transferred model has no prediction intervals for its "
-                "current series. Call `transfer(df, method=...)` to compute them."
+                "current series. Call `transfer(df, method)` with a `Recalibration`, "
+                "`ErrorScaling` or `ScaleAlignment` method to compute them."
             )
         ts = self.ts
         forecasts = ts.predict(
@@ -1725,10 +1727,7 @@ class MLForecast:
                                 f"{missing_ids}."
                             )
                 if adapted is not None and adapted.signed:
-                    fix_h = (
-                        "pass `TransferConformal(method='recalibrate', h=h)` "
-                        "to `transfer`"
-                    )
+                    fix_h = "pass `Recalibration(h=h)` to `transfer`"
                 else:
                     fix_h = (
                         "pass PredictionIntervals(h=h) to the `prediction_intervals` "
@@ -1991,9 +1990,7 @@ class MLForecast:
                     )
                 fcst = self._transfer(
                     train,
-                    TransferConformal(method="recalibrate")
-                    if level is not None
-                    else None,
+                    Recalibration() if level is not None else None,
                     check_in_sample=False,
                 )
             with warnings.catch_warnings():

@@ -10,7 +10,11 @@ from mlforecast import MLForecast
 from mlforecast.forecast import _get_conformal_method
 from mlforecast.lag_transforms import ExponentiallyWeightedMean
 from mlforecast.target_transforms import Differences
-from mlforecast.utils import PredictionIntervals, TransferConformal, generate_daily_series
+from mlforecast.utils import (
+    PredictionIntervals,
+    ScaleAlignment,
+    generate_daily_series,
+)
 
 warnings.simplefilter('ignore', UserWarning)
 
@@ -141,19 +145,10 @@ def test_prediction_intervals_method_validation():
         PredictionIntervals(method="weighted_conformal_error")
 
 
-def test_transfer_conformal_scale_estimator_validation():
-    TransferConformal(method="scale_aligned", scale_estimator="std")
-    with pytest.raises(ValueError, match="scale_estimator"):
-        TransferConformal(method="scale_aligned", scale_estimator="variance")
-    with pytest.raises(ValueError, match="scale_estimator is only valid"):
-        TransferConformal(method="recalibrate", scale_estimator="std")
-
-
-@pytest.mark.parametrize("kwargs", [{"n_windows": 3}, {"step_size": 2}])
-def test_transfer_conformal_backtest_args_validation(kwargs):
-    TransferConformal(method="error_scaled", **kwargs)
-    with pytest.raises(ValueError, match="only valid"):
-        TransferConformal(method="scale_aligned", **kwargs)
+def test_scale_alignment_scale_estimator_validation():
+    ScaleAlignment(scale_estimator="std")
+    with pytest.raises(ValueError, match="scale_estimator must be 'mad' or 'std'"):
+        ScaleAlignment(scale_estimator="variance")
 
 
 def _series_scales(df, method):
@@ -267,7 +262,7 @@ def test_scale_aligned_transfer_large_target(scale_aligned_setup):
     preds_src = fcst.predict(h, level=[80])
     src_width = (preds_src["LGBMRegressor-hi-80"] - preds_src["LGBMRegressor-lo-80"]).mean()
 
-    preds_sa = fcst.transfer(target_series, "scale_aligned").predict(
+    preds_sa = fcst.transfer(target_series, ScaleAlignment()).predict(
         h, level=[80]
     )
     assert "LGBMRegressor-lo-80" in preds_sa.columns
@@ -283,21 +278,17 @@ def test_scale_aligned_transfer_large_target(scale_aligned_setup):
 # Item 1 new API tests
 # ---------------------------------------------------------------------------
 
-def test_transfer_conformal_string_shorthand_equals_object(scale_aligned_setup):
-    """String shorthand == TransferConformal(method=<str>)."""
-    fcst, _, target_series, h = scale_aligned_setup
-    pd.testing.assert_frame_equal(
-        fcst.transfer(target_series, "scale_aligned").predict(h, level=[80]),
-        fcst.transfer(
-            target_series, TransferConformal(method="scale_aligned")
-        ).predict(h, level=[80]),
-    )
-
-
-def test_transfer_conformal_invalid_method_raises():
-    """TransferConformal with unknown method raises ValueError."""
-    with pytest.raises(ValueError, match="must be one of"):
-        TransferConformal(method="nonexistent")
+@pytest.mark.parametrize(
+    "method, match",
+    [
+        ("scale_aligned", "must be a `Recalibration`"),
+        (ScaleAlignment, r"Pass an instance, e.g. `ScaleAlignment\(\)`"),
+    ],
+)
+def test_transfer_invalid_method_raises(scale_aligned_setup, method, match):
+    fcst, _, target_series, _ = scale_aligned_setup
+    with pytest.raises(TypeError, match=match):
+        fcst.transfer(target_series, method)
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +308,7 @@ def test_per_series_scale_width_proportional(scale_aligned_setup):
     s_wide["unique_id"] = "tgt_wide"
     target_two = pd.concat([s_normal, s_wide], ignore_index=True)
 
-    preds = fcst.transfer(target_two, "scale_aligned").predict(h, level=[80])
+    preds = fcst.transfer(target_two, ScaleAlignment()).predict(h, level=[80])
     normal_w = (preds[preds["unique_id"] == "tgt_normal"]["LGBMRegressor-hi-80"]
                 - preds[preds["unique_id"] == "tgt_normal"]["LGBMRegressor-lo-80"]).mean()
     wide_w = (preds[preds["unique_id"] == "tgt_wide"]["LGBMRegressor-hi-80"]
@@ -339,8 +330,8 @@ def test_per_series_scale_leaves_other_series_unchanged(scale_aligned_setup):
     s2_scaled = s2.copy(); s2_scaled["y"] *= 5.0
     target_scaled = pd.concat([s1, s2_scaled], ignore_index=True)
 
-    p_orig = fcst.transfer(target_orig, "scale_aligned").predict(h, level=[80])
-    p_scaled = fcst.transfer(target_scaled, "scale_aligned").predict(h, level=[80])
+    p_orig = fcst.transfer(target_orig, ScaleAlignment()).predict(h, level=[80])
+    p_scaled = fcst.transfer(target_scaled, ScaleAlignment()).predict(h, level=[80])
 
     w1_orig = (p_orig[p_orig["unique_id"] == "tgt_1"]["LGBMRegressor-hi-80"]
                - p_orig[p_orig["unique_id"] == "tgt_1"]["LGBMRegressor-lo-80"]).mean()

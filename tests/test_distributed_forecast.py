@@ -19,7 +19,7 @@ import fugue.api as fa
 from mlforecast.distributed import DistributedMLForecast
 from mlforecast.distributed.models.dask.lgb import DaskLGBMForecast
 from mlforecast.lag_transforms import ExpandingMean, RollingMean
-from mlforecast.utils import TransferConformal, generate_daily_series
+from mlforecast.utils import Recalibration, generate_daily_series
 
 warnings.simplefilter("ignore", FutureWarning)
 
@@ -286,7 +286,7 @@ def test_dask_to_local_transfer_rejects_in_sample_windows():
     fcst.fit(_make_partitioned_series(series, npartitions=2), static_features=[])
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
         fcst.to_local().transfer(
-            series, TransferConformal(method="recalibrate", h=3, n_windows=2)
+            series, Recalibration(h=3, n_windows=2)
         )
 
 

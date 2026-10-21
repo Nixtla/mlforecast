@@ -27,6 +27,7 @@ from mlforecast.lgb_cv import LightGBMCV
 from mlforecast.target_transforms import Differences, LocalStandardScaler
 from mlforecast.utils import (
     PredictionIntervals,
+    Recalibration,
     generate_daily_series,
     generate_prices_for_series,
     generate_series,
@@ -2439,7 +2440,7 @@ def test_transfer_learning_intervals():
 
     saved_calibration = fcst._calibration_
 
-    preds = fcst.transfer(train_ef, "recalibrate").predict(h=5, level=[80, 95])
+    preds = fcst.transfer(train_ef, Recalibration()).predict(h=5, level=[80, 95])
 
     # interval columns exist
     assert "LinearRegression-lo-80" in preds.columns
@@ -2455,9 +2456,6 @@ def test_transfer_learning_intervals():
     # the source state is not adapted in place
     assert fcst._calibration_ is saved_calibration
     assert fcst._transfer_ is None
-
-    with pytest.raises(ValueError, match="TransferConformal.method must be one of"):
-        fcst.transfer(train_ef, "bogus")
 
 
 def test_transfer_learning_intervals_no_prediction_intervals_raises():
@@ -2830,9 +2828,9 @@ def test_transfer_keeps_source_state():
     original_ts = fcst.ts
     original_calibration = fcst._calibration_
     with pytest.raises(ValueError, match="range"):
-        fcst.transfer(new_df, "recalibrate").predict(1, level=[150])
+        fcst.transfer(new_df, Recalibration()).predict(1, level=[150])
     assert fcst.ts is original_ts
-    fcst.transfer(new_df, "recalibrate").predict(1, level=[80])
+    fcst.transfer(new_df, Recalibration()).predict(1, level=[80])
     assert fcst.ts is original_ts
     assert fcst._calibration_ is original_calibration
     assert fcst._transfer_ is None

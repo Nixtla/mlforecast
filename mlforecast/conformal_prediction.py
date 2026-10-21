@@ -1,4 +1,10 @@
-__all__ = ["PredictionIntervals", "TransferConformal"]
+__all__ = [
+    "ErrorScaling",
+    "PredictionIntervals",
+    "Recalibration",
+    "ScaleAlignment",
+    "TransferMethod",
+]
 
 import warnings
 from dataclasses import dataclass
@@ -11,68 +17,74 @@ import utilsforecast.processing as ufp
 from utilsforecast.compat import DFType
 
 
-_VALID_TRANSFER_METHODS = ("recalibrate", "scale_aligned", "error_scaled")
+def _check_min(obj: Any, field: str, minimum: int) -> None:
+    value = getattr(obj, field)
+    if value is not None and value < minimum:
+        raise ValueError(
+            f"{type(obj).__name__}.{field} must be >= {minimum}, got {value}"
+        )
 
 
 @dataclass
-class TransferConformal:
-    """Configuration for adapting the prediction intervals to transferred series.
-
-    Pass to ``MLForecast.transfer``. A plain string is shorthand for
-    ``TransferConformal(method=<str>)``.
+class Recalibration:
+    """Transfer method that computes the conformity scores from a backtest of the trained models on the transferred series.
 
     Args:
-        method (str): ``'recalibrate'``, ``'error_scaled'`` or ``'scale_aligned'``. Defaults to 'recalibrate'.
-        h (int, optional): Forecast horizon of the conformity scores. Defaults to the ``h`` of ``PredictionIntervals``. Required for ``'recalibrate'`` on a model fit without prediction intervals.
-        n_windows (int, optional): Number of backtest windows on the transferred series. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them.
-        step_size (int, optional): Step size between the backtest windows. Only for ``'recalibrate'`` and ``'error_scaled'``. Defaults to 1.
-        scale_estimator (str): Per-series scale estimator, ``'mad'`` or ``'std'``. Only for ``'scale_aligned'``. Defaults to 'mad'.
+        h (int, optional): Forecast horizon of the backtest windows. Defaults to the ``h`` of ``PredictionIntervals``. Required if the model was fit without prediction intervals.
+        n_windows (int, optional): Number of backtest windows, at least 2. Defaults to the ``n_windows`` of ``PredictionIntervals``, or 2 if the model was fit without them.
+        step_size (int): Step size between the backtest windows. Defaults to 1.
     """
 
-    method: str = "recalibrate"
     h: Optional[int] = None
     n_windows: Optional[int] = None
-    step_size: Optional[int] = None
+    step_size: int = 1
+
+    def __post_init__(self) -> None:
+        _check_min(self, "h", 1)
+        _check_min(self, "n_windows", 2)
+        _check_min(self, "step_size", 1)
+
+
+@dataclass
+class ErrorScaling:
+    """Transfer method that scales the training conformity scores by the ratio of the backtest errors on the transferred series to the training errors.
+
+    Requires prediction intervals at fit. The backtest uses the ``h`` of ``PredictionIntervals``.
+
+    Args:
+        n_windows (int, optional): Number of backtest windows. Defaults to the ``n_windows`` of ``PredictionIntervals``.
+        step_size (int): Step size between the backtest windows. Defaults to 1.
+    """
+
+    n_windows: Optional[int] = None
+    step_size: int = 1
+
+    def __post_init__(self) -> None:
+        _check_min(self, "n_windows", 1)
+        _check_min(self, "step_size", 1)
+
+
+@dataclass
+class ScaleAlignment:
+    """Transfer method that scales the training conformity scores by the ratio of each transferred series' scale to the training series' scale.
+
+    Requires prediction intervals at fit.
+
+    Args:
+        scale_estimator (str): Per-series scale estimator, ``'mad'`` or ``'std'``. Defaults to 'mad'.
+    """
+
     scale_estimator: Literal["mad", "std"] = "mad"
 
     def __post_init__(self) -> None:
-        if self.method not in _VALID_TRANSFER_METHODS:
-            raise ValueError(
-                f"TransferConformal.method must be one of {_VALID_TRANSFER_METHODS}, "
-                f"got '{self.method}'"
-            )
         if self.scale_estimator not in ("mad", "std"):
             raise ValueError(
-                "TransferConformal.scale_estimator must be 'mad' or 'std', "
+                "ScaleAlignment.scale_estimator must be 'mad' or 'std', "
                 f"got '{self.scale_estimator}'"
             )
-        if self.h is not None and self.h < 1:
-            raise ValueError(f"TransferConformal.h must be >= 1, got {self.h}")
-        if self.n_windows is not None and self.n_windows < 1:
-            raise ValueError(
-                f"TransferConformal.n_windows must be >= 1, got {self.n_windows}"
-            )
-        if self.step_size is not None and self.step_size < 1:
-            raise ValueError(
-                f"TransferConformal.step_size must be >= 1, got {self.step_size}"
-            )
-        if self.method == "scale_aligned" and (
-            self.n_windows is not None or self.step_size is not None
-        ):
-            raise ValueError(
-                "TransferConformal.n_windows and step_size are only valid with "
-                f"method='recalibrate' or 'error_scaled', got method='{self.method}'"
-            )
-        if self.method == "recalibrate" and self.n_windows == 1:
-            raise ValueError(
-                "TransferConformal(method='recalibrate') requires at least 2 "
-                "windows, got n_windows=1"
-            )
-        if self.method != "scale_aligned" and self.scale_estimator != "mad":
-            raise ValueError(
-                "TransferConformal.scale_estimator is only valid with "
-                f"method='scale_aligned', got method='{self.method}'"
-            )
+
+
+TransferMethod = Union[Recalibration, ErrorScaling, ScaleAlignment]
 
 
 class PredictionIntervals:
@@ -342,7 +354,7 @@ def _add_transfer_intervals(
                 q_lo_lv = q_lo_vals[-(i + 1)]  # matching lower quantile
                 if np.all(q_hi_lv < 0):
                     warnings.warn(
-                        f"Transfer recalibrate level={lv}: upper quantile is negative across "
+                        f"Recalibration level={lv}: upper quantile is negative across "
                         "all horizon steps — interval lies entirely below point forecasts. "
                         "The transferred model systematically over-predicts on the target domain.",
                         UserWarning,
@@ -350,7 +362,7 @@ def _add_transfer_intervals(
                     )
                 elif np.all(q_lo_lv > 0):
                     warnings.warn(
-                        f"Transfer recalibrate level={lv}: lower quantile is positive across "
+                        f"Recalibration level={lv}: lower quantile is positive across "
                         "all horizon steps — interval lies entirely above point forecasts. "
                         "The transferred model systematically under-predicts on the target domain.",
                         UserWarning,
@@ -515,7 +527,7 @@ def _error_scaled_transfer(
     The ratio is computed from the pooled residuals of all series combined — not
     per-series. This corrects for domain-level scale differences between source and
     target but does not account for series-level heterogeneity within the target domain.
-    For per-series scale correction use ``scale_aligned`` instead.
+    For per-series scale correction use ``ScaleAlignment`` instead.
     """
     target_cs_df = compute_conformity_scores(backtest_results, model_names, target_col)
 

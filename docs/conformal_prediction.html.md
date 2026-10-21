@@ -10,6 +10,14 @@ title: Conformal Prediction
     options:
       show_if_no_docstring: false
 
-::: mlforecast.conformal_prediction.TransferConformal
+::: mlforecast.conformal_prediction.Recalibration
+    options:
+      show_if_no_docstring: false
+
+::: mlforecast.conformal_prediction.ErrorScaling
+    options:
+      show_if_no_docstring: false
+
+::: mlforecast.conformal_prediction.ScaleAlignment
     options:
       show_if_no_docstring: false
