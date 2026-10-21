@@ -164,6 +164,17 @@ def test_raw_series_scales(backend, id_dtype, shuffle):
     assert raw["mad"][flat] == raw["std"][flat] == 0.0
 
 
+@pytest.mark.parametrize("backend", ["pandas", "polars"])
+def test_raw_series_scales_large_int_target(backend):
+    rng = np.random.default_rng(0)
+    y = 30_000_000 + rng.integers(0, 7, size=200).cumsum()
+    df = pd.DataFrame({"unique_id": "a", "ds": np.arange(y.size), "y": y})
+    if backend == "polars":
+        df = pl.from_pandas(df)
+    raw = cp._raw_series_scales(df, "unique_id", "ds", "y", ("std",))
+    np.testing.assert_allclose(raw["std"]["a"], np.std(np.diff(y), ddof=1), rtol=RTOL)
+
+
 # ---------------------------------------------------------------------------
 # 2. _apply_scale_alignment
 # ---------------------------------------------------------------------------

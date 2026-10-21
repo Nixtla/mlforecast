@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
 
 import coreforecast.scalers as core_scalers
+import narwhals as nw
 import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
@@ -129,9 +130,13 @@ def _raw_series_scales(
     methods: Sequence[str],
 ) -> Dict[str, Dict]:
     """MAD(Δy) and/or std(Δy) per series, before the floor of `_floor_series_scales`."""
-    uids, _, data, indptr, _ = ufp.process_df(
-        df[[id_col, time_col, target_col]], id_col, time_col, target_col
+    # process_df casts non-float targets to float32
+    df = (
+        nw.from_native(df, eager_only=True)
+        .select(id_col, time_col, nw.col(target_col).cast(nw.Float64))
+        .to_native()
     )
+    uids, _, data, indptr, _ = ufp.process_df(df, id_col, time_col, target_col)
     y = data[:, 0].astype(np.float64)
     dy = core_scalers.Difference(1).fit_transform(CoreGroupedArray(y, indptr))
     dy_ga = CoreGroupedArray(dy, indptr)
