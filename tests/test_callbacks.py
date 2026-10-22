@@ -70,13 +70,9 @@ def test_hooks_are_off_by_default_and_methods_keep_their_identity():
     assert MLForecast.predict.__doc__.startswith("Compute the predictions")
 
 
-def test_hooks_validate_type_and_old_pickle_state(series):
+def test_hooks_validate_type():
     with pytest.raises(TypeError, match="list of Hook"):
         MLForecast(models=LinearRegression(), freq="D", hooks=[object()])
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
-    fcst.fit(series)
-    del fcst.hooks  # direct pickles from before the hooks argument lack this field
-    assert not fcst.predict(2).empty
 
 
 def test_empty_profiler_has_queryable_columns():

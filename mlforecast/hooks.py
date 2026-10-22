@@ -90,7 +90,7 @@ class _SpanResult:
 @contextmanager
 def _span(obj: Any, stage: str, **kwargs: Any) -> Iterator[_SpanResult]:
     span = _SpanResult()
-    hooks = getattr(obj, "hooks", ())
+    hooks = obj.hooks
     if not hooks:
         yield span
         return
@@ -119,7 +119,7 @@ def _stage(name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
         @functools.wraps(method)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             self: Any = args[0]
-            if not getattr(self, "hooks", ()):
+            if not self.hooks:
                 return method(*args, **kwargs)
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
