@@ -3,6 +3,7 @@ import os
 import pickle
 import sys
 
+import numpy as np
 import pytest
 from sklearn.base import BaseEstimator
 from sklearn.linear_model import LinearRegression
@@ -71,8 +72,14 @@ def test_hooks_are_off_by_default_and_methods_keep_their_identity():
 
 
 def test_hooks_validate_type():
-    with pytest.raises(TypeError, match="list of Hook"):
+    with pytest.raises(TypeError, match="sequence of Hook"):
         MLForecast(models=LinearRegression(), freq="D", hooks=[object()])
+
+
+def test_hooks_accept_any_sequence():
+    profiler = Profiler()
+    fcst = MLForecast(models=LinearRegression(), freq="D", hooks=(profiler,))
+    assert fcst.hooks == [profiler]
 
 
 def test_empty_profiler_has_queryable_columns():
@@ -218,6 +225,31 @@ def test_profiler_times_each_model_in_predict(series, max_horizon):
         {"model": "LinearRegression2"},
     ]
     assert predict.seconds >= sum(child.seconds for child in predict.children)
+
+
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_predict_model_result_is_the_models_predictions(series, max_horizon):
+    class ResultRecorder(Hook):
+        def __init__(self):
+            self.results = {}
+
+        def on_end(self, stage, fcst, result, **kwargs):  # noqa: ARG002
+            if stage == "predict_model":
+                self.results[kwargs["name"]] = result
+
+    recorder = ResultRecorder()
+    fcst = MLForecast(
+        models=[LinearRegression(), LinearRegression(fit_intercept=False)],
+        freq="D",
+        lags=[1],
+        hooks=[recorder],
+    )
+    fcst.fit(series, max_horizon=max_horizon)
+    preds = fcst.predict(2)
+
+    assert list(recorder.results) == ["LinearRegression", "LinearRegression2"]
+    for name, result in recorder.results.items():
+        np.testing.assert_allclose(result, preds[name].to_numpy())
 
 
 def test_each_horizon_fit_model_gets_its_own_weights(series):

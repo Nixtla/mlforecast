@@ -45,7 +45,7 @@ class Hook:
 
     - ``preprocess``, ``fit``, ``fit_models``, ``predict``, ``cross_validation``: the bound arguments of the method call.
     - ``fit_model``: ``name``, ``model``, ``X``, ``y``, ``fit_kwargs`` and ``h`` (0-indexed horizon for direct models, None otherwise). Emitted once per estimator ``fit`` call.
-    - ``predict_model``: ``name`` and ``model`` (a dict keyed by horizon index for direct models). Emitted once per model and covers its feature updates too.
+    - ``predict_model``: ``name`` and ``model`` (a dict keyed by horizon index for direct models). Emitted once per model and covers its feature updates too. Its result is the model's predictions as a flat array ordered by series and then step, before target transforms are inverted.
     - ``cv_window``: ``i_window`` and ``cutoffs``.
 
     Hooks that started a stage get its ``on_end`` or ``on_error`` even if another one raises, and the first
