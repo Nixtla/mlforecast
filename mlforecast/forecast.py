@@ -43,6 +43,8 @@ from mlforecast.core import (
 )
 
 from .grouped_array import GroupedArray
+from .hooks import Hook, _span, _stage
+from ._warnings import _user_warning_stacklevel
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
@@ -173,6 +175,7 @@ class MLForecast:
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
         drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
+        hooks: Optional[Sequence[Hook]] = None,
     ):
         """Forecasting pipeline
 
@@ -187,6 +190,7 @@ class MLForecast:
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
+            hooks (sequence of Hook, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. They're dropped when the forecaster is pickled or deep-copied. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -196,6 +200,12 @@ class MLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        hooks_error = "hooks must be a sequence of Hook instances"
+        if isinstance(hooks, Hook):
+            raise TypeError(hooks_error)
+        self.hooks = list(hooks or [])
+        if any(not isinstance(hook, Hook) for hook in self.hooks):
+            raise TypeError(hooks_error)
         num_threads = _resolve_num_threads(num_threads)
         self.ts = TimeSeries(
             freq=freq,
@@ -212,6 +222,18 @@ class MLForecast:
     @property
     def horizon_features_(self) -> Dict[int, List[str]]:
         return self.ts.horizon_features_
+
+    def __getstate__(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if k != "hooks"}
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.hooks = []
+
+    def __copy__(self) -> "MLForecast":
+        out = object.__new__(type(self))
+        out.__dict__.update(self.__dict__)
+        return out
 
     def __repr__(self):
         return (
@@ -311,7 +333,7 @@ class MLForecast:
                     "silently produce incorrect feature values. Consider "
                     "enabling validation or pre-validating your data.",
                     UserWarning,
-                    stacklevel=3,
+                    stacklevel=_user_warning_stacklevel(),
                 )
 
     def _get_dynamic_exog_cols(
@@ -402,7 +424,7 @@ class MLForecast:
                         f"`horizon_features` includes an empty list for horizon {horizon}. "
                         "This entry has no effect and can be removed.",
                         UserWarning,
-                        stacklevel=2,
+                        stacklevel=_user_warning_stacklevel(),
                     )
                 resolved[horizon] = list(dict.fromkeys(cols))
         else:
@@ -464,6 +486,7 @@ class MLForecast:
             )
         return resolved
 
+    @_stage("preprocess")
     def preprocess(
         self,
         df: DFType,
@@ -648,6 +671,7 @@ class MLForecast:
         )
         return self
 
+    @_stage("fit_models")
     def fit_models(
         self,
         X: Union[DataFrame, np.ndarray, None] = None,
@@ -675,10 +699,16 @@ class MLForecast:
                 f"Valid model names are: {list(self.models)}."
             )
 
-        def fit_model(
-            model, X, y, weight_col, model_fit_kwargs: Optional[dict[str, Any]]
+        def fit_with_weights(
+            name,
+            model,
+            X,
+            y,
+            weight_col,
+            model_fit_kwargs: Optional[dict[str, Any]],
+            h: Optional[int] = None,
         ):
-            fit_kwargs = model_fit_kwargs or {}
+            fit_kwargs = dict(model_fit_kwargs or {})
             if weight_col is not None:
                 if isinstance(X, np.ndarray):
                     fit_kwargs["sample_weight"] = X[:, 0]
@@ -693,7 +723,18 @@ class MLForecast:
                 sample_weight = fit_kwargs.get("sample_weight")
                 if isinstance(sample_weight, pl_Series):
                     fit_kwargs["sample_weight"] = sample_weight.to_numpy()
-            return clone(model).fit(X, y, **fit_kwargs)
+            with _span(
+                self,
+                "fit_model",
+                name=name,
+                model=model,
+                X=X,
+                y=y,
+                fit_kwargs=fit_kwargs,
+                h=h,
+            ) as span:
+                span.result = clone(model).fit(X, y, **fit_kwargs)
+            return span.result
 
         self.models_: Dict[str, Union[BaseEstimator, Dict[int, BaseEstimator]]] = {}
 
@@ -706,8 +747,8 @@ class MLForecast:
                 # Create fresh generator for each model (generators are single-use)
                 horizon_gen = generator_factory()
                 for h, X_h, y_h in horizon_gen:
-                    fitted = fit_model(
-                        model, X_h, y_h, self.ts.weight_col, model_fit_kwargs
+                    fitted = fit_with_weights(
+                        name, model, X_h, y_h, self.ts.weight_col, model_fit_kwargs, h
                     )
                     self.models_[name][h] = fitted
         else:
@@ -717,8 +758,8 @@ class MLForecast:
             )
             for name, model in self.models.items():
                 model_fit_kwargs = models_fit_kwargs.get(name, None)
-                self.models_[name] = fit_model(
-                    model, X, y, self.ts.weight_col, model_fit_kwargs
+                self.models_[name] = fit_with_weights(
+                    name, model, X, y, self.ts.weight_col, model_fit_kwargs
                 )
         return self
 
@@ -1143,6 +1184,7 @@ class MLForecast:
         result = result.sort_values([id_col, time_col]).reset_index(drop=True)
         return result
 
+    @_stage("fit")
     def fit(
         self,
         df: DataFrame,
@@ -1422,7 +1464,7 @@ class MLForecast:
                 warnings.warn(
                     "Computing recursive fitted values for h>1 on demand can be slow.",
                     UserWarning,
-                    stacklevel=2,
+                    stacklevel=_user_warning_stacklevel(),
                 )
                 res_pd = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
@@ -1479,6 +1521,7 @@ class MLForecast:
         ids = [self.ts.id_col, self.ts.time_col]
         return ufp.anti_join(expected, X_df[ids], on=ids)
 
+    @_stage("predict")
     def predict(
         self,
         h: int,
@@ -1650,6 +1693,9 @@ class MLForecast:
             after_predict_callback=after_predict_callback,
             X_df=X_df,
             ids=ids,
+            model_span=lambda name, model: _span(
+                self, "predict_model", name=name, model=model
+            ),
         )
         if level is not None:
             if conformity_scores is None or self.prediction_intervals is None:
@@ -1740,7 +1786,7 @@ class MLForecast:
                             "quantiles may return inf bounds. Consider: lower confidence levels, "
                             "more calibration windows, or reduce clip_quantile in TransferConformal.",
                             UserWarning,
-                            stacklevel=2,
+                            stacklevel=_user_warning_stacklevel(),
                         )
                 if _cs_weights is not None and self.prediction_intervals.method in (
                     "conformal_distribution",
@@ -1832,6 +1878,7 @@ class MLForecast:
             self.ts = new_ts
         return forecasts
 
+    @_stage("cross_validation")
     def cross_validation(
         self,
         df: DFType,
@@ -1914,135 +1961,143 @@ class MLForecast:
             input_size=input_size,
         )
         for i_window, (cutoffs, train, valid) in enumerate(splits):
-            should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
-            if should_fit:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pooled.*validate_data",
-                        category=UserWarning,
-                    )
-                    self.fit(
-                        train,
+            with _span(self, "cv_window", i_window=i_window, cutoffs=cutoffs) as span:
+                should_fit = i_window == 0 or (refit > 0 and i_window % refit == 0)
+                if should_fit:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Pooled.*validate_data",
+                            category=UserWarning,
+                        )
+                        self.fit(
+                            train,
+                            id_col=id_col,
+                            time_col=time_col,
+                            target_col=target_col,
+                            static_features=static_features,
+                            dropna=dropna,
+                            keep_last_n=keep_last_n,
+                            max_horizon=max_horizon,
+                            horizons=horizons,
+                            horizon_features=horizon_features,
+                            horizon_feature_templates=horizon_feature_templates,
+                            prediction_intervals=prediction_intervals,
+                            fitted=fitted,
+                            as_numpy=as_numpy,
+                            weight_col=weight_col,
+                            validate_data=False,
+                        )
+                    cv_models.append(self.models_)
+                    if fitted:
+                        cv_fitted_values.append(
+                            ufp.assign_columns(
+                                self.fcst_fitted_values_, "fold", i_window
+                            )
+                        )
+                if fitted and not should_fit:
+                    if self.ts.target_transforms is not None:
+                        for tfm in self.ts.target_transforms:
+                            if hasattr(tfm, "store_fitted"):
+                                tfm.store_fitted = True
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Pooled.*validate_data",
+                            category=UserWarning,
+                        )
+                        prep = self.preprocess(
+                            train,
+                            id_col=id_col,
+                            time_col=time_col,
+                            target_col=target_col,
+                            static_features=static_features,
+                            dropna=dropna,
+                            keep_last_n=keep_last_n,
+                            max_horizon=max_horizon,
+                            horizons=horizons,
+                            horizon_features=horizon_features,
+                            horizon_feature_templates=horizon_feature_templates,
+                            return_X_y=False,
+                            weight_col=weight_col,
+                            validate_data=False,
+                        )
+                    assert not isinstance(prep, tuple)
+                    effective_max_horizon = self.ts.max_horizon
+                    base = prep[[id_col, time_col]]
+                    train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
+                    if as_numpy:
+                        train_X = ufp.to_numpy(train_X)
+                    del prep
+                    fitted_values = self._compute_fitted_values(
+                        base=base,
+                        X=train_X,
+                        y=train_y,
                         id_col=id_col,
                         time_col=time_col,
                         target_col=target_col,
-                        static_features=static_features,
-                        dropna=dropna,
-                        keep_last_n=keep_last_n,
-                        max_horizon=max_horizon,
-                        horizons=horizons,
-                        horizon_features=horizon_features,
-                        horizon_feature_templates=horizon_feature_templates,
-                        prediction_intervals=prediction_intervals,
-                        fitted=fitted,
-                        as_numpy=as_numpy,
+                        max_horizon=effective_max_horizon,
                         weight_col=weight_col,
-                        validate_data=False,
+                        original_df=train
+                        if effective_max_horizon is not None
+                        else None,
                     )
-                cv_models.append(self.models_)
-                if fitted:
-                    cv_fitted_values.append(
-                        ufp.assign_columns(self.fcst_fitted_values_, "fold", i_window)
+                    fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
+                    cv_fitted_values.append(fitted_values)
+                static = [c for c in self.ts.static_features_.columns if c != id_col]
+                dynamic = [
+                    c
+                    for c in valid.columns
+                    if c not in static + [id_col, time_col, target_col]
+                ]
+                if dynamic:
+                    X_df: Optional[DataFrame] = ufp.drop_columns(
+                        valid, static + [target_col]
                     )
-            if fitted and not should_fit:
-                if self.ts.target_transforms is not None:
-                    for tfm in self.ts.target_transforms:
-                        if hasattr(tfm, "store_fitted"):
-                            tfm.store_fitted = True
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Pooled.*validate_data",
-                        category=UserWarning,
-                    )
-                    prep = self.preprocess(
-                        train,
-                        id_col=id_col,
-                        time_col=time_col,
-                        target_col=target_col,
-                        static_features=static_features,
-                        dropna=dropna,
-                        keep_last_n=keep_last_n,
-                        max_horizon=max_horizon,
-                        horizons=horizons,
-                        horizon_features=horizon_features,
-                        horizon_feature_templates=horizon_feature_templates,
-                        return_X_y=False,
-                        weight_col=weight_col,
-                        validate_data=False,
-                    )
-                assert not isinstance(prep, tuple)
-                effective_max_horizon = self.ts.max_horizon
-                base = prep[[id_col, time_col]]
-                train_X, train_y = self._extract_X_y(prep, target_col, weight_col)
-                if as_numpy:
-                    train_X = ufp.to_numpy(train_X)
-                del prep
-                fitted_values = self._compute_fitted_values(
-                    base=base,
-                    X=train_X,
-                    y=train_y,
-                    id_col=id_col,
-                    time_col=time_col,
-                    target_col=target_col,
-                    max_horizon=effective_max_horizon,
-                    weight_col=weight_col,
-                    original_df=train if effective_max_horizon is not None else None,
+                else:
+                    X_df = None
+                y_pred = self.predict(
+                    h=h,
+                    before_predict_callback=before_predict_callback,
+                    after_predict_callback=after_predict_callback,
+                    new_df=train if not should_fit else None,
+                    level=level,
+                    X_df=X_df,
                 )
-                fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
-                cv_fitted_values.append(fitted_values)
-            static = [c for c in self.ts.static_features_.columns if c != id_col]
-            dynamic = [
-                c
-                for c in valid.columns
-                if c not in static + [id_col, time_col, target_col]
-            ]
-            if dynamic:
-                X_df: Optional[DataFrame] = ufp.drop_columns(
-                    valid, static + [target_col]
+                y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
+                result = ufp.join(
+                    valid[[id_col, time_col, target_col]],
+                    y_pred,
+                    on=[id_col, time_col],
                 )
-            else:
-                X_df = None
-            y_pred = self.predict(
-                h=h,
-                before_predict_callback=before_predict_callback,
-                after_predict_callback=after_predict_callback,
-                new_df=train if not should_fit else None,
-                level=level,
-                X_df=X_df,
-            )
-            y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
-            result = ufp.join(
-                valid[[id_col, time_col, target_col]],
-                y_pred,
-                on=[id_col, time_col],
-            )
-            sort_idxs = ufp.maybe_compute_sort_indices(result, id_col, time_col)
-            if sort_idxs is not None:
-                result = ufp.take_rows(result, sort_idxs)
-            # Calculate expected rows accounting for sparse horizons
-            internal_horizons = self.ts._horizons
-            full_range = (
-                list(range(self.ts.max_horizon)) if self.ts.max_horizon else None
-            )
-            is_sparse = (
-                internal_horizons is not None and internal_horizons != full_range
-            )
-            if is_sparse:
-                # Sparse horizons: expect only predictions for trained horizons <= h
-                assert internal_horizons is not None
-                n_trained_horizons = sum(th < h for th in internal_horizons)
-                n_series = nw.from_native(valid[id_col], series_only=True).n_unique()
-                expected_rows = n_trained_horizons * n_series
-            else:
-                expected_rows = valid.shape[0]
-            if result.shape[0] < expected_rows:
-                raise ValueError(
-                    "Cross validation result produced less results than expected. "
-                    "Please verify that the frequency set on the MLForecast constructor matches your series' "
-                    "and that there aren't any missing periods."
+                sort_idxs = ufp.maybe_compute_sort_indices(result, id_col, time_col)
+                if sort_idxs is not None:
+                    result = ufp.take_rows(result, sort_idxs)
+                # Calculate expected rows accounting for sparse horizons
+                internal_horizons = self.ts._horizons
+                full_range = (
+                    list(range(self.ts.max_horizon)) if self.ts.max_horizon else None
                 )
+                is_sparse = (
+                    internal_horizons is not None and internal_horizons != full_range
+                )
+                if is_sparse:
+                    # Sparse horizons: expect only predictions for trained horizons <= h
+                    assert internal_horizons is not None
+                    n_trained_horizons = sum(th < h for th in internal_horizons)
+                    n_series = nw.from_native(
+                        valid[id_col], series_only=True
+                    ).n_unique()
+                    expected_rows = n_trained_horizons * n_series
+                else:
+                    expected_rows = valid.shape[0]
+                if result.shape[0] < expected_rows:
+                    raise ValueError(
+                        "Cross validation result produced less results than expected. "
+                        "Please verify that the frequency set on the MLForecast constructor matches your series' "
+                        "and that there aren't any missing periods."
+                    )
+                span.result = result
             results.append(result)
         del self.models_
         self.cv_models_ = cv_models
