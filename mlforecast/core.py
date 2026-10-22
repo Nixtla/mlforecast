@@ -54,7 +54,6 @@ from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
     PooledState,
     base_channels,
-    encode_keys,
     factorize,
     get_kernel,
     lookup,
@@ -248,6 +247,20 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     return bool(changed.fill_null(False).any())
 
 
+def _assign_buckets(state, leaves, arrays) -> np.ndarray:
+    """Bucket ids of the key `arrays`, adding unseen keys to `state`."""
+    ids, uniques = factorize(arrays)
+    remap = state.grow_buckets(uniques)
+    if remap is not None:
+        # growing renumbers buckets, so the per-kernel inner state
+        # has to be permuted and extended to match
+        for leaf in leaves:
+            leaf._pooled_kernel.remap_buckets(
+                leaf._pooled_inner, remap, state.n_buckets
+            )
+    return np.searchsorted(state.bucket_uniques, uniques)[ids]
+
+
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -286,6 +299,7 @@ class TimeSeries:
     _horizons: Optional[List[int]] = None
     # shared dict is safe: every writer rebinds the attribute
     horizon_features_: Dict[int, List[str]] = {}
+    _pooled_states: Dict[Tuple, PooledState] = {}
 
     def __init__(
         self,
@@ -392,6 +406,53 @@ class TimeSeries:
         group = self._leaf_cols("_gb_cols")
         return group + [c for c in self._leaf_cols("_pt_cols") if c not in group]
 
+    @property
+    def _future_input_cols(self) -> List[str]:
+        """Columns whose future values must be supplied at predict time."""
+        return _dedupe_preserve_order(
+            [
+                *self._get_dynamic_exog_cols(self.features_order_),
+                *self._dynamic_key_cols,
+            ]
+        )
+
+    @property
+    def _dynamic_key_cols(self) -> List[str]:
+        statics = self.static_features_.columns
+        return _dedupe_preserve_order(
+            c
+            for key in getattr(self, "_pooled_states", {})
+            for c in self._bucket_cols(key)
+            if c not in statics
+        )
+
+    def _bucket_cols(self, key) -> List[str]:
+        """Columns whose values identify a bucket of the pooled `key`."""
+        mode, gcols, pcols = key
+        id_cols = [self.id_col] if mode == "local" else []
+        return [*id_cols, *gcols, *pcols]
+
+    def _key_values(self, cols, frame, reps=None) -> List[np.ndarray]:
+        """Values of pooled key columns: statics broadcast by `reps`, else `frame`'s."""
+        statics = self.static_features_
+        frame_cols = set(getattr(frame, "columns", []))
+        missing = [c for c in cols if c not in statics.columns and c not in frame_cols]
+        if missing:
+            raise ValueError(
+                f"Pooled key column(s) {missing} must be static features or be "
+                "provided in the data."
+            )
+        out = []
+        for c in cols:
+            if c in statics.columns:
+                vals = np.asarray(statics[c].to_numpy())
+                if reps is not None:
+                    vals = np.repeat(vals, reps)
+            else:
+                vals = np.asarray(frame[c].to_numpy())
+            out.append(vals)
+        return out
+
     def _pooled_feature_values(self, tfm, updates_only: bool) -> np.ndarray:
         """Evaluate a (possibly wrapped) pooled feature.
 
@@ -475,69 +536,33 @@ class TimeSeries:
         timestamp; the same call is made here for every appended timestamp,
         otherwise the next predict would skip straight to the newest one.
         """
-        states = getattr(self, "_pooled_states", {})
+        states = self._pooled_states
         if not states:
             return
         counts = np.asarray(sizes["counts"].to_numpy())
         if not counts.any():
             return  # nothing appended
         n_new = int(counts[0])
-        if not bool((counts == n_new).all()):
-            raise ValueError(
-                "Pooled lag transforms require updates to include all series for "
-                "each timestamp."
-            )
         n_series = len(counts)
         # values arrive grouped by id, so column j is the j-th new timestamp
         per_step = np.asarray(values, dtype=np.float64).reshape(n_series, n_new)
-        uids = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
-        statics = self.static_features_
-        part_cols = self._partition_cols
-        part: Dict[str, np.ndarray] = {}
-        if part_cols:
-            missing = [c for c in part_cols if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"`partition_by` column(s) {missing} must be provided in the "
-                    "update frame."
-                )
-            pdf = df[part_cols]
-            part = {
-                c: np.asarray(pdf[c].to_numpy()).reshape(n_series, n_new)
-                for c in part_cols
-            }
         leaves_by_key = self._get_pooled_tfms()
         for key, state in states.items():
-            mode, gcols, pcols = key
             leaves = leaves_by_key.get(key, ())
             accumulators = [leaf for leaf in leaves if leaf._pooled_kernel.primes_state]
-            bids = None
+            cols = self._bucket_cols(key)
+            keys = [
+                k.reshape(n_series, n_new)
+                for k in self._key_values(cols, df, reps=np.full(n_series, n_new))
+            ]
+            bids = np.zeros(n_series, dtype=np.int64)
             for j in range(n_new):
-                if mode == "global" and not pcols:
-                    bids = np.zeros(n_series, dtype=np.int64)
-                else:
-                    arrays = []
-                    if mode == "local":
-                        arrays.append(uids)
-                    elif gcols:
-                        arrays += [np.asarray(statics[c].to_numpy()) for c in gcols]
-                    arrays += [part[c][:, j] for c in pcols]
-                    remap = state.grow_buckets(np.unique(encode_keys(arrays)))
-                    if remap is not None:
-                        # growing renumbers buckets, so the per-kernel inner state
-                        # has to be permuted and extended to match
-                        for leaf in leaves:
-                            leaf._pooled_kernel.remap_buckets(
-                                leaf._pooled_inner, remap, state.n_buckets
-                            )
-                    bids = lookup(arrays, state.bucket_uniques)
+                if keys:
+                    bids = _assign_buckets(state, leaves, [k[:, j] for k in keys])
                 for leaf in accumulators:
                     state.update(leaf._pooled_kernel, leaf._pooled_inner)
                 state.append(per_step[:, j], bucket_ids=bids)
-            if bids is not None:
-                state.set_series_bucket_id(bids)
+            state.set_series_bucket_id(bids)
 
     def _stateful_cores(self) -> List[Any]:
         """Inner coreforecast transforms that carry a per-group accumulator."""
@@ -580,7 +605,7 @@ class TimeSeries:
             self.keep_last_n = max(self.keep_last_n, min_kept)
             self.ga = self.ga.take_from_groups(slice(-self.keep_last_n, None))
             self._trim_pooled_states()
-        for state in getattr(self, "_pooled_states", {}).values():
+        for state in self._pooled_states.values():
             state.finish_fit()
 
     def _initialize_lag_transform_states(self) -> None:
@@ -700,6 +725,33 @@ class TimeSeries:
             primed = copy.deepcopy(core)
             primed.transform(CoreGroupedArray(sub.data, sub.indptr))
             core.stats_[fresh] = primed.stats_
+
+    def _lag_transform_snapshots(self) -> Tuple[List[Any], Dict[Tuple, Any]]:
+        """State that ``update`` advances in place, to restore it on failure."""
+        cores = [(core, core.stats_.copy()) for core in self._stateful_cores()]
+        leaves_by_key = self._get_pooled_tfms()
+        pooled = {
+            key: (
+                state.snapshot(),
+                [
+                    (leaf, copy.deepcopy(leaf._pooled_inner))
+                    for leaf in leaves_by_key.get(key, ())
+                ],
+            )
+            for key, state in self._pooled_states.items()
+        }
+        return cores, pooled
+
+    def _restore_lag_transforms(
+        self, snaps: Tuple[List[Any], Dict[Tuple, Any]]
+    ) -> None:
+        cores, pooled = snaps
+        for core, stats in cores:
+            core.stats_ = stats
+        for key, (snap, inners) in pooled.items():
+            self._pooled_states[key].restore(snap)
+            for leaf, inner in inners:
+                leaf._pooled_inner = inner
 
     def _check_aligned_ends(self) -> None:
         """Check that all series end at the same timestamp when using pooled lag transforms."""
@@ -877,7 +929,8 @@ class TimeSeries:
             static_features = [
                 c
                 for c in df.columns
-                if c not in [time_col, target_col] and c not in partition_cols
+                if c not in [time_col, target_col]
+                and (c == id_col or c not in partition_cols)
             ]
         else:
             if id_col not in static_features:
@@ -943,7 +996,7 @@ class TimeSeries:
         Runs after the target transforms so the channels see the transformed
         target, and after ``static_features_`` so ``groupby`` keys resolve.
         """
-        self._pooled_states: Dict[Tuple, PooledState] = {}
+        self._pooled_states = {}
         pooled = self._get_pooled_tfms()
         if not pooled:
             return
@@ -959,41 +1012,25 @@ class TimeSeries:
         _, row_ord = np.unique(times, return_inverse=True)
         row_ord = row_ord.astype(np.int64, copy=False).ravel()
         n_ordinals = int(row_ord.max()) + 1
-        uid_vals = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
         statics = self.static_features_
-        # Key columns for a partitioned bucket are read per row, so they may vary
-        # over time; a groupby column that is static is broadcast from statics.
-        key_cols = self._pooled_aux_cols
-        row_cols = [c for c in key_cols if c in df.columns]
-        part_cols = self._partition_cols
-        missing = [
-            c for c in part_cols if c not in df.columns and c not in statics.columns
+        row_cols = [
+            c
+            for c in self._pooled_aux_cols
+            if c in df.columns and c not in statics.columns
         ]
-        if missing:
-            raise ValueError(
-                f"partition_by column(s) {missing} not found in dataframe."
-            )
-        key_rows: Dict[str, np.ndarray] = {}
+        key_df = None
         if row_cols:
-            kdf = df[row_cols]
+            key_df = df[row_cols]
             if self._sort_idxs is not None:
-                kdf = ufp.take_rows(kdf, self._sort_idxs)
-            key_rows = {c: np.asarray(kdf[c].to_numpy()) for c in row_cols}
-
-        def _row_values(col):
-            """Per-row values for a key column, from the frame or the statics."""
-            if col in key_rows:
-                return key_rows[col]
-            return np.repeat(np.asarray(statics[col].to_numpy()), lens)
+                key_df = ufp.take_rows(key_df, self._sort_idxs)
 
         for key, leaves in pooled.items():
             mode, gcols, pcols = key
+            cols = self._bucket_cols(key)
             if not pcols:
                 # a pure groupby bucket is broadcast from the statics at predict,
-                # so its key has to be static; with partition_by the key is read
-                # per row instead and may come from the frame
+                # so its key has to be static; with partition_by its dynamic
+                # columns are read per row from the frame
                 missing_static = [c for c in gcols if c not in statics.columns]
                 if missing_static:
                     raise ValueError(
@@ -1001,27 +1038,19 @@ class TimeSeries:
                         f"Missing from static_features: {missing_static}."
                     )
             uniques = None
-            if not pcols:
-                if mode == "global":
-                    n_buckets = 1
-                    series_bid = np.zeros(len(lens), dtype=np.int64)
-                else:
-                    series_bid, uniques = factorize(
-                        [np.asarray(statics[c].to_numpy()) for c in gcols]
-                    )
+            if all(c in statics.columns for c in cols):
+                if cols:
+                    series_bid, uniques = factorize(self._key_values(cols, None))
                     n_buckets = len(uniques)
+                else:
+                    series_bid = np.zeros(len(lens), dtype=np.int64)
+                    n_buckets = 1
                 row_bid = np.repeat(series_bid, lens)
             else:
-                arrays = []
-                if mode == "local":
-                    arrays.append(np.repeat(uid_vals, lens))
-                elif gcols:
-                    arrays += [_row_values(c) for c in gcols]
-                arrays += [_row_values(c) for c in pcols]
-                row_bid, uniques = factorize(arrays)
+                row_bid, uniques = factorize(self._key_values(cols, key_df, reps=lens))
                 n_buckets = len(uniques)
                 # seed with each series' assignment at its last observed
-                # timestamp; predict overwrites this per step from X_df
+                # timestamp; predict re-buckets every step
                 series_bid = row_bid[indptr[1:] - 1]
             needed: Set[str] = set()
             needs_rows = False
@@ -1534,15 +1563,21 @@ class TimeSeries:
             self.horizon_features_ = horizon_features
         return self
 
-    def _fit_settings(self) -> Dict[str, Any]:
-        """Arguments that warm a fresh instance the way this one was fit."""
-        settings: Dict[str, Any] = dict(
+    def _feature_settings(self) -> Dict[str, Any]:
+        """Arguments that build features the way this instance was fit."""
+        return dict(
             id_col=self.id_col,
             time_col=self.time_col,
             target_col=self.target_col,
             static_features=self.static_features,
             keep_last_n=self.keep_last_n,
             weight_col=self.weight_col,
+        )
+
+    def _fit_settings(self) -> Dict[str, Any]:
+        """Arguments that warm a fresh instance the way this one was fit."""
+        settings: Dict[str, Any] = dict(
+            **self._feature_settings(),
             as_numpy=self.as_numpy,
             horizon_features=copy.deepcopy(self.horizon_features_),
         )
@@ -1732,50 +1767,26 @@ class TimeSeries:
         return ufp.drop_index_if_pandas(ufp.take_rows(X_df, rows))
 
     def _update_partition_assignments(self, X_df):
-        """Re-bucket every series for the current step from the dynamic columns.
+        """Re-bucket every series for the current step from its partitioned keys.
 
         Returns the sliced ``X_row`` (one row per series for this step) so
-        ``_get_features_for_next_step`` can reuse it, or ``None`` when there are
-        no partition columns.
+        ``_get_features_for_next_step`` can reuse it, or ``None`` when no key
+        was read from it.
         """
-        if not self._partition_cols:
-            return None
-        X_row = self._current_step_rows(X_df)
-        x_cols = set(getattr(X_row, "columns", []))
-        uids = np.asarray(
-            self.uids.to_numpy() if hasattr(self.uids, "to_numpy") else self.uids
-        )
-        for key, state in self._pooled_states.items():
-            mode, gcols, pcols = key
+        X_row = None
+        for key, state in getattr(self, "_pooled_states", {}).items():
+            _, _, pcols = key
             if not pcols:
                 continue
-            sf_cols = set(self.static_features_.columns)
-            needed = list(gcols) + list(pcols)
-            missing = [c for c in needed if c not in x_cols and c not in sf_cols]
-            if missing:
-                raise ValueError(
-                    f"Partition/group key column(s) {missing} not found in X_df "
-                    "or static_features. Provide these columns in X_df for "
-                    "prediction."
-                )
-
-            def _ctx(col):
-                src = X_row if col in x_cols else self.static_features_
-                return np.asarray(src[col].to_numpy())
-
-            arrays = []
-            if mode == "local":
-                arrays.append(uids)
-            elif gcols:
-                arrays += [_ctx(c) for c in gcols]
-            arrays += [_ctx(c) for c in pcols]
-            state.set_series_bucket_id(lookup(arrays, state.bucket_uniques))
+            if X_row is None and X_df is not None:
+                X_row = self._current_step_rows(X_df)
+            keys = self._key_values(self._bucket_cols(key), X_row)
+            assert state.bucket_uniques is not None
+            state.set_series_bucket_id(lookup(keys, state.bucket_uniques))
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
-        X_row = None
-        if X_df is not None:
-            X_row = self._update_partition_assignments(X_df)
+        X_row = self._update_partition_assignments(X_df)
         # same frame _update_features builds, but with the statics trimmed to
         # model features (_statics_keep) so columns dropped by the
         # features_order_ selection below aren't carried through every step
@@ -1824,7 +1835,7 @@ class TimeSeries:
         # Pooled states are only appended to during prediction, so a cheap
         # structural snapshot (references + shallow container copies) restores
         # them faithfully without deep-copying every aggregate array per model.
-        pooled_states = getattr(self, "_pooled_states", {})
+        pooled_states = self._pooled_states
         pooled_snaps = {key: state.snapshot() for key, state in pooled_states.items()}
         try:
             yield
@@ -2056,7 +2067,7 @@ class TimeSeries:
     def _has_ga_target_tfms(self):
         return any(
             isinstance(tfm, _BaseGroupedArrayTargetTransform)
-            for tfm in self.target_transforms
+            for tfm in self.target_transforms or ()
         )
 
     @contextmanager
@@ -2121,10 +2132,7 @@ class TimeSeries:
         else:
             idxs = None
         if X_df is None:
-            required_future_cols = set(
-                self._get_dynamic_exog_cols(self.features_order_)
-            )
-            required_future_cols.update(getattr(self, "_partition_cols", set()))
+            required_future_cols = set(self._future_input_cols)
             if required_future_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
@@ -2155,10 +2163,7 @@ class TimeSeries:
                         UserWarning,
                         stacklevel=2,
                     )
-                required_future_cols = set(
-                    self._get_dynamic_exog_cols(self.features_order_)
-                )
-                required_future_cols.update(getattr(self, "_partition_cols", set()))
+                required_future_cols = set(self._future_input_cols)
                 missing = sorted(required_future_cols - set(dynamics))
                 if missing:
                     raise ValueError(
@@ -2196,6 +2201,9 @@ class TimeSeries:
                 drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)
+                if not X_df.shape[1]:
+                    # only statics were provided; a polars frame with no columns has no rows
+                    X_df = None
             if getattr(self, "max_horizon", None) is None:
                 preds = self._predict_recursive(
                     models=models,
@@ -2269,6 +2277,13 @@ class TimeSeries:
         values = df[self.target_col].to_numpy()
         values = values.astype(self.ga.data.dtype, copy=False)
         self._check_aligned_ends()
+        if validate_new_data:
+            self._validate_new_df(df=df)
+        else:
+            ids = df[self.id_col].to_numpy()
+            times = df[self.time_col].to_numpy()
+            if ((ids[1:] == ids[:-1]) & (times[1:] == times[:-1])).any():
+                raise ValueError("Update has duplicate rows for an id and timestamp.")
         if self._pooled_states:
             uids_nw = nw.from_native(_index_to_series(uids), series_only=True).alias(
                 "_uid"
@@ -2288,8 +2303,12 @@ class TimeSeries:
                 raise ValueError(
                     "Pooled lag transforms require updates to include all series for each timestamp."
                 )
-        if validate_new_data:
-            self._validate_new_df(df=df)
+            missing = [c for c in self._dynamic_key_cols if c not in df.columns]
+            if missing and df.shape[0] > 0:
+                raise ValueError(
+                    f"Pooled key column(s) {missing} must be provided in the "
+                    "update frame."
+                )
         id_counts = ufp.counts_by_id(df, self.id_col)
         try:
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer_coalesce")
@@ -2299,52 +2318,74 @@ class TimeSeries:
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
+        if new_groups.any():
+            if self.target_transforms is not None:
+                raise ValueError("Can not update target_transforms with new series.")
+            missing = [c for c in self.static_features_.columns if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"New series must include their static features: {missing}."
+                )
         last_dates = ufp.group_by_agg(df, self.id_col, {self.time_col: "max"})
         last_dates = ufp.join(sizes, last_dates, on=self.id_col, how="left")
         curr_last_dates = type(df)({self.id_col: uids, "_curr": self.last_dates})
         last_dates = ufp.join(last_dates, curr_last_dates, on=self.id_col, how="left")
         last_dates = ufp.fill_null(last_dates, {self.time_col: last_dates["_curr"]})
         last_dates = ufp.sort(last_dates, by=self.id_col)
-        self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
-        self.uids = ufp.sort(sizes[self.id_col])
-        self.uids = _to_native_index(self.uids, df=df)
-        self.last_dates = _to_native_index(self.last_dates, df=df)
-        if new_groups.any():
+        prev = (self.uids, self.last_dates, self.static_features_, self.ga)
+        lag_snaps = self._lag_transform_snapshots()
+        tfm_snaps = []
+        try:
             if self.target_transforms is not None:
-                raise ValueError("Can not update target_transforms with new series.")
-            new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
-            new_ids_df = ufp.filter_with_mask(df, ufp.is_in(df[self.id_col], new_ids))
-            new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
-            new_statics = ufp.take_rows(
-                new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
+                if self._has_ga_target_tfms():
+                    indptr = np.append(0, id_counts["counts"]).cumsum()
+                transformed = df
+                for tfm in self.target_transforms:
+                    tfm_snaps.append(copy.deepcopy(tfm))
+                    if isinstance(tfm, _BaseGroupedArrayTargetTransform):
+                        ga = GroupedArray(values, indptr)
+                        ga = tfm.update(ga)
+                        transformed = ufp.assign_columns(
+                            transformed, self.target_col, ga.data
+                        )
+                    else:
+                        transformed = tfm.update(transformed)
+                    values = transformed[self.target_col].to_numpy()
+            self.last_dates = ufp.cast(last_dates[self.time_col], self.last_dates.dtype)
+            self.uids = ufp.sort(sizes[self.id_col])
+            self.uids = _to_native_index(self.uids, df=df)
+            self.last_dates = _to_native_index(self.last_dates, df=df)
+            if new_groups.any():
+                new_ids = ufp.filter_with_mask(sizes[self.id_col], new_groups)
+                new_ids_df = ufp.filter_with_mask(
+                    df, ufp.is_in(df[self.id_col], new_ids)
+                )
+                new_ids_counts = ufp.counts_by_id(new_ids_df, self.id_col)
+                new_statics = ufp.take_rows(
+                    new_ids_df, new_ids_counts["counts"].to_numpy().cumsum() - 1
+                )
+                new_statics = new_statics[self.static_features_.columns]
+                self.static_features_ = ufp.vertical_concat(
+                    [self.static_features_, new_statics]
+                )
+                self.static_features_ = ufp.sort(self.static_features_, self.id_col)
+            # the outer join above can make the sizes float, which the offset
+            # arithmetic in _advance_lag_transform_states needs as integers
+            appended_counts = sizes["counts"].to_numpy().astype(np.int64)
+            new_groups_mask = new_groups.to_numpy()
+            prev_ga = self.ga
+            self.ga = self.ga.append_several(
+                new_sizes=appended_counts.astype(np.int32),
+                new_values=values,
+                new_groups=new_groups_mask,
             )
-            new_statics = new_statics[self.static_features_.columns]
-            self.static_features_ = ufp.vertical_concat(
-                [self.static_features_, new_statics]
+            self._advance_lag_transform_states(
+                prev_ga, appended_counts, values, new_groups_mask
             )
-            self.static_features_ = ufp.sort(self.static_features_, self.id_col)
-        if self.target_transforms is not None:
-            if self._has_ga_target_tfms():
-                indptr = np.append(0, id_counts["counts"]).cumsum()
-            for tfm in self.target_transforms:
-                if isinstance(tfm, _BaseGroupedArrayTargetTransform):
-                    ga = GroupedArray(values, indptr)
-                    ga = tfm.update(ga)
-                    df = ufp.assign_columns(df, self.target_col, ga.data)
-                else:
-                    df = tfm.update(df)
-                values = df[self.target_col].to_numpy()
-        # the outer join above can make the sizes float, which the offset
-        # arithmetic in _advance_lag_transform_states needs as integers
-        appended_counts = sizes["counts"].to_numpy().astype(np.int64)
-        new_groups_mask = new_groups.to_numpy()
-        prev_ga = self.ga
-        self.ga = self.ga.append_several(
-            new_sizes=appended_counts.astype(np.int32),
-            new_values=values,
-            new_groups=new_groups_mask,
-        )
-        self._advance_lag_transform_states(
-            prev_ga, appended_counts, values, new_groups_mask
-        )
-        self._update_pooled_states(df, sizes, values)
+            self._update_pooled_states(df, sizes, values)
+        except BaseException:
+            self.uids, self.last_dates, self.static_features_, self.ga = prev
+            self._restore_lag_transforms(lag_snaps)
+            for tfm, snap in zip(self.target_transforms or [], tfm_snaps):
+                tfm.__dict__ = snap.__dict__
+            raise
