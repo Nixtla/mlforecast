@@ -230,6 +230,11 @@ class MLForecast:
         self.__dict__.update(state)
         self.hooks = []
 
+    def __copy__(self) -> "MLForecast":
+        out = object.__new__(type(self))
+        out.__dict__.update(self.__dict__)
+        return out
+
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(models=[{', '.join(self.models.keys())}], "
@@ -291,7 +296,6 @@ class MLForecast:
         copy instead of on this instance.
         """
         out = copy.copy(self)
-        out.hooks = self.hooks
         if ts is not None:
             out.ts = ts
         return out
