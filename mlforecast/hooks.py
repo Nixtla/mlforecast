@@ -45,6 +45,7 @@ class Hook:
 
     - ``preprocess``, ``fit``, ``fit_models``, ``predict``, ``cross_validation``: the bound arguments of the method call.
     - ``fit_model``: ``name``, ``model``, ``X``, ``y``, ``fit_kwargs`` and ``h`` (0-indexed horizon for direct models, None otherwise). Emitted once per estimator ``fit`` call.
+    - ``predict_model``: ``name`` and ``model`` (a dict keyed by horizon index for direct models). Emitted once per model and covers its feature updates too.
     - ``cv_window``: ``i_window`` and ``cutoffs``.
 
     Hooks that started a stage get its ``on_end`` or ``on_error`` even if another one raises, and the first
@@ -165,6 +166,8 @@ def _span_details(stage: str, kwargs: Dict[str, Any], result: Any) -> Dict[str, 
         }
     if stage == "predict":
         return {"h": kwargs["h"]}
+    if stage == "predict_model":
+        return {"model": kwargs["name"]}
     if stage == "cross_validation":
         return {"n_windows": kwargs["n_windows"], "h": kwargs["h"]}
     if stage == "cv_window":

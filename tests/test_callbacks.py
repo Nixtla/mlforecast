@@ -149,18 +149,23 @@ def test_stages_receive_bound_arguments(series):
         "fit_models",
         "fit_model",
         "predict",
+        "predict_model",
     ]
     assert recorder.stages("end") == [
         "preprocess",
         "fit_model",
         "fit_models",
         "fit",
+        "predict_model",
         "predict",
     ]
     (fit_model,) = [kw for h, s, kw in recorder.events if s == "fit_model"][:1]
     assert fit_model["name"] == "LinearRegression"
     assert fit_model["h"] is None
     assert fit_model["X"].shape[0] == len(fit_model["y"])
+    (predict_model,) = [kw for h, s, kw in recorder.events if s == "predict_model"][:1]
+    assert predict_model["name"] == "LinearRegression"
+    assert predict_model["model"] is fcst.models_["LinearRegression"]
     (predict,) = [kw for h, s, kw in recorder.events if s == "predict"][:1]
     assert predict["h"] == 3
     # defaults are bound too
@@ -191,6 +196,28 @@ def test_direct_models_emit_one_fit_model_per_horizon(series):
         ("LinearRegression2", 0),
         ("LinearRegression2", 1),
     ]
+
+
+@pytest.mark.parametrize("max_horizon", [None, 2])
+def test_profiler_times_each_model_in_predict(series, max_horizon):
+    profiler = Profiler()
+    fcst = MLForecast(
+        models=[LinearRegression(), LinearRegression()],
+        freq="D",
+        lags=[1],
+        hooks=[profiler],
+    )
+    fcst.fit(series, max_horizon=max_horizon)
+    profiler.reset()
+    fcst.predict(2)
+
+    (predict,) = profiler.spans
+    assert _stages(predict) == ["predict_model", "predict_model"]
+    assert [child.details for child in predict.children] == [
+        {"model": "LinearRegression"},
+        {"model": "LinearRegression2"},
+    ]
+    assert predict.seconds >= sum(child.seconds for child in predict.children)
 
 
 def test_each_horizon_fit_model_gets_its_own_weights(series):

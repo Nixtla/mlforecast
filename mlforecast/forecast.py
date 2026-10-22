@@ -1693,6 +1693,9 @@ class MLForecast:
             after_predict_callback=after_predict_callback,
             X_df=X_df,
             ids=ids,
+            model_span=lambda name, model: _span(
+                self, "predict_model", name=name, model=model
+            ),
         )
         if level is not None:
             if conformity_scores is None or self.prediction_intervals is None:

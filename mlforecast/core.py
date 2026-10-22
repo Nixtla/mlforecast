@@ -6,11 +6,12 @@ import inspect
 import reprlib
 import warnings
 from collections import Counter, OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import (
     Any,
     Callable,
+    ContextManager,
     Dict,
     Iterable,
     Iterator,
@@ -115,6 +116,10 @@ def _build_transform_name(
     else:
         name = _build_lag_transform_name(tfm, lag)
     return name
+
+
+def _no_model_span(name: str, model: Any) -> ContextManager[Any]:  # noqa: ARG001
+    return nullcontext()
 
 
 def _get_model_name(model) -> str:
@@ -1899,10 +1904,11 @@ class TimeSeries:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
+        model_span: Callable[[str, Any], ContextManager[Any]] = _no_model_span,
     ) -> DFType:
         """Use `model` to predict the next `horizon` timesteps."""
         for i, (name, model) in enumerate(models.items()):
-            with self._backup():
+            with self._backup(), model_span(name, model):
                 self._predict_setup()
                 for _ in range(horizon):
                     new_x = self._get_features_for_next_step(X_df)
@@ -1933,6 +1939,7 @@ class TimeSeries:
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
+        model_span: Callable[[str, Any], ContextManager[Any]] = _no_model_span,
     ) -> DFType:
         assert self.max_horizon is not None
         if horizon > self.max_horizon:
@@ -2023,7 +2030,7 @@ class TimeSeries:
                 )
 
         for name, model in models.items():
-            with self._backup():
+            with self._backup(), model_span(name, model):
                 self._predict_setup()
                 predictions = np.empty((len(self.uids), output_horizon))
 
@@ -2113,6 +2120,7 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
+        model_span: Callable[[str, Any], ContextManager[Any]] = _no_model_span,
     ) -> DFType:
         if ids is not None:
             has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
@@ -2211,6 +2219,7 @@ class TimeSeries:
                     before_predict_callback=before_predict_callback,
                     after_predict_callback=after_predict_callback,
                     X_df=X_df,
+                    model_span=model_span,
                 )
             else:
                 preds = self._predict_multi(
@@ -2218,6 +2227,7 @@ class TimeSeries:
                     horizon=horizon,
                     before_predict_callback=before_predict_callback,
                     X_df=X_df,
+                    model_span=model_span,
                 )
             if self.target_transforms is not None:
                 if self._has_ga_target_tfms():

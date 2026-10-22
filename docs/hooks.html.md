@@ -23,6 +23,9 @@ model_times = (
 )
 ```
 
+The `predict_model` stage does the same for prediction, covering each model's
+feature updates as well as its `predict` calls.
+
 Each span's duration includes its children, so summing durations across every
 stage counts nested work more than once. During interval calibration, nested
 stages use a scratch forecaster. A hook can distinguish them from the original
