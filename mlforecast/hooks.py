@@ -206,6 +206,26 @@ class Profiler(Hook):
     def on_start(self, stage: str, fcst: "MLForecast", **kwargs: Any) -> None:  # noqa: ARG002
         self._stack.append((stage, perf_counter(), self._rss(), []))
 
+    def _close(
+        self,
+        stage: str,
+        kwargs: Dict[str, Any],
+        result: Any,
+        error: Optional[BaseException],
+    ) -> None:
+        _, start, rss_start, children = self._stack.pop()
+        rss_delta = None if rss_start is None else self._rss() - rss_start  # type: ignore[operator]
+        span = Span(
+            stage=stage,
+            seconds=perf_counter() - start,
+            details=_span_details(stage, kwargs, result),
+            rss_delta_bytes=rss_delta,
+            children=children,
+            error=None if error is None else f"{type(error).__name__}: {error}",
+        )
+        parent = self._stack[-1][3] if self._stack else self.spans
+        parent.append(span)
+
     def on_end(
         self,
         stage: str,
@@ -215,18 +235,7 @@ class Profiler(Hook):
     ) -> None:
         if not self._stack or self._stack[-1][0] != stage:
             raise RuntimeError(f"Profiler stage mismatch at {stage!r}")
-        _, start, rss_start, children = self._stack.pop()
-        seconds = perf_counter() - start
-        rss_delta = None if rss_start is None else self._rss() - rss_start  # type: ignore[operator]
-        span = Span(
-            stage=stage,
-            seconds=seconds,
-            details=_span_details(stage, kwargs, result),
-            rss_delta_bytes=rss_delta,
-            children=children,
-        )
-        parent = self._stack[-1][3] if self._stack else self.spans
-        parent.append(span)
+        self._close(stage, kwargs, result, None)
 
     def on_error(
         self,
@@ -237,18 +246,7 @@ class Profiler(Hook):
     ) -> None:
         if not self._stack or self._stack[-1][0] != stage:
             return  # on_start failed before the profiler started this stage
-        _, start, rss_start, children = self._stack.pop()
-        rss_delta = None if rss_start is None else self._rss() - rss_start  # type: ignore[operator]
-        span = Span(
-            stage=stage,
-            seconds=perf_counter() - start,
-            details=_span_details(stage, kwargs, None),
-            rss_delta_bytes=rss_delta,
-            children=children,
-            error=f"{type(error).__name__}: {error}",
-        )
-        parent = self._stack[-1][3] if self._stack else self.spans
-        parent.append(span)
+        self._close(stage, kwargs, None, error)
 
     def reset(self) -> None:
         self.spans = []
