@@ -16,8 +16,10 @@ permissions:
 
 jobs:
   efficiency-tests:
-    if: false
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC authentication with CodSpeed
     timeout-minutes: 15
     steps:
       - name: Clone repo
@@ -41,7 +43,6 @@ jobs:
         uses: CodSpeedHQ/action@f842b9a3ffe213dbb81768fd7f7eeb4dfcf1c369 # 5.4.2
         with:
           mode: simulation
-          token: ${{ secrets.CODESPEED_TOKEN }}
           run: uv run pytest tests/bench_pipeline.py tests/bench_pooled.py --codspeed -n 4 --no-cov -p no:rerunfailures
 
   performance-tests:
