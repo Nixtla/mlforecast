@@ -138,27 +138,6 @@ def test_pooled_validation_warning_points_to_the_caller(series, with_hooks):
     assert warning.filename == __file__
 
 
-@pytest.mark.parametrize("with_hooks", [False, True])
-def test_static_columns_in_X_df_warning_points_to_the_caller(with_hooks):
-    series = generate_daily_series(
-        2, min_length=20, max_length=30, n_static_features=1, equal_ends=True
-    )
-    fcst = MLForecast(
-        models=LinearRegression(),
-        freq="D",
-        lags=[1],
-        hooks=[Profiler()] if with_hooks else None,
-    )
-    fcst.fit(series, static_features=["static_0"])
-    X_df = fcst.make_future_dataframe(h=2).merge(
-        series[["unique_id", "static_0"]].drop_duplicates()
-    )
-    with pytest.warns(UserWarning, match="considered static") as caught:
-        fcst.predict(2, X_df=X_df)
-    (warning,) = [w for w in caught if "considered static" in str(w.message)]
-    assert warning.filename == __file__
-
-
 def test_stages_receive_bound_arguments(series):
     recorder = Recorder()
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[recorder])

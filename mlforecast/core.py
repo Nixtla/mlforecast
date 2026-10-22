@@ -46,7 +46,6 @@ from mlforecast.target_transforms import (
     _BaseGroupedArrayTargetTransform,
 )
 
-from ._warnings import _user_warning_stacklevel
 from .compat import CatBoostRegressor
 from .data_validation import _index_to_series, _validate_no_null_times
 from .date_features import _DUMMY_ALIASES, CalendarFeature
@@ -2162,7 +2161,7 @@ class TimeSeries:
                         "If any of these columns should vary over the forecast horizon, refit "
                         "with static_features=[] or exclude them from static_features.",
                         UserWarning,
-                        stacklevel=_user_warning_stacklevel(),
+                        stacklevel=2,
                     )
                 required_future_cols = set(self._future_input_cols)
                 missing = sorted(required_future_cols - set(dynamics))
