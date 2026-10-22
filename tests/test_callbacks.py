@@ -100,6 +100,30 @@ def test_warning_stacklevel_stops_at_dirs_sharing_the_package_prefix():
 
 
 @pytest.mark.parametrize("with_hooks", [False, True])
+@pytest.mark.parametrize("stage", ["preprocess", "fit", "cross_validation"])
+def test_warnings_raised_inside_stages_point_to_the_caller(series, stage, with_hooks):
+    """The stage wrapper adds a frame on every path, with or without hooks."""
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    kwargs = {"max_horizon": 2, "horizon_features": {1: []}}
+    calls = {
+        "preprocess": lambda: fcst.preprocess(series, **kwargs),
+        "fit": lambda: fcst.fit(series, **kwargs),
+        "cross_validation": lambda: fcst.cross_validation(
+            series, n_windows=1, h=2, **kwargs
+        ),
+    }
+    with pytest.warns(UserWarning, match="has no effect") as caught:
+        calls[stage]()
+    (warning,) = [w for w in caught if "has no effect" in str(w.message)]
+    assert warning.filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
 def test_pooled_validation_warning_points_to_the_caller(series, with_hooks):
     fcst = MLForecast(
         models=LinearRegression(),
