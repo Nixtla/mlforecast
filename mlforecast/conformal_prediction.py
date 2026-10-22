@@ -952,7 +952,7 @@ def _weighted_conformal_transfer(
             f"Target data is missing {len(dropped)} feature column(s) used during source fit "
             f"({sorted(dropped)}). Density ratio estimation will use the common subset only.",
             UserWarning,
-            stacklevel=_user_warning_stacklevel(),
+            stacklevel=2,
         )
 
     src_np = np.column_stack(

@@ -424,7 +424,7 @@ class MLForecast:
                         f"`horizon_features` includes an empty list for horizon {horizon}. "
                         "This entry has no effect and can be removed.",
                         UserWarning,
-                        stacklevel=_user_warning_stacklevel(),
+                        stacklevel=2,
                     )
                 resolved[horizon] = list(dict.fromkeys(cols))
         else:
@@ -1464,7 +1464,7 @@ class MLForecast:
                 warnings.warn(
                     "Computing recursive fitted values for h>1 on demand can be slow.",
                     UserWarning,
-                    stacklevel=_user_warning_stacklevel(),
+                    stacklevel=2,
                 )
                 res_pd = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
