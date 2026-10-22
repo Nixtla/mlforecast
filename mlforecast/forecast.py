@@ -200,9 +200,12 @@ class MLForecast:
         else:
             models_with_names = models
         self.models = models_with_names
+        hooks_error = "hooks must be a sequence of Hook instances"
+        if isinstance(hooks, Hook):
+            raise TypeError(hooks_error)
         self.hooks = list(hooks or [])
         if any(not isinstance(hook, Hook) for hook in self.hooks):
-            raise TypeError("hooks must be a sequence of Hook instances")
+            raise TypeError(hooks_error)
         num_threads = _resolve_num_threads(num_threads)
         self.ts = TimeSeries(
             freq=freq,

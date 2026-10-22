@@ -71,9 +71,10 @@ def test_hooks_are_off_by_default_and_methods_keep_their_identity():
     assert MLForecast.predict.__doc__.startswith("Compute the predictions")
 
 
-def test_hooks_validate_type():
+@pytest.mark.parametrize("hooks", [[object()], Profiler()])
+def test_hooks_validate_type(hooks):
     with pytest.raises(TypeError, match="sequence of Hook"):
-        MLForecast(models=LinearRegression(), freq="D", hooks=[object()])
+        MLForecast(models=LinearRegression(), freq="D", hooks=hooks)
 
 
 def test_hooks_accept_any_sequence():
