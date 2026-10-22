@@ -245,7 +245,7 @@ class Profiler(Hook):
         **kwargs: Any,
     ) -> None:
         if not self._stack or self._stack[-1][0] != stage:
-            return  # on_start failed before the profiler started this stage
+            return  # don't replace the stage's error with a mismatch
         self._close(stage, kwargs, None, error)
 
     def reset(self) -> None:
