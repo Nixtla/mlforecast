@@ -273,17 +273,15 @@ def test_profiler_can_record_memory(series):
     assert Profiler().on_start("fit", fcst) is None
 
 
-def test_profiler_memory_forecaster_is_picklable(series):
-    pytest.importorskip("psutil")
-    fcst = MLForecast(
-        models=LinearRegression(), freq="D", lags=[1], hooks=[Profiler(memory=True)]
-    )
+def test_hooks_are_dropped_on_serialization(series):
+    profiler = Profiler()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[profiler])
     fcst.fit(series)
-    copy.deepcopy(fcst)
-    loaded = pickle.loads(pickle.dumps(fcst))
-    loaded.fit(series)
-    assert [span.stage for span in loaded.hooks[0].spans] == ["fit", "fit"]
-    assert isinstance(loaded.hooks[0].spans[1].rss_delta_bytes, int)
+    for restored in (copy.deepcopy(fcst), pickle.loads(pickle.dumps(fcst))):
+        assert restored.hooks == []
+        restored.predict(2)
+    assert fcst.hooks == [profiler]
+    assert [span.stage for span in profiler.spans] == ["fit"]
 
 
 def test_errors_are_reported_and_profiler_recovers(series):

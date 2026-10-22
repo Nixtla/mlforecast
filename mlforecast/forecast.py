@@ -190,7 +190,7 @@ class MLForecast:
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
             drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops all columns referenced in any groupby transform. False keeps all columns. A list of strings drops only the named columns explicitly. Changed in v1.0.4: default changed from False (keep all columns) to True (auto-drop groupby columns).
-            hooks (list of Hook, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. Defaults to None.
+            hooks (list of Hook, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. They're dropped when the forecaster is pickled or deep-copied. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -222,6 +222,13 @@ class MLForecast:
     @property
     def horizon_features_(self) -> Dict[int, List[str]]:
         return self.ts.horizon_features_
+
+    def __getstate__(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if k != "hooks"}
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.hooks = []
 
     def __repr__(self):
         return (
@@ -284,6 +291,7 @@ class MLForecast:
         copy instead of on this instance.
         """
         out = copy.copy(self)
+        out.hooks = self.hooks
         if ts is not None:
             out.ts = ts
         return out
