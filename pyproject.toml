@@ -29,7 +29,7 @@ dependencies = [
     "narwhals",
     "optuna",
     "pandas<3.0",
-    "scikit-learn",
+    "scikit-learn>=1.3",
     "utilsforecast>=0.2.9",
 ]
 
@@ -62,7 +62,6 @@ dev = [
     "lightgbm>=4.6",
     "matplotlib",
     "mlflow>=2.10.0",
-    "mypy",
     "numpy",
     "pandas",
     "pre-commit",
@@ -98,6 +97,7 @@ select = ["F", "ARG"]
 
 [tool.mypy]
 ignore_missing_imports = true
+check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = 'mlforecast.compat'
