@@ -214,6 +214,23 @@ def test_direct_models_emit_one_fit_model_per_horizon(series):
     ]
 
 
+def test_each_horizon_fit_model_gets_its_own_weights(series):
+    series = series.assign(w=1.0)
+    models_fit_kwargs = {"LinearRegression": {"sample_weight": None}}
+    recorder = Recorder()
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[recorder])
+    fcst.fit(series, max_horizon=3, weight_col="w", models_fit_kwargs=models_fit_kwargs)
+
+    n_rows = [
+        (len(kwargs["X"]), len(kwargs["fit_kwargs"]["sample_weight"]))
+        for hook, stage, kwargs in recorder.events
+        if hook == "start" and stage == "fit_model"
+    ]
+    assert len(n_rows) == 3
+    assert all(n_x == n_w for n_x, n_w in n_rows)
+    assert models_fit_kwargs == {"LinearRegression": {"sample_weight": None}}
+
+
 def test_profiler_nests_calibration_inside_fit(series):
     profiler = Profiler()
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=[profiler])

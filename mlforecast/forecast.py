@@ -708,7 +708,7 @@ class MLForecast:
             model_fit_kwargs: Optional[dict[str, Any]],
             h: Optional[int] = None,
         ):
-            fit_kwargs = model_fit_kwargs or {}
+            fit_kwargs = dict(model_fit_kwargs or {})
             if weight_col is not None:
                 if isinstance(X, np.ndarray):
                     fit_kwargs["sample_weight"] = X[:, 0]
