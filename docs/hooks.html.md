@@ -23,8 +23,9 @@ model_times = (
 )
 ```
 
-The `predict_model` stage does the same for prediction, covering each model's
-feature updates as well as its `predict` calls.
+`fit_model` and `predict_model` are emitted once per model, and `fit_model` once
+per horizon for direct models. `predict_model` covers each model's feature
+updates as well as its `predict` calls.
 
 Each span's duration includes its children, so summing durations across every
 stage counts nested work more than once. During interval calibration, nested
