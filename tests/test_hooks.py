@@ -420,6 +420,37 @@ def test_cv_window_start_failure_unwinds_profiler(series):
     assert profiler.spans[0].children[0].error == "RuntimeError: window start failed"
 
 
+@pytest.mark.parametrize("model", [LinearRegression(), Boom()])
+def test_hooks_finish_in_reverse_order(series, model):
+    events = []
+
+    class Logger(Hook):
+        def __init__(self, label):
+            self.label = label
+
+        def on_start(self, stage, fcst, **kwargs):  # noqa: ARG002
+            if stage == "fit_model":
+                events.append(("start", self.label))
+
+        def on_end(self, stage, fcst, result, **kwargs):  # noqa: ARG002
+            if stage == "fit_model":
+                events.append(("end", self.label))
+
+        def on_error(self, stage, fcst, error, **kwargs):  # noqa: ARG002
+            if stage == "fit_model":
+                events.append(("error", self.label))
+
+    fcst = MLForecast(
+        models=model, freq="D", lags=[1], hooks=[Logger("a"), Logger("b")]
+    )
+    try:
+        fcst.fit(series)
+    except RuntimeError:
+        pass
+    finish = "end" if isinstance(model, LinearRegression) else "error"
+    assert events == [("start", "a"), ("start", "b"), (finish, "b"), (finish, "a")]
+
+
 @pytest.mark.parametrize("raiser_first", [True, False])
 def test_raising_on_end_does_not_break_later_hooks(series, raiser_first):
     raiser = Raiser(stage="fit_model")

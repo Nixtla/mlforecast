@@ -48,7 +48,7 @@ class Hook:
     - ``predict_model``: ``name`` and ``model`` (a dict keyed by horizon index for direct models). Emitted once per model and covers its feature updates too. Its result is the model's predictions as a flat array ordered by series and then step, before target transforms are inverted.
     - ``cv_window``: ``i_window`` and ``cutoffs``.
 
-    Hooks that started a stage get its ``on_end`` or ``on_error`` even if another one raises, and the first
+    Hooks that started a stage get its ``on_end`` or ``on_error``, in reverse order, even if another one raises, and the first
     hook error then propagates in place of the stage's own: a stage whose ``on_end`` raises still ended, and the
     error reaches the enclosing stages as their ``on_error``.
     """
@@ -106,9 +106,9 @@ def _span(obj: Any, stage: str, **kwargs: Any) -> Iterator[_SpanResult]:
     try:
         yield span
     except BaseException as error:
-        _notify(hooks, "on_error", stage, obj, error=error, **kwargs)
+        _notify(reversed(started), "on_error", stage, obj, error=error, **kwargs)
         raise
-    _notify(hooks, "on_end", stage, obj, result=span.result, **kwargs)
+    _notify(reversed(started), "on_end", stage, obj, result=span.result, **kwargs)
 
 
 def _stage(name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
