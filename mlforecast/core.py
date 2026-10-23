@@ -1746,7 +1746,7 @@ class TimeSeries:
         repeated = np.repeat(np.asarray(self.uids), h)
         return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
 
-    def _get_predictions(self) -> DataFrame:
+    def _get_predictions(self, raw_preds: np.ndarray) -> DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
         h = len(self.y_pred)
         # native-container boundary — uids/df constructor selected per backend
@@ -1759,7 +1759,7 @@ class TimeSeries:
             {
                 self.id_col: uids,
                 self.time_col: np.array(self.test_dates).ravel("F"),
-                f"{self.target_col}_pred": self._get_raw_predictions(),
+                f"{self.target_col}_pred": raw_preds,
             },
         )
         return df
@@ -1927,7 +1927,7 @@ class TimeSeries:
                     self._update_y(predictions)
                 raw_preds = self._get_raw_predictions()
                 if i == 0:
-                    preds = self._get_predictions()
+                    preds = self._get_predictions(raw_preds)
                     rename_dict = {f"{self.target_col}_pred": name}
                     preds = ufp.rename(preds, rename_dict)
                 else:
