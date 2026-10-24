@@ -2338,7 +2338,7 @@ class TimeSeries:
         try:
             if self.target_transforms is not None:
                 if self._has_ga_target_tfms():
-                    indptr = np.append(0, id_counts["counts"]).cumsum()
+                    indptr = np.append(0, sizes["counts"]).cumsum(dtype=np.int64)
                 transformed = df
                 for tfm in self.target_transforms:
                     tfm_snaps.append(copy.deepcopy(tfm))
