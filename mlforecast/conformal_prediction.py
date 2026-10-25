@@ -953,6 +953,18 @@ def _weighted_conformal_transfer(
             stacklevel=2,
         )
 
+    null_cols = [
+        c
+        for c in tgt_feature_cols
+        if source_cs_df[c].isna().any() or tgt_preprocessed[c].isna().any()
+    ]
+    if null_cols:
+        raise ValueError(
+            "Density ratio estimation does not accept null features, but found nulls "
+            f"in feature column(s) {null_cols}. Remove these features or use a "
+            "transfer_conformal_method that does not estimate density ratios."
+        )
+
     src_np = np.column_stack(
         [source_cs_df[c].to_numpy() for c in tgt_feature_cols]
     ).astype(float)
