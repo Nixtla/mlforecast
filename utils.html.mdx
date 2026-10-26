@@ -149,8 +149,16 @@ test_fail(lambda: generate_prices_for_series(series), contains='equal ends')
 ### `PredictionIntervals`
 
 ```python
-PredictionIntervals(n_windows=2, h=1, method='conformal_distribution', scale_estimator=None)
+PredictionIntervals(n_windows=2, h=1, method='conformal_distribution')
 ```
 
 Class for storing prediction intervals metadata information.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`n_windows` | <code>[int](#int)</code> | Number of cross validation windows used to compute the conformity scores. Defaults to 2. | <code>2</code>
+`h` | <code>[int](#int)</code> | Forecast horizon of each cross validation window. Defaults to 1. | <code>1</code>
+`method` | <code>[str](#str)</code> | ``'conformal_distribution'`` or ``'conformal_error'``. Defaults to 'conformal_distribution'. | <code>'conformal_distribution'</code>
 

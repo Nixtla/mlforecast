@@ -225,7 +225,7 @@ fcst2.predict(h=7, X_df=future_df).head()
 
 ```python
 preds2 = fcst.predict(7, X_df=prices_catalog)
-preds3 = fcst.predict(7, new_df=series_with_prices, X_df=prices_catalog)
+preds3 = fcst.transfer(series_with_prices).predict(7, X_df=prices_catalog)
 
 pd.testing.assert_frame_equal(preds, preds2)
 pd.testing.assert_frame_equal(preds, preds3)
