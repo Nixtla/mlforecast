@@ -88,13 +88,17 @@ def test_empty_profiler_has_queryable_columns():
 
 
 def test_direct_conformal_warning_points_to_caller(series):
-    from mlforecast.conformal_prediction import _compute_series_scales
+    from mlforecast.conformal_prediction import (
+        _floor_series_scales,
+        _raw_series_scales,
+    )
 
     frame = series.copy()
     first_id = frame["unique_id"].iloc[0]
     frame.loc[frame["unique_id"] == first_id, "y"] = 5.0
+    raw = _raw_series_scales(frame, "unique_id", "ds", "y", ("mad",))
     with pytest.warns(UserWarning, match="near-zero scale") as caught:
-        _compute_series_scales(frame, "unique_id", "ds", "y", method="mad")
+        _floor_series_scales(raw["mad"], floor_factor=1e-3)
     assert caught[0].filename == __file__
 
 
