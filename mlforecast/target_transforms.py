@@ -23,7 +23,6 @@ from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import TransformerMixin, clone
 from utilsforecast.compat import DataFrame
 
-from .compat import core_scalers_support_skipna
 from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
 
@@ -39,15 +38,6 @@ def _bare_instance(obj: _Transform) -> _Transform:
     over the arguments they know about.
     """
     return type(obj).__new__(type(obj))
-
-
-def _validate_scaler_skipna(skipna: bool) -> None:
-    if skipna and not core_scalers_support_skipna():
-        raise ValueError(
-            "skipna=True requires a coreforecast version that supports it; the "
-            "installed one does not (it was added after 0.0.16). Please upgrade "
-            "coreforecast."
-        )
 
 
 class BaseTargetTransform(abc.ABC):
@@ -463,12 +453,6 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
         # null rows survive as nulls and get dropped before fitting.
         return bool(self.skipna)
 
-    def _skipna_kwargs(self) -> dict:
-        # skipna=True is rejected at construction on an older coreforecast, so
-        # when unsupported only the default is possible and the kwarg is dropped
-        # rather than passed as False (which that version wouldn't accept).
-        return {"skipna": self.skipna} if core_scalers_support_skipna() else {}
-
     def update(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.transform(ga), ga.indptr)
@@ -510,10 +494,8 @@ class LocalStandardScaler(_BaseLocalScaler):
     scaler_factory = core_scalers.LocalStandardScaler
 
     def __init__(self, skipna: bool = False):
-        _validate_scaler_skipna(skipna)
         self.skipna = skipna
-        kwargs = self._skipna_kwargs()
-        self.scaler_factory = lambda: core_scalers.LocalStandardScaler(**kwargs)
+        self.scaler_factory = lambda: core_scalers.LocalStandardScaler(skipna=skipna)
 
 
 class LocalMinMaxScaler(_BaseLocalScaler):
@@ -529,10 +511,8 @@ class LocalMinMaxScaler(_BaseLocalScaler):
     scaler_factory = core_scalers.LocalMinMaxScaler
 
     def __init__(self, skipna: bool = False):
-        _validate_scaler_skipna(skipna)
         self.skipna = skipna
-        kwargs = self._skipna_kwargs()
-        self.scaler_factory = lambda: core_scalers.LocalMinMaxScaler(**kwargs)
+        self.scaler_factory = lambda: core_scalers.LocalMinMaxScaler(skipna=skipna)
 
 
 class LocalRobustScaler(_BaseLocalScaler):
@@ -547,11 +527,11 @@ class LocalRobustScaler(_BaseLocalScaler):
     """
 
     def __init__(self, scale: str, skipna: bool = False):
-        _validate_scaler_skipna(skipna)
         self.scale = scale
         self.skipna = skipna
-        kwargs = self._skipna_kwargs()
-        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale, **kwargs)
+        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(
+            scale, skipna=skipna
+        )
 
 
 class LocalBoxCox(_BaseLocalScaler):

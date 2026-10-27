@@ -640,34 +640,22 @@ class TimeSeries:
         if core_tfms:
             self._compute_transforms(core_tfms, updates_only=False)
 
-    def _resolve_skipna(self, allow_null_target: bool) -> List[str]:
+    def _resolve_skipna(self, allow_null_target: bool) -> None:
         """Apply every transform's deferred `skipna=None`.
 
         `skipna` defaults to None, meaning "follow `allow_null_target`", so
         opting into null targets is enough to get NaN-skipping features without
         also annotating every transform. Runs on each fit, so re-fitting with a
         different flag re-resolves rather than inheriting the previous answer.
-
-        Returns the names of transforms that should have skipped nulls but can't,
-        because the installed coreforecast ignores `skipna` in its incremental
-        `update` (see `mlforecast.compat`). Those fall back to propagating.
         """
-        unsupported = []
         for tfm in self.transforms.values():
-            if not isinstance(tfm, _BaseLagTransform):
-                continue
-            name = tfm._resolve_skipna(allow_null_target)
-            if name is not None:
-                unsupported.append(name)
-        return unsupported
+            if isinstance(tfm, _BaseLagTransform):
+                tfm._resolve_skipna(allow_null_target)
 
-    def _check_null_target_support(self, skipna_unsupported: List[str]) -> None:
-        """Validate the configured transforms against a target that contains nulls.
+    def _check_null_target_support(self) -> None:
+        """Reject target transforms that can't handle a target containing nulls.
 
-        Target transforms are a hard error when they'd propagate the null through
-        every fitted value and prediction. Lag transforms that wanted to skip
-        nulls but can't only get a warning, so a configuration that worked before
-        `allow_null_target` existed doesn't start failing.
+        They'd propagate the null through every fitted value and prediction.
         """
         unsafe_target_tfms = [
             type(tfm).__name__
@@ -683,20 +671,6 @@ class TimeSeries:
                 "(LocalStandardScaler, LocalMinMaxScaler, LocalRobustScaler) "
                 "accept `skipna=True`, which computes their statistics over the "
                 "observed values only and is supported here."
-            )
-        if skipna_unsupported:
-            names = reprlib.repr(sorted(set(skipna_unsupported)))
-            warnings.warn(
-                f"The target contains nulls and {names} can't skip them: the "
-                "installed coreforecast honors `skipna` when computing the "
-                "features but ignores it when updating them step by step, so "
-                "skipping would make training and prediction disagree.\n"
-                "They propagate the nulls instead, which makes every later value "
-                "of an affected series null too (with `dropna=True` those rows "
-                "are then dropped from training).\n"
-                "Use a pooled scope (`global_=True`, `groupby=[...]`, "
-                "`partition_by=[...]`), which keeps its own NaN-aware aggregates, "
-                "or a rolling transform, whose updates do honor `skipna`."
             )
 
     def _advance_lag_transform_states(
@@ -947,7 +921,7 @@ class TimeSeries:
         # Resolve deferred `skipna=None` on every fit, before any feature is
         # computed, so `update`-supplied nulls are handled the same way even when
         # this particular frame has none.
-        skipna_unsupported = self._resolve_skipna(allow_null_target)
+        self._resolve_skipna(allow_null_target)
         if ufp.is_nan_or_none(df[target_col]).any():
             if not allow_null_target:
                 raise ValueError(
@@ -956,7 +930,7 @@ class TimeSeries:
                     "for feature computation and have them dropped before the "
                     "models are fitted."
                 )
-            self._check_null_target_support(skipna_unsupported)
+            self._check_null_target_support()
         self.id_col = id_col
         self.target_col = target_col
         self.time_col = time_col

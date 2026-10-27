@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "cloudpickle",
-    "coreforecast>=0.0.15",
+    "coreforecast>=0.0.19",
     "fsspec",
     "narwhals",
     "optuna",

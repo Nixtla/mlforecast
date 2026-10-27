@@ -166,18 +166,26 @@ def _raw_series_scales(
     y = data[:, 0]
     dy = core_scalers.Difference(1).fit_transform(CoreGroupedArray(y, indptr))
     dy_ga = CoreGroupedArray(dy, indptr)
-    n_dy = np.diff(indptr) - 1
-    single = np.abs(y[indptr[:-1]])
+    # a null target (allow_null_target) nulls the differences next to it, so
+    # the statistics skip them and only the observed ones are counted
+    starts = indptr[:-1]
+    n_dy = np.add.reduceat(~np.isnan(dy), starts)
+    observed_y = ~np.isnan(y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        single = np.add.reduceat(np.where(observed_y, np.abs(y), 0.0), starts) / (
+            np.add.reduceat(observed_y, starts)
+        )
     raw = {}
     if "mad" in methods:
-        mad = core_scalers.LocalRobustScaler("mad").fit(dy_ga).stats_[:, 1]
-        raw["mad"] = np.where(n_dy == 0, single, mad)
+        mad = core_scalers.LocalRobustScaler("mad", skipna=True).fit(dy_ga)
+        raw["mad"] = np.where(n_dy == 0, single, mad.stats_[:, 1])
     if "std" in methods:
         # coreforecast's std has ddof=0
-        std = core_scalers.LocalStandardScaler().fit(dy_ga).stats_[:, 1]
+        std = core_scalers.LocalStandardScaler(skipna=True).fit(dy_ga).stats_[:, 1]
         with np.errstate(divide="ignore", invalid="ignore"):
             std = std * np.sqrt(n_dy / (n_dy - 1))
-        first_dy = np.abs(dy[np.minimum(indptr[:-1] + 1, y.size - 1)])
+        # the only observed difference when n_dy == 1
+        first_dy = np.fmax.reduceat(np.abs(dy), starts)
         raw["std"] = np.select([n_dy == 0, n_dy == 1], [single, first_dy], std)
     uid_list = uids.to_list()
     return {m: dict(zip(uid_list, v.tolist())) for m, v in raw.items()}
