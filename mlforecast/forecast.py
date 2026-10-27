@@ -604,6 +604,7 @@ class MLForecast:
             weight_col=weight_col,
             horizon_features=resolved_horizon_features,
         )
+        self._set_missing_train_ends()
         self._drop_transfer_intervals()
         return prep
 
@@ -715,8 +716,14 @@ class MLForecast:
             as_numpy=as_numpy,
             horizon_features=resolved_horizon_features,
         )
+        self._set_missing_train_ends()
         self._drop_transfer_intervals()
         return self
+
+    def _set_missing_train_ends(self) -> None:
+        # models assigned to `models_` by hand have no other source of train ends
+        if self._train_ends_ is None:
+            self._train_ends_ = _train_ends(self.ts)
 
     def _drop_transfer_intervals(self) -> None:
         # they were computed for the previous series

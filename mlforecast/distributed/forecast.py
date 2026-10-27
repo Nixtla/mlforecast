@@ -1080,6 +1080,10 @@ class DistributedMLForecast:
         ts.static_features_ = statics
         ts.transforms.update(combined_core_lag_tfms)
         ts.target_transforms = combined_target_tfms
+        # models assigned to `models_` by hand have no train ends
+        train_ends = self._train_ends_
+        if train_ends is None:
+            train_ends = _train_ends(ts)
         return MLForecast._from_ts(
-            ts, models=self.models_, models_=self.models_, train_ends=self._train_ends_
+            ts, models=self.models_, models_=self.models_, train_ends=train_ends
         )
