@@ -174,12 +174,12 @@ def _frozen_backtest(
         )
         raise ValueError(
             "Adapting the prediction intervals to new series with a frozen-model "
-            "backtest (the `Recalibration` and `ErrorScaling` methods of `transfer`, "
-            "and `cross_validation(refit=False, level=...)`) requires "
+            "backtest (the `Recalibration` and `ErrorScaling` methods of `transfer`) "
+            "requires "
             f">= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
             f"Series too short: {details}. For point forecasts only, use "
-            "`transfer(df)` without a method or `cross_validation` without `level`."
+            "`transfer(df)` without a method."
         )
 
     all_results = []
@@ -1584,21 +1584,18 @@ class MLForecast:
         self,
         df: DFType,
         method: Optional[TransferMethod],
-        check_in_sample: bool = True,
     ) -> "MLForecast":
         self._check_fitted()
-        result = None if method is None else self._adapt(df, method, check_in_sample)
+        result = None if method is None else self._adapt(df, method)
         out = self._with_ts(self.ts._clone_warm(df))
         out.models_ = dict(self.models_)
         out._transfer_ = TransferState(result=result)
         return out
 
-    def _adapt(
-        self, df: DFType, method: TransferMethod, check_in_sample: bool
-    ) -> TransferResult:
+    def _adapt(self, df: DFType, method: TransferMethod) -> TransferResult:
         """Adapt the source calibration to `df`."""
         pi = self.prediction_intervals
-        train_ends = self._train_ends_ if check_in_sample else None
+        train_ends = self._train_ends_
         model_names = list(self.models.keys())
         if isinstance(method, Recalibration):
             if method.h is not None:
@@ -1866,7 +1863,7 @@ class MLForecast:
             horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features.
                 Each template must include exactly one '{h}' placeholder (1-indexed), for example: ['feature_h{h}'].
                 Acts as shorthand for `horizon_features` and is only supported when using `max_horizon` or `horizons`. Defaults to None.
-            refit (bool or int): Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. Defaults to True.
+            refit (bool or int): Retrain model for each cross validation window. If False, the models are trained at the beginning and then used to predict each window. If positive int, the models are retrained every `refit` windows. The windows that aren't retrained use the prediction intervals of the last fit. Defaults to True.
             before_predict_callback (callable, optional): Function to call on the features before computing the predictions. This function will take the input dataframe that will be passed to the model for predicting and should return a dataframe with the same structure. The series identifier is on the index. Defaults to None.
             after_predict_callback (callable, optional): Function to call on the predictions before updating the targets. This function will take a pandas Series with the predictions and should return another one with the same structure. The series identifier is on the index. Defaults to None.
             prediction_intervals (PredictionIntervals, optional): Configuration to calibrate prediction intervals (Conformal Prediction). Defaults to None.
@@ -1992,23 +1989,13 @@ class MLForecast:
             if should_fit:
                 fcst = self
             else:
-                if level is not None and self.prediction_intervals is None:
-                    raise ValueError(
-                        "Prediction intervals for the windows that aren't refit "
-                        "require `prediction_intervals=PredictionIntervals(...)`."
-                    )
-                fcst = self._transfer(
-                    train,
-                    Recalibration() if level is not None else None,
-                    check_in_sample=False,
-                )
+                fcst = self._with_ts(self.ts._clone_warm(train))
             with warnings.catch_warnings():
                 if not should_fit:
-                    # window 0 already warned with the hint for cross_validation,
-                    # and the bias warnings name a transfer the user didn't call
+                    # window 0 already emitted these warnings
                     for message in (
                         "Prediction intervals are calculated using 1-step",
-                        "Recalibration level=",
+                        "Please rerun the `fit` method",
                     ):
                         warnings.filterwarnings(
                             "ignore", message=message, category=UserWarning
