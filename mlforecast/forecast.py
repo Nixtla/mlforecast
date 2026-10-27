@@ -1813,6 +1813,21 @@ class MLForecast:
             horizon=h,
         )
 
+    def _add_intervals_to_calibrated(
+        self, forecasts: DFType, level: List[Union[int, float]], h: int
+    ) -> DFType:
+        """Add the fit's intervals to the series it calibrated, leave the rest missing."""
+        assert self._calibration_ is not None
+        id_col = self.ts.id_col
+        calibrated = ufp.is_in(forecasts[id_col], self._calibration_.scores[id_col])
+        seen = ufp.filter_with_mask(forecasts, calibrated)
+        ids = nw.from_native(seen[id_col], series_only=True).unique(maintain_order=True)
+        seen = self._add_intervals_from_fit(seen, level, h, ids.to_list())
+        unseen = ufp.filter_with_mask(forecasts, ~calibrated)
+        return nw.concat(
+            [nw.from_native(seen), nw.from_native(unseen)], how="diagonal"
+        ).to_native()
+
     def cross_validation(
         self,
         df: DFType,
@@ -1989,6 +2004,9 @@ class MLForecast:
                 fcst = self
             else:
                 fcst = self._with_ts(self.ts._clone_warm(train))
+            frozen_intervals = (
+                not should_fit and level is not None and self._calibration_ is not None
+            )
             with warnings.catch_warnings():
                 if not should_fit:
                     # the window that was fit already emitted these warnings
@@ -2003,9 +2021,12 @@ class MLForecast:
                     h=h,
                     before_predict_callback=before_predict_callback,
                     after_predict_callback=after_predict_callback,
-                    level=level,
+                    level=None if frozen_intervals else level,
                     X_df=X_df,
                 )
+                if frozen_intervals:
+                    assert level is not None
+                    y_pred = fcst._add_intervals_to_calibrated(y_pred, sorted(level), h)
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(
                 valid[[id_col, time_col, target_col]],

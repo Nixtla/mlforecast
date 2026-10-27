@@ -953,6 +953,46 @@ def test_cross_validation_frozen_window_not_calibrated_in_sample():
     np.testing.assert_allclose(w1, w0)
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("refit", [False, 2])
+def test_cross_validation_frozen_windows_new_series(engine, refit):
+    old = generate_daily_series(4, min_length=120, max_length=120, seed=0)
+    old["unique_id"] = old["unique_id"].astype(str)
+    new = generate_daily_series(1, min_length=33, max_length=33, seed=1)
+    new["unique_id"] = "new"
+    new["ds"] += old["ds"].max() - new["ds"].max()
+    kwargs = dict(
+        n_windows=4,
+        h=3,
+        step_size=10,
+        refit=refit,
+        level=[80],
+        prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+    )
+
+    def cv(df):
+        if engine == "polars":
+            df = pl.from_pandas(df)
+        fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1, 2])
+        res = fcst.cross_validation(df, **kwargs)
+        return res.to_pandas() if engine == "polars" else res
+
+    res = cv(pd.concat([old, new]))
+    window = res["cutoff"].rank(method="dense").astype(int) - 1
+    is_new = res["unique_id"].eq("new")
+    assert not is_new[window == 0].any()
+    # the first fit has no conformity scores for the new series
+    assert res.loc[is_new & (window == 1), f"{LR}-lo-80"].isna().all()
+    assert res.loc[is_new, LR].notna().all()
+    if refit == 2:
+        assert res.loc[is_new & (window >= 2), f"{LR}-lo-80"].notna().all()
+    else:
+        assert res.loc[is_new, f"{LR}-lo-80"].isna().all()
+        pd.testing.assert_frame_equal(
+            res[~is_new].reset_index(drop=True), cv(old).reset_index(drop=True)
+        )
+
+
 def test_cross_validation_refit_false_one_step_warning():
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
