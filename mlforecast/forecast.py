@@ -175,8 +175,7 @@ def _frozen_backtest(
         raise ValueError(
             "Adapting the prediction intervals to new series with a frozen-model "
             "backtest (the `Recalibration` and `ErrorScaling` methods of `transfer`) "
-            "requires "
-            f">= {required} time steps per series "
+            f"requires >= {required} time steps per series "
             f"(h={h}, n_windows={n_windows}, step_size={step_size}, max_lag={max_lag}). "
             f"Series too short: {details}. For point forecasts only, use "
             "`transfer(df)` without a method."
@@ -1992,7 +1991,7 @@ class MLForecast:
                 fcst = self._with_ts(self.ts._clone_warm(train))
             with warnings.catch_warnings():
                 if not should_fit:
-                    # window 0 already emitted these warnings
+                    # the window that was fit already emitted these warnings
                     for message in (
                         "Prediction intervals are calculated using 1-step",
                         "Please rerun the `fit` method",
