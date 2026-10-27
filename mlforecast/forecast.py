@@ -140,7 +140,7 @@ def _frozen_backtest(
     n_windows: int,
     h: int,
     step_size: int,
-    train_ends: Optional[DataFrame],
+    train_ends: DataFrame,
 ) -> DFType:
     """Run inference-only backtesting windows using already-fitted models.
 
@@ -148,8 +148,7 @@ def _frozen_backtest(
     step_size=1 is safe here (no refitting means no leakage from overlapping windows).
     Windows are computed per series (``ufp.backtest_splits``) so that series with
     unaligned ends each get cutoffs relative to their own last timestamp.
-    If `train_ends` is given, the windows of the series in it must start after
-    their training end.
+    The windows of the series in `train_ends` must start after their training end.
     """
     ts = fcst.ts
     id_col, time_col, target_col = ts.id_col, ts.time_col, ts.target_col
@@ -192,7 +191,7 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for i, (cutoffs, train, valid) in enumerate(splits):
-        if i == 0 and train_ends is not None:
+        if i == 0:
             _check_out_of_sample(cutoffs, train_ends, id_col)
         X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
         preds = fcst._transfer(train, None).predict(h=h, X_df=X_df)
@@ -1595,6 +1594,7 @@ class MLForecast:
         """Adapt the source calibration to `df`."""
         pi = self.prediction_intervals
         train_ends = self._train_ends_
+        assert train_ends is not None
         model_names = list(self.models.keys())
         if isinstance(method, Recalibration):
             if method.h is not None:
