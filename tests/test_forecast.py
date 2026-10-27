@@ -1485,6 +1485,28 @@ def test_direct_forecasting_perfect_exogenous_fit_multiple_series():
         )
 
 
+@pytest.mark.parametrize("freq", [1, "1d"])
+def test_polars_sparse_horizon_dates(freq):
+    times = np.arange(46)
+    if freq == "1d":
+        times = pd.date_range("2026-01-01", periods=46).to_numpy()
+    df = pl.DataFrame(
+        {
+            "unique_id": np.repeat(["a", "b"], 30),
+            "ds": np.concatenate([times[:30], times[10:40]]),
+            "y": np.concatenate([np.arange(30), np.arange(10, 40)]),
+        }
+    )
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    fcst.fit(df, horizons=[2, 4, 6])
+    preds = fcst.predict(6)
+    expected = np.array([31, 33, 35, 41, 43, 45])
+    assert preds["unique_id"].to_list() == ["a"] * 3 + ["b"] * 3
+    np.testing.assert_array_equal(preds["ds"].to_numpy(), times[expected])
+    assert preds.schema["ds"] == df.schema["ds"]
+    np.testing.assert_allclose(preds["LinearRegression"].to_numpy(), expected)
+
+
 # Tests for horizons parameter
 def test_horizons_basic():
     """Test that horizons=[7, 14] creates exactly 2 models."""

@@ -1980,7 +1980,7 @@ class TimeSeries:
                 ]
                 # backend-specific date-matrix build at prediction assembly
                 # Stack: each row is a series, each col is a horizon
-                dates_matrix = pl.DataFrame(dates_per_horizon).transpose()
+                dates_matrix = pl.DataFrame(dates_per_horizon)
                 # Flatten row by row: [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
                 dates = dates_matrix.to_numpy().ravel()
                 dates = pl.Series(dates)
