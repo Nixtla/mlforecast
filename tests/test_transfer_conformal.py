@@ -932,7 +932,7 @@ def test_cross_validation_frozen_windows_use_fit_intervals(refit, step_size):
         )
 
 
-def test_cross_validation_frozen_window_not_calibrated_in_sample():
+def test_cross_validation_frozen_window_reuses_fit_intervals():
     h = 4
     src = generate_daily_series(5, min_length=100, max_length=100, seed=0)
     src["y"] += np.random.default_rng(0).normal(0, 3, len(src))
@@ -977,7 +977,8 @@ def test_cross_validation_frozen_windows_new_series(engine, refit):
         res = fcst.cross_validation(df, **kwargs)
         return res.to_pandas() if engine == "polars" else res
 
-    res = cv(pd.concat([old, new]))
+    with pytest.warns(UserWarning, match=r"didn't calibrate series \['new'\]"):
+        res = cv(pd.concat([old, new]))
     window = res["cutoff"].rank(method="dense").astype(int) - 1
     is_new = res["unique_id"].eq("new")
     assert not is_new[window == 0].any()
@@ -991,6 +992,32 @@ def test_cross_validation_frozen_windows_new_series(engine, refit):
         pd.testing.assert_frame_equal(
             res[~is_new].reset_index(drop=True), cv(old).reset_index(drop=True)
         )
+
+
+def test_cross_validation_frozen_windows_warn_series_after_first_window():
+    old = generate_daily_series(2, min_length=120, max_length=120, seed=0)
+    old["unique_id"] = old["unique_id"].astype(str)
+    late = generate_daily_series(1, min_length=15, max_length=15, seed=1)
+    late["unique_id"] = "late"
+    late["ds"] += old["ds"].max() - late["ds"].max()
+    fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1, 2])
+    with pytest.warns(UserWarning, match="didn't calibrate") as record:
+        res = fcst.cross_validation(
+            pd.concat([old, late]),
+            n_windows=4,
+            h=3,
+            step_size=10,
+            refit=False,
+            level=[80],
+            prediction_intervals=PredictionIntervals(n_windows=2, h=3),
+        )
+    messages = [
+        str(w.message) for w in record if "didn't calibrate" in str(w.message)
+    ]
+    assert len(messages) == 1
+    assert "['late']" in messages[0]
+    first_frozen = res["cutoff"].drop_duplicates().nsmallest(2).max()
+    assert not res.loc[res["cutoff"] == first_frozen, "unique_id"].eq("late").any()
 
 
 def test_cross_validation_refit_false_one_step_warning():

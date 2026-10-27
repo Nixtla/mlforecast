@@ -1815,8 +1815,10 @@ class MLForecast:
 
     def _add_intervals_to_calibrated(
         self, forecasts: DFType, level: List[Union[int, float]], h: int
-    ) -> DFType:
-        """Add the fit's intervals to the series it calibrated, leave the rest missing."""
+    ) -> Tuple[DFType, List[Any]]:
+        """Add the fit's intervals to the series it calibrated, leave the rest missing.
+
+        Also returns the ids of the series without intervals."""
         assert self._calibration_ is not None
         id_col = self.ts.id_col
         scores_ids = self._calibration_.scores[id_col]
@@ -1826,9 +1828,9 @@ class MLForecast:
         ids = nw.from_native(seen[id_col], series_only=True).unique(maintain_order=True)
         seen = self._add_intervals_from_fit(seen, level, h, ids.to_list())
         unseen = ufp.filter_with_mask(forecasts, ~calibrated)
-        return nw.concat(
-            [nw.from_native(seen), nw.from_native(unseen)], how="diagonal"
-        ).to_native()
+        unseen_ids = nw.from_native(unseen[id_col], series_only=True)
+        out = nw.concat([nw.from_native(seen), nw.from_native(unseen)], how="diagonal")
+        return out.to_native(), unseen_ids.unique(maintain_order=True).to_list()
 
     def cross_validation(
         self,
@@ -1901,6 +1903,7 @@ class MLForecast:
         results = []
         cv_models = []
         cv_fitted_values = []
+        uncalibrated: Dict[Any, None] = {}
         splits = ufp.backtest_splits(
             df,
             n_windows=n_windows,
@@ -2028,7 +2031,10 @@ class MLForecast:
                 )
                 if frozen_intervals:
                     assert level is not None
-                    y_pred = fcst._add_intervals_to_calibrated(y_pred, sorted(level), h)
+                    y_pred, unseen_ids = fcst._add_intervals_to_calibrated(
+                        y_pred, sorted(level), h
+                    )
+                    uncalibrated.update(dict.fromkeys(unseen_ids))
             y_pred = ufp.join(y_pred, cutoffs, on=id_col, how="left")
             result = ufp.join(
                 valid[[id_col, time_col, target_col]],
@@ -2061,6 +2067,13 @@ class MLForecast:
                     "and that there aren't any missing periods."
                 )
             results.append(result)
+        if uncalibrated:
+            warnings.warn(
+                "The prediction intervals of the windows that aren't refit use the "
+                "conformity scores of the last fit, which didn't calibrate series "
+                f"{list(uncalibrated)}. Their intervals are missing.",
+                UserWarning,
+            )
         del self.models_
         self.cv_models_ = cv_models
         self.cv_fitted_values_ = cv_fitted_values
