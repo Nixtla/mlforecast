@@ -14,7 +14,7 @@ __all__ = [
 
 import abc
 import copy
-from typing import Iterable, List, Optional, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence, TypeVar
 
 import coreforecast.scalers as core_scalers
 import numpy as np
@@ -26,6 +26,19 @@ from utilsforecast.compat import DataFrame
 from .compat import core_scalers_support_skipna
 from .grouped_array import GroupedArray
 from .utils import _ShortSeriesException
+
+_GATransform = TypeVar("_GATransform", bound="_BaseGroupedArrayTargetTransform")
+_Transform = TypeVar("_Transform")
+
+
+def _bare_instance(obj: _Transform) -> _Transform:
+    """An instance of `obj`'s class with no attributes set.
+
+    Calling the constructor instead would downgrade a user subclass whose
+    `__init__` takes different arguments, so clones start from this and copy
+    over the arguments they know about.
+    """
+    return type(obj).__new__(type(obj))
 
 
 def _validate_scaler_skipna(skipna: bool) -> None:
@@ -50,6 +63,14 @@ class BaseTargetTransform(abc.ABC):
         self.time_col = time_col
         self.target_col = target_col
 
+    def clone(self) -> "BaseTargetTransform":
+        """An unfitted instance with the same arguments.
+
+        The default copies the fitted state along, which is safe for any
+        subclass; override it when that state is large.
+        """
+        return copy.deepcopy(self)
+
     def update(self, df: DataFrame) -> DataFrame:
         raise NotImplementedError
 
@@ -73,6 +94,17 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
 
     def set_num_threads(self, num_threads: int) -> None:
         self.num_threads = num_threads
+
+    def clone(self: _GATransform) -> _GATransform:
+        """An unfitted instance with the same arguments and thread count."""
+        out = self._clone()
+        out.num_threads = self.num_threads
+        return out
+
+    def _clone(self: _GATransform) -> _GATransform:
+        # the default copies the fitted state along; override it to rebuild
+        # from the arguments when that state is large
+        return copy.deepcopy(self)
 
     @abc.abstractmethod
     def update(self, ga: GroupedArray) -> GroupedArray: ...
@@ -107,6 +139,11 @@ class Differences(_BaseGroupedArrayTargetTransform):
 
     def __init__(self, differences: Iterable[int]):
         self.differences = list(differences)
+
+    def _clone(self) -> "Differences":
+        out = _bare_instance(self)
+        out.differences = list(self.differences)
+        return out
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         self.fitted_: List[np.ndarray] = []
@@ -158,7 +195,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(transformed, ga.indptr)
 
     def take(self, idxs: np.ndarray) -> "Differences":
-        out = Differences(self.differences)
+        out = self.clone()
         if self.fitted_indptr_ is None:
             out.fitted_ = []
             out.fitted_indptr_ = None
@@ -182,7 +219,7 @@ class Differences(_BaseGroupedArrayTargetTransform):
         first_scaler = scalers[0]
         core_scaler = first_scaler.scalers_[0]
         diffs = first_scaler.differences
-        out = Differences(diffs)
+        out = first_scaler.clone()
         out.fitted_ = []
         if first_scaler.fitted_indptr_ is None:
             out.fitted_indptr_ = None
@@ -209,6 +246,11 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
 
     def __init__(self, max_diffs: int):
         self.scaler_ = core_scalers.AutoDifferences(max_diffs)
+
+    def _clone(self) -> "AutoDifferences":
+        out = _bare_instance(self)
+        out.scaler_ = core_scalers.AutoDifferences(self.scaler_.max_diffs)
+        return out
 
     def _diffs_per_step(self, indptr_dtype: np.dtype) -> List[np.ndarray]:
         """Convert stored differences into per-step difference arrays.
@@ -301,7 +343,7 @@ class AutoDifferences(_BaseGroupedArrayTargetTransform):
         return GroupedArray(transformed, ga.indptr)
 
     def take(self, idxs: np.ndarray) -> "AutoDifferences":
-        out = AutoDifferences(self.scaler_.max_diffs)
+        out = self.clone()
         out.scaler_ = self.scaler_.take(idxs)
         if self.fitted_indptr_ is None:
             out.fitted_ = []
@@ -341,6 +383,15 @@ class AutoSeasonalDifferences(AutoDifferences):
             n_seasons=n_seasons,
         )
 
+    def _clone(self) -> "AutoSeasonalDifferences":
+        out = _bare_instance(self)
+        out.scaler_ = core_scalers.AutoSeasonalDifferences(
+            season_length=self.scaler_.season_length,
+            max_diffs=self.scaler_.max_diffs,
+            n_seasons=self.scaler_.n_seasons,
+        )
+        return out
+
 
 class AutoSeasonalityAndDifferences(AutoDifferences):
     """Find the length of the seasonal period and apply the optimal number of differences to each group.
@@ -367,6 +418,16 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
             n_seasons=n_seasons,
         )
 
+    def _clone(self) -> "AutoSeasonalityAndDifferences":
+        out = _bare_instance(self)
+        out.max_diffs = self.max_diffs
+        out.scaler_ = core_scalers.AutoSeasonalityAndDifferences(
+            max_season_length=self.scaler_.max_season_length,
+            max_diffs=self.scaler_.max_diffs,
+            n_seasons=self.scaler_.n_seasons,
+        )
+        return out
+
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
         # Validate that each series has enough data for STL decomposition
         # STL requires at least 2 periods of the detected seasonal period after differencing.
@@ -392,7 +453,7 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
 
 class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
-    scaler_factory: type
+    scaler_factory: Callable[[], core_scalers._BaseLocalScaler]
     skipna: bool = False
 
     @property
@@ -408,15 +469,12 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
         # rather than passed as False (which that version wouldn't accept).
         return {"skipna": self.skipna} if core_scalers_support_skipna() else {}
 
-    def _make_scaler(self):
-        return self.scaler_factory()
-
     def update(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         return GroupedArray(self.scaler_.transform(ga), ga.indptr)
 
     def fit_transform(self, ga: GroupedArray) -> GroupedArray:
-        self.scaler_ = self._make_scaler()
+        self.scaler_ = self.scaler_factory()
         core_ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
         transformed = self.scaler_.fit_transform(core_ga)
         return GroupedArray(transformed, ga.indptr)
@@ -426,8 +484,15 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
         transformed = self.scaler_.inverse_transform(core_ga)
         return GroupedArray(transformed, ga.indptr)
 
+    def _clone(self) -> "_BaseLocalScaler":
+        # an unfitted local scaler is its factory; `scaler_` is what fit builds
+        out = _bare_instance(self)
+        out.scaler_factory = self.scaler_factory
+        out.skipna = self.skipna
+        return out
+
     def take(self, idxs: np.ndarray) -> "_BaseLocalScaler":
-        out = copy.deepcopy(self)
+        out = self.clone()
         out.scaler_ = self.scaler_.take(idxs)
         return out
 
@@ -447,9 +512,8 @@ class LocalStandardScaler(_BaseLocalScaler):
     def __init__(self, skipna: bool = False):
         _validate_scaler_skipna(skipna)
         self.skipna = skipna
-
-    def _make_scaler(self):
-        return self.scaler_factory(**self._skipna_kwargs())
+        kwargs = self._skipna_kwargs()
+        self.scaler_factory = lambda: core_scalers.LocalStandardScaler(**kwargs)
 
 
 class LocalMinMaxScaler(_BaseLocalScaler):
@@ -467,9 +531,8 @@ class LocalMinMaxScaler(_BaseLocalScaler):
     def __init__(self, skipna: bool = False):
         _validate_scaler_skipna(skipna)
         self.skipna = skipna
-
-    def _make_scaler(self):
-        return self.scaler_factory(**self._skipna_kwargs())
+        kwargs = self._skipna_kwargs()
+        self.scaler_factory = lambda: core_scalers.LocalMinMaxScaler(**kwargs)
 
 
 class LocalRobustScaler(_BaseLocalScaler):
@@ -487,9 +550,8 @@ class LocalRobustScaler(_BaseLocalScaler):
         _validate_scaler_skipna(skipna)
         self.scale = scale
         self.skipna = skipna
-
-    def _make_scaler(self):
-        return core_scalers.LocalRobustScaler(self.scale, **self._skipna_kwargs())
+        kwargs = self._skipna_kwargs()
+        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale, **kwargs)
 
 
 class LocalBoxCox(_BaseLocalScaler):
@@ -506,6 +568,11 @@ class GlobalSklearnTransformer(BaseTargetTransform):
 
     def __init__(self, transformer: TransformerMixin):
         self.transformer = transformer
+
+    def clone(self) -> "GlobalSklearnTransformer":
+        out = _bare_instance(self)
+        out.transformer = self.transformer
+        return out
 
     def fit_transform(self, df: DataFrame) -> DataFrame:
         df = ufp.copy_if_pandas(df, deep=False)

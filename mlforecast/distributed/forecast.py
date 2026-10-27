@@ -29,7 +29,6 @@ try:
 except ModuleNotFoundError:
     SPARK_INSTALLED = False
 try:
-    from lightgbm_ray import RayDMatrix
     from ray.data import Dataset as RayDataset
 
     RAY_INSTALLED = True
@@ -49,7 +48,7 @@ from mlforecast.core import (
     _name_models,
 )
 
-from ..forecast import MLForecast
+from ..forecast import MLForecast, _train_ends
 from ..grouped_array import GroupedArray
 from ..utils import _resolve_num_threads
 
@@ -62,6 +61,7 @@ class DistributedMLForecast:
     """Multi backend distributed pipeline"""
 
     _PARTITION_FIELDS = ("ts", "train", "valid", "first_uid", "all_uids", "x_df")
+    _train_ends_: Optional[pd.DataFrame] = None
 
     def __init__(
         self,
@@ -81,10 +81,10 @@ class DistributedMLForecast:
 
         Args:
             models (regressor or list of regressors): Models that will be trained and used to compute the forecasts.
-            freq (str or int, optional): Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series. Defaults to None.
+            freq (str or int): Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
             lags (list of int, optional): Lags of the target to use as features. Defaults to None.
             lag_transforms (dict of int to list of functions, optional): Mapping of target lags to their transformations. Defaults to None.
-            date_features (list of str or callable, optional): Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
+            date_features (list of str, callable or CalendarFeature, optional): Features computed from the dates. Can be calendar features from `mlforecast.date_features` (listed by `mlforecast.date_features.available()`), date attributes of the dataframe backend or functions that will take the dates as input.
                 Defaults to None.
             num_threads (int): Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1.
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step.
@@ -97,7 +97,7 @@ class DistributedMLForecast:
                 will be done by the `id_col`. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name.
                 Defaults to None.
-            date_features_as_dummies (bool): If True, string date features with a known finite range (e.g. 'dayofweek', 'month') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
+            date_features_as_dummies (bool): If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
             models = [models]
@@ -188,7 +188,6 @@ class DistributedMLForecast:
             if core_tfms:
                 # populate the stats needed for the updates
                 ts._compute_transforms(core_tfms, updates_only=False)
-            ts.as_numpy = False
             return [
                 [
                     cloudpickle.dumps(ts),
@@ -317,6 +316,8 @@ class DistributedMLForecast:
         weight_col: str | None = None,
         allow_null_target: bool = False,
     ) -> fugue.AnyDataFrame:
+        # `_base_ts` is never fit; it records the settings the partitions were
+        # fit with, for the methods that run later and for `save`/`load`
         self._base_ts.id_col = id_col
         self._base_ts.time_col = time_col
         self._base_ts.target_col = target_col
@@ -443,7 +444,8 @@ class DistributedMLForecast:
                 trained_model = clone(model).fit(X, y, sample_weight=weights)
                 self.models_[name] = trained_model.model_
         elif RAY_INSTALLED and isinstance(data, RayDataset):
-            # Need to materialize
+            # Need to materialize. Each model's fit would otherwise re-execute
+            # this same dataset, since they all get handed the lazy one.
             if weight_col is not None:
                 raise NotImplementedError(
                     "Only spark and dask engines currently support sample weights."
@@ -451,18 +453,34 @@ class DistributedMLForecast:
             prep_selected = prep.select_columns(
                 cols=features + [target_col]
             ).materialize()
-            X = RayDMatrix(
-                prep_selected,
-                label=target_col,
-            )
             for name, model in self.models.items():
-                trained_model = clone(model).fit(X, y=None)
+                trained_model = clone(model).fit(prep_selected, target_col=target_col)
                 self.models_[name] = trained_model.model_
         else:
             raise NotImplementedError(
                 "Only spark, dask, and ray engines are supported."
             )
+        self._train_ends_ = None
         return self
+
+    @staticmethod
+    def _get_train_ends(items: List[List[Any]]) -> Iterable[List[Any]]:
+        for row in items:
+            data = dict(zip(DistributedMLForecast._PARTITION_FIELDS, row))
+            yield [cloudpickle.dumps(_train_ends(cloudpickle.loads(data["ts"])))]
+
+    def _collect_train_ends(self) -> pd.DataFrame:
+        # `update` moves the partitions' last dates past what the models trained on
+        res = fa.transform(
+            self._partition_results,
+            DistributedMLForecast._get_train_ends,
+            schema="train_ends:binary",
+            engine=self.engine,
+            as_fugue=True,
+        )
+        return ufp.vertical_concat(
+            [cloudpickle.loads(x) for x in res.as_pandas()["train_ends"]]
+        )
 
     def fit(
         self,
@@ -494,7 +512,7 @@ class DistributedMLForecast:
         Returns:
             (DistributedMLForecast): Forecast object with series values and trained models.
         """
-        return self._fit(
+        self._fit(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -505,6 +523,8 @@ class DistributedMLForecast:
             weight_col=weight_col,
             allow_null_target=allow_null_target,
         )
+        self._train_ends_ = self._collect_train_ends()
+        return self
 
     @staticmethod
     def _attach_x_df(part: pd.DataFrame, uid_to_xdf: dict) -> Iterable[pd.DataFrame]:
@@ -878,6 +898,8 @@ class DistributedMLForecast:
         dummy_df.as_pandas()
         with fsspec.open(f"{path}/models.pkl", "wb") as f:
             cloudpickle.dump(self.models_, f)
+        with fsspec.open(f"{path}/train_ends.pkl", "wb") as f:
+            cloudpickle.dump(self._train_ends_, f)
         self._base_ts.save(f"{path}/_base_ts.pkl")
 
     @staticmethod
@@ -918,6 +940,8 @@ class DistributedMLForecast:
         )
         with fsspec.open(f"{path}/models.pkl", "rb") as f:
             models = cloudpickle.load(f)
+        with fsspec.open(f"{path}/train_ends.pkl", "rb") as f:
+            train_ends = cloudpickle.load(f)
         base_ts = TimeSeries.load(f"{path}/_base_ts.pkl")
         fcst = DistributedMLForecast(models=models, freq=base_ts.freq)
         fcst._base_ts = base_ts
@@ -925,6 +949,7 @@ class DistributedMLForecast:
             partition_results, lazy=False, engine=engine, as_fugue=True
         )
         fcst.models_ = models
+        fcst._train_ends_ = train_ends
         fcst.engine = engine
         fcst.num_partitions = len(paths)
         return fcst
@@ -1068,7 +1093,6 @@ class DistributedMLForecast:
         ts.static_features_ = statics
         ts.transforms.update(combined_core_lag_tfms)
         ts.target_transforms = combined_target_tfms
-        fcst = MLForecast(models=self.models_, freq=ts.freq)
-        fcst.ts = ts
-        fcst.models_ = self.models_
-        return fcst
+        return MLForecast._from_ts(
+            ts, models=self.models_, models_=self.models_, train_ends=self._train_ends_
+        )

@@ -15,6 +15,12 @@ import pytest
 from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
+from mlforecast.conformal_prediction import (
+    ErrorScaling,
+    PredictionIntervals,
+    Recalibration,
+    ScaleAlignment,
+)
 from mlforecast.compat import core_supports_skipna
 from mlforecast.core import TimeSeries
 from mlforecast.lag_transforms import (
@@ -482,11 +488,11 @@ def test_flag_is_recorded_on_the_timeseries(series):
 @pytest.mark.skipif(
     not core_supports_skipna(), reason="coreforecast without skipna support"
 )
-def test_predict_with_new_df(series):
-    """predict(new_df=...) rebuilds history and must not re-reject the nulls."""
+def test_transfer_predict(series):
+    """transfer(df) rebuilds history and must not re-reject the nulls."""
     fcst = _fcst(lags=[1], lag_transforms={1: [RollingMean(3, 1, skipna=True)]})
     fcst.fit(series, allow_null_target=True)
-    preds = fcst.predict(2, new_df=series)
+    preds = fcst.transfer(series).predict(2)
     assert preds.shape[0] == 2
     assert preds["LinearRegression"].notna().all()
 
@@ -495,7 +501,7 @@ def test_predict_with_new_df(series):
     not core_supports_skipna(), reason="coreforecast without skipna support"
 )
 def test_cross_validation_without_refit(series):
-    """refit=False routes windows through predict(new_df=...)."""
+    """refit=False warms each window from a rebuilt history."""
     fcst = _fcst(lags=[1], lag_transforms={1: [RollingMean(3, 1, skipna=True)]})
     cv = fcst.cross_validation(
         series, n_windows=2, h=2, refit=False, allow_null_target=True
@@ -660,18 +666,12 @@ def _two_series_no_gap():
     )[["unique_id", "ds", "y"]]
 
 
-def _fitted_with_intervals(
-    train, method="conformal_distribution", scale_estimator=None
-):
-    from mlforecast.utils import PredictionIntervals
-
+def _fitted_with_intervals(train):
     fcst = _fcst(lags=[1], lag_transforms={1: [RollingMean(3, 1, skipna=True)]})
     fcst.fit(
         train,
         allow_null_target=True,
-        prediction_intervals=PredictionIntervals(
-            n_windows=2, h=2, method=method, scale_estimator=scale_estimator
-        ),
+        prediction_intervals=PredictionIntervals(n_windows=2, h=2),
     )
     return fcst
 
@@ -679,53 +679,35 @@ def _fitted_with_intervals(
 @pytest.mark.skipif(
     not core_supports_skipna(), reason="coreforecast without skipna support"
 )
-@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
-def test_transfer_conformal_rejects_null_calibration_tail(method):
-    """P1: a null in new_df's validation tail silently produced null intervals."""
-    train = _two_series_no_gap()
-    fcst = _fitted_with_intervals(train)
+@pytest.mark.parametrize("method", [Recalibration(), ErrorScaling()])
+def test_transfer_rejects_null_calibration_tail(method):
+    """A null in the backtest tail of `df` silently produced null intervals."""
+    fcst = _fitted_with_intervals(_two_series_no_gap())
 
-    new_df = _two_series_no_gap()
+    # new ids, so the backtest isn't rejected as overlapping the training data
+    new_df = pd.concat(
+        [_one_series("c", 1.0, gap=False), _one_series("d", 50.0, gap=False)],
+        ignore_index=True,
+    )[["unique_id", "ds", "y"]]
     new_df.loc[new_df["ds"].eq(DATES[-1]), "y"] = np.nan  # inside the backtest tail
     with pytest.raises(ValueError, match="calibration windows contain unobserved"):
-        fcst.predict(2, new_df=new_df, level=[80], transfer_conformal=method)
+        fcst.transfer(new_df, method)
 
 
 @pytest.mark.skipif(
     not core_supports_skipna(), reason="coreforecast without skipna support"
 )
-@pytest.mark.parametrize("method", ["recalibrate", "error_scaled"])
-def test_transfer_conformal_works_with_observed_tail(method):
+@pytest.mark.parametrize(
+    "method", [Recalibration(), ErrorScaling(), ScaleAlignment()]
+)
+def test_transfer_works_with_observed_tail(method):
     """Nulls in older history are fine; only the calibration tail must be observed."""
-    train = _two_series_no_gap()
-    fcst = _fitted_with_intervals(train)
+    fcst = _fitted_with_intervals(_two_series_no_gap())
 
     new_df = pd.concat(
-        [_one_series("a", 1.0), _one_series("b", 50.0)], ignore_index=True
+        [_one_series("c", 1.0), _one_series("d", 50.0)], ignore_index=True
     )[["unique_id", "ds", "y"]]  # holes at 01-09..01-11 only
-    preds = fcst.predict(2, new_df=new_df, level=[80], transfer_conformal=method)
-    assert preds["LinearRegression-lo-80"].notna().all()
-    assert preds["LinearRegression-hi-80"].notna().all()
-
-
-@pytest.mark.skipif(
-    not core_supports_skipna(), reason="coreforecast without skipna support"
-)
-@pytest.mark.parametrize("method", ["weighted_conformal", "scale_aligned_weighted"])
-def test_weighted_transfer_inherits_allow_null_target(method):
-    """P2: preprocess_fn(new_df) must not re-reject the accepted nulls."""
-    train = _two_series_no_gap()
-    # scale_aligned_weighted additionally requires a source scale estimator
-    fcst = _fitted_with_intervals(
-        train,
-        method="weighted_conformal_distribution",
-        scale_estimator="mad" if method == "scale_aligned_weighted" else None,
-    )
-
-    new_df = pd.concat(
-        [_one_series("a", 1.0), _one_series("b", 50.0)], ignore_index=True
-    )[["unique_id", "ds", "y"]]
-    preds = fcst.predict(2, new_df=new_df, level=[80], transfer_conformal=method)
+    preds = fcst.transfer(new_df, method).predict(2, level=[80])
     assert preds["LinearRegression-lo-80"].notna().all()
     assert preds["LinearRegression-hi-80"].notna().all()
 
@@ -831,7 +813,7 @@ def test_inferred_skipna_survives_predict(series):
     fcst = _fcst(lags=[1], lag_transforms={1: [RollingMean(3, 1)]})
     fcst.fit(series, allow_null_target=True)
     direct = fcst.predict(2)
-    rebuilt = fcst.predict(2, new_df=series)
+    rebuilt = fcst.transfer(series).predict(2)
     pd.testing.assert_frame_equal(direct, rebuilt)
 
 

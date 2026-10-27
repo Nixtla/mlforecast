@@ -25,7 +25,7 @@ import copy
 import inspect
 import re
 import warnings
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
@@ -37,6 +37,17 @@ from .compat import core_supports_skipna, core_update_honors_skipna
 
 def _pascal2camel(pascal_str: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", pascal_str).lower()
+
+
+def _configured_lag_samples(tfm) -> int:
+    """``update_samples`` for a transform that only reads the value ``lag`` back.
+
+    -1 (keep everything) until the lag is known, i.e. before ``_set_core_tfm``.
+    """
+    core = getattr(tfm, "_core_tfm", None)
+    if core is None:
+        return -1
+    return core.lag
 
 
 def _normalize_columns(columns):
@@ -304,6 +315,20 @@ class _BaseLagTransform(BaseEstimator):
         out._core_tfm = self._core_tfm.take(idxs)
         return out
 
+    def _stateful_core_tfms(self) -> List[Any]:
+        """Inner coreforecast transforms that carry a per-group accumulator.
+
+        Only these need their state advanced when observations are appended
+        outside the recursive predict loop (``TimeSeries.update``); every other
+        transform recomputes from the stored array on each call. ``stats_`` is
+        only set by ``transform``, so this also skips transforms that were
+        never warmed up (e.g. the pooled ones).
+        """
+        core = getattr(self, "_core_tfm", None)
+        if core is not None and hasattr(core, "stats_"):
+            return [core]
+        return []
+
     @staticmethod
     def stack(transforms: Sequence["_BaseLagTransform"]) -> "_BaseLagTransform":
         out = copy.deepcopy(transforms[0])
@@ -373,11 +398,11 @@ class LookupLag(_BaseLagTransform):
 
     ``partition_by`` is required: it defines the matching buckets and is what
     makes this a lookup rather than a plain :class:`Lag`. Like other pooled
-    transforms, the partition columns may vary over time and must be supplied
-    via ``X_df`` at prediction.
+    transforms, the partition columns may vary over time; dynamic ones must be supplied
+    via ``X_df`` at prediction and in ``update``.
 
     Args:
-        partition_by (Sequence[str]): Dynamic column names used to define the
+        partition_by (Sequence[str]): Column names used to define the
             matching buckets within each series. Required.
     """
 
@@ -406,15 +431,13 @@ class LookupLag(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        if self._core_tfm is None:
-            return -1
         # LookupLag's pooled state is never trimmed under ``keep_last_n`` (it is
         # not finite-window; see ``_pooled_retention``), so it keeps full bucket
         # history at predict. This value only feeds the ``self.ga`` keep_last_n
         # inference and the regular-``ga`` core-``Lag`` output it governs -- which
         # the pooled result overwrites; pooled trimming ignores it. ``lag`` is the
         # minimal safe value.
-        return self._core_tfm.lag
+        return _configured_lag_samples(self)
 
     @property
     def _pooled_retention(self) -> Optional[int]:
@@ -465,11 +488,13 @@ class _RollingBase(_BaseLagTransform):
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-                Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+                Columns must be static features unless ``partition_by`` is set, in which case columns left
+                out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+                at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
-                Unlike ``groupby``, partition columns may vary over time and must be
-                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
+                supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
@@ -637,11 +662,13 @@ class _Seasonal_RollingBase(_BaseLagTransform):
             global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
                 Requires all series to end at the same timestamp. Defaults to False.
             groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-                Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+                Columns must be static features unless ``partition_by`` is set, in which case columns left
+                out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+                at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
             partition_by (Sequence[str], optional): Column names to partition by.
                 Each unique combination of partition values creates a separate bucket.
-                Unlike ``groupby``, partition columns may vary over time and must be
-                supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+                Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
+                supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
                 aggregates within each partition), ``groupby`` (group aggregates within each
                 partition), or stands alone (per-(id, partition) buckets, *local* mode).
                 See the Pooled lag transforms guide for details. Defaults to None.
@@ -754,11 +781,13 @@ class _ExpandingBase(_BaseLagTransform):
         global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-            Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+            Columns must be static features unless ``partition_by`` is set, in which case columns left
+            out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+            at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
-            Unlike ``groupby``, partition columns may vary over time and must be
-            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
+            supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
@@ -805,7 +834,9 @@ class _ExpandingBase(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        return 1
+        # The accumulator carries the history, but each update still reads the
+        # value `lag` positions back, so that many samples must survive the trim.
+        return _configured_lag_samples(self)
 
     @property
     def _pooled_retention(self) -> Optional[int]:
@@ -878,11 +909,13 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         global_ (bool): If True, compute the statistic across all series aggregated by timestamp.
             Requires all series to end at the same timestamp. Defaults to False.
         groupby (Sequence[str], optional): Column names to group by before computing the statistic.
-            Columns must be static features. Mutually exclusive with `global_`. Defaults to None.
+            Columns must be static features unless ``partition_by`` is set, in which case columns left
+            out of an explicit ``static_features`` may vary over time and must be supplied via ``X_df``
+            at prediction and in ``update``. Mutually exclusive with `global_`. Defaults to None.
         partition_by (Sequence[str], optional): Column names to partition by.
             Each unique combination of partition values creates a separate bucket.
-            Unlike ``groupby``, partition columns may vary over time and must be
-            supplied via ``X_df`` at prediction. Composes with ``global_`` (cross-series
+            Unlike ``groupby``, partition columns may vary over time; dynamic ones must be
+            supplied via ``X_df`` at prediction and in ``update``. Composes with ``global_`` (cross-series
             aggregates within each partition), ``groupby`` (group aggregates within each
             partition), or stands alone (per-(id, partition) buckets, *local* mode).
             See the Pooled lag transforms guide for details. Defaults to None.
@@ -949,7 +982,9 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        return 1
+        # The accumulator carries the history, but each update still reads the
+        # value `lag` positions back, so that many samples must survive the trim.
+        return _configured_lag_samples(self)
 
     @property
     def _pooled_retention(self) -> Optional[int]:
@@ -1007,7 +1042,9 @@ class Offset(_BaseLagTransform):
 
     @property
     def update_samples(self) -> int:
-        return self.tfm.update_samples + self.n
+        # ``_set_core_tfm(lag + n)`` already bakes the offset into the inner
+        # transform's core lag, so adding ``n`` here would count it twice.
+        return self.tfm.update_samples
 
     @property
     def _pooled_retention(self) -> Optional[int]:
@@ -1113,6 +1150,9 @@ class Combine(_BaseLagTransform):
         out.tfm1 = self.tfm1.take(idxs)
         out.tfm2 = self.tfm2.take(idxs)
         return out
+
+    def _stateful_core_tfms(self) -> List[Any]:
+        return self.tfm1._stateful_core_tfms() + self.tfm2._stateful_core_tfms()
 
     @staticmethod
     def stack(transforms: Sequence["Combine"]) -> "Combine":

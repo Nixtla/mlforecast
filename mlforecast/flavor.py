@@ -112,8 +112,6 @@ def save_model(
             (e.g. ["pandas", "-r requirements.txt", "-c constraints.txt"]) or the string
             path to a pip requirements file on the local filesystem
             (e.g. "requirements.txt"). Defaults to None.
-        serialization_format (str, optional): The format in which to serialize the model. This should be one of the formats
-            "pickle" or "cloudpickle". Defaults to "pickle".
     """
     _validate_env_arguments(conda_env, pip_requirements, extra_pip_requirements)
     _validate_and_prepare_target_save_path(path)
@@ -346,4 +344,5 @@ class _MLForecastModelWrapper:
         if X_df is not None:
             X_df = pd.DataFrame(X_df).astype(col_types)
         ids = attrs.get("ids")
-        return self.model.predict(h=h, new_df=new_df, level=level, X_df=X_df, ids=ids)
+        model = self.model if new_df is None else self.model._transfer(new_df, None)
+        return model.predict(h=h, level=level, X_df=X_df, ids=ids)

@@ -21,6 +21,7 @@ from mlforecast.core import (
     TargetTransform,
     TimeSeries,
 )
+from mlforecast.data_validation import _validate_no_null_times
 from mlforecast.utils import _resolve_num_threads
 
 
@@ -106,6 +107,49 @@ def _update_and_predict(
 
 
 CVResult = Tuple[int, float]
+_CATEGORICAL_FEATURE_ALIASES = frozenset(
+    [
+        "categorical_feature",
+        "categorical_features",
+        "cat_feature",
+        "categorical_column",
+        "cat_column",
+    ]
+)
+
+
+class _LGBMRegressor(lgb.LGBMRegressor):
+    """`LGBMRegressor` with `categorical_feature` as an attribute, so that `MLForecast.from_cv` can carry it over.
+
+    It's kept out of `get_params` because LightGBM forwards those to the booster, where it isn't a valid parameter.
+    """
+
+    categorical_feature: Optional[List[str]] = None
+
+    def __sklearn_clone__(self) -> "_LGBMRegressor":
+        new = super().__sklearn_clone__()
+        new.categorical_feature = copy.copy(self.categorical_feature)
+        return new
+
+    def set_params(self, **params: Any) -> "_LGBMRegressor":
+        self.categorical_feature = params.pop(
+            "categorical_feature", self.categorical_feature
+        )
+        return super().set_params(**params)
+
+    def fit(
+        self,
+        X,
+        y,
+        *args,
+        categorical_feature=None,
+        **kwargs,
+    ):
+        if categorical_feature is None:
+            categorical_feature = self.categorical_feature
+        if categorical_feature is not None:
+            kwargs["categorical_feature"] = categorical_feature
+        return super().fit(X, y, *args, **kwargs)
 
 
 class LightGBMCV:
@@ -124,7 +168,7 @@ class LightGBMCV:
             freq (str or int): Pandas offset alias, e.g. 'D', 'W-THU' or integer denoting the frequency of the series.
             lags (list of int, optional): Lags of the target to use as features. Defaults to None.
             lag_transforms (dict of int to list of functions, optional): Mapping of target lags to their transformations. Defaults to None.
-            date_features (list of str or callable, optional): Features computed from the dates. Can be pandas date attributes or functions that will take the dates as input.
+            date_features (list of str, callable or CalendarFeature, optional): Features computed from the dates. Can be calendar features from `mlforecast.date_features` (listed by `mlforecast.date_features.available()`), date attributes of the dataframe backend or functions that will take the dates as input.
                 Defaults to None.
             num_threads (int): Number of threads to use when computing the features. Use -1 to use all available CPU cores. Defaults to 1.
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step.
@@ -174,6 +218,7 @@ class LightGBMCV:
         metric: Union[str, Callable] = "mape",
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
+        categorical_feature: Optional[List[str]] = None,
         allow_null_target: bool = False,
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
@@ -199,11 +244,14 @@ class LightGBMCV:
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
             weight_col (str, optional):Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
+            categorical_feature (list of str, optional): Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'.
+                It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None.
             allow_null_target (bool): Allow nulls in the target column instead of raising. The rows are kept while each window's features are computed and dropped before training. Defaults to False.
 
         Returns:
             (LightGBMCV): CV object with internal data structures for partial_fit.
         """
+        _validate_no_null_times(df, time_col)
         if weights is None:
             self.weights = np.full(n_windows, 1 / n_windows)
         elif len(weights) != n_windows:
@@ -225,7 +273,20 @@ class LightGBMCV:
         self.id_col = id_col
         self.time_col = time_col
         self.target_col = target_col
-        self.params = {} if params is None else params
+        self.params = {} if params is None else dict(params)
+        ignored = sorted(_CATEGORICAL_FEATURE_ALIASES.intersection(self.params))
+        if ignored:
+            warnings.warn(
+                f"{ignored} in `params` is ignored, use the `categorical_feature` argument instead."
+            )
+            for k in ignored:
+                del self.params[k]
+        if categorical_feature is not None and (
+            isinstance(categorical_feature, str)
+            or not all(isinstance(c, str) for c in categorical_feature)
+        ):
+            raise TypeError("`categorical_feature` must be a list of feature names.")
+        self.categorical_feature = categorical_feature
         splits = backtest_splits(
             df,
             n_windows=n_windows,
@@ -257,11 +318,12 @@ class LightGBMCV:
             else:
                 current_weights = None
             ds = lgb.Dataset(
-                prep.drop(
-                    columns=[id_col, time_col, target_col, weight_col], errors="ignore"
-                ),
+                prep[ts.features_order_],
                 prep[target_col],
                 weight=current_weights,
+                categorical_feature=(
+                    "auto" if categorical_feature is None else categorical_feature
+                ),
             ).construct()
 
             bst = lgb.Booster({**self.params, "num_threads": self.bst_threads}, ds)
@@ -421,6 +483,7 @@ class LightGBMCV:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
+        categorical_feature: Optional[List[str]] = None,
         allow_null_target: bool = False,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
@@ -457,6 +520,9 @@ class LightGBMCV:
                 The series identifier is on the index. Defaults to None.
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
+            weight_col (str, optional): Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
+            categorical_feature (list of str, optional): Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'.
+                It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None.
             allow_null_target (bool): Allow nulls in the target column instead of raising. See `MLForecast.preprocess` for the semantics. Defaults to False.
 
         Returns:
@@ -478,6 +544,7 @@ class LightGBMCV:
             weights=weights,
             metric=metric,
             weight_col=weight_col,
+            categorical_feature=categorical_feature,
             allow_null_target=allow_null_target,
         )
         hist = []
@@ -530,7 +597,6 @@ class LightGBMCV:
             weight_col,
             allow_null_target=allow_null_target,
         )
-        self.ts.as_numpy = False
         return hist
 
     def predict(

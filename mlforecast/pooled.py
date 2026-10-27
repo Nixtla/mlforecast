@@ -28,7 +28,7 @@ cancels).  See ``_PooledKernel`` subclasses for the full table.
 
 __all__ = ["PooledState"]
 
-from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Collection, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -42,50 +42,58 @@ _NULL_KEY = "\x00__MLF_NULL__"
 
 
 # %% key encoding
-def _encode_column(values: np.ndarray) -> np.ndarray:
-    """Encode one key column as strings, canonically across dtypes.
+# object column contents whose equal values always print alike
+_PRINT_STABLE = {"empty", "string", "integer", "boolean"}
 
-    Two things have to hold. Every missing value (null, NaN, ``None``) maps to a
-    single sentinel, so missing matches missing and nothing else -- SQL
-    ``PARTITION BY`` semantics. And a key must encode the same whether it
-    arrives as an int or as a float: a column can be float at fit (one NaN is
-    enough to widen it) and int in ``X_df`` at predict, and those must land in
-    the same bucket. So integral values encode as an int string and only
-    fractional ones keep a decimal point, which cannot collide with an integer.
+
+def _encode_value(v: Any) -> str:
+    # integral floats encode as ints so a key matches whether it arrives as int or float
+    if isinstance(v, float):
+        integral = v.is_integer()
+    elif isinstance(v, np.floating):
+        # checked in its own dtype so longdouble keeps its precision
+        integral = np.isfinite(v) and v == np.floor(v)
+    else:
+        return str(v)
+    return str(int(v)) if integral else str(v)
+
+
+def _factorize_column(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Codes and encoded distinct values of one key column.
+
+    Every missing value maps to a single sentinel, so missing matches missing
+    and nothing else, and a key encodes the same whether it arrives as an int
+    or a float.
     """
     values = np.asarray(values)
-    if values.dtype.kind in "fc":
-        missing = np.isnan(values)
-    elif values.dtype.kind == "O":
-        missing = np.array([v is None or v != v for v in values], dtype=bool)
-    elif values.dtype.kind == "M":
-        missing = np.isnat(values)
+    if values.dtype.kind == "f" and values.dtype.itemsize > 8:
+        # pandas factorizes longdouble through float64
+        values = values.astype(object)
+    if (
+        values.dtype.kind == "O"
+        and pd.api.types.infer_dtype(values, skipna=True) not in _PRINT_STABLE
+    ):
+        # pandas merges equal values that print differently (True and 1), so
+        # these are factorized by their encoding
+        encoded = np.array([_encode_value(v) for v in values], dtype=object)
+        encoded[pd.isna(values)] = None
+        values = encoded
+    codes, uniques = pd.factorize(values)
+    uniques = np.asarray(uniques)
+    if uniques.dtype.kind == "f":
+        enc = np.array([_encode_value(v) for v in uniques], dtype=object)
     else:
-        missing = np.zeros(values.shape, dtype=bool)
-    if values.dtype.kind == "f":
-        safe = np.where(missing, 0.0, values)
-        integral = safe == np.floor(safe)
-        out = np.empty(values.shape, dtype=object)
-        if integral.any():
-            out[integral] = safe[integral].astype(np.int64).astype(str)
-        if (~integral).any():
-            out[~integral] = safe[~integral].astype(str)
-    elif values.dtype.kind == "O":
-        # object columns may mix ints and floats; normalise the numeric ones
-        out = np.array(
-            [
-                str(int(v))
-                if isinstance(v, float) and not (v != v) and v == int(v)
-                else str(v)
-                for v in values
-            ],
-            dtype=object,
-        )
-    else:
-        out = values.astype(str).astype(object)
-    if missing.any():
-        out[missing] = _NULL_KEY
-    return out
+        enc = uniques.astype(str).astype(object)
+    # pandas codes every missing value as -1, so it gets the trailing sentinel slot
+    enc = np.append(enc, _NULL_KEY)
+    codes = np.where(codes < 0, len(enc) - 1, codes).astype(np.int64, copy=False)
+    return codes, enc
+
+
+def _encode_column(values: np.ndarray) -> np.ndarray:
+    """Encode one key column as strings, canonically across dtypes."""
+    codes, enc = _factorize_column(values)
+    return enc[codes]
 
 
 def _join_encoded(parts: Sequence[np.ndarray]) -> np.ndarray:
@@ -121,14 +129,8 @@ def factorize(arrays: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     codes: List[np.ndarray] = []
     encoded: List[np.ndarray] = []
     for arr in arrays:
-        col_codes, col_uniques = pd.factorize(np.asarray(arr))
-        enc = _encode_column(np.asarray(col_uniques))
-        if (col_codes < 0).any():
-            # pandas parks every missing value at -1; give it a slot of its own
-            # so it encodes to the sentinel like any other key
-            enc = np.append(enc, _NULL_KEY)
-            col_codes = np.where(col_codes < 0, len(col_uniques), col_codes)
-        codes.append(col_codes.astype(np.int64, copy=False))
+        col_codes, enc = _factorize_column(arr)
+        codes.append(col_codes)
         encoded.append(enc)
     combined = codes[0]
     for col_codes, enc in zip(codes[1:], encoded[1:]):
@@ -838,7 +840,10 @@ class _PooledKernel:
         return float(getattr(self.tfm, "window_size", 1))
 
     def combine(
-        self, res: Dict[str, np.ndarray], k: np.ndarray, shift: Optional[np.ndarray]
+        self,
+        res: Dict[str, np.ndarray],
+        k: Union[float, np.ndarray],
+        shift: Optional[np.ndarray],
     ) -> np.ndarray:
         """Feature values from the reduced channels ``res``.
 
@@ -874,7 +879,7 @@ class _PooledKernel:
             tfm.stats_ = _grow_rows(stats, remap, n_new, _expanding_fill(tfm, stats))
 
     @staticmethod
-    def _n_obs(res: Dict[str, np.ndarray], k: np.ndarray) -> np.ndarray:
+    def _n_obs(res: Dict[str, np.ndarray], k: Union[float, np.ndarray]) -> np.ndarray:
         """Total observations inside the window: ``k * mean(count)``.
 
         Rounded because the count only ever comes back as a *mean* over ``k``
@@ -960,7 +965,7 @@ class _MaxKernel(_PooledKernel):
         return np.where(ok, res["max"], np.nan)
 
 
-class _RollingMixin:
+class _RollingKernel(_PooledKernel):
     primes_state = False
 
     def window_cells(self, ordinals):
@@ -977,7 +982,7 @@ class _RollingMixin:
         return cls(lag=self.lag, window_size=self.tfm.window_size, min_samples=1, **kw)
 
 
-class _SeasonalMixin:
+class _SeasonalKernel(_PooledKernel):
     primes_state = False
 
     def window_cells(self, ordinals):
@@ -1002,9 +1007,12 @@ class _SeasonalMixin:
         )
 
 
-class _ExpandingMixin:
+class _ExpandingKernel(_PooledKernel):
     def window_cells(self, ordinals):
         return np.clip(ordinals - self.lag + 1, 0, None).astype(float)
+
+    def make_inner(self, lag: Optional[int] = None) -> Dict[str, Any]:
+        raise NotImplementedError
 
     def _inner(self, cls, lag=None, **kw):
         return cls(lag=self.lag if lag is None else lag, **kw)
@@ -1074,17 +1082,17 @@ class _ExpandingMixin:
         return values
 
 
-class RollingMeanK(_RollingMixin, _MeanKernel):
+class RollingMeanK(_RollingKernel, _MeanKernel):
     def make_inner(self):
         return {c: self._inner(core_tfms.RollingMean) for c in self.channels}
 
 
-class RollingStdK(_RollingMixin, _StdKernel):
+class RollingStdK(_RollingKernel, _StdKernel):
     def make_inner(self):
         return {c: self._inner(core_tfms.RollingMean) for c in self.channels}
 
 
-class RollingMinK(_RollingMixin, _MinKernel):
+class RollingMinK(_RollingKernel, _MinKernel):
     def make_inner(self):
         return {
             "min": self._inner(core_tfms.RollingMin),
@@ -1092,7 +1100,7 @@ class RollingMinK(_RollingMixin, _MinKernel):
         }
 
 
-class RollingMaxK(_RollingMixin, _MaxKernel):
+class RollingMaxK(_RollingKernel, _MaxKernel):
     def make_inner(self):
         return {
             "max": self._inner(core_tfms.RollingMax),
@@ -1100,17 +1108,17 @@ class RollingMaxK(_RollingMixin, _MaxKernel):
         }
 
 
-class SeasonalRollingMeanK(_SeasonalMixin, _MeanKernel):
+class SeasonalRollingMeanK(_SeasonalKernel, _MeanKernel):
     def make_inner(self):
         return {c: self._inner(core_tfms.SeasonalRollingMean) for c in self.channels}
 
 
-class SeasonalRollingStdK(_SeasonalMixin, _StdKernel):
+class SeasonalRollingStdK(_SeasonalKernel, _StdKernel):
     def make_inner(self):
         return {c: self._inner(core_tfms.SeasonalRollingMean) for c in self.channels}
 
 
-class SeasonalRollingMinK(_SeasonalMixin, _MinKernel):
+class SeasonalRollingMinK(_SeasonalKernel, _MinKernel):
     def make_inner(self):
         return {
             "min": self._inner(core_tfms.SeasonalRollingMin),
@@ -1118,7 +1126,7 @@ class SeasonalRollingMinK(_SeasonalMixin, _MinKernel):
         }
 
 
-class SeasonalRollingMaxK(_SeasonalMixin, _MaxKernel):
+class SeasonalRollingMaxK(_SeasonalKernel, _MaxKernel):
     def make_inner(self):
         return {
             "max": self._inner(core_tfms.SeasonalRollingMax),
@@ -1126,17 +1134,17 @@ class SeasonalRollingMaxK(_SeasonalMixin, _MaxKernel):
         }
 
 
-class ExpandingMeanK(_ExpandingMixin, _MeanKernel):
+class ExpandingMeanK(_ExpandingKernel, _MeanKernel):
     def make_inner(self, lag=None):
         return {c: self._inner(core_tfms.ExpandingMean, lag) for c in self.channels}
 
 
-class ExpandingStdK(_ExpandingMixin, _StdKernel):
+class ExpandingStdK(_ExpandingKernel, _StdKernel):
     def make_inner(self, lag=None):
         return {c: self._inner(core_tfms.ExpandingMean, lag) for c in self.channels}
 
 
-class ExpandingMinK(_ExpandingMixin, _MinKernel):
+class ExpandingMinK(_ExpandingKernel, _MinKernel):
     def make_inner(self, lag=None):
         return {
             "min": self._inner(core_tfms.ExpandingMin, lag),
@@ -1144,7 +1152,7 @@ class ExpandingMinK(_ExpandingMixin, _MinKernel):
         }
 
 
-class ExpandingMaxK(_ExpandingMixin, _MaxKernel):
+class ExpandingMaxK(_ExpandingKernel, _MaxKernel):
     def make_inner(self, lag=None):
         return {
             "max": self._inner(core_tfms.ExpandingMax, lag),
@@ -1338,14 +1346,14 @@ class _RowKernel(_PooledKernel):
         return self.values_at(self._view(state._rows), np.arange(n), targets)
 
 
-class _RollingRowMixin:
+class _RollingRowKernel(_RowKernel):
     def window_bounds(self, rows, bucket, ordinal):
         hi_ord = ordinal - self.lag
         lo_ord = hi_ord - self.tfm.window_size + 1
         return rows.search(bucket, lo_ord, "left"), rows.search(bucket, hi_ord, "right")
 
 
-class _ExpandingRowMixin:
+class _ExpandingRowKernel(_RowKernel):
     def window_bounds(self, rows, bucket, ordinal):
         return rows.indptr[bucket], rows.search(bucket, ordinal - self.lag, "right")
 
@@ -1353,12 +1361,12 @@ class _ExpandingRowMixin:
         return 1.0
 
 
-class RollingQuantileK(_RollingRowMixin, _RowKernel):
+class RollingQuantileK(_RollingRowKernel):
     def stat(self, mat):
         return np.quantile(mat, self.tfm.p, axis=1)
 
 
-class ExpandingQuantileK(_ExpandingRowMixin, _RowKernel):
+class ExpandingQuantileK(_ExpandingRowKernel):
     def stat(self, mat):
         return np.quantile(mat, self.tfm.p, axis=1)
 
@@ -1820,10 +1828,11 @@ class PooledState:
     def set_series_bucket_id(self, bucket_id: np.ndarray) -> None:
         self.series_bucket_id = bucket_id
 
-    # -- cheap rollback for TimeSeries._backup ---------------------------
+    # -- cheap rollback for TimeSeries._backup and update -------------
     def snapshot(self):
-        # aggregates are only appended to during predict, so copying the array
-        # references is enough -- no deep copy of the whole state per model
+        # predict and update only append to the aggregates and grow_buckets
+        # replaces them, so copying the array references is enough -- no deep
+        # copy of the whole state per model
         return (
             dict(self.base),
             dict(self.shift),

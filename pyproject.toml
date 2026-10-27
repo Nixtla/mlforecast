@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,14 +9,13 @@ description = "Scalable machine learning based time series forecasting"
 authors = [{name = "José Morales", email = "jmoralz92@gmail.com"}]
 license = {text = "Apache Software License 2.0"}
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["python", "forecast", "forecasting", "machine-learning", "dask"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Natural Language :: English",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -29,7 +28,7 @@ dependencies = [
     "narwhals",
     "optuna",
     "pandas<3.0",
-    "scikit-learn",
+    "scikit-learn>=1.3",
     "utilsforecast>=0.2.9",
 ]
 
@@ -41,10 +40,12 @@ Documentation = "https://nixtlaverse.nixtla.io/mlforecast/"
 [project.optional-dependencies]
 dask = ["fugue[dask]>=0.9.4", "dask[complete]", "lightgbm", "xgboost"]
 ray = [
-    "fugue[ray]>=0.9.4; sys_platform != 'win32' and python_version < '3.14'",
-    "lightgbm_ray; sys_platform != 'win32' and python_version < '3.14'",
-    "xgboost_ray>=0.1.19; sys_platform != 'win32' and python_version < '3.14'",
-    "xgboost>=2.0.0,<2.1.0; sys_platform != 'win32' and python_version < '3.14'"
+    "fugue[ray]>=0.9.4; sys_platform != 'win32'",
+    "ray[data,train]>=2.56; sys_platform != 'win32'",
+    "lightgbm>=4.6; sys_platform != 'win32'",
+    # RayXGBForecast mixes RayForecastBase into XGBRegressor, which needs
+    # XGBModel.get_params' "parent has no get_params" fallback, added in 2.1.4
+    "xgboost>=2.1.4; sys_platform != 'win32'"
 ]
 spark = ["fugue[spark]>=0.9.4", "pyspark>=3.3", "lightgbm", "xgboost"]
 aws = ["fsspec[s3]"]
@@ -55,19 +56,18 @@ polars = ["polars[numpy]"]
 [dependency-groups]
 dev = [
     "datasetsforecast>=1",
-    "gitpython",
+    "gitpython>=3.2.1",
     "holidays<0.21",
     "lightgbm>=4.6",
     "matplotlib",
-    "mlflow>=2.10.0",
-    "mypy",
+    "mlflow>=3.17.2",
     "numpy",
     "pandas",
     "pre-commit",
     "polars[numpy]<=1.31.0",
     "pyarrow",
     "ruff",
-    "setuptools",
+    "setuptools>=84.1.0",
     "statsmodels",
     "xgboost",
     "catboost",
@@ -78,6 +78,7 @@ dev = [
     "pytest-xdist",
     "pytest-codspeed",
     "pytest-rerunfailures",
+    "pytest-timeout",
     "mkdocstrings-parser @ git+https://github.com/Nixtla/mkdocstrings-parser@main"
 ]
 
@@ -95,6 +96,7 @@ select = ["F", "ARG"]
 
 [tool.mypy]
 ignore_missing_imports = true
+check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = 'mlforecast.compat'
