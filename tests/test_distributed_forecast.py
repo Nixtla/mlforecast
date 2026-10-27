@@ -299,7 +299,9 @@ def test_dask_to_local_transfer_checks_in_sample_windows(tmp_path):
 
 def test_dask_to_local_transfer_checks_in_sample_windows_of_assigned_models():
     series = generate_daily_series(5, equal_ends=True, min_length=50, max_length=50)
-    partitioned = _make_partitioned_series(series, npartitions=2)
+    series["unique_id"] = series["unique_id"].astype(str)
+    train = series.groupby("unique_id", observed=True).head(40)
+    partitioned = _make_partitioned_series(train, npartitions=2)
     kwargs = dict(freq="D", lags=[1, 2])
     fitted = DistributedMLForecast(
         models=[DaskLGBMForecast(verbosity=-1, random_state=0, n_estimators=5)],
@@ -308,9 +310,12 @@ def test_dask_to_local_transfer_checks_in_sample_windows_of_assigned_models():
     fcst = DistributedMLForecast(models=fitted.models, **kwargs)
     fcst.preprocess(partitioned, static_features=[])
     fcst.models_ = fitted.models_
-    series["unique_id"] = series["unique_id"].astype(str)
+    method = Recalibration(h=3, n_windows=2)
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
-        fcst.to_local().transfer(series, Recalibration(h=3, n_windows=2))
+        fcst.to_local().transfer(train, method)
+    # the rows added by update weren't used for training
+    fcst.update(series.groupby("unique_id", observed=True).tail(10))
+    fcst.to_local().transfer(series, method).predict(3, level=[80])
 
 
 @pytest.mark.parametrize("refit", [True, False])

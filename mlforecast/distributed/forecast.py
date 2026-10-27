@@ -370,7 +370,7 @@ class DistributedMLForecast:
         Returns:
             (same type as df): `df` with added features.
         """
-        return self._preprocess(
+        prep = self._preprocess(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -380,6 +380,10 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             weight_col=weight_col,
         )
+        # models assigned to `models_` by hand have no other source of train ends
+        if self._train_ends_ is None:
+            self._train_ends_ = self._collect_train_ends()
+        return prep
 
     def _fit(
         self,
@@ -1080,10 +1084,6 @@ class DistributedMLForecast:
         ts.static_features_ = statics
         ts.transforms.update(combined_core_lag_tfms)
         ts.target_transforms = combined_target_tfms
-        # models assigned to `models_` by hand have no train ends
-        train_ends = self._train_ends_
-        if train_ends is None:
-            train_ends = _train_ends(ts)
         return MLForecast._from_ts(
-            ts, models=self.models_, models_=self.models_, train_ends=train_ends
+            ts, models=self.models_, models_=self.models_, train_ends=self._train_ends_
         )
