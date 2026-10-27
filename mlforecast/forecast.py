@@ -1819,7 +1819,9 @@ class MLForecast:
         """Add the fit's intervals to the series it calibrated, leave the rest missing."""
         assert self._calibration_ is not None
         id_col = self.ts.id_col
-        calibrated = ufp.is_in(forecasts[id_col], self._calibration_.scores[id_col])
+        scores_ids = self._calibration_.scores[id_col]
+        cs_ids = nw.from_native(scores_ids, series_only=True).unique().to_list()
+        calibrated = ufp.is_in(forecasts[id_col], cs_ids)
         seen = ufp.filter_with_mask(forecasts, calibrated)
         ids = nw.from_native(seen[id_col], series_only=True).unique(maintain_order=True)
         seen = self._add_intervals_from_fit(seen, level, h, ids.to_list())
