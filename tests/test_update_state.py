@@ -5,6 +5,7 @@ of recomputing from the stored array, so appending observations outside the
 recursive predict loop has to advance it explicitly (issue #726).
 """
 
+import copy
 import operator
 
 import numpy as np
@@ -26,6 +27,12 @@ from mlforecast.lag_transforms import (
     Offset,
     RollingMean,
     _BaseLagTransform,
+)
+from mlforecast.target_transforms import (
+    Differences,
+    LocalMinMaxScaler,
+    LocalRobustScaler,
+    LocalStandardScaler,
 )
 
 FREQ = "D"
@@ -319,3 +326,150 @@ def test_keep_last_n_covers_the_transform_lag(lag):
     assert cb.get_features()[f"expanding_mean_lag{lag}"].item() == pytest.approx(
         y[: n - lag + 1].mean()
     )
+
+
+def _fit_target_update(df, engine, target_transforms):
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=ENGINE_FREQ[engine],
+        lags=[1, 2],
+        target_transforms=copy.deepcopy(target_transforms),
+        num_threads=1,
+    )
+    return fcst.fit(
+        pl.from_pandas(df) if engine == "polars" else df, static_features=[]
+    )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("validate_new_data", [False, True])
+@pytest.mark.parametrize("updated_ids", [("a",), ("b",), ("a", "b")])
+@pytest.mark.parametrize(
+    "target_transforms",
+    [
+        None,
+        [LocalStandardScaler()],
+        [LocalMinMaxScaler()],
+        [LocalRobustScaler(scale="mad")],
+        [Differences([1])],
+        [Differences([1, 2])],
+        [LocalStandardScaler(), Differences([1, 2])],
+        [Differences([1, 2]), LocalStandardScaler()],
+    ],
+    ids=[
+        "none",
+        "standard",
+        "minmax",
+        "robust",
+        "diff",
+        "diffs",
+        "scale-diff",
+        "diff-scale",
+    ],
+)
+def test_target_transform_update_existing_subset(
+    engine, validate_new_data, updated_ids, target_transforms
+):
+    """Omitted series retain their history and inverse-transform state (#809)."""
+    full = _series({"a": 14, "b": 13})
+    full.loc[full["unique_id"].eq("b"), "y"] *= 100
+    hist = full[full["ds"] <= START + 11 * pd.offsets.Day()]
+    new = full[
+        (full["ds"] > hist["ds"].max()) & full["unique_id"].isin(updated_ids)
+    ].iloc[::-1]
+    fcst = _fit_target_update(hist, engine, target_transforms)
+    before = [fcst.ts.ga[i].copy() for i in range(2)]
+    _new = pl.from_pandas(new) if engine == "polars" else new
+    fcst.update(_new, validate_new_data=validate_new_data)
+    predictions = fcst.predict(3)
+    if engine == "polars":
+        predictions = predictions.to_pandas()
+
+    assert list(fcst.ts.uids) == ["a", "b"]
+    for i, uid in enumerate(("a", "b")):
+        # A single-series update is a reference that cannot misalign groups.
+        single = _fit_target_update(
+            hist[hist["unique_id"].eq(uid)], engine, target_transforms
+        )
+        if uid in updated_ids:
+            update = new[new["unique_id"].eq(uid)]
+            single.update(
+                pl.from_pandas(update) if engine == "polars" else update,
+                validate_new_data=validate_new_data,
+            )
+        else:
+            np.testing.assert_array_equal(fcst.ts.ga[i], before[i])
+        np.testing.assert_allclose(fcst.ts.ga[i], single.ts.ga[0], equal_nan=True)
+        # Keep the trained model fixed when comparing multi-step predictions.
+        single.models_ = fcst.models_
+        expected = single.predict(3)
+        if engine == "polars":
+            expected = expected.to_pandas()
+        pd.testing.assert_frame_equal(
+            predictions[predictions["unique_id"].eq(uid)].reset_index(drop=True),
+            expected.reset_index(drop=True),
+        )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("validate_new_data", [False, True])
+def test_target_transform_update_new_series_rejected(engine, validate_new_data):
+    hist = _series({"a": 12, "b": 12})
+    fcst = _fit_target_update(hist, engine, [Differences([1]), LocalStandardScaler()])
+    expected = fcst.predict(3)
+    data = fcst.ts.ga.data.copy()
+    new = _series({"c": 1})
+    with pytest.raises(
+        ValueError, match="Can not update target_transforms with new series"
+    ):
+        fcst.update(
+            pl.from_pandas(new) if engine == "polars" else new,
+            validate_new_data=validate_new_data,
+        )
+    np.testing.assert_array_equal(fcst.ts.ga.data, data)
+    assert list(fcst.ts.uids) == ["a", "b"]
+    actual = fcst.predict(3)
+    if engine == "polars":
+        actual, expected = actual.to_pandas(), expected.to_pandas()
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("validate_new_data", [False, True])
+def test_target_transform_partial_update_rolls_back(
+    engine, validate_new_data, monkeypatch
+):
+    full = _series({"a": 14, "b": 12})
+    hist = full[full["ds"] <= START + 11 * pd.offsets.Day()]
+    new = full[full["ds"] > hist["ds"].max()]
+    if engine == "polars":
+        new = pl.from_pandas(new)
+    tfms = [Differences([1, 2]), LocalStandardScaler()]
+    fcst = _fit_target_update(hist, engine, tfms)
+    expected = _fit_target_update(hist, engine, tfms)
+    data = fcst.ts.ga.data.copy()
+    dates = list(fcst.ts.last_dates)
+    diffs = fcst.ts.target_transforms[0]
+    tails = [sc.tails_.copy() for sc in diffs.scalers_]
+
+    def fail(self, ga):  # noqa: ARG001
+        raise RuntimeError("target update failed")
+
+    with monkeypatch.context() as m:
+        m.setattr(LocalStandardScaler, "update", fail)
+        with pytest.raises(RuntimeError, match="target update failed"):
+            fcst.update(new, validate_new_data=validate_new_data)
+    assert fcst.ts.target_transforms[0] is diffs
+    for scaler, tail in zip(diffs.scalers_, tails):
+        np.testing.assert_array_equal(scaler.tails_, tail)
+    np.testing.assert_array_equal(fcst.ts.ga.data, data)
+    assert list(fcst.ts.last_dates) == dates
+    fcst.update(new, validate_new_data=validate_new_data)
+    expected.update(new, validate_new_data=validate_new_data)
+    actual_preds, expected_preds = fcst.predict(3), expected.predict(3)
+    if engine == "polars":
+        actual_preds, expected_preds = (
+            actual_preds.to_pandas(),
+            expected_preds.to_pandas(),
+        )
+    pd.testing.assert_frame_equal(actual_preds, expected_preds)

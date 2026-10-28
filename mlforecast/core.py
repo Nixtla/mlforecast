@@ -2335,10 +2335,13 @@ class TimeSeries:
         prev = (self.uids, self.last_dates, self.static_features_, self.ga)
         lag_snaps = self._lag_transform_snapshots()
         tfm_snaps = []
+        # the outer join above can make the sizes float, which the offset
+        # arithmetic in _advance_lag_transform_states needs as integers
+        appended_counts = sizes["counts"].to_numpy().astype(np.int64)
         try:
             if self.target_transforms is not None:
                 if self._has_ga_target_tfms():
-                    indptr = np.append(0, id_counts["counts"]).cumsum()
+                    indptr = np.append(0, appended_counts).cumsum()
                 transformed = df
                 for tfm in self.target_transforms:
                     tfm_snaps.append(copy.deepcopy(tfm))
@@ -2369,9 +2372,6 @@ class TimeSeries:
                     [self.static_features_, new_statics]
                 )
                 self.static_features_ = ufp.sort(self.static_features_, self.id_col)
-            # the outer join above can make the sizes float, which the offset
-            # arithmetic in _advance_lag_transform_states needs as integers
-            appended_counts = sizes["counts"].to_numpy().astype(np.int64)
             new_groups_mask = new_groups.to_numpy()
             prev_ga = self.ga
             self.ga = self.ga.append_several(
