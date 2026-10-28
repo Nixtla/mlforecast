@@ -308,7 +308,9 @@ def test_dask_to_local_transfer_checks_in_sample_windows_of_assigned_models():
         **kwargs,
     ).fit(partitioned, static_features=[])
     fcst = DistributedMLForecast(models=fitted.models, **kwargs)
-    fcst.preprocess(partitioned, static_features=[])
+    # the ends come from the last data seen before the models are assigned
+    for df in (series, train):
+        fcst.preprocess(_make_partitioned_series(df, npartitions=2), static_features=[])
     fcst.models_ = fitted.models_
     method = Recalibration(h=3, n_windows=2)
     with pytest.raises(ValueError, match="'id_0' was trained up to"):

@@ -817,13 +817,15 @@ def test_transfer_in_sample_windows_raise(method):
 def test_transfer_checks_in_sample_windows_of_assigned_models(warm):
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
     fitted = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2]).fit(src)
+    future = fitted.make_future_dataframe(4).assign(y=1.0)
+    seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-    getattr(fcst, warm)(src)
+    # the ends come from the last data seen before the models are assigned
+    for df in (seen, src):
+        getattr(fcst, warm)(df)
     fcst.models_ = fitted.models_
     with pytest.raises(ValueError, match="'id_0' was trained up to"):
         fcst.transfer(src, Recalibration(h=3))
-    future = fcst.make_future_dataframe(4).assign(y=1.0)
-    seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
     preds = fcst.transfer(seen, Recalibration(h=3)).predict(3, level=[80])
     assert preds[f"{LR}-lo-80"].notna().all()
 

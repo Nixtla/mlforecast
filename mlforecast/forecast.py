@@ -722,7 +722,7 @@ class MLForecast:
 
     def _set_missing_train_ends(self) -> None:
         # models assigned to `models_` by hand have no other source of train ends
-        if self._train_ends_ is None:
+        if self._train_ends_ is None or not hasattr(self, "models_"):
             self._train_ends_ = _train_ends(self.ts)
 
     def _drop_transfer_intervals(self) -> None:

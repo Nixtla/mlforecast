@@ -381,7 +381,7 @@ class DistributedMLForecast:
             weight_col=weight_col,
         )
         # models assigned to `models_` by hand have no other source of train ends
-        if self._train_ends_ is None:
+        if self._train_ends_ is None or not hasattr(self, "models_"):
             self._train_ends_ = self._collect_train_ends()
         return prep
 
