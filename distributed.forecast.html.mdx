@@ -181,6 +181,7 @@ cross_validation(df, n_windows, h, id_col='unique_id', time_col='ds', target_col
 Perform time series cross validation.
 Creates `n_windows` splits where each window has `h` test periods,
 trains the models, computes the predictions and merges the actuals.
+The trained models are stored in `cv_models_`, so call `fit` before predicting.
 
 **Parameters:**
 
