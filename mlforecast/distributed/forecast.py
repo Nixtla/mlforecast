@@ -170,6 +170,7 @@ class DistributedMLForecast:
         window_info: Optional[WindowInfo] = None,
         fit_ts_only: bool = False,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> List[List[Any]]:
         ts = copy.deepcopy(base_ts)
         if fit_ts_only:
@@ -181,6 +182,7 @@ class DistributedMLForecast:
                 static_features=static_features,
                 keep_last_n=keep_last_n,
                 weight_col=weight_col,
+                allow_null_target=allow_null_target,
             )
             core_tfms = ts._get_core_lag_tfms()
             if core_tfms:
@@ -226,6 +228,7 @@ class DistributedMLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         return [
             [
@@ -255,6 +258,7 @@ class DistributedMLForecast:
         window_info: Optional[WindowInfo] = None,
         fit_ts_only: bool = False,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> List[Any]:
         if self.num_partitions:
             partition = dict(by=id_col, num=self.num_partitions, algo="coarse")
@@ -289,6 +293,7 @@ class DistributedMLForecast:
                 "window_info": window_info,
                 "fit_ts_only": fit_ts_only,
                 "weight_col": weight_col,
+                "allow_null_target": allow_null_target,
             },
             schema="ts:binary,train:binary,valid:binary,first_uid:str,all_uids:binary",
             engine=self.engine,
@@ -309,6 +314,7 @@ class DistributedMLForecast:
         keep_last_n: Optional[int] = None,
         window_info: Optional[WindowInfo] = None,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> fugue.AnyDataFrame:
         # `_base_ts` is never fit; it records the settings the partitions were
         # fit with, for the methods that run later and for `save`/`load`
@@ -319,6 +325,10 @@ class DistributedMLForecast:
         self._base_ts.dropna = dropna
         self._base_ts.keep_last_n = keep_last_n
         self._base_ts.weight_col = weight_col
+        # `_fit` runs on per-partition deepcopies, so the base never records this
+        # itself; stash it here like the other settings `predict(new_df=...)`
+        # reads back when it rebuilds the partition states.
+        self._base_ts.allow_null_target = allow_null_target
         self._partition_results = self._preprocess_partitions(
             data=data,
             id_col=id_col,
@@ -329,6 +339,7 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             window_info=window_info,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         base_schema = fa.get_schema(data)
         features_schema = {
@@ -352,6 +363,7 @@ class DistributedMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> fugue.AnyDataFrame:
         """Add the features to `data`.
 
@@ -366,6 +378,7 @@ class DistributedMLForecast:
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it.
                 Defaults to None.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. The rows are kept on the time grid while each partition's features are computed and dropped afterwards. See `MLForecast.preprocess` for the full semantics. Defaults to False.
 
         Returns:
             (same type as df): `df` with added features.
@@ -379,6 +392,7 @@ class DistributedMLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
 
     def _fit(
@@ -392,6 +406,7 @@ class DistributedMLForecast:
         keep_last_n: Optional[int] = None,
         window_info: Optional[WindowInfo] = None,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> "DistributedMLForecast":
         prep = self._preprocess(
             data,
@@ -403,6 +418,7 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             window_info=window_info,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         exclude_cols = {id_col, time_col, target_col}
         if weight_col is not None:
@@ -476,6 +492,7 @@ class DistributedMLForecast:
         dropna: bool = True,
         keep_last_n: Optional[int] = None,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> "DistributedMLForecast":
         """Apply the feature engineering and train the models.
 
@@ -490,6 +507,7 @@ class DistributedMLForecast:
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it.
                 Defaults to None.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. The rows stay on the time grid while the features are computed and are excluded from model fitting. See `MLForecast.preprocess` for the full semantics. Defaults to False.
 
         Returns:
             (DistributedMLForecast): Forecast object with series values and trained models.
@@ -503,6 +521,7 @@ class DistributedMLForecast:
             dropna=dropna,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            allow_null_target=allow_null_target,
         )
         self._train_ends_ = self._collect_train_ends()
         return self
@@ -722,6 +741,7 @@ class DistributedMLForecast:
                 dropna=self._base_ts.dropna,
                 keep_last_n=self._base_ts.keep_last_n,
                 fit_ts_only=True,
+                allow_null_target=getattr(self._base_ts, "allow_null_target", False),
             )
         else:
             partition_results = self._partition_results
@@ -761,6 +781,7 @@ class DistributedMLForecast:
         after_predict_callback: Optional[Callable] = None,
         input_size: Optional[int] = None,
         weight_col: str | None = None,
+        allow_null_target: bool = False,
     ) -> fugue.AnyDataFrame:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -791,6 +812,7 @@ class DistributedMLForecast:
             input_size (int, optional): Maximum training samples per serie in each window. If None, will use an expanding window.
                 Defaults to None.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. See `MLForecast.preprocess` for the semantics. Defaults to False.
 
         Returns:
             (dask, spark or ray DataFrame): Predictions for each window with the series id, timestamp, target value and predictions from each model.
@@ -810,6 +832,7 @@ class DistributedMLForecast:
                     keep_last_n=keep_last_n,
                     window_info=window_info,
                     weight_col=weight_col,
+                    allow_null_target=allow_null_target,
                 )
                 self.cv_models_.append(self.models_)
                 partition_results = self._partition_results
@@ -824,6 +847,7 @@ class DistributedMLForecast:
                     keep_last_n=keep_last_n,
                     window_info=window_info,
                     weight_col=weight_col,
+                    allow_null_target=allow_null_target,
                 )
             schema = self._get_predict_schema() + Schema(
                 ("cutoff", "datetime"), (self._base_ts.target_col, "double")

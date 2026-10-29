@@ -19,6 +19,32 @@ from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from utilsforecast.compat import DFType
 
 
+def validate_observed_calibration_targets(
+    cv_results: DFType,
+    target_col: str,
+    n_windows: int,
+    h: int,
+    *,
+    source: str = "prediction interval",
+) -> None:
+    """Reject calibration windows that contain unobserved actuals.
+
+    Conformity scores are reshaped to ``(n_windows, n_series, h)`` downstream, so
+    the offending rows can't simply be dropped, and a null score turns into a
+    null interval at the quantile step. Calibrating on a subset of each window
+    would also change the coverage guarantee, so make the caller decide rather
+    than quietly degrading it. Only reachable with ``allow_null_target=True``.
+    """
+    if not ufp.is_nan_or_none(cv_results[target_col]).any():
+        return
+    raise ValueError(
+        f"The {source} calibration windows contain unobserved targets. "
+        "Conformal calibration needs an observed actual for every one of the "
+        f"last {n_windows} x {h} steps of each serie. Reduce `n_windows`/`h`, "
+        "or calibrate on a history whose tail is fully observed."
+    )
+
+
 def _check_min(obj: Any, field: str, minimum: int) -> None:
     value = getattr(obj, field)
     if value is not None and value < minimum:
@@ -140,18 +166,26 @@ def _raw_series_scales(
     y = data[:, 0]
     dy = core_scalers.Difference(1).fit_transform(CoreGroupedArray(y, indptr))
     dy_ga = CoreGroupedArray(dy, indptr)
-    n_dy = np.diff(indptr) - 1
-    single = np.abs(y[indptr[:-1]])
+    # a null target (allow_null_target) nulls the differences next to it, so
+    # the statistics skip them and only the observed ones are counted
+    starts = indptr[:-1]
+    n_dy = np.add.reduceat(~np.isnan(dy), starts)
+    observed_y = ~np.isnan(y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        single = np.add.reduceat(np.where(observed_y, np.abs(y), 0.0), starts) / (
+            np.add.reduceat(observed_y, starts)
+        )
     raw = {}
     if "mad" in methods:
-        mad = core_scalers.LocalRobustScaler("mad").fit(dy_ga).stats_[:, 1]
-        raw["mad"] = np.where(n_dy == 0, single, mad)
+        mad = core_scalers.LocalRobustScaler("mad", skipna=True).fit(dy_ga)
+        raw["mad"] = np.where(n_dy == 0, single, mad.stats_[:, 1])
     if "std" in methods:
         # coreforecast's std has ddof=0
-        std = core_scalers.LocalStandardScaler().fit(dy_ga).stats_[:, 1]
+        std = core_scalers.LocalStandardScaler(skipna=True).fit(dy_ga).stats_[:, 1]
         with np.errstate(divide="ignore", invalid="ignore"):
             std = std * np.sqrt(n_dy / (n_dy - 1))
-        first_dy = np.abs(dy[np.minimum(indptr[:-1] + 1, y.size - 1)])
+        # the only observed difference when n_dy == 1
+        first_dy = np.fmax.reduceat(np.abs(dy), starts)
         raw["std"] = np.select([n_dy == 0, n_dy == 1], [single, first_dy], std)
     uid_list = uids.to_list()
     return {m: dict(zip(uid_list, v.tolist())) for m, v in raw.items()}

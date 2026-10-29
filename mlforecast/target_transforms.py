@@ -43,6 +43,11 @@ def _bare_instance(obj: _Transform) -> _Transform:
 class BaseTargetTransform(abc.ABC):
     """Base class used for target transformations."""
 
+    # Whether this transform tolerates NaN in the target. Gates
+    # ``allow_null_target=True``, which would otherwise let a NaN-propagating
+    # transform turn every fitted value and prediction into NaN silently.
+    _nan_safe: bool = False
+
     def set_column_names(self, id_col: str, time_col: str, target_col: str):
         self.id_col = id_col
         self.time_col = time_col
@@ -75,6 +80,7 @@ class _BaseGroupedArrayTargetTransform(abc.ABC):
 
     num_threads: int = 1
     scaler_: core_scalers._BaseLocalScaler
+    _nan_safe: bool = False
 
     def set_num_threads(self, num_threads: int) -> None:
         self.num_threads = num_threads
@@ -438,6 +444,14 @@ class AutoSeasonalityAndDifferences(AutoDifferences):
 
 class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
     scaler_factory: Callable[[], core_scalers._BaseLocalScaler]
+    skipna: bool = False
+
+    @property
+    def _nan_safe(self) -> bool:  # type: ignore[override]
+        # With skipna the statistics are computed over the observed values only,
+        # and ``_scaler_transform`` leaves NaN in place positionally, so the
+        # null rows survive as nulls and get dropped before fitting.
+        return bool(self.skipna)
 
     def update(self, ga: GroupedArray) -> GroupedArray:
         ga = CoreGroupedArray(ga.data, ga.indptr, self.num_threads)
@@ -458,6 +472,7 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
         # an unfitted local scaler is its factory; `scaler_` is what fit builds
         out = _bare_instance(self)
         out.scaler_factory = self.scaler_factory
+        out.skipna = self.skipna
         return out
 
     def take(self, idxs: np.ndarray) -> "_BaseLocalScaler":
@@ -467,15 +482,37 @@ class _BaseLocalScaler(_BaseGroupedArrayTargetTransform):
 
 
 class LocalStandardScaler(_BaseLocalScaler):
-    """Standardizes each serie by subtracting its mean and dividing by its standard deviation."""
+    """Standardizes each serie by subtracting its mean and dividing by its standard deviation.
+
+    Args:
+        skipna (bool): Compute the mean and standard deviation over the observed
+            values only, leaving NaN in place instead of turning the whole serie
+            into NaN. Required to combine this transform with
+            ``allow_null_target=True``. Defaults to False.
+    """
 
     scaler_factory = core_scalers.LocalStandardScaler
 
+    def __init__(self, skipna: bool = False):
+        self.skipna = skipna
+        self.scaler_factory = lambda: core_scalers.LocalStandardScaler(skipna=skipna)
+
 
 class LocalMinMaxScaler(_BaseLocalScaler):
-    """Scales each serie to be in the [0, 1] interval."""
+    """Scales each serie to be in the [0, 1] interval.
+
+    Args:
+        skipna (bool): Compute the min and max over the observed values only,
+            leaving NaN in place instead of turning the whole serie into NaN.
+            Required to combine this transform with ``allow_null_target=True``.
+            Defaults to False.
+    """
 
     scaler_factory = core_scalers.LocalMinMaxScaler
+
+    def __init__(self, skipna: bool = False):
+        self.skipna = skipna
+        self.scaler_factory = lambda: core_scalers.LocalMinMaxScaler(skipna=skipna)
 
 
 class LocalRobustScaler(_BaseLocalScaler):
@@ -484,10 +521,17 @@ class LocalRobustScaler(_BaseLocalScaler):
     Args:
         scale (str): Statistic to use for scaling. Can be either 'iqr' (Inter Quartile Range) or 'mad' (Median Absolute Deviation).
             Defaults to 'iqr'.
+        skipna (bool): Compute the statistic over the observed values only, leaving
+            NaN in place instead of turning the whole serie into NaN. Required to
+            combine this transform with ``allow_null_target=True``. Defaults to False.
     """
 
-    def __init__(self, scale: str):
-        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(scale)
+    def __init__(self, scale: str, skipna: bool = False):
+        self.scale = scale
+        self.skipna = skipna
+        self.scaler_factory = lambda: core_scalers.LocalRobustScaler(
+            scale, skipna=skipna
+        )
 
 
 class LocalBoxCox(_BaseLocalScaler):

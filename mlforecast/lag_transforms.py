@@ -120,6 +120,10 @@ class _BaseLagTransform(BaseEstimator):
         init_args.pop("groupby", None)
         init_args.pop("partition_by", None)
         init_args.pop("time_agg", None)
+        if "skipna" in init_args:
+            # ``None`` means "decide at fit time"; start from the conservative
+            # default and let ``_resolve_skipna`` flip it.
+            init_args["skipna"] = init_args["skipna"] is True
         # resolved along the class hierarchy, so a subclass keeps its parent's
         # coreforecast counterpart
         for cls in type(self).__mro__:
@@ -132,6 +136,36 @@ class _BaseLagTransform(BaseEstimator):
             )
         self._core_tfm = core_cls(lag=lag, **init_args)
         return self
+
+    @property
+    def _accepts_skipna(self) -> bool:
+        """Whether this transform takes ``skipna`` at all.
+
+        Derived from the signature so it can't drift from the constructors.
+        ``Lag``/``LookupLag`` don't take it (the lag of an unobserved value is
+        genuinely unobserved), and the wrappers delegate to inner transforms.
+        """
+        return "skipna" in self._get_init_signature()
+
+    def _resolve_skipna(self, allow_null_target: bool) -> None:
+        """Apply a deferred ``skipna=None`` now that the fit-time flag is known.
+
+        ``skipna=None`` (the default) means "skip nulls if the caller said the
+        target may contain them", so `allow_null_target=True` is enough on its
+        own. An explicit True/False always wins and was already validated at
+        construction.
+
+        Mutates only ``_core_tfm.skipna``, never the declared ``skipna``, so a
+        later fit with a different `allow_null_target` re-resolves from scratch.
+        Feature names are fixed before this runs (they're built during
+        `_parse_transforms`), so they don't move either way.
+        """
+        if not self._accepts_skipna or getattr(self, "skipna", None) is not None:
+            return
+        # pooled scopes always skip nulls via their own aggregates
+        if self._is_pooled:
+            return
+        self._core_tfm.skipna = allow_null_target
 
     def _get_name(self, lag: int) -> str:
         init_params = self._get_init_signature()
@@ -359,6 +393,7 @@ class _RollingBase(_BaseLagTransform):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -408,6 +443,15 @@ class _RollingBase(_BaseLagTransform):
                 single row per (bucket, timestamp) and the aggregation would be an
                 identity). Defaults to None, which treats each row as an individual
                 pooled sample.
+            skipna (bool, optional): Exclude NaN target values from the statistic
+                instead of propagating them, so they don't count toward the
+                window's sample count either. Defaults to None, which follows
+                ``allow_null_target`` on ``MLForecast.preprocess``/``fit``: if you
+                said the target may contain nulls, they're skipped. Pass False to
+                propagate them anyway (a null window then yields a null feature),
+                or True to skip them regardless. Only affects local (per-series)
+                mode: pooled scopes (``global_``, ``groupby``, ``partition_by``)
+                always skip NaN, so it's a no-op there.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -423,6 +467,7 @@ class _RollingBase(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
         self.time_agg = time_agg
+        self.skipna = skipna
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
@@ -480,6 +525,7 @@ class RollingQuantile(_RollingBase):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         super().__init__(
@@ -489,6 +535,7 @@ class RollingQuantile(_RollingBase):
             groupby=groupby,
             partition_by=partition_by,
             time_agg=time_agg,
+            skipna=skipna,
             **kwargs,
         )
         self.p = p
@@ -499,6 +546,7 @@ class RollingQuantile(_RollingBase):
             p=self.p,
             window_size=self.window_size,
             min_samples=self.min_samples,
+            skipna=self.skipna is True,
         )
         return self
 
@@ -515,6 +563,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -560,6 +609,11 @@ class _Seasonal_RollingBase(_BaseLagTransform):
                 each bucket into a single value before applying the transform. One of
                 ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires
                 ``global_`` or ``groupby``. Defaults to None.
+            skipna (bool, optional): Exclude NaN target values from the statistic
+                instead of propagating them, so they don't count toward the
+                window's sample count either. Defaults to None, which follows
+                ``allow_null_target`` on ``MLForecast.preprocess``/``fit``. Only
+                affects local (per-series) mode: pooled scopes always skip NaN.
         """
         if "global" in kwargs:
             global_ = kwargs.pop("global")
@@ -576,6 +630,7 @@ class _Seasonal_RollingBase(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
         self.time_agg = time_agg
+        self.skipna = skipna
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
@@ -634,6 +689,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         super().__init__(
@@ -644,6 +700,7 @@ class SeasonalRollingQuantile(_Seasonal_RollingBase):
             groupby=groupby,
             partition_by=partition_by,
             time_agg=time_agg,
+            skipna=skipna,
             **kwargs,
         )
         self.p = p
@@ -670,6 +727,10 @@ class _ExpandingBase(_BaseLagTransform):
             bucket into a single value before applying the transform. One of ``"sum"``,
             ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or
             ``groupby``. Defaults to None.
+        skipna (bool, optional): Exclude NaN target values from the statistic
+            instead of propagating them. Defaults to None, which follows
+            ``allow_null_target`` on ``MLForecast.preprocess``/``fit``. Only affects
+            local (per-series) mode: pooled scopes always skip NaN.
     """
 
     def __init__(
@@ -678,6 +739,7 @@ class _ExpandingBase(_BaseLagTransform):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         if "global" in kwargs:
@@ -692,6 +754,7 @@ class _ExpandingBase(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
         self.time_agg = time_agg
+        self.skipna = skipna
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(time_agg, self.global_, self.groupby)
@@ -741,6 +804,7 @@ class ExpandingQuantile(_ExpandingBase):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: Optional[str] = None,
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         super().__init__(
@@ -748,6 +812,7 @@ class ExpandingQuantile(_ExpandingBase):
             groupby=groupby,
             partition_by=partition_by,
             time_agg=time_agg,
+            skipna=skipna,
             **kwargs,
         )
         self.p = p
@@ -788,6 +853,10 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
             which matches EWM's bucket-mean update rule: each timestamp contributes
             its bucket aggregate mean exactly once, regardless of how many rows
             aggregated there. ``None`` is not accepted.
+        skipna (bool, optional): Exclude NaN target values from the average instead
+            of propagating them. Defaults to None, which follows
+            ``allow_null_target`` on ``MLForecast.preprocess``/``fit``. Only affects
+            local (per-series) mode: pooled scopes always skip NaN.
     """
 
     def __init__(
@@ -797,6 +866,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         groupby: Optional[Sequence[str]] = None,
         partition_by: Optional[Sequence[str]] = None,
         time_agg: str = "mean",
+        skipna: Optional[bool] = None,
         **kwargs,
     ):
         if "global" in kwargs:
@@ -812,6 +882,7 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
         self.groupby = _normalize_columns(groupby)
         self.partition_by = _normalize_columns(partition_by)
         self.time_agg = time_agg
+        self.skipna = skipna
         if self.global_ and self.groupby:
             raise ValueError("`global_` and `groupby` can't be used together.")
         _validate_time_agg(
@@ -875,6 +946,10 @@ class Offset(_BaseLagTransform):
         self.tfm = copy.deepcopy(self.tfm)._set_core_tfm(lag + self.n)
         self._core_tfm = self.tfm._core_tfm
         return self
+
+    def _resolve_skipna(self, allow_null_target: bool) -> None:
+        # the wrapper takes no skipna of its own; the inner transform owns it
+        self.tfm._resolve_skipna(allow_null_target)
 
     def _get_configured_lag(self) -> int:
         return self.tfm._get_configured_lag() - self.n
@@ -955,6 +1030,11 @@ class Combine(_BaseLagTransform):
 
     def update(self, ga: CoreGroupedArray) -> np.ndarray:
         return self.operator(self.tfm1.update(ga), self.tfm2.update(ga))
+
+    def _resolve_skipna(self, allow_null_target: bool) -> None:
+        # the wrapper takes no skipna of its own; the inner transforms own it
+        self.tfm1._resolve_skipna(allow_null_target)
+        self.tfm2._resolve_skipna(allow_null_target)
 
     @property
     def update_samples(self):

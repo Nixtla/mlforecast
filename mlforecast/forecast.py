@@ -66,6 +66,7 @@ from .conformal_prediction import (
     _rescale_interval_columns,
     get_conformal_method,
     compute_conformity_scores,
+    validate_observed_calibration_targets,
 )
 
 _get_conformal_method = get_conformal_method  # backward compat
@@ -549,6 +550,7 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         validate_data: bool = True,
+        allow_null_target: bool = False,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
@@ -571,6 +573,15 @@ class MLForecast:
             as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             validate_data (bool): Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            allow_null_target (bool): Allow nulls in the target column instead of raising.
+                The rows are kept on the time grid while the features are computed -- so
+                lags stay positional and the series has no gaps -- and are then dropped
+                from the returned features and target, since the target isn't known for
+                them. Use it when a null means "not observed" rather than zero, e.g. a
+                product that didn't exist yet, and pass `skipna=True` to the lag
+                transforms so the nulls don't count toward their sample counts either.
+                Rows dropped this way don't appear in `forecast_fitted_values()`.
+                Defaults to False.
 
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
@@ -604,6 +615,7 @@ class MLForecast:
             as_numpy=as_numpy,
             weight_col=weight_col,
             horizon_features=resolved_horizon_features,
+            allow_null_target=allow_null_target,
         )
         self._drop_transfer_intervals()
         return prep
@@ -623,6 +635,7 @@ class MLForecast:
         horizon_feature_templates: Optional[List[str]] = None,
         as_numpy: Optional[bool] = None,
         validate_data: bool = True,
+        allow_null_target: bool = False,
     ) -> "MLForecast":
         """Build the internal state from `df` without computing the features.
 
@@ -653,6 +666,7 @@ class MLForecast:
             horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None.
             as_numpy (bool, optional): Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None.
             validate_data (bool): Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. See `preprocess` for the semantics. Defaults to False.
 
         Returns:
             MLForecast: Forecast object with the internal state built from `df`.
@@ -715,6 +729,7 @@ class MLForecast:
             horizons=horizons,
             as_numpy=as_numpy,
             horizon_features=resolved_horizon_features,
+            allow_null_target=allow_null_target,
         )
         self._drop_transfer_intervals()
         return self
@@ -816,6 +831,7 @@ class MLForecast:
         n_windows: int = 2,
         h: int = 1,
         as_numpy: bool = False,
+        allow_null_target: bool = False,
     ) -> DFType:
         """Compute conformity scores.
 
@@ -855,7 +871,10 @@ class MLForecast:
             horizon_feature_templates=horizon_feature_templates,
             prediction_intervals=None,
             as_numpy=as_numpy,
+            allow_null_target=allow_null_target,
         )
+        if allow_null_target:
+            validate_observed_calibration_targets(cv_results, target_col, n_windows, h)
         return compute_conformity_scores(
             cv_results, list(self.models.keys()), target_col
         )
@@ -1218,6 +1237,7 @@ class MLForecast:
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         validate_data: bool = True,
         cache_train_df: bool = True,
+        allow_null_target: bool = False,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -1246,6 +1266,10 @@ class MLForecast:
                 `forecast_fitted_values(h>1)` can be called later for recursive models without
                 passing `train_df`. Disable this to avoid the memory overhead and pass
                 `train_df` directly to `forecast_fitted_values` when needed. Defaults to True.
+            allow_null_target (bool): Allow nulls in the target column instead of raising.
+                The rows stay on the time grid while the features are computed and are then
+                excluded from model fitting. See `preprocess` for the full semantics.
+                They also won't appear in `forecast_fitted_values()`. Defaults to False.
 
         Returns:
             MLForecast: Forecast object with series values and trained models.
@@ -1272,6 +1296,7 @@ class MLForecast:
                 n_windows=prediction_intervals.n_windows,
                 h=prediction_intervals.h,
                 as_numpy=as_numpy,
+                allow_null_target=allow_null_target,
             )
             source_scales = _raw_series_scales(
                 df=df,
@@ -1300,6 +1325,7 @@ class MLForecast:
                 as_numpy=as_numpy,
                 weight_col=weight_col,
                 validate_data=validate_data,
+                allow_null_target=allow_null_target,
             )
 
             # Get the effective max horizon and internal horizons from preprocessing
@@ -1361,6 +1387,7 @@ class MLForecast:
                 as_numpy=as_numpy,
                 weight_col=weight_col,
                 validate_data=validate_data,
+                allow_null_target=allow_null_target,
             )
             if isinstance(prep, tuple):
                 X, y = prep
@@ -1611,6 +1638,13 @@ class MLForecast:
             backtest_results = _frozen_backtest(
                 self, df, n_windows, h, method.step_size, train_ends
             )
+            validate_observed_calibration_targets(
+                backtest_results,
+                self.ts.target_col,
+                n_windows,
+                h,
+                source="transfer `Recalibration`",
+            )
             return TransferResult(
                 cs_df=compute_conformity_scores(
                     backtest_results, model_names, self.ts.target_col, signed=True
@@ -1625,13 +1659,18 @@ class MLForecast:
                 "`prediction_intervals=PredictionIntervals(...)`."
             )
         if isinstance(method, ErrorScaling):
+            n_windows = method.n_windows or pi.n_windows
             backtest_results = _frozen_backtest(
-                self,
-                df,
-                method.n_windows or pi.n_windows,
+                self, df, n_windows, pi.h, method.step_size, train_ends
+            )
+            # a single null residual makes the pooled IQR ratio NaN, which
+            # scales *every* source score to NaN and yields null intervals
+            validate_observed_calibration_targets(
+                backtest_results,
+                self.ts.target_col,
+                n_windows,
                 pi.h,
-                method.step_size,
-                train_ends,
+                source="transfer `ErrorScaling`",
             )
             target_cs_df = compute_conformity_scores(
                 backtest_results, model_names, self.ts.target_col
@@ -1858,6 +1897,7 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         validate_data: bool = True,
+        allow_null_target: bool = False,
     ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -1891,6 +1931,7 @@ class MLForecast:
             as_numpy (bool): Cast features to numpy array. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             validate_data (bool): Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            allow_null_target (bool): Allow nulls in the target column instead of raising. See `preprocess` for the semantics. Null rows are still used to build each window's features and are excluded from fitting, but a null that falls inside a *validation* window is returned as a null actual rather than dropped, so the row count stays aligned with `h * n_windows` per serie. Filter them out before scoring. Defaults to False.
 
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
@@ -1940,6 +1981,7 @@ class MLForecast:
                         as_numpy=as_numpy,
                         weight_col=weight_col,
                         validate_data=False,
+                        allow_null_target=allow_null_target,
                     )
                 cv_models.append(self.models_)
                 if fitted:
@@ -1972,6 +2014,7 @@ class MLForecast:
                         return_X_y=False,
                         weight_col=weight_col,
                         validate_data=False,
+                        allow_null_target=allow_null_target,
                     )
                 assert not isinstance(prep, tuple)
                 effective_max_horizon = self.ts.max_horizon
