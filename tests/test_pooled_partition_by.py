@@ -102,16 +102,17 @@ def test_feature_names(tfm, name):
 @pytest.mark.parametrize(
     "tfm, match",
     [
-        (RollingMean(3, partition_by=["unique_id"]), "drop the argument"),
+        (RollingMean(3, partition_by=["unique_id"]), "only static"),
         (RollingMean(3, partition_by=["unique_id", "brand"]), "only static"),
         (LookupLag(partition_by=["promo"]), "LookupLag's partition_by must include"),
+        (LookupLag(partition_by=["unique_id"]), "use `Lag` instead"),
         (
             RollingMean(3, partition_by=["unique_id", "promo"], time_agg="sum"),
             "time_agg requires a partition_by without",
         ),
         (
             Offset(RollingMean(3, partition_by=["unique_id"]), 1),
-            "drop the argument",
+            "only static",
         ),
     ],
 )

@@ -100,7 +100,7 @@ def _load_to_sqlite(
     key_cols: List[str],
 ):
     cols = ["unique_id", "ds", "y"]
-    cols += [c for c in key_cols if c not in cols]
+    cols.extend(c for c in key_cols if c not in cols)
     sub = df[cols].copy()
     sub["y"] = sub["y"].astype(float)
     sub.to_sql("obs", conn, index=False, if_exists="replace")

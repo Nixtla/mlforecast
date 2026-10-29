@@ -180,19 +180,10 @@ predictions start from the last date + the frequency.
 test_eq(ts.last_dates, series.groupby('unique_id', observed=True)['ds'].max().values)
 ```
 
-The last row of every serie without the `y` and `ds` columns are taken
-as static features.
-
-```python
-pd.testing.assert_frame_equal(
-    ts.static_features_,
-    series.groupby('unique_id', observed=True).tail(1).drop(columns=['ds', 'y']).reset_index(drop=True),
-)
-```
-
-If you pass `static_features` to
+The columns passed in `static_features` to
 [`TimeSeries.fit_transform`](https://Nixtla.github.io/mlforecast/core.html#timeseries.fit_transform)
-then only these are kept.
+are taken from the last row of every serie and repeated when predicting.
+Every other column is dynamic.
 
 ```python
 ts.fit_transform(series, id_col='unique_id', time_col='ds', target_col='y', static_features=['static_0'])

@@ -994,16 +994,16 @@ class TimeSeries:
                             f"Found in: {name}."
                         )
                     continue
-                if key == (id_col,):
-                    raise ValueError(
-                        f"partition_by=['{id_col}'] is the per-series transform, "
-                        f"please drop the argument. Found in: {name}."
-                    )
+                per_series = (
+                    "`Lag`"
+                    if isinstance(leaf, LookupLag)
+                    else "the transform without partition_by"
+                )
                 if all(c in static_cols for c in key):
                     raise ValueError(
                         f"partition_by={leaf.partition_by} holds '{id_col}' and only "
                         "static columns, so each bucket is a single series. Please "
-                        f"use the per-series transform instead. Found in: {name}."
+                        f"use {per_series} instead. Found in: {name}."
                     )
                 if (
                     leaf.time_agg is not None
