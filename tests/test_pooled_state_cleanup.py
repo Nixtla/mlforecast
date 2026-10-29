@@ -82,11 +82,11 @@ def _build_fcst():
         lag_transforms={
             1: [
                 RollingMean(2, global_=True),
-                RollingMean(2, groupby=["brand"]),
+                RollingMean(2, partition_by=["brand"]),
+                RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"]),
                 RollingMean(2, min_samples=1, partition_by=["promo"]),
-                RollingMean(2, min_samples=1, global_=True, partition_by=["promo"]),
                 RollingMean(
-                    2, min_samples=1, groupby=["brand"], partition_by=["promo"]
+                    2, min_samples=1, partition_by=["brand", "promo"]
                 ),
                 RollingStd(3, min_samples=2, global_=True),
                 RollingMin(3, global_=True),
@@ -180,7 +180,7 @@ def test_snapshot_restore_after_dynamic_new_bucket():
         lags=[1],
         lag_transforms={
             1: [
-                RollingMean(2, min_samples=1, groupby=["brand"], partition_by=["promo"])
+                RollingMean(2, min_samples=1, partition_by=["brand", "promo"])
             ]
         },
     )
@@ -191,7 +191,7 @@ def test_snapshot_restore_after_dynamic_new_bucket():
         target_col="y",
         static_features=["brand"],
     )
-    key = ("nonlocal", ("brand",), ("promo",))
+    key = ("brand", "promo")
     state = fcst.ts._pooled_states[key]
     ref = copy.deepcopy(state)
     snap = state.snapshot()
