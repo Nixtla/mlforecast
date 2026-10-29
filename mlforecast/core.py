@@ -1786,8 +1786,7 @@ class TimeSeries:
         """One row per series from ``X_df`` for the current horizon step (``self._h``)."""
         n_series = len(self.uids)
         h = X_df.shape[0] // n_series
-        row_offset = min(self._h, h - 1)
-        rows = np.arange(row_offset, X_df.shape[0], h)
+        rows = np.arange(self._h, X_df.shape[0], h)
         return ufp.drop_index_if_pandas(ufp.take_rows(X_df, rows))
 
     def _update_partition_assignments(self, X_df):
