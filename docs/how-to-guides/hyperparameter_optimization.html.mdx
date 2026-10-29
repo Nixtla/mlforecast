@@ -307,11 +307,11 @@ the tuning rounds without the need to split the data again.
     (standard setting)
 -   We inspect the resulting feature values for
     `RollingMean(..., global_=True)` and
-    `RollingMean(..., groupby=[...])` to see how the local, global, and
-    grouped aggregations differ.
+    `RollingMean(..., partition_by=[...])` to see how the local, global,
+    and grouped aggregations differ.
 
-All rolling window functions support `global_` and `groupby`; here we
-only show `RollingMean`.
+All rolling window functions support `global_` and `partition_by`; here
+we only show `RollingMean`.
 
 ```python
 from datasetsforecast.m5 import M5
@@ -361,8 +361,8 @@ def m5_benchmark_init_config(trial: optuna.Trial):
             1: [
                 RollingMean(window_size=28),
                 RollingMean(window_size=28, global_=True),
-                RollingMean(window_size=28, groupby=['cat_id']),
-                RollingMean(window_size=28, groupby=['state_id', 'cat_id']),
+                RollingMean(window_size=28, partition_by=['cat_id']),
+                RollingMean(window_size=28, partition_by=['state_id', 'cat_id']),
             ]
         },
     }
@@ -420,8 +420,8 @@ m5_feature_demo = MLForecast(
         1: [
             RollingMean(window_size=7),
             RollingMean(window_size=7, global_=True),
-            RollingMean(window_size=7, groupby=['state_id']),
-            RollingMean(window_size=7, groupby=['state_id', 'store_id']),
+            RollingMean(window_size=7, partition_by=['state_id']),
+            RollingMean(window_size=7, partition_by=['state_id', 'store_id']),
         ]
     },
 )
@@ -435,8 +435,8 @@ m5_feature_values = m5_feature_demo.preprocess(
 feature_cols = [
     'rolling_mean_lag1_window_size7',
     'global_rolling_mean_lag1_window_size7',
-    'groupby_state_id_rolling_mean_lag1_window_size7',
-    'groupby_state_id__store_id_rolling_mean_lag1_window_size7',
+    'partby_state_id_rolling_mean_lag1_window_size7',
+    'partby_state_id__store_id_rolling_mean_lag1_window_size7',
 ]
 last_ds = m5_feature_values['ds'].max()
 
@@ -451,35 +451,35 @@ last_ds = m5_feature_values['ds'].max()
 
 ```
 
-|       | ds         | unique_id        | state_id | cat_id | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | groupby_state_id_rolling_mean_lag1_window_size7 | groupby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
-|-------|------------|------------------|----------|--------|--------------------------------|---------------------------------------|-------------------------------------------------|-------------------------------------------------------------|
-| 1968  | 2016-06-19 | FOODS_1_001_CA_1 | CA       | FOODS  | 0.857143                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
-| 3937  | 2016-06-19 | FOODS_1_001_CA_2 | CA       | FOODS  | 1.142857                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
-| 5906  | 2016-06-19 | FOODS_1_001_CA_3 | CA       | FOODS  | 1.714286                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
-| 7874  | 2016-06-19 | FOODS_1_001_CA_4 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
-| 21632 | 2016-06-19 | FOODS_1_002_CA_1 | CA       | FOODS  | 1.285714                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
-| 23601 | 2016-06-19 | FOODS_1_002_CA_2 | CA       | FOODS  | 0.714286                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
-| 25570 | 2016-06-19 | FOODS_1_002_CA_3 | CA       | FOODS  | 0.285714                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
-| 27538 | 2016-06-19 | FOODS_1_002_CA_4 | CA       | FOODS  | 0.571429                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
-| 41300 | 2016-06-19 | FOODS_1_003_CA_1 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                       | 11.428572                                                   |
-| 43269 | 2016-06-19 | FOODS_1_003_CA_2 | CA       | FOODS  | 1.428571                       | 137.428574                            | 64.428574                                       | 23.714285                                                   |
-| 45238 | 2016-06-19 | FOODS_1_003_CA_3 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                       | 19.571428                                                   |
-| 47206 | 2016-06-19 | FOODS_1_003_CA_4 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                       | 9.714286                                                    |
+|       | ds         | unique_id        | state_id | cat_id | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | partby_state_id_rolling_mean_lag1_window_size7 | partby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
+|-------|------------|------------------|----------|--------|--------------------------------|---------------------------------------|------------------------------------------------|------------------------------------------------------------|
+| 1968  | 2016-06-19 | FOODS_1_001_CA_1 | CA       | FOODS  | 0.857143                       | 137.428574                            | 64.428574                                      | 11.428572                                                  |
+| 3937  | 2016-06-19 | FOODS_1_001_CA_2 | CA       | FOODS  | 1.142857                       | 137.428574                            | 64.428574                                      | 23.714285                                                  |
+| 5906  | 2016-06-19 | FOODS_1_001_CA_3 | CA       | FOODS  | 1.714286                       | 137.428574                            | 64.428574                                      | 19.571428                                                  |
+| 7874  | 2016-06-19 | FOODS_1_001_CA_4 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                      | 9.714286                                                   |
+| 21632 | 2016-06-19 | FOODS_1_002_CA_1 | CA       | FOODS  | 1.285714                       | 137.428574                            | 64.428574                                      | 11.428572                                                  |
+| 23601 | 2016-06-19 | FOODS_1_002_CA_2 | CA       | FOODS  | 0.714286                       | 137.428574                            | 64.428574                                      | 23.714285                                                  |
+| 25570 | 2016-06-19 | FOODS_1_002_CA_3 | CA       | FOODS  | 0.285714                       | 137.428574                            | 64.428574                                      | 19.571428                                                  |
+| 27538 | 2016-06-19 | FOODS_1_002_CA_4 | CA       | FOODS  | 0.571429                       | 137.428574                            | 64.428574                                      | 9.714286                                                   |
+| 41300 | 2016-06-19 | FOODS_1_003_CA_1 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                      | 11.428572                                                  |
+| 43269 | 2016-06-19 | FOODS_1_003_CA_2 | CA       | FOODS  | 1.428571                       | 137.428574                            | 64.428574                                      | 23.714285                                                  |
+| 45238 | 2016-06-19 | FOODS_1_003_CA_3 | CA       | FOODS  | 0.428571                       | 137.428574                            | 64.428574                                      | 19.571428                                                  |
+| 47206 | 2016-06-19 | FOODS_1_003_CA_4 | CA       | FOODS  | 0.142857                       | 137.428574                            | 64.428574                                      | 9.714286                                                   |
 
 ```python
 m5_feature_values.describe()
 ```
 
-|       | ds                            | y             | lag1          | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | groupby_state_id_rolling_mean_lag1_window_size7 | groupby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
-|-------|-------------------------------|---------------|---------------|--------------------------------|---------------------------------------|-------------------------------------------------|-------------------------------------------------------------|
-| count | 181878                        | 181878.000000 | 181778.000000 | 181178.000000                  | 181552.000000                         | 181552.000000                                   | 181552.000000                                               |
-| mean  | 2013-12-12 09:05:38.112361216 | 1.341410      | 1.341383      | 1.338734                       | 128.771957                            | 44.179596                                       | 12.859269                                                   |
-| min   | 2011-01-29 00:00:00           | 0.000000      | 0.000000      | 0.000000                       | 32.857143                             | 5.285714                                        | 0.428571                                                    |
-| 25%   | 2012-09-22 00:00:00           | 0.000000      | 0.000000      | 0.142857                       | 92.285713                             | 29.142857                                       | 6.857143                                                    |
-| 50%   | 2013-12-23 00:00:00           | 0.000000      | 0.000000      | 0.428571                       | 129.071426                            | 41.571430                                       | 11.285714                                                   |
-| 75%   | 2015-03-23 00:00:00           | 1.000000      | 1.000000      | 1.142857                       | 162.000000                            | 57.000000                                       | 17.000000                                                   |
-| max   | 2016-06-19 00:00:00           | 116.000000    | 116.000000    | 49.285713                      | 298.714294                            | 149.571426                                      | 61.000000                                                   |
-| std   | NaN                           | 3.615288      | 3.615864      | 3.123487                       | 51.012020                             | 21.452202                                       | 7.960689                                                    |
+|       | ds                            | y             | lag1          | rolling_mean_lag1_window_size7 | global_rolling_mean_lag1_window_size7 | partby_state_id_rolling_mean_lag1_window_size7 | partby_state_id\_\_store_id_rolling_mean_lag1_window_size7 |
+|-------|-------------------------------|---------------|---------------|--------------------------------|---------------------------------------|------------------------------------------------|------------------------------------------------------------|
+| count | 181878                        | 181878.000000 | 181778.000000 | 181178.000000                  | 181552.000000                         | 181552.000000                                  | 181552.000000                                              |
+| mean  | 2013-12-12 09:05:38.112361216 | 1.341410      | 1.341383      | 1.338734                       | 128.771957                            | 44.179596                                      | 12.859269                                                  |
+| min   | 2011-01-29 00:00:00           | 0.000000      | 0.000000      | 0.000000                       | 32.857143                             | 5.285714                                       | 0.428571                                                   |
+| 25%   | 2012-09-22 00:00:00           | 0.000000      | 0.000000      | 0.142857                       | 92.285713                             | 29.142857                                      | 6.857143                                                   |
+| 50%   | 2013-12-23 00:00:00           | 0.000000      | 0.000000      | 0.428571                       | 129.071426                            | 41.571430                                      | 11.285714                                                  |
+| 75%   | 2015-03-23 00:00:00           | 1.000000      | 1.000000      | 1.142857                       | 162.000000                            | 57.000000                                      | 17.000000                                                  |
+| max   | 2016-06-19 00:00:00           | 116.000000    | 116.000000    | 49.285713                      | 298.714294                            | 149.571426                                     | 61.000000                                                  |
+| std   | NaN                           | 3.615288      | 3.615864      | 3.123487                       | 51.012020                             | 21.452202                                      | 7.960689                                                   |
 
 ## Accessing the optimization results
 

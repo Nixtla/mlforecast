@@ -107,7 +107,9 @@ In order to get the features as an array with the preprocess method we
 also have to ask for the X, y tuple.
 
 ```python
-X, y = fcst.preprocess(series_pl, return_X_y=True, as_numpy=True)
+X, y = fcst.preprocess(
+    series_pl, static_features=['static_0'], return_X_y=True, as_numpy=True
+)
 X[:2]
 ```
 
