@@ -2317,6 +2317,28 @@ class TimeSeries:
             sizes = ufp.join(uids, id_counts, on=self.id_col, how="outer")
         sizes = ufp.fill_null(sizes, {"counts": 0})
         sizes = ufp.sort(sizes, by=self.id_col)
+        # `append_several` keeps the existing groups at their current positions and appends the new
+        # values positionally, so `values` has to follow `sizes`' order rather than the id sort.
+        # With pandas categoricals whose category order is not alphabetical, `df`'s sort above
+        # produces a different order, and the appended values then land on the wrong series.
+        order = ufp.join(
+            ufp.assign_columns(
+                ufp.copy_if_pandas(sizes[[self.id_col]], deep=False),
+                "_rank",
+                np.arange(sizes.shape[0]),
+            ),
+            ufp.assign_columns(
+                ufp.copy_if_pandas(df[[self.id_col]], deep=False),
+                "_row",
+                np.arange(df.shape[0]),
+            ),
+            on=self.id_col,
+            how="inner",
+        )
+        order = ufp.sort(order, by=["_rank", "_row"])
+        df = ufp.take_rows(df, order["_row"].to_numpy())
+        values = df[self.target_col].to_numpy()
+        values = values.astype(self.ga.data.dtype, copy=False)
         new_groups = ~ufp.is_in(sizes[self.id_col], uids)
         if new_groups.any():
             if self.target_transforms is not None:

@@ -15,6 +15,7 @@ from sklearn.linear_model import LinearRegression
 
 from mlforecast import MLForecast
 from mlforecast.callbacks import SaveFeatures
+from mlforecast.core import TimeSeries
 from mlforecast.lag_transforms import (
     Combine,
     ExpandingMax,
@@ -166,6 +167,48 @@ def test_ragged_update_matches_full_fit(engine):
     tail = full[full["ds"] > cutoff]
     assert tail.groupby("unique_id").size().nunique() > 1
     _assert_matches_full_fit(full, hist, [tail], engine)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_update_with_reordered_categorical_ids(engine):
+    """Categorical ids whose category order is not alphabetical keep their values on the right series.
+
+    ``update`` sorts the new frame by id and appends the values positionally, while the stored group
+    order comes from the id sort of the sizes frame. When the ids are pandas categoricals the two
+    sorts disagree unless the category order happens to be alphabetical, so every appended value
+    landed one series off. Polars categoricals use their own physical ordering and were unaffected.
+    """
+    train = pd.DataFrame(
+        {
+            "unique_id": pd.Categorical(["d", "a", "c"], categories=["d", "c", "a"]),
+            "ds": [1, 1, 1],
+            "y": [1.0, 2.0, 3.0],
+        }
+    )
+    new = pd.DataFrame(
+        {
+            "unique_id": pd.Categorical(
+                ["a", "b", "c", "d"], categories=["d", "c", "b", "a"]
+            ),
+            "ds": [2, 2, 2, 2],
+            "y": [20.0, 200.0, 30.0, 10.0],
+        }
+    )
+    if engine == "polars":
+        train, new = pl.from_pandas(train), pl.from_pandas(new)
+
+    ts = TimeSeries(freq=1, lags=[1])
+    ts.fit_transform(
+        train, id_col="unique_id", time_col="ds", target_col="y", dropna=False
+    )
+    ts.update(new)
+
+    expected = {"a": 20.0, "b": 200.0, "c": 30.0, "d": 10.0}
+    actual = {
+        str(uid): float(ts.ga.data[ts.ga.indptr[i + 1] - 1])
+        for i, uid in enumerate(ts.uids)
+    }
+    assert actual == expected
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
