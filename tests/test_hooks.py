@@ -191,6 +191,7 @@ def test_warn_points_to_the_first_frame_outside_the_package():
         lambda: RollingMean(3, min_samples=0, global_=True),
         lambda: ExponentiallyWeightedMean(0.5, partition_by=["static_0"]),
     ],
+    ids=["rolling_quantile", "seasonal_rolling_quantile", "rolling_mean", "ewm"],
 )
 def test_lag_transform_warnings_point_to_the_caller(make_tfm):
     with pytest.warns(UserWarning) as caught:
