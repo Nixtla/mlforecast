@@ -2183,23 +2183,40 @@ class TimeSeries:
                 X_df = ufp.join(X_df, dates_validation, on=self.id_col)
                 mask = ufp.between(X_df[self.time_col], X_df["_start"], X_df["_end"])
                 X_df = ufp.filter_with_mask(X_df, mask)
-                if X_df.shape[0] < len(self.uids):
+                X_df = ufp.sort(X_df, [self.id_col, self.time_col])
+                future_ids = X_df[self.id_col].to_numpy()
+                future_times = X_df[self.time_col].to_numpy()
+                if (
+                    (future_ids[1:] == future_ids[:-1])
+                    & (future_times[1:] == future_times[:-1])
+                ).any():
+                    raise ValueError(
+                        "X_df has duplicate rows for an id and timestamp in the forecast horizon."
+                    )
+                expected = ufp.make_future_dataframe(
+                    uids=self.uids,
+                    last_times=self.last_dates,
+                    freq=self.freq,
+                    h=horizon,
+                    id_col=self.id_col,
+                    time_col=self.time_col,
+                )
+                expected = ufp.sort(expected, [self.id_col, self.time_col])
+                if (
+                    X_df.shape[0] != expected_rows_X
+                    or not np.array_equal(future_ids, expected[self.id_col].to_numpy())
+                    or not np.array_equal(
+                        future_times, expected[self.time_col].to_numpy()
+                    )
+                ):
                     msg = (
-                        "Found missing inputs in X_df. "
-                        "It should have at least one row per id.\n"
+                        "Found missing or unexpected inputs in X_df. "
+                        "It should have one row per id and timestamp in the forecast horizon.\n"
                         "You can get the expected structure by running `MLForecast.make_future_dataframe(h)` "
                         "or get the missing combinations in your current `X_df` by running `MLForecast.get_missing_future(h, X_df)`."
                     )
                     raise ValueError(msg)
-                # Warn if partial features provided
-                if X_df.shape[0] < expected_rows_X:
-                    warnings.warn(
-                        f"X_df has {X_df.shape[0]} rows but {expected_rows_X} expected for horizon {horizon}. "
-                        "Features will be reused for missing horizon steps. "
-                        "Use `make_future_dataframe(h)` or `get_missing_future(h, X_df)` to generate complete features."
-                    )
                 drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
-                X_df = ufp.sort(X_df, [self.id_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)
                 if not X_df.shape[1]:
                     # only statics were provided; a polars frame with no columns has no rows
