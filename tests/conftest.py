@@ -17,7 +17,7 @@ def assert_raises_with_message(func, expected_msg, *args, **kwargs):
 
 
 def make_groupby_df(engine, series_data):
-    """Create a test DataFrame with brand column for groupby tests.
+    """Create a test DataFrame with brand column for static key tests.
 
     Args:
         engine: "pandas" or "polars"

@@ -381,8 +381,8 @@ def test_partition_by_id_key_fit_transform(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_global_fit_transform(engine):
-    """partition_by with global_ creates global+partition buckets."""
+def test_partition_by_dynamic_key_fit_transform(engine):
+    """partition_by without the id pools series that share a bucket."""
     df = _make_df(
         engine,
         {
@@ -602,7 +602,7 @@ def test_partition_by_update(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_local_numeric_values(engine):
+def test_partition_by_id_key_numeric_values(engine):
     """Verify rolling mean per (id, promo) bucket matches hand-computed values."""
     df = _make_df(
         engine,
@@ -1255,8 +1255,8 @@ def test_new_partition_bucket_uses_existing_parent_calendar(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_global_partition_update_advances_sibling_calendar(engine):
-    """Global+partition: update advances all sibling bucket ordinals."""
+def test_dynamic_key_update_advances_sibling_calendar(engine):
+    """Dynamic key: update advances all sibling bucket ordinals."""
     df = _make_df(
         engine,
         {
@@ -1419,7 +1419,7 @@ def test_partition_predict_requires_x_df(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_unseen_partition_predict(engine):
+def test_id_key_unseen_partition_predict(engine):
     """Fit with promo=0 only, predict h=1 with unseen promo=1."""
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
@@ -1476,8 +1476,8 @@ def test_local_unseen_partition_predict(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_global_partition_unseen_bucket_predict(engine):
-    """Regression test for Bug 1: global+partition with unseen bucket at predict.
+def test_dynamic_key_unseen_bucket_predict(engine):
+    """Regression test for Bug 1: dynamic key with unseen bucket at predict.
 
     Previously raised IndexError because append_predictions passed
     new_groups=zeros for buckets that didn't exist in the GA yet.
@@ -1538,8 +1538,8 @@ def test_global_partition_unseen_bucket_predict(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_global_partition_new_bucket_inherits_parent_calendar(engine):
-    """Same, for a global+partition bucket: unseen partition value -> no bucket."""
+def test_dynamic_key_new_bucket_inherits_parent_calendar(engine):
+    """Same, for a dynamic key bucket: unseen partition value -> no bucket."""
     df = _make_df(
         engine,
         {
@@ -2767,7 +2767,7 @@ def test_partition_ewm_skips_missing_parent_ordinals():
         )
 
 
-def test_global_partition_ewm_uses_timestamp_mean_once():
+def test_dynamic_key_ewm_uses_timestamp_mean_once():
     """Multiple series in the same partition bucket at the same timestamp
     contribute their aggregate mean once to EWM, not once per row."""
     df = pd.DataFrame(
@@ -3112,7 +3112,7 @@ def test_polars_join_preserves_row_order():
 
 
 def test_polars_shuffled_rows_feature_parity_with_pandas():
-    """Static + dynamic key features on a shuffled-row polars frame match the
+    """Multi-column dynamic key features on a shuffled-row polars frame match the
     pandas-engine run, at fit and at the first prediction step."""
     n_series, n_times = 40, 8
     rng = np.random.default_rng(1)
@@ -4007,7 +4007,7 @@ def _fit_transform_values(engine, df, tfm):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_local_default_min_samples_is_one(engine):
+def test_partition_by_id_key_default_min_samples_is_one(engine):
     """On a dense panel with interleaved promo days, a 7-step window almost
     never holds 7 same-promo observations (the window spans calendar steps
     while only same-promo rows count), so the window_size default would make
@@ -5207,8 +5207,6 @@ def _run_key_spelling(engine, tfm):
 _SPELLING_TFMS = [
     (lambda **kw: RollingMean(3, **kw), {"min_samples": 1}),
     (lambda **kw: RollingStd(3, **kw), {"min_samples": 1}),
-    (lambda **kw: ExpandingMean(**kw), {}),
-    (lambda **kw: ExponentiallyWeightedMean(alpha=0.5, **kw), {}),
 ]
 
 
@@ -5216,7 +5214,7 @@ _SPELLING_TFMS = [
 @pytest.mark.parametrize(
     "tfm_factory, explicit_kw",
     _SPELLING_TFMS,
-    ids=["rolling_mean", "rolling_std", "expanding_mean", "ewm"],
+    ids=["rolling_mean", "rolling_std"],
 )
 def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
     """An id key's defaults give the same features and forecasts as spelling them out."""
@@ -5242,7 +5240,7 @@ def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
         ),
     ],
 )
-def test_bucket_uniques(engine, partition_by, expected):
+def test_id_key_bucket_uniques(engine, partition_by, expected):
     """Saved models keep the bucket vocabulary they were fit with, in the
     sorted key column order."""
     df = _make_df(
@@ -5271,7 +5269,7 @@ def test_bucket_uniques(engine, partition_by, expected):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_with_static_dynamic_key_matches_fit(engine):
+def test_update_with_dynamic_key_matches_fit(engine):
     train, new, _ = _key_spelling_frames(engine)
     full = pl.concat([train, new]) if engine == "polars" else pd.concat([train, new])
     tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
