@@ -98,6 +98,7 @@ select = ["F", "ARG", "TID251"]
 "warnings.warn".msg = "Use mlforecast._warnings._warn so the warning points to the user's code."
 
 [tool.ruff.lint.per-file-ignores]
+"!mlforecast/**" = ["TID251"]
 "mlforecast/_warnings.py" = ["TID251"]
 
 [tool.mypy]
