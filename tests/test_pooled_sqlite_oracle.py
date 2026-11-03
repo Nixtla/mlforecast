@@ -874,7 +874,7 @@ def test_sqlite_oracle_sparse_long_partition(
 
 
 def _dynamic_key_null_df():
-    """global + partition_by where the partition key has NaN (-> one bucket)."""
+    """Dynamic key where the partition column has NaN (-> one bucket)."""
     df = _dynamic_key_df()
     # float promo with NaN scattered across both series at the same timestamps.
     df["promo"] = pd.Series([0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan] * 2)
@@ -954,7 +954,7 @@ def test_sqlite_oracle_partition_fractional_float(mode):
         df["discount"] = _DISCOUNT_PATTERN * 2
         transform = RollingMean(_WINDOW_SIZE, partition_by=pc)
     elif mode == "static_dynamic_key":
-        df = _static_dynamic_key_df()  # static `brand` group key
+        df = _static_dynamic_key_df()  # static `brand` key column
         df["discount"] = _DISCOUNT_PATTERN * 4
         group_cols = ["brand"]
         transform = RollingMean(_WINDOW_SIZE, partition_by=[*group_cols, *pc])

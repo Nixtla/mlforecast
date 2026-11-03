@@ -2558,11 +2558,11 @@ def test_partition_predict_x_df_partition_column_has_nan(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_static_dynamic_key_null_scope_resolves_at_predict(engine):
-    """NaN group keys must share one scope, at fit and at predict.
+    """NaN static key values must share one scope, at fit and at predict.
 
     ``discount`` is genuinely numeric with NaN, so without a sentinel encoding
     raw ``NaN != NaN`` would spawn a fresh scope per row. The encoded key must
-    put every NaN-discount bucket in the same group scope.
+    put every NaN-discount bucket in the same static scope.
     """
     from mlforecast.pooled import encode_keys
 
@@ -5298,7 +5298,7 @@ def test_update_with_dynamic_key_matches_fit(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_predict_requires_static_dynamic_key(engine):
+def test_predict_requires_x_df_for_dynamic_key_column(engine):
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
 

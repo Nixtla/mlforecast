@@ -37,7 +37,7 @@ from mlforecast.utils import (
     generate_daily_series,
     generate_prices_for_series,
 )
-from .conftest import make_groupby_df
+from .conftest import make_brand_df
 
 
 @pytest.fixture
@@ -716,7 +716,7 @@ def test_global_lag_transform(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_lag_transform(engine):
-    df = make_groupby_df(
+    df = make_brand_df(
         engine,
         [
             ("a", [1, 2, 3, 4], "x"),
@@ -1115,7 +1115,7 @@ def test_group_update_new_group_order(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_lag_transform_uses_transformed_target(engine):
-    df = make_groupby_df(
+    df = make_brand_df(
         engine,
         [
             ("a", [1, 2, 3], "x"),
@@ -1385,7 +1385,7 @@ def test_global_rolling_quantile(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_rolling_std(engine):
-    df = make_groupby_df(
+    df = make_brand_df(
         engine,
         [
             ("a", [1, 1, 1, 1], "x"),
@@ -1441,7 +1441,7 @@ def test_group_rolling_std(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_expanding_mean(engine):
-    df = make_groupby_df(
+    df = make_brand_df(
         engine,
         [
             ("a", [1, 2, 3, 4], "x"),
@@ -1496,7 +1496,7 @@ def test_group_expanding_mean(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_group_rolling_quantile(engine):
-    df = make_groupby_df(
+    df = make_brand_df(
         engine,
         [
             ("a", [1, 3, 5, 7, 9], "x"),
