@@ -6,8 +6,8 @@ pre-cleanup baseline. Because two models are fitted, ``TimeSeries._backup``
 runs between them, so this also guards that the cheaper snapshot/restore
 backup is behavior-identical to the original deepcopy.
 
-The fit spans all five pooled modes (global / groupby / local-partition /
-global+partition / groupby+partition) and every aggregate field
+The fit spans every kind of pooled key (global / static / id + dynamic /
+dynamic / static + dynamic) and every aggregate field
 (mean/std/min/max/expanding/EWM), so a regression in any pooled append or
 aggregate path moves a prediction and fails here.
 """

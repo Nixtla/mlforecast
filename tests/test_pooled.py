@@ -277,7 +277,7 @@ def test_staggered_series_start(engine, lag):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
-def test_categorical_groupby_update_with_new_group(engine, lag):
+def test_categorical_key_update_with_new_group(engine, lag):
     """Update with a new categorical group value works correctly."""
     df = _make_df(
         engine,
@@ -348,8 +348,8 @@ def test_compute_pooled_features_raises_for_unsupported():
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_local_fit_transform(engine):
-    """partition_by with local mode (no global_/groupby) creates correct buckets."""
+def test_partition_by_id_key_fit_transform(engine):
+    """partition_by with the id creates per-series buckets."""
     df = _make_df(
         engine,
         {
@@ -411,8 +411,8 @@ def test_partition_by_global_fit_transform(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_groupby_fit_transform(engine):
-    """partition_by with groupby creates group+partition buckets."""
+def test_partition_by_static_dynamic_key_fit_transform(engine):
+    """partition_by with a static and a dynamic column creates the joint buckets."""
     df = _make_df(
         engine,
         {
@@ -442,8 +442,8 @@ def test_partition_by_groupby_fit_transform(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_local_predict(engine):
-    """partition_by local: predict produces features without errors."""
+def test_partition_by_id_key_predict(engine):
+    """partition_by with the id: predict produces features without errors."""
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
@@ -842,8 +842,8 @@ def test_partition_by_dynamic_keys_multistep(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_predict_ids_with_nonlocal_partition_raises(engine):
-    """predict(ids=...) must be blocked for nonlocal partition transforms."""
+def test_predict_ids_with_cross_series_key_raises(engine):
+    """predict(ids=...) must be blocked for keys without the id."""
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
@@ -1073,7 +1073,7 @@ def test_partition_by_backup_restore(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_partition_prediction_advances_sibling_calendar(engine):
+def test_id_key_prediction_advances_sibling_calendar(engine):
     """Multi-step predict: sibling buckets under same parent advance together.
 
     Uses RollingMean(2, min_samples=1) partition transform plus a regular
@@ -1144,7 +1144,7 @@ def test_local_partition_prediction_advances_sibling_calendar(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_partition_update_advances_sibling_calendar(engine):
+def test_id_key_update_advances_sibling_calendar(engine):
     """update() advances parent calendar so sibling bucket sees new timestamp.
 
     After updating with promo=1 at ds=6, verify:
@@ -1300,8 +1300,8 @@ def test_global_partition_update_advances_sibling_calendar(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_groupby_partition_update_advances_sibling_calendar(engine):
-    """Groupby+partition: update advances sibling buckets within each group."""
+def test_static_dynamic_key_update_advances_sibling_calendar(engine):
+    """Static + dynamic key: update advances sibling buckets within each static group."""
     df = _make_df(
         engine,
         {
@@ -1742,8 +1742,8 @@ def test_partition_predict_multi_horizon_multiple_unseen(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_partition_recursive_h3_consistency(engine):
-    """Local partition recursive predict slides the rolling window correctly.
+def test_id_key_recursive_h3_consistency(engine):
+    """Id-key recursive predict slides the rolling window correctly.
 
     Single series, constant promo=1, RollingMean(window_size=2, lag=1). Each
     horizon's feature must equal the mean of the two most recent values (real,
@@ -2025,9 +2025,6 @@ def test_partition_cv_fold_independent(engine):
     assert len(state.bucket_uniques) == 2
 
 
-# === Tests ported from feature/groupby_with_range_semantics ===
-
-
 class TestValidateDataWarning:
     """Warning when validate_data=False with pooled transforms."""
 
@@ -2054,12 +2051,6 @@ class TestValidateDataWarning:
 
     def test_warns_global(self):
         fcst = self._make_fcst({1: [RollingMean(window_size=2, global_=True)]})
-        df = self._make_simple_df()
-        with pytest.warns(UserWarning, match="Pooled.*validate_data"):
-            fcst.preprocess(df, static_features=["brand"], validate_data=False)
-
-    def test_warns_groupby(self):
-        fcst = self._make_fcst({1: [RollingMean(window_size=2, partition_by=["brand"])]})
         df = self._make_simple_df()
         with pytest.warns(UserWarning, match="Pooled.*validate_data"):
             fcst.preprocess(df, static_features=["brand"], validate_data=False)
@@ -2131,8 +2122,8 @@ def test_ewm_lag_semantics(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_ewm_lag_semantics_groupby(engine):
-    """EWM lag semantics hold in groupby mode too."""
+def test_ewm_lag_semantics_static_key(engine):
+    """EWM lag semantics hold with a static key too."""
     df = _make_df(
         engine,
         {
@@ -2165,7 +2156,7 @@ def test_ewm_lag_semantics_groupby(engine):
 
 
 def _fit_and_collect(engine, lag, tfms, y_a, y_b, n_times, grp=None):
-    """Helper: fit global or groupby transforms, return per-series-a preprocess
+    """Helper: fit global or static-key transforms, return per-series-a preprocess
     values and prediction values."""
     data = {
         "unique_id": ["a"] * n_times + ["b"] * n_times,
@@ -2265,8 +2256,8 @@ def test_pooled_transforms_lag3_global(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_pooled_transforms_lag2_groupby(engine):
-    """Decomposable transforms produce correct values with lag=2 in groupby mode."""
+def test_pooled_transforms_lag2_static_key(engine):
+    """Decomposable transforms produce correct values with lag=2 and a static key."""
     # Group X: series a=[1,2,3,4,5], b=[10,20,30,40,50]
     # Per-ts global means in group X: t0=5.5, t1=11, t2=16.5, t3=22, t4=27.5
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0]
@@ -2438,11 +2429,11 @@ def test_fast_vs_slow_partition(tfm_factory, lag):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("lag", _LAGS)
-def test_fast_vs_slow_local_partition_with_nan(engine, lag):
-    """Local partition_by with a missing partition value: the slow-path join
+def test_fast_vs_slow_id_key_with_nan(engine, lag):
+    """Id key with a missing partition value: the slow-path join
     (forced by clearing the aggregate cache and the idsorted permutation) keys on
     (id, time), so missing-partition rows are matched, not dropped — matching the
-    fast path. Guards the local ``join_cols`` fix on both engine join paths.
+    fast path. Guards the id-key ``join_cols`` fix on both engine join paths.
 
     The missing value is ``None`` (-> polars *null*, pandas NaN): a raw polars join
     on a null key does NOT match (raw pandas merge and polars NaN both do), so the
@@ -2502,7 +2493,7 @@ def test_fast_vs_slow_local_partition_with_nan(engine, lag):
         slow,
         atol=1e-10,
         equal_nan=True,
-        err_msg=f"local+partition NaN fast vs slow for {col}",
+        err_msg=f"id key NaN fast vs slow for {col}",
     )
     # the NaN-partition rows must receive values from the slow-path join, not be
     # dropped (which would leave them NaN where the fast path has a value).
@@ -2566,7 +2557,7 @@ def test_partition_predict_x_df_partition_column_has_nan(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_groupby_partition_null_scope_resolves_at_predict(engine):
+def test_static_dynamic_key_null_scope_resolves_at_predict(engine):
     """NaN group keys must share one scope, at fit and at predict.
 
     ``discount`` is genuinely numeric with NaN, so without a sentinel encoding
@@ -2845,9 +2836,9 @@ def test_global_partition_ewm_uses_timestamp_mean_once():
 
 
 # ---------------------------------------------------------------------------
-# Null/NaN groupby key support.
+# Null/NaN static key support.
 #
-# A missing (null/NaN/None) value in a groupby key column must collapse all
+# A missing (null/NaN/None) value in a static key column must collapse all
 # missing values into a single bucket (SQL PARTITION BY semantics), identically
 # across pandas/polars and key dtypes, without crashing fit/predict/update.
 # ---------------------------------------------------------------------------
@@ -3030,7 +3021,7 @@ def test_one_missing_column_keeps_distinct_buckets():
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_groupby_null_key_fit_predict_update(engine):
+def test_static_null_key_fit_predict_update(engine):
     from sklearn.linear_model import LinearRegression
     from mlforecast.forecast import MLForecast
 
@@ -3068,8 +3059,8 @@ def test_groupby_null_key_fit_predict_update(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("kind", ["string-null", "numeric-nan"])
-def test_null_groupby_key_no_static_change_error(engine, kind):
-    # A series whose entire (static) groupby key is missing must NOT raise
+def test_null_static_key_no_static_change_error(engine, kind):
+    # A series whose entire static key is missing must NOT raise
     # "values change over time" (NaN != NaN). Covers pandas object-None,
     # pandas float-NaN, polars null, and polars float-NaN.
     if kind == "string-null":
@@ -3121,7 +3112,7 @@ def test_polars_join_preserves_row_order():
 
 
 def test_polars_shuffled_rows_feature_parity_with_pandas():
-    """groupby+partition_by features on a shuffled-row polars frame match the
+    """Static + dynamic key features on a shuffled-row polars frame match the
     pandas-engine run, at fit and at the first prediction step."""
     n_series, n_times = 40, 8
     rng = np.random.default_rng(1)
@@ -3248,12 +3239,12 @@ def _diffed_range_mean_oracle(
 
     Fixtures use a contiguous integer calendar shared by all series, so parent
     ordinals equal the timestamps for both the global and the per-series
-    (local) parent calendars."""
+    (id-key) parent calendars."""
     lo, hi = qt - lag - window + 1, qt - lag
     mask = (times >= lo) & (times <= hi)
     if scope == "global":
         pass  # one bucket: every series
-    else:  # local + partition_by: bucket is (series, promo value)
+    else:  # id key: bucket is (series, promo value)
         mask &= (ids == qid) & (promos == qpromo)
     vals = diffs[mask]
     vals = vals[~np.isnan(vals)]
@@ -3299,7 +3290,7 @@ def test_target_transforms_with_pooled_preprocess(engine):
         prep = prep.to_pandas()
 
     diffs = pd.Series(y).groupby(ids).diff().to_numpy()
-    for scope, tfm in [("global", g_tfm), ("local", p_tfm)]:
+    for scope, tfm in [("global", g_tfm), ("id_key", p_tfm)]:
         col = tfm._get_name(1)
         expected = np.array(
             [
@@ -3408,9 +3399,9 @@ def _range_quantile_oracle(
     """Expected RANGE rolling quantile per bucket. ``hist`` is a list of
     (id, t, y, promo) rows on a contiguous integer calendar (ordinals == t)."""
     lo, hi = qt - lag - window + 1, qt - lag
-    if mode == "global":  # bucket key is (promo,)
+    if mode == "cross_series":  # bucket key is (promo,)
         vals = [r[2] for r in hist if lo <= r[1] <= hi and r[3] == qpromo]
-    else:  # local: bucket key is (id, promo)
+    else:  # id key: bucket key is (id, promo)
         vals = [
             r[2] for r in hist if lo <= r[1] <= hi and r[0] == qid and r[3] == qpromo
         ]
@@ -3421,7 +3412,7 @@ def _range_quantile_oracle(
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-@pytest.mark.parametrize("mode", ["local", "global"])
+@pytest.mark.parametrize("mode", ["id_key", "cross_series"])
 def test_slow_path_quantile_with_partition_by(engine, mode):
     """RollingQuantile has no aggregate fast path, so partition_by routes it
     through the row-level slow path at fit and through build_query_arrays at
@@ -3447,7 +3438,7 @@ def test_slow_path_quantile_with_partition_by(engine, mode):
         0.5,
         3,
         min_samples=1,
-        partition_by=["promo"] if mode == "global" else ["unique_id", "promo"],
+        partition_by=["promo"] if mode == "cross_series" else ["unique_id", "promo"],
     )
     col = tfm._get_name(1)
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
@@ -3957,8 +3948,8 @@ def test_time_agg_sklearn_clone_roundtrip():
 
 
 # === min_samples default resolution ===
-# In local partition mode min_samples=None defaults to 1 (SQL RANGE semantics);
-# every other mode keeps the window_size default.
+# With the id in the key min_samples=None defaults to 1 (SQL RANGE semantics);
+# every other key keeps the window_size default.
 
 from mlforecast.pooled import get_kernel as _get_kernel  # noqa: E402
 
@@ -4020,7 +4011,7 @@ def test_partition_by_local_default_min_samples_is_one(engine):
     """On a dense panel with interleaved promo days, a 7-step window almost
     never holds 7 same-promo observations (the window spans calendar steps
     while only same-promo rows count), so the window_size default would make
-    the feature ~100% NaN. Local partition mode defaults to 1 instead."""
+    the feature ~100% NaN. A key with the id defaults to 1 instead."""
     n = 30
     df = _make_df(
         engine,
@@ -4040,7 +4031,7 @@ def test_partition_by_local_default_min_samples_is_one(engine):
     np.testing.assert_array_equal(default_vals, explicit_one)
     # usable feature: only the empty-lookback rows at the start are NaN
     assert np.isnan(default_vals).mean() < 0.2
-    # the local-mode default (window_size) would have produced all NaN here
+    # the window_size default would have produced all NaN here
     old_default = _fit_transform_values(
         engine, df, RollingMean(7, min_samples=7, partition_by=["unique_id", "promo"])
     )
@@ -4048,9 +4039,9 @@ def test_partition_by_local_default_min_samples_is_one(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_nonlocal_default_min_samples_unchanged(engine):
-    """global_ + partition_by keeps the window_size default (counts sum
-    across series in the (partition) bucket)."""
+def test_partition_by_cross_series_default_min_samples_unchanged(engine):
+    """A key without the id keeps the window_size default (counts sum
+    across series in the bucket)."""
     n = 12
     df = _make_df(
         engine,
@@ -4693,8 +4684,8 @@ def _fit_ts(df, tfm, lag, keep_last_n=None):
     ],
     ids=[
         "exp_mean",
-        "exp_mean_groupby",
-        "exp_std_groupby",
+        "exp_mean_static_key",
+        "exp_std_static_key",
         "exp_min",
         "exp_max",
         "ewm",
@@ -4799,7 +4790,7 @@ _STD_IDS = [
 
 
 @pytest.mark.parametrize(
-    "mode", [dict(global_=True), dict(partition_by=["brand"])], ids=["global", "groupby"]
+    "mode", [dict(global_=True), dict(partition_by=["brand"])], ids=["global", "static_key"]
 )
 @pytest.mark.parametrize("make_tfm, reference", _STD_CASES, ids=_STD_IDS)
 def test_pooled_std_is_precise_on_offset_data(make_tfm, reference, mode):
@@ -5223,21 +5214,17 @@ _SPELLING_TFMS = [
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize(
-    "tfm_factory, local_kw",
+    "tfm_factory, explicit_kw",
     _SPELLING_TFMS,
     ids=["rolling_mean", "rolling_std", "expanding_mean", "ewm"],
 )
-@pytest.mark.parametrize("pair", ["groupby", "local_partition"])
-def test_equivalent_key_spellings(engine, tfm_factory, local_kw, pair):
-    """Spellings that pool the same bucket key give the same features and forecasts."""
-    if pair == "groupby":
-        kwargs = dict(partition_by=["brand"])
-        equivalent = dict(partition_by=["brand"])
-    else:
-        kwargs = dict(partition_by=["unique_id", "promo"])
-        equivalent = dict(partition_by=["unique_id", "promo"], **local_kw)
-    exp_feats, exp_preds = _run_key_spelling(engine, tfm_factory(**kwargs))
-    feats, preds = _run_key_spelling(engine, tfm_factory(**equivalent))
+def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
+    """An id key's defaults give the same features and forecasts as spelling them out."""
+    key = ["unique_id", "promo"]
+    exp_feats, exp_preds = _run_key_spelling(engine, tfm_factory(partition_by=key))
+    feats, preds = _run_key_spelling(
+        engine, tfm_factory(partition_by=key, **explicit_kw)
+    )
     for step, exp_step in zip(feats, exp_feats, strict=True):
         np.testing.assert_allclose(step, exp_step)
     np.testing.assert_allclose(preds, exp_preds)
@@ -5255,7 +5242,7 @@ def test_equivalent_key_spellings(engine, tfm_factory, local_kw, pair):
         ),
     ],
 )
-def test_local_partition_bucket_uniques(engine, partition_by, expected):
+def test_bucket_uniques(engine, partition_by, expected):
     """Saved models keep the bucket vocabulary they were fit with, in the
     sorted key column order."""
     df = _make_df(
@@ -5284,7 +5271,7 @@ def test_local_partition_bucket_uniques(engine, partition_by, expected):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_update_with_dynamic_groupby_key_matches_fit(engine):
+def test_update_with_static_dynamic_key_matches_fit(engine):
     train, new, _ = _key_spelling_frames(engine)
     full = pl.concat([train, new]) if engine == "polars" else pd.concat([train, new])
     tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
@@ -5313,7 +5300,7 @@ def test_update_with_dynamic_groupby_key_matches_fit(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_predict_requires_dynamic_groupby_key(engine):
+def test_predict_requires_static_dynamic_key(engine):
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
 

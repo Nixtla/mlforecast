@@ -340,7 +340,7 @@ def _global_df():
     )
 
 
-def _groupby_df():
+def _static_key_df():
     return pd.DataFrame(
         {
             "unique_id": ["a"] * 8 + ["b"] * 8 + ["c"] * 8 + ["d"] * 8,
@@ -406,13 +406,13 @@ _TRANSFORMS = [
     "transform_factory,transform_name", _TRANSFORMS, ids=[t[1] for t in _TRANSFORMS]
 )
 @pytest.mark.parametrize("lag", [1, 2, 3])
-@pytest.mark.parametrize("mode", ["global", "groupby"])
+@pytest.mark.parametrize("mode", ["global", "static_key"])
 def test_sqlite_oracle_matches_numpy(transform_factory, transform_name, lag, mode):
     if mode == "global":
         df = _global_df()
         gc_arg = None
     else:
-        df = _groupby_df()
+        df = _static_key_df()
         gc_arg = ["brand"]
     transform = transform_factory(gc_arg)
     window_size = _WINDOW_SIZE if transform_name.startswith("Rolling") else None
@@ -517,7 +517,7 @@ def test_random_data(seed):
         ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, partition_by=gc)),
     ],
 )
-def test_multi_column_groupby(transform_name, tfm_factory):
+def test_multi_column_static_key(transform_name, tfm_factory):
     df = pd.DataFrame(
         {
             "unique_id": ["a"] * 6 + ["b"] * 6 + ["c"] * 6 + ["d"] * 6,
@@ -627,7 +627,7 @@ def test_sparse_windows_nan_vs_value():
 # ---------------------------------------------------------------------------
 
 
-def _global_partition_df():
+def _dynamic_key_df():
     return pd.DataFrame(
         {
             "unique_id": ["a"] * 8 + ["b"] * 8,
@@ -655,7 +655,7 @@ def _global_partition_df():
     )
 
 
-def _groupby_partition_df():
+def _static_dynamic_key_df():
     return pd.DataFrame(
         {
             "unique_id": ["a"] * 8 + ["b"] * 8 + ["c"] * 8 + ["d"] * 8,
@@ -700,7 +700,7 @@ def _groupby_partition_df():
     )
 
 
-def _local_partition_df():
+def _id_key_df():
     return pd.DataFrame(
         {
             "unique_id": ["a"] * 8 + ["b"] * 8,
@@ -740,19 +740,19 @@ _PARTITION_TRANSFORMS = _TRANSFORMS
 )
 @pytest.mark.parametrize("lag", [1, 2, 3])
 @pytest.mark.parametrize(
-    "mode", ["global_partition", "groupby_partition", "local_partition"]
+    "mode", ["dynamic_key", "static_dynamic_key", "id_key"]
 )
 def test_sqlite_oracle_partition_by(transform_factory, transform_name, lag, mode):
     pc = ["promo"]
-    if mode == "global_partition":
-        df = _global_partition_df()
+    if mode == "dynamic_key":
+        df = _dynamic_key_df()
         transform = transform_factory(pc)
-    elif mode == "groupby_partition":
-        df = _groupby_partition_df()
+    elif mode == "static_dynamic_key":
+        df = _static_dynamic_key_df()
         group_cols = ["brand"]
         transform = transform_factory([*group_cols, *pc])
     else:
-        df = _local_partition_df()
+        df = _id_key_df()
         transform = transform_factory(["unique_id", *pc])
     window_size = _WINDOW_SIZE if transform_name.startswith("Rolling") else None
     with _warnings.catch_warnings():
@@ -839,14 +839,14 @@ def _sparse_long_partition_df():
     ids=[t[1] for t in _SPARSE_TRANSFORMS],
 )
 @pytest.mark.parametrize("min_samples", [1, 2])
-@pytest.mark.parametrize("mode", ["global_partition", "local_partition"])
+@pytest.mark.parametrize("mode", ["dynamic_key", "id_key"])
 def test_sqlite_oracle_sparse_long_partition(
     transform_cls, transform_name, min_samples, mode
 ):
     is_rolling = transform_name.startswith("Rolling")
     if not is_rolling and min_samples != 1:
         pytest.skip("expanding transforms take no min_samples")
-    if mode == "global_partition":
+    if mode == "dynamic_key":
         kwargs: dict = {"partition_by": ["promo"]}
     else:
         kwargs = {"partition_by": ["unique_id", "promo"]}
@@ -873,16 +873,16 @@ def test_sqlite_oracle_sparse_long_partition(
 # oracle locks the SQL NULL-partition semantics for partition_by transforms.
 
 
-def _global_partition_null_df():
+def _dynamic_key_null_df():
     """global + partition_by where the partition key has NaN (-> one bucket)."""
-    df = _global_partition_df()
+    df = _dynamic_key_df()
     # float promo with NaN scattered across both series at the same timestamps.
     df["promo"] = pd.Series([0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan] * 2)
     return df
 
 
-def _groupby_partition_null_df():
-    """groupby + partition_by where BOTH the group key and the partition key are
+def _static_dynamic_key_null_df():
+    """Static + dynamic key where BOTH the static and the dynamic column are
     NULL on some rows.
 
     Exercises (a) null-scope parent-calendar resolution: series b and c share a
@@ -890,15 +890,15 @@ def _groupby_partition_null_df():
     partition (promo) value collapsing into one bucket within each scope — i.e.
     SQL PARTITION BY (brand, promo) with NULLs treated as equal.
     """
-    df = _groupby_partition_df()
+    df = _static_dynamic_key_df()
     df["brand"] = pd.Series(["X"] * 8 + [None] * 8 + [None] * 8 + ["Y"] * 8)
     df["promo"] = pd.Series([0.0, np.nan, 1.0, 1.0, np.nan, 1.0, 0.0, np.nan] * 4)
     return df
 
 
-def _local_partition_null_df():
-    """local + partition_by where the partition key has NaN (-> own bucket)."""
-    df = _local_partition_df()
+def _id_key_null_df():
+    """Id key where the partition column has NaN (-> own bucket)."""
+    df = _id_key_df()
     df["promo"] = pd.Series([0.0, np.nan, 1.0, np.nan, 0.0, 1.0, 0.0, np.nan] * 2)
     return df
 
@@ -910,19 +910,19 @@ def _local_partition_null_df():
 )
 @pytest.mark.parametrize("lag", [1, 2, 3])
 @pytest.mark.parametrize(
-    "mode", ["global_partition", "groupby_partition", "local_partition"]
+    "mode", ["dynamic_key", "static_dynamic_key", "id_key"]
 )
 def test_sqlite_oracle_partition_null_key(transform_factory, transform_name, lag, mode):
     pc = ["promo"]
-    if mode == "global_partition":
-        df = _global_partition_null_df()
+    if mode == "dynamic_key":
+        df = _dynamic_key_null_df()
         transform = transform_factory(pc)
-    elif mode == "groupby_partition":
-        df = _groupby_partition_null_df()
+    elif mode == "static_dynamic_key":
+        df = _static_dynamic_key_null_df()
         group_cols = ["brand"]
         transform = transform_factory([*group_cols, *pc])
     else:
-        df = _local_partition_null_df()
+        df = _id_key_null_df()
         transform = transform_factory(["unique_id", *pc])
     window_size = _WINDOW_SIZE if transform_name.startswith("Rolling") else None
     with _warnings.catch_warnings():
@@ -945,21 +945,21 @@ _DISCOUNT_PATTERN = [0.1, 0.1, 0.25, 0.5, 0.1, 0.25, 0.1, 0.5]  # 8 per series
 
 
 @pytest.mark.parametrize(
-    "mode", ["global_partition", "groupby_partition", "local_partition"]
+    "mode", ["dynamic_key", "static_dynamic_key", "id_key"]
 )
 def test_sqlite_oracle_partition_fractional_float(mode):
     pc = ["discount"]
-    if mode == "global_partition":
-        df = _global_partition_df()
+    if mode == "dynamic_key":
+        df = _dynamic_key_df()
         df["discount"] = _DISCOUNT_PATTERN * 2
         transform = RollingMean(_WINDOW_SIZE, partition_by=pc)
-    elif mode == "groupby_partition":
-        df = _groupby_partition_df()  # static `brand` group key
+    elif mode == "static_dynamic_key":
+        df = _static_dynamic_key_df()  # static `brand` group key
         df["discount"] = _DISCOUNT_PATTERN * 4
         group_cols = ["brand"]
         transform = RollingMean(_WINDOW_SIZE, partition_by=[*group_cols, *pc])
     else:
-        df = _local_partition_df()
+        df = _id_key_df()
         df["discount"] = _DISCOUNT_PATTERN * 2
         transform = RollingMean(_WINDOW_SIZE, partition_by=["unique_id", *pc])
     assert_oracle_matches(
@@ -972,15 +972,15 @@ def test_sqlite_oracle_partition_fractional_float(mode):
 
 
 # ---------------------------------------------------------------------------
-# NULL groupby keys (SQL collapses all NULLs into one partition; our pooled
+# NULL static keys (SQL collapses all NULLs into one partition; our pooled
 # state must do the same). The oracle harness is pandas->SQLite, where to_sql
 # maps NaN/None -> SQL NULL, so it locks the SQL NULL-partition semantics.
 # (Polars-engine-origin NaN behavior is exercised in tests/test_pooled.py.)
 # ---------------------------------------------------------------------------
 
 
-def _groupby_string_null_df():
-    """String groupby key where two series share a NULL brand (-> one bucket)."""
+def _static_key_string_null_df():
+    """String static key where two series share a NULL brand (-> one bucket)."""
     return pd.DataFrame(
         {
             "unique_id": ["a"] * 8 + ["b"] * 8 + ["c"] * 8 + ["d"] * 8,
@@ -1024,9 +1024,9 @@ def _groupby_string_null_df():
     )
 
 
-def _groupby_numeric_null_df():
-    """Numeric groupby key with NaN (float) shared by two series (-> one bucket)."""
-    df = _groupby_string_null_df()
+def _static_key_numeric_null_df():
+    """Numeric static key with NaN (float) shared by two series (-> one bucket)."""
+    df = _static_key_string_null_df()
     df["brand"] = pd.Series([1.0] * 8 + [np.nan] * 8 + [np.nan] * 8 + [2.0] * 8)
     return df
 
@@ -1037,10 +1037,10 @@ def _groupby_numeric_null_df():
 @pytest.mark.parametrize("lag", [1, 2, 3])
 @pytest.mark.parametrize(
     "df_factory",
-    [_groupby_string_null_df, _groupby_numeric_null_df],
+    [_static_key_string_null_df, _static_key_numeric_null_df],
     ids=["string-null", "numeric-null"],
 )
-def test_sqlite_oracle_groupby_null_key(
+def test_sqlite_oracle_static_null_key(
     transform_factory, transform_name, lag, df_factory
 ):
     df = df_factory()
@@ -1063,7 +1063,7 @@ def test_sqlite_oracle_groupby_null_key(
         ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, partition_by=gc)),
     ],
 )
-def test_multi_column_groupby_one_null_col(transform_name, tfm_factory):
+def test_multi_column_static_key_one_null_col(transform_name, tfm_factory):
     """Multi-column key where exactly one column is NULL: (X, NULL) and
     (X, 'north') stay distinct, while two (X, NULL) rows share a bucket."""
     df = pd.DataFrame(
@@ -1153,7 +1153,7 @@ _TIME_AGG_TRANSFORMS = [
 )
 @pytest.mark.parametrize("time_agg", _TIME_AGGS)
 @pytest.mark.parametrize("lag", [1, 2, 3])
-@pytest.mark.parametrize("mode", ["global", "groupby"])
+@pytest.mark.parametrize("mode", ["global", "static_key"])
 def test_sqlite_oracle_time_agg(transform_factory, transform_name, time_agg, lag, mode):
     # NOTE: the public fit path rejects NaN targets, so the all-NaN-timestamp /
     # SQL-NULL conventions can't be driven through this oracle; they are pinned
@@ -1162,7 +1162,7 @@ def test_sqlite_oracle_time_agg(transform_factory, transform_name, time_agg, lag
         df = _global_df()
         gc_arg = None
     else:
-        df = _groupby_df()
+        df = _static_key_df()
         gc_arg = ["brand"]
     transform = transform_factory(gc_arg, time_agg)
     window_size = _WINDOW_SIZE if transform_name.startswith("Rolling") else None
@@ -1177,16 +1177,16 @@ def test_sqlite_oracle_time_agg(transform_factory, transform_name, time_agg, lag
 
 
 @pytest.mark.parametrize("time_agg", _TIME_AGGS)
-@pytest.mark.parametrize("mode", ["global_partition", "groupby_partition"])
+@pytest.mark.parametrize("mode", ["dynamic_key", "static_dynamic_key"])
 def test_sqlite_oracle_time_agg_partition(time_agg, mode):
     pc = ["promo"]
-    if mode == "global_partition":
-        df = _global_partition_df()
+    if mode == "dynamic_key":
+        df = _dynamic_key_df()
         transform = RollingMean(
             _WINDOW_SIZE, partition_by=pc, time_agg=time_agg
         )
     else:
-        df = _groupby_partition_df()
+        df = _static_dynamic_key_df()
         group_cols = ["brand"]
         transform = RollingMean(
             _WINDOW_SIZE, partition_by=[*group_cols, *pc], time_agg=time_agg

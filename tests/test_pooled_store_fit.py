@@ -204,10 +204,10 @@ _MODES = [
 ]
 _MODE_IDS = [
     "global",
-    "groupby",
-    "local_partition",
-    "global_partition",
-    "groupby_partition",
+    "static_key",
+    "id_key",
+    "dynamic_key",
+    "static_dynamic_key",
 ]
 
 

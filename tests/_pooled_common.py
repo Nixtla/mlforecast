@@ -71,7 +71,7 @@ CONFIGS = [
         ],
         False,
     ),
-    Config("groupby_rolling_mean", lambda: [RollingMean(7, partition_by=["brand"])], False),
+    Config("static_key_rolling_mean", lambda: [RollingMean(7, partition_by=["brand"])], False),
     Config("global_expanding_mean", lambda: [ExpandingMean(global_=True)], False),
     Config(
         "global_ewm",
@@ -93,12 +93,12 @@ CONFIGS = [
         False,
     ),
     Config(
-        "local_partition_rolling",
+        "id_key_rolling",
         lambda: [RollingMean(7, partition_by=["unique_id", "promo"])],
         True,
     ),
     Config(
-        "global_partition_rolling",
+        "dynamic_key_rolling",
         lambda: [RollingMean(7, partition_by=["promo"])],
         True,
     ),

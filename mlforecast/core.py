@@ -249,10 +249,10 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     """Whether a static feature differs between each series' start and end.
 
     Backend-agnostic (narwhals) and null-safe: two missing values count as equal
-    (so an all-null static feature, e.g. a null groupby key, is not flagged as
-    changing), while a missing-vs-present pair counts as a change. Mirrors the
-    dtype-aware "missing" rule used for pooled bucket keys (null, plus NaN for
-    float dtypes).
+    (so an all-null static feature, e.g. a null partition_by key, is not flagged
+    as changing), while a missing-vs-present pair counts as a change. Mirrors
+    the dtype-aware "missing" rule used for pooled bucket keys (null, plus NaN
+    for float dtypes).
     """
     a = nw.from_native(start_series, series_only=True)
     b = nw.from_native(end_series, series_only=True)
@@ -994,11 +994,12 @@ class TimeSeries:
                             f"Found in: {name}."
                         )
                     continue
-                per_series = (
-                    "`Lag`"
-                    if isinstance(leaf, LookupLag)
-                    else "the transform without partition_by"
-                )
+                if isinstance(leaf, LookupLag):
+                    per_series = "`Lag`"
+                elif getattr(leaf, "min_samples", 0) is None:
+                    per_series = "the transform without partition_by and min_samples=1"
+                else:
+                    per_series = "the transform without partition_by"
                 if all(c in static_cols for c in key):
                     raise ValueError(
                         f"partition_by={leaf.partition_by} holds '{id_col}' and only "

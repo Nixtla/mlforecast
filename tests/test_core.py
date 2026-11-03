@@ -839,7 +839,7 @@ def test_group_lag_transform_requires_aligned_ends(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_partition_lag_transform_requires_aligned_ends(engine):
+def test_id_key_lag_transform_requires_aligned_ends(engine):
     if engine == "polars":
         df = pl.DataFrame(
             {
@@ -998,7 +998,7 @@ def test_group_update_requires_complete_timestamps(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_local_partition_update_requires_complete_timestamps(engine):
+def test_id_key_update_requires_complete_timestamps(engine):
     if engine == "polars":
         df = pl.DataFrame(
             {

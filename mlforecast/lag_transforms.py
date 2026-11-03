@@ -297,7 +297,7 @@ class LookupLag(_BaseLagTransform):
     Args:
         partition_by (Sequence[str]): Columns that define the matching buckets.
             Must include the id column. Columns not listed in ``static_features``
-            must be supplied via ``X_df`` at prediction and in ``update``. Required.
+            must be supplied via ``X_df`` at prediction and in ``update``.
     """
 
     def __init__(

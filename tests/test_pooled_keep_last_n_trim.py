@@ -259,14 +259,14 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n, transforms):
 # where "trimmed == fresh fit on the tail" holds. G2.2b covers the other case.
 _MODES = {
     "global": {1: [RollingMean(4, global_=True)]},
-    "groupby": {1: [RollingMean(4, partition_by=["brand"])]},
-    "global+partition": {
+    "static_key": {1: [RollingMean(4, partition_by=["brand"])]},
+    "dynamic_key": {
         1: [RollingMean(3, min_samples=1, partition_by=["promo"])]
     },
-    "groupby+partition": {
+    "static_dynamic_key": {
         1: [RollingMean(3, min_samples=1, partition_by=["brand", "promo"])]
     },
-    "local+partition": {1: [RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"])]},
+    "id_key": {1: [RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"])]},
 }
 
 
@@ -316,7 +316,7 @@ def test_g2_2_trim_then_update_matches_fresh_then_update(name):
     a state freshly fit on the retained tail (exercises the rebuilt _ts_aggs and
     both append conventions). Uses preprocess + TimeSeries.update so no model is
     trained -- the contract is purely about state, and a bare static string
-    feature would otherwise trip the regressor in the global/local-only modes."""
+    feature would otherwise trip the regressor in the global and id-key modes."""
     lag_transforms = _MODES[name]
     T = 20
     df = _make_panel(T)
@@ -374,7 +374,7 @@ def test_g2_2b_accumulator_state_differs_from_fit_on_slice():
     T = 20
     df = _make_panel(T)
     df_slice = df[df[TIME] > T - _R].reset_index(drop=True)
-    # groupby rather than global_ so `brand` is auto-dropped as an auxiliary
+    # partition_by rather than global_ so `brand` is auto-dropped as an auxiliary
     # column and never reaches the model as a string feature
     lag_transforms = {1: [ExpandingMean(partition_by=["brand"])]}
     key = ("brand",)
@@ -682,7 +682,7 @@ def test_g2_6_ewm_below_retention_fails_loudly():
 @pytest.mark.parametrize(
     "make_tfm, reach",
     [
-        # groupby, not global_, so `brand` is auto-dropped as auxiliary rather
+        # partition_by, not global_, so `brand` is auto-dropped as auxiliary rather
         # than reaching the model as a string feature
         (lambda: RollingQuantile(p=0.5, window_size=4, partition_by=["brand"]), 4),
         (
