@@ -112,11 +112,11 @@ def test_feature_names(tfm, name):
         ),
         (
             RollingMean(3, min_samples=2, partition_by=["unique_id", "brand"]),
-            "without partition_by instead",
+            "use the transform without partition_by instead",
         ),
         (
             ExpandingMean(partition_by=["unique_id", "brand"]),
-            "without partition_by instead",
+            "use the transform without partition_by instead",
         ),
         (LookupLag(partition_by=["promo"]), "LookupLag's partition_by must include"),
         (LookupLag(partition_by=["unique_id"]), "use `Lag` instead"),

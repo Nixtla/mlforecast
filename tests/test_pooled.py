@@ -5156,7 +5156,7 @@ def test_get_kernel_resolves_subclasses():
         get_kernel(NotPooled())
 
 
-def _key_spelling_frames(engine):
+def _key_frames(engine):
     T = 12
     rows = [
         {
@@ -5182,7 +5182,7 @@ def _key_spelling_frames(engine):
     return train, new, future
 
 
-def _run_key_spelling(engine, tfm):
+def _run_fit_update_predict(engine, tfm):
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -5190,7 +5190,7 @@ def _run_key_spelling(engine, tfm):
         step_feats.append(np.asarray(X[X.columns[-1]].to_numpy()))
         return X
 
-    train, new, future = _key_spelling_frames(engine)
+    train, new, future = _key_frames(engine)
     fcst = MLForecast(
         models=[HistGradientBoostingRegressor(max_iter=10)],
         freq=1,
@@ -5204,7 +5204,7 @@ def _run_key_spelling(engine, tfm):
     return step_feats, preds["HistGradientBoostingRegressor"].to_numpy()
 
 
-_SPELLING_TFMS = [
+_ID_KEY_TFMS = [
     (lambda **kw: RollingMean(3, **kw), {"min_samples": 1}),
     (lambda **kw: RollingStd(3, **kw), {"min_samples": 1}),
 ]
@@ -5213,14 +5213,14 @@ _SPELLING_TFMS = [
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize(
     "tfm_factory, explicit_kw",
-    _SPELLING_TFMS,
+    _ID_KEY_TFMS,
     ids=["rolling_mean", "rolling_std"],
 )
 def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
     """An id key's defaults give the same features and forecasts as spelling them out."""
     key = ["unique_id", "promo"]
-    exp_feats, exp_preds = _run_key_spelling(engine, tfm_factory(partition_by=key))
-    feats, preds = _run_key_spelling(
+    exp_feats, exp_preds = _run_fit_update_predict(engine, tfm_factory(partition_by=key))
+    feats, preds = _run_fit_update_predict(
         engine, tfm_factory(partition_by=key, **explicit_kw)
     )
     for step, exp_step in zip(feats, exp_feats, strict=True):
@@ -5238,7 +5238,7 @@ def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
     ids=["expanding_mean", "ewm"],
 )
 def test_id_key_fit_update_predict(engine, tfm):
-    _, preds = _run_key_spelling(engine, tfm)
+    _, preds = _run_fit_update_predict(engine, tfm)
     assert np.isfinite(preds).all()
 
 
@@ -5284,7 +5284,7 @@ def test_id_key_bucket_uniques(engine, partition_by, expected):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_update_with_dynamic_key_matches_fit(engine):
-    train, new, _ = _key_spelling_frames(engine)
+    train, new, _ = _key_frames(engine)
     full = pl.concat([train, new]) if engine == "polars" else pd.concat([train, new])
     tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
 
@@ -5316,7 +5316,7 @@ def test_predict_requires_x_df_for_dynamic_key_column(engine):
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
 
-    train, new, future = _key_spelling_frames(engine)
+    train, new, future = _key_frames(engine)
     tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
     fcst = MLForecast(
         models=[HistGradientBoostingRegressor(max_iter=10)],
