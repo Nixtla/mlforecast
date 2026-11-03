@@ -328,8 +328,10 @@ def test_dask_cross_validation_drops_fitted_models(tmp_path, refit):
         freq="D",
         lags=[1, 2],
     )
+    partitioned = _make_partitioned_series(series, npartitions=2)
+    fcst.fit(partitioned, static_features=[])
     fcst.cross_validation(
-        _make_partitioned_series(series, npartitions=2),
+        partitioned,
         n_windows=2,
         h=3,
         static_features=[],
@@ -343,6 +345,9 @@ def test_dask_cross_validation_drops_fitted_models(tmp_path, refit):
         fcst.save(str(tmp_path))
     with pytest.raises(ValueError, match=msg):
         fcst.to_local()
+    fcst.models_ = fcst.cv_models_[-1]
+    with pytest.raises(ValueError, match="training data is unknown"):
+        fcst.to_local().transfer(series, Recalibration(h=3))
 
 
 @pytest.mark.parametrize(

@@ -380,8 +380,10 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             weight_col=weight_col,
         )
-        # models assigned to `models_` by hand have no other source of train ends
-        if self._train_ends_ is None or not hasattr(self, "models_"):
+        # models assigned to `models_` by hand are assumed to be trained on this data
+        if hasattr(self, "models_"):
+            self._train_ends_ = None
+        else:
             self._train_ends_ = self._collect_train_ends()
         return prep
 
@@ -448,6 +450,7 @@ class DistributedMLForecast:
             raise NotImplementedError(
                 "Only spark, dask, and ray engines are supported."
             )
+        self._train_ends_ = None
         return self
 
     def _check_fitted(self) -> None:
