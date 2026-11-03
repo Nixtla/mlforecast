@@ -2,6 +2,7 @@
 
 import os
 import sys
+import warnings
 from pathlib import Path
 from types import FrameType
 from typing import Optional
@@ -17,3 +18,7 @@ def _user_warning_stacklevel() -> int:
         level += 1
         frame = frame.f_back
     return level
+
+
+def _warn(message: str, category: type[Warning] = UserWarning) -> None:
+    warnings.warn(message, category, stacklevel=_user_warning_stacklevel())

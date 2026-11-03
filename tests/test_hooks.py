@@ -1,7 +1,9 @@
+import ast
 import copy
 import os
 import pickle
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,7 +14,12 @@ from utilsforecast.losses import smape
 import mlforecast
 from mlforecast import MLForecast
 from mlforecast.hooks import Hook, Profiler
-from mlforecast.lag_transforms import RollingMean
+from mlforecast.lag_transforms import (
+    ExponentiallyWeightedMean,
+    RollingMean,
+    RollingQuantile,
+    SeasonalRollingQuantile,
+)
 from mlforecast.utils import PredictionIntervals, generate_daily_series
 
 
@@ -148,6 +155,119 @@ def test_pooled_validation_warning_points_to_the_caller(series, with_hooks):
         fcst.fit(series, validate_data=False)
     (warning,) = [w for w in caught if "gap-free" in str(w.message)]
     assert warning.filename == __file__
+
+
+def test_package_only_warns_through_the_stacklevel_helper():
+    package_dir = Path(mlforecast.__file__).parent
+    bare = []
+    for path in package_dir.rglob("*.py"):
+        if path.name == "_warnings.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "warn"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "warnings"
+            ):
+                bare.append(f"{path.relative_to(package_dir)}:{node.lineno}")
+    assert bare == []
+
+
+def test_warn_points_to_the_first_frame_outside_the_package():
+    caller = os.path.join(os.path.dirname(mlforecast.__file__) + "_ext", "run.py")
+    code = "from mlforecast._warnings import _warn\n_warn('from outside')"
+    with pytest.warns(UserWarning, match="from outside") as caught:
+        exec(compile(code, caller, "exec"), {})
+    assert caught[0].filename == caller
+
+
+@pytest.mark.parametrize(
+    "make_tfm",
+    [
+        lambda: RollingQuantile(0.5, 3, min_samples=0, global_=True),
+        lambda: SeasonalRollingQuantile(0.5, 7, 3, min_samples=0, global_=True),
+        lambda: RollingMean(3, min_samples=0, global_=True),
+        lambda: ExponentiallyWeightedMean(0.5, partition_by=["static_0"]),
+    ],
+)
+def test_lag_transform_warnings_point_to_the_caller(make_tfm):
+    with pytest.warns(UserWarning) as caught:
+        make_tfm()
+    assert caught[0].filename == __file__
+
+
+@pytest.fixture
+def static_series():
+    return generate_daily_series(
+        2, min_length=20, max_length=30, n_static_features=1, equal_ends=True
+    )
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+def test_static_columns_in_X_df_warning_points_to_the_caller(static_series, with_hooks):
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    fcst.fit(static_series, static_features=["static_0"])
+    X_df = fcst.make_future_dataframe(h=2).merge(
+        static_series[["unique_id", "static_0"]].drop_duplicates()
+    )
+    with pytest.warns(UserWarning, match="considered static") as caught:
+        fcst.predict(2, X_df=X_df)
+    (warning,) = [w for w in caught if "considered static" in str(w.message)]
+    assert warning.filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+def test_partial_X_df_warning_points_to_the_caller(static_series, with_hooks):
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    fcst.fit(static_series, static_features=[])
+    X_df = fcst.make_future_dataframe(h=2).merge(
+        static_series[["unique_id", "static_0"]].drop_duplicates()
+    )
+    with pytest.warns(UserWarning, match="rows but") as caught:
+        fcst.predict(3, X_df=X_df)
+    (warning,) = [w for w in caught if "rows but" in str(w.message)]
+    assert warning.filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+def test_predict_interval_warnings_point_to_the_caller(series, with_hooks):
+    hooks = [Profiler()] if with_hooks else None
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1], hooks=hooks)
+    fcst.fit(series)
+    with pytest.warns(UserWarning, match="rerun the `fit`") as caught:
+        fcst.predict(2, level=[80])
+    assert caught[0].filename == __file__
+
+    fcst.fit(series, prediction_intervals=PredictionIntervals(h=1))
+    with pytest.warns(UserWarning, match="1-step ahead") as caught:
+        fcst.predict(2, level=[80])
+    assert caught[0].filename == __file__
+
+
+@pytest.mark.parametrize("with_hooks", [False, True])
+def test_unknown_auxiliary_columns_warning_points_to_the_caller(series, with_hooks):
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        drop_auxiliary_columns=["missing"],
+        hooks=[Profiler()] if with_hooks else None,
+    )
+    with pytest.warns(UserWarning, match="were not found") as caught:
+        fcst.fit(series)
+    assert caught[0].filename == __file__
 
 
 def test_stages_receive_bound_arguments(series):
