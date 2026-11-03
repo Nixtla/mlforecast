@@ -46,9 +46,9 @@ Name | Type | Description | Default
 `step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
 `num_iterations` | <code>[int](#int)</code> | Maximum number of boosting iterations to run. Defaults to 100. | <code>100</code>
 `params` | <code>[dict](#dict)</code> | Parameters to be passed to the LightGBM Boosters. Defaults to None. | <code>None</code>
-`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `eval_every` | <code>[int](#int)</code> | Number of boosting iterations to train before evaluating on the whole forecast window. Defaults to 10. | <code>10</code>
 `weights` | <code>sequence of float</code> | Weights to multiply the metric of each window. If None, all windows have the same weight. Defaults to None. | <code>None</code>
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
@@ -111,9 +111,9 @@ Name | Type | Description | Default
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
 `step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
 `params` | <code>[dict](#dict)</code> | Parameters to be passed to the LightGBM Boosters. Defaults to None. | <code>None</code>
-`static_features` | <code>list of str</code> | Names of the features that are static and will be repeated when forecasting. Defaults to None. | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None. | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/groupby/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `weights` | <code>sequence of float</code> | Weights to multiply the metric of each window. If None, all windows have the same weight. Defaults to None. | <code>None</code>
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
