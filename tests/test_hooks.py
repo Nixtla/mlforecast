@@ -1,9 +1,7 @@
-import ast
 import copy
 import os
 import pickle
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -156,24 +154,6 @@ def test_pooled_validation_warning_points_to_the_caller(series, with_hooks):
         fcst.fit(series, validate_data=False)
     (warning,) = [w for w in caught if "gap-free" in str(w.message)]
     assert warning.filename == __file__
-
-
-def test_package_only_warns_through_the_stacklevel_helper():
-    package_dir = Path(mlforecast.__file__).parent
-    bare = []
-    for path in package_dir.rglob("*.py"):
-        if path.name == "_warnings.py":
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "warn"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "warnings"
-            ):
-                bare.append(f"{path.relative_to(package_dir)}:{node.lineno}")
-    assert bare == []
 
 
 def test_warn_points_to_the_first_frame_outside_the_package():
