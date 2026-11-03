@@ -102,10 +102,13 @@ def test_feature_names(tfm, name):
 @pytest.mark.parametrize(
     "tfm, match",
     [
-        (RollingMean(3, partition_by=["unique_id"]), "only static"),
+        (
+            RollingMean(3, partition_by=["unique_id"]),
+            "with min_samples=1 and without partition_by instead",
+        ),
         (
             RollingMean(3, partition_by=["unique_id", "brand"]),
-            "without partition_by and min_samples=1 instead",
+            "with min_samples=1 and without partition_by instead",
         ),
         (
             RollingMean(3, min_samples=2, partition_by=["unique_id", "brand"]),

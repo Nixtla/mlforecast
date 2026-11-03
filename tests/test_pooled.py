@@ -5230,6 +5230,20 @@ def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize(
+    "tfm",
+    [
+        ExpandingMean(partition_by=["unique_id", "promo"]),
+        ExponentiallyWeightedMean(alpha=0.5, partition_by=["unique_id", "promo"]),
+    ],
+    ids=["expanding_mean", "ewm"],
+)
+def test_id_key_fit_update_predict(engine, tfm):
+    _, preds = _run_key_spelling(engine, tfm)
+    assert np.isfinite(preds).all()
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
     "partition_by, expected",
     [
         (["promo"], ["0\x1fa", "0\x1fb", "1\x1fb", "2\x1fa"]),

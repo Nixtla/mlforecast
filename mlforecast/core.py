@@ -997,7 +997,9 @@ class TimeSeries:
                 if isinstance(leaf, LookupLag):
                     per_series = "`Lag`"
                 elif getattr(leaf, "min_samples", 0) is None:
-                    per_series = "the transform without partition_by and min_samples=1"
+                    per_series = (
+                        "the transform with min_samples=1 and without partition_by"
+                    )
                 else:
                     per_series = "the transform without partition_by"
                 if all(c in static_cols for c in key):
