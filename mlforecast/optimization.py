@@ -2,6 +2,7 @@ __all__ = ["mlforecast_objective"]
 
 
 import copy
+import warnings
 from typing import Any, Callable, Dict, Optional, Union, List, Tuple
 
 import narwhals as nw
@@ -14,7 +15,6 @@ from utilsforecast.compat import DataFrame
 from . import MLForecast
 from .compat import CatBoostRegressor
 from .core import Freq
-from ._warnings import _warn
 
 _TrialToConfig = Callable[[optuna.Trial], Dict[str, Any]]
 CVSplit = Tuple[DataFrame, DataFrame, DataFrame]
@@ -29,9 +29,10 @@ def _get_categorical_static_features(
         feature for feature in static_features if feature not in df.columns
     ]
     if missing_features:
-        _warn(
+        warnings.warn(
             "Ignoring unrecognized static features not found in the dataframe: "
-            f"{missing_features}."
+            f"{missing_features}.",
+            UserWarning,
         )
     static_features = [feature for feature in static_features if feature in df.columns]
     schema = nw.from_native(df, eager_only=True).schema

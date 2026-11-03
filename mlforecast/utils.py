@@ -9,6 +9,7 @@ __all__ = [
 
 
 from math import ceil, log10
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -22,7 +23,6 @@ from .conformal_prediction import (  # noqa: F401
     Recalibration,
     ScaleAlignment,
 )
-from ._warnings import _warn
 
 
 def _resolve_num_threads(num_threads: int) -> int:
@@ -43,11 +43,19 @@ def _resolve_num_threads(num_threads: int) -> int:
         try:
             resolved = cpu_count()
             if resolved is None:
-                _warn("Could not determine CPU count, using num_threads=1.")
+                warnings.warn(
+                    "Could not determine CPU count, using num_threads=1.",
+                    UserWarning,
+                    stacklevel=3,
+                )
                 return 1
             return resolved
         except Exception as e:
-            _warn(f"Error determining CPU count ({e}), using num_threads=1.")
+            warnings.warn(
+                f"Error determining CPU count ({e}), using num_threads=1.",
+                UserWarning,
+                stacklevel=3,
+            )
             return 1
     if num_threads < 1:
         raise ValueError(

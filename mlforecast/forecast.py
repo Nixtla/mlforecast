@@ -44,7 +44,7 @@ from mlforecast.core import (
 
 from .grouped_array import GroupedArray
 from .hooks import Hook, _span, _stage
-from ._warnings import _warn
+from ._warnings import _user_warning_stacklevel
 
 if TYPE_CHECKING:
     from mlforecast.lgb_cv import LightGBMCV
@@ -106,10 +106,11 @@ def _check_scores_horizon(cs_h: int, h: int, fix_h: str) -> None:
             f"greater or equal to `h`. To fix it, {fix_h}."
         )
     if cs_h == 1 and h > 1:
-        _warn(
+        warnings.warn(
             "Prediction intervals are calculated using 1-step ahead cross-validation, "
             "with a constant width for all horizons. To vary the error by horizon, "
-            f"{fix_h}."
+            f"{fix_h}.",
+            UserWarning,
         )
 
 
@@ -393,12 +394,14 @@ class MLForecast:
                 for v in self.ts.transforms.values()
             )
             if has_pooled:
-                _warn(
+                warnings.warn(
                     "Pooled (global/groupby/partition_by) lag transforms assume "
                     "a continuous, gap-free time grid. Data validation has been "
                     "disabled (validate_data=False), so timestamp gaps may "
                     "silently produce incorrect feature values. Consider "
-                    "enabling validation or pre-validating your data."
+                    "enabling validation or pre-validating your data.",
+                    UserWarning,
+                    stacklevel=_user_warning_stacklevel(),
                 )
 
     def _get_dynamic_exog_cols(
@@ -485,9 +488,11 @@ class MLForecast:
                         "Each value in `horizon_features` must be a list of column names."
                     )
                 if not cols:
-                    _warn(
+                    warnings.warn(
                         f"`horizon_features` includes an empty list for horizon {horizon}. "
-                        "This entry has no effect and can be removed."
+                        "This entry has no effect and can be removed.",
+                        UserWarning,
+                        stacklevel=_user_warning_stacklevel(),
                     )
                 resolved[horizon] = list(dict.fromkeys(cols))
         else:
@@ -1508,8 +1513,10 @@ class MLForecast:
                         "On-demand recursive fitted values for `h>1` are not supported when using "
                         "global or grouped lag transforms."
                     )
-                _warn(
-                    "Computing recursive fitted values for h>1 on demand can be slow."
+                warnings.warn(
+                    "Computing recursive fitted values for h>1 on demand can be slow.",
+                    UserWarning,
+                    stacklevel=_user_warning_stacklevel(),
                 )
                 res_pd = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
@@ -1752,7 +1759,7 @@ class MLForecast:
                     "Please rerun the `fit` method passing a proper value "
                     "to prediction intervals to compute them."
                 )
-                _warn(warn_msg)
+                warnings.warn(warn_msg, UserWarning)
             else:
                 forecasts = self._add_intervals_from_fit(
                     forecasts, sorted(level), h, ids
@@ -2115,10 +2122,11 @@ class MLForecast:
                 span.result = result
             results.append(result)
         if uncalibrated:
-            _warn(
+            warnings.warn(
                 "The prediction intervals of the windows that aren't refit use the "
                 "conformity scores of the last fit, which didn't calibrate series "
-                f"{list(uncalibrated)}. Their intervals are missing."
+                f"{list(uncalibrated)}. Their intervals are missing.",
+                UserWarning,
             )
         del self.models_
         self.cv_models_ = cv_models

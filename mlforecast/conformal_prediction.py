@@ -6,6 +6,7 @@ __all__ = [
     "TransferMethod",
 ]
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
 
@@ -17,7 +18,7 @@ import utilsforecast.processing as ufp
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from utilsforecast.compat import DFType
 
-from ._warnings import _warn
+from ._warnings import _user_warning_stacklevel
 
 
 def _check_min(obj: Any, field: str, minimum: int) -> None:
@@ -166,9 +167,11 @@ def _floor_series_scales(raw: Dict, floor_factor: float, kind: str = "Series") -
     for uid, v in raw.items():
         effective = max(v, floor)
         if effective > v:
-            _warn(
+            warnings.warn(
                 f"{kind} '{uid}' has near-zero scale estimate ({v:.2e}); "
-                f"applying floor {floor:.2e}. Check for flat or constant series."
+                f"applying floor {floor:.2e}. Check for flat or constant series.",
+                UserWarning,
+                stacklevel=_user_warning_stacklevel(),
             )
         floored[uid] = effective
     return floored
@@ -330,16 +333,20 @@ def _add_transfer_intervals(
                 q_hi_lv = q_hi_vals[i]  # upper quantile for this level
                 q_lo_lv = q_lo_vals[-(i + 1)]  # matching lower quantile
                 if np.all(q_hi_lv < 0):
-                    _warn(
+                    warnings.warn(
                         f"Recalibration level={lv}: upper quantile is negative across "
                         "all horizon steps — interval lies entirely below point forecasts. "
-                        "The transferred model systematically over-predicts on the target domain."
+                        "The transferred model systematically over-predicts on the target domain.",
+                        UserWarning,
+                        stacklevel=_user_warning_stacklevel(),
                     )
                 elif np.all(q_lo_lv > 0):
-                    _warn(
+                    warnings.warn(
                         f"Recalibration level={lv}: lower quantile is positive across "
                         "all horizon steps — interval lies entirely above point forecasts. "
-                        "The transferred model systematically under-predicts on the target domain."
+                        "The transferred model systematically under-predicts on the target domain.",
+                        UserWarning,
+                        stacklevel=_user_warning_stacklevel(),
                     )
         elif method == "conformal_distribution":
             q_per_horizon = np.quantile(np.vstack([-scores, scores]), all_cuts, axis=0)
@@ -440,10 +447,16 @@ def _robust_scale_ratio(src: np.ndarray, tgt: np.ndarray) -> float:
     std_src = float(np.std(src)) if len(src) > 1 else 0.0
     std_tgt = float(np.std(tgt)) if len(tgt) > 1 else 0.0
     if std_src >= 1e-10:
-        _warn(
-            "IQR of residuals near zero; falling back to std ratio for scale estimation."
+        warnings.warn(
+            "IQR of residuals near zero; falling back to std ratio for scale estimation.",
+            UserWarning,
+            stacklevel=_user_warning_stacklevel(),
         )
         return std_tgt / max(std_src, 1e-10)
     # Fallback 2: constant
-    _warn("Both IQR and std of residuals near zero; scale ratio defaulting to 1.0.")
+    warnings.warn(
+        "Both IQR and std of residuals near zero; scale ratio defaulting to 1.0.",
+        UserWarning,
+        stacklevel=_user_warning_stacklevel(),
+    )
     return 1.0
