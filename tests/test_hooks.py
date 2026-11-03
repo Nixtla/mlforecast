@@ -14,6 +14,7 @@ from utilsforecast.losses import smape
 import mlforecast
 from mlforecast import MLForecast
 from mlforecast.hooks import Hook, Profiler
+from mlforecast.lgb_cv import LightGBMCV
 from mlforecast.lag_transforms import (
     ExponentiallyWeightedMean,
     RollingMean,
@@ -181,6 +182,26 @@ def test_warn_points_to_the_first_frame_outside_the_package():
     with pytest.warns(UserWarning, match="from outside") as caught:
         exec(compile(code, caller, "exec"), {})
     assert caught[0].filename == caller
+
+
+def test_warnings_in_package_thread_pools_point_to_the_package():
+    df = generate_daily_series(2, min_length=40, max_length=40, equal_ends=True)
+    df["x"] = np.arange(len(df), dtype=float)
+    df.loc[df.index[-3:], "x"] = np.nan
+    cv = LightGBMCV(freq="D", lags=[1])
+    with pytest.warns(UserWarning, match="null values") as caught:
+        cv.fit(
+            df,
+            n_windows=1,
+            h=2,
+            num_iterations=2,
+            params={"verbose": -1},
+            static_features=[],
+            compute_cv_preds=True,
+        )
+    package_dir = os.path.dirname(mlforecast.__file__) + os.sep
+    filenames = {w.filename for w in caught if "null values" in str(w.message)}
+    assert filenames == {__file__, os.path.join(package_dir, "lgb_cv.py")}
 
 
 @pytest.mark.parametrize(
