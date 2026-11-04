@@ -24,13 +24,14 @@ __all__ = [
 import copy
 import inspect
 import re
-import warnings
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import coreforecast.lag_transforms as core_tfms
 import numpy as np
 from coreforecast.grouped_array import GroupedArray as CoreGroupedArray
 from sklearn.base import BaseEstimator
+
+from ._warnings import _warn
 
 
 def _pascal2camel(pascal_str: str) -> str:
@@ -110,10 +111,9 @@ class _BaseLagTransform(BaseEstimator):
                     "partition_by=[...]."
                 )
         if min_samples == 0 and self._is_pooled:
-            warnings.warn(
+            _warn(
                 "min_samples=0 with pooled transforms (global_/partition_by) "
-                "produces NaN for timestamps with no observations in the window.",
-                stacklevel=3,
+                "produces NaN for timestamps with no observations in the window."
             )
 
     def _get_init_signature(self):
