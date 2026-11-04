@@ -148,13 +148,9 @@ def _frozen_backtest(
     step_size=1 is safe here (no refitting means no leakage from overlapping windows).
     Windows are computed per series (``ufp.backtest_splits``) so that series with
     unaligned ends each get cutoffs relative to their own last timestamp.
-    The windows of the series in `train_ends` must start after their training end.
+    If `train_ends` is given, the windows of the series in it must start after
+    their training end.
     """
-    if train_ends is None:
-        raise ValueError(
-            "The end of the models' training data is unknown. "
-            "Call `fit` or `fit_models` before `transfer`."
-        )
     ts = fcst.ts
     id_col, time_col, target_col = ts.id_col, ts.time_col, ts.target_col
     # future values of dynamic inputs come from each validation window
@@ -196,7 +192,7 @@ def _frozen_backtest(
         step_size=step_size,
     )
     for i, (cutoffs, train, valid) in enumerate(splits):
-        if i == 0:
+        if i == 0 and train_ends is not None:
             _check_out_of_sample(cutoffs, train_ends, id_col)
         X_df = valid[[id_col, time_col, *future_cols]] if future_cols else None
         preds = fcst._transfer(train, None).predict(h=h, X_df=X_df)
@@ -609,7 +605,6 @@ class MLForecast:
             weight_col=weight_col,
             horizon_features=resolved_horizon_features,
         )
-        self._reset_train_ends()
         self._drop_transfer_intervals()
         return prep
 
@@ -723,13 +718,6 @@ class MLForecast:
         )
         self._drop_transfer_intervals()
         return self
-
-    def _reset_train_ends(self) -> None:
-        # models assigned to `models_` by hand are assumed to be trained on this data
-        if hasattr(self, "models_"):
-            self._train_ends_ = None
-        else:
-            self._train_ends_ = _train_ends(self.ts)
 
     def _drop_transfer_intervals(self) -> None:
         # they were computed for the previous series
@@ -1606,6 +1594,7 @@ class MLForecast:
     def _adapt(self, df: DFType, method: TransferMethod) -> TransferResult:
         """Adapt the source calibration to `df`."""
         pi = self.prediction_intervals
+        train_ends = self._train_ends_
         model_names = list(self.models.keys())
         if isinstance(method, Recalibration):
             if method.h is not None:
@@ -1620,7 +1609,7 @@ class MLForecast:
                 )
             n_windows = method.n_windows or (pi.n_windows if pi is not None else 2)
             backtest_results = _frozen_backtest(
-                self, df, n_windows, h, method.step_size, self._train_ends_
+                self, df, n_windows, h, method.step_size, train_ends
             )
             return TransferResult(
                 cs_df=compute_conformity_scores(
@@ -1642,7 +1631,7 @@ class MLForecast:
                 method.n_windows or pi.n_windows,
                 pi.h,
                 method.step_size,
-                self._train_ends_,
+                train_ends,
             )
             target_cs_df = compute_conformity_scores(
                 backtest_results, model_names, self.ts.target_col

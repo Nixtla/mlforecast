@@ -813,26 +813,6 @@ def test_transfer_in_sample_windows_raise(method):
         assert preds[f"{LR}-lo-80"].notna().all()
 
 
-def test_transfer_checks_in_sample_windows_of_assigned_models():
-    src = generate_daily_series(3, min_length=60, max_length=60, seed=0)
-    fitted = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2]).fit(src)
-    future = fitted.make_future_dataframe(4).assign(y=1.0)
-    seen = pd.concat([src, future]).sort_values(["unique_id", "ds"])
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 2])
-    # the ends come from the last data seen before the models are assigned
-    for df in (seen, src):
-        fcst.preprocess(df)
-    fcst.models_ = fitted.models_
-    with pytest.raises(ValueError, match="'id_0' was trained up to"):
-        fcst.transfer(src, Recalibration(h=3))
-    preds = fcst.transfer(seen, Recalibration(h=3)).predict(3, level=[80])
-    assert preds[f"{LR}-lo-80"].notna().all()
-    # models assigned after preprocessing with fitted models have unknown ends
-    fcst.preprocess(seen)
-    with pytest.raises(ValueError, match="training data is unknown"):
-        fcst.transfer(seen, Recalibration(h=3))
-
-
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_transfer_target_ids_of_other_dtype(engine):
     src = generate_daily_series(3, min_length=60, max_length=60, seed=0)

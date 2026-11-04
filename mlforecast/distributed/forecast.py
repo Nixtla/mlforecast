@@ -370,7 +370,7 @@ class DistributedMLForecast:
         Returns:
             (same type as df): `df` with added features.
         """
-        prep = self._preprocess(
+        return self._preprocess(
             df,
             id_col=id_col,
             time_col=time_col,
@@ -380,12 +380,6 @@ class DistributedMLForecast:
             keep_last_n=keep_last_n,
             weight_col=weight_col,
         )
-        # models assigned to `models_` by hand are assumed to be trained on this data
-        if hasattr(self, "models_"):
-            self._train_ends_ = None
-        else:
-            self._train_ends_ = self._collect_train_ends()
-        return prep
 
     def _fit(
         self,
