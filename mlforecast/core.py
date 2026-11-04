@@ -212,6 +212,14 @@ def _validate_horizon_params(
     return None, None
 
 
+def _sort_partition_by(tfm: _BaseLagTransform) -> _BaseLagTransform:
+    tfm = copy.deepcopy(tfm)
+    for leaf in tfm._pooled_leaves():
+        if leaf.partition_by:
+            leaf.partition_by = sorted(leaf.partition_by)
+    return tfm
+
+
 def _parse_transforms(
     lags: Lags,
     lag_transforms: LagTransforms,
@@ -222,11 +230,23 @@ def _parse_transforms(
         namer = _build_transform_name
     for lag in lags:
         transforms[f"lag{lag}"] = Lag(lag)
+    seen_keys: Dict[str, Tuple[str, str]] = {}
     for lag in lag_transforms.keys():
         for tfm in lag_transforms[lag]:
             if isinstance(tfm, _BaseLagTransform):
                 tfm_name = namer(tfm, lag)
                 transforms[tfm_name] = copy.deepcopy(tfm)._set_core_tfm(lag)
+                default_name = _build_transform_name(tfm, lag)
+                prev_name, prev_default = seen_keys.setdefault(
+                    _build_transform_name(_sort_partition_by(tfm), lag),
+                    (tfm_name, default_name),
+                )
+                if prev_default != default_name:
+                    _warn(
+                        f"The lag transforms {prev_name} and {tfm_name} compute the "
+                        "same feature, since their partition_by only differ in "
+                        "column order. Please keep only one of them."
+                    )
             else:
                 tfm, *args = _as_tuple(tfm)
                 assert callable(tfm)
@@ -2113,13 +2133,8 @@ class TimeSeries:
         last_dates = self.last_dates
         targ_tfms = copy.copy(self.target_transforms)
         lag_tfms = copy.deepcopy(self.transforms)
-        series_bids = {
-            key: state.series_bucket_id for key, state in self._pooled_states.items()
-        }
 
         if idxs is not None:
-            for key, state in self._pooled_states.items():
-                state.set_series_bucket_id(series_bids[key][idxs])
             # assign subsets
             self.ga = self.ga.take(idxs)
             self.uids = uids[idxs]
@@ -2143,8 +2158,6 @@ class TimeSeries:
             self.last_dates = last_dates
             self.target_transforms = targ_tfms
             self.transforms = lag_tfms
-            for key, state in self._pooled_states.items():
-                state.set_series_bucket_id(series_bids[key])
 
     def predict(
         self,

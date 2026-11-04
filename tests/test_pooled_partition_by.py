@@ -66,6 +66,20 @@ def test_global_and_partition_by_exclusive():
         RollingMean(3, global_=True, partition_by=["brand"])
 
 
+@pytest.mark.parametrize(
+    "make_tfm",
+    [
+        lambda partition_by: RollingMean(3, partition_by=partition_by),
+        lambda partition_by: ExpandingMean(partition_by=partition_by),
+        lambda partition_by: ExponentiallyWeightedMean(0.5, partition_by=partition_by),
+    ],
+)
+@pytest.mark.parametrize("partition_by", [[], ()])
+def test_empty_partition_by_raises(make_tfm, partition_by):
+    with pytest.raises(ValueError, match="use `global_=True`"):
+        make_tfm(partition_by)
+
+
 def test_time_agg_requires_pooled_scope():
     with pytest.raises(ValueError, match="pooled scope"):
         RollingMean(3, time_agg="sum")
@@ -160,14 +174,16 @@ def test_combine_needs_same_key():
 
 def test_key_order_shares_state():
     df = _panel()
-    ts, res = _fit_ts(
-        df,
-        [
-            RollingMean(3, partition_by=["promo", "unique_id"]),
-            RollingMean(3, partition_by=["unique_id", "promo"]),
-            LookupLag(partition_by=["unique_id", "promo"]),
-        ],
-    )
+    with pytest.warns(UserWarning, match="only differ in column order") as record:
+        ts, res = _fit_ts(
+            df,
+            [
+                RollingMean(3, partition_by=["promo", "unique_id"]),
+                RollingMean(3, partition_by=["unique_id", "promo"]),
+                LookupLag(partition_by=["unique_id", "promo"]),
+            ],
+        )
+    assert sum("column order" in str(w.message) for w in record) == 1
     assert list(ts._pooled_states) == [("promo", "unique_id")]
     np.testing.assert_allclose(
         res["partby_promo__unique_id_rolling_mean_lag1_window_size3"],

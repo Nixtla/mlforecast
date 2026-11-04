@@ -228,7 +228,7 @@ class LightGBMCV:
                 Defaults to None.
             params (dict, optional): Parameters to be passed to the LightGBM Boosters. Defaults to None.
             static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting.
-                Defaults to None.
+                Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it.
                 Defaults to None.
@@ -499,7 +499,7 @@ class LightGBMCV:
             num_iterations (int): Maximum number of boosting iterations to run. Defaults to 100.
             params (dict, optional): Parameters to be passed to the LightGBM Boosters. Defaults to None.
             static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting.
-                Defaults to None.
+                Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it.
                 Defaults to None.

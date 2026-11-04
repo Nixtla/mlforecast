@@ -90,6 +90,11 @@ class _BaseLagTransform(BaseEstimator):
         self.global_ = global_
         self.partition_by = _normalize_columns(partition_by)
         self.time_agg = time_agg
+        if partition_by is not None and self.partition_by is None:
+            raise ValueError(
+                "partition_by can't be empty. Please use `global_=True` to pool "
+                "all the series."
+            )
         if self.global_ and self.partition_by:
             raise ValueError(
                 "`global_` and `partition_by` can't be used together; "
