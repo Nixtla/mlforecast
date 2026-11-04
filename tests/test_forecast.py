@@ -1640,6 +1640,22 @@ def test_horizons_prediction_dates_series_major(engine, freq):
     np.testing.assert_allclose(preds["LinearRegression"].to_numpy(), expected)
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_horizons_cross_validation_unequal_ends(engine):
+    """Sparse-horizon CV lines dates up with series that end on different dates (#814)."""
+    data = {
+        "unique_id": np.repeat(["a", "b"], 30),
+        "ds": np.concatenate([np.arange(30), np.arange(10, 40)]),
+        "y": np.concatenate([np.arange(30), np.arange(10, 40)]).astype(float),
+    }
+    df = pl.DataFrame(data) if engine == "polars" else pd.DataFrame(data)
+    fcst = MLForecast(models=[LinearRegression()], freq=1, lags=[1])
+    cv = fcst.cross_validation(df, n_windows=2, h=4, horizons=[2, 4])
+    assert list(cv["unique_id"]) == ["a", "a", "b", "b"] * 2
+    np.testing.assert_array_equal(cv["ds"].to_numpy(), [23, 25, 33, 35, 27, 29, 37, 39])
+    np.testing.assert_allclose(cv["LinearRegression"].to_numpy(), cv["y"].to_numpy())
+
+
 def test_horizons_cross_validation():
     """Test that cross_validation works with sparse horizons parameter.
 

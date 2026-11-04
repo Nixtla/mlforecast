@@ -1983,13 +1983,12 @@ class TimeSeries:
                 ufp.offset_times(self.curr_dates, self.freq, h + 1)
                 for h in horizons_to_predict
             ]
-            # concat is horizon-major; gather into series-major order. Native
-            # concat/gather keep the dtype (tz, time unit, pl.Date)
+            # concat is horizon-major; gather into series-major order (native ops keep the dtype)
             n_series = len(self.curr_dates)
             order = np.arange(n_series * output_horizon).reshape(-1, n_series).T.ravel()
             if isinstance(self.curr_dates, pl_Series):
                 df_constructor = pl_DataFrame
-                # rechunk: gathering across the per-horizon chunks is ~6x slower
+                # rechunk: gathering across the per-horizon chunks is ~2x slower
                 dates = pl.concat(dates_per_horizon, rechunk=True).gather(order)
             else:
                 df_constructor = pd.DataFrame
