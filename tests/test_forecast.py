@@ -1656,6 +1656,56 @@ def test_horizons_cross_validation_unequal_ends(engine):
     np.testing.assert_allclose(cv["LinearRegression"].to_numpy(), cv["y"].to_numpy())
 
 
+@pytest.mark.parametrize(
+    "engine, tz",
+    [("polars", "America/New_York"), ("pandas", "America/New_York"), ("polars", None)],
+)
+def test_timezone_aware_dates_keep_their_timezone(engine, tz):
+    """tz-aware ds keeps its dtype and local wall times across predict paths."""
+    # January: no DST transition, so local hours are a fixed shift from UTC
+    times = pd.date_range("2024-01-01", periods=70, freq="h", tz=tz)
+    data = {
+        "unique_id": np.repeat(["a", "b"], 48),
+        "ds": times[:48].append(times[10:58]),
+        "y": np.arange(96) % 5 + 1.0,
+    }
+    df = pl.DataFrame(data) if engine == "polars" else pd.DataFrame(data)
+    freq = "1h" if engine == "polars" else "h"
+
+    def check(ds, idxs):
+        assert ds.dtype == df["ds"].dtype
+        assert list(ds) == list(times[idxs])
+        assert [d.hour for d in ds] == list(times[idxs].hour)
+
+    hours = []
+    fcst = MLForecast(
+        models=[LinearRegression()], freq=freq, lags=[1], date_features=["hour"]
+    )
+    fcst.fit(df, fitted=True, prediction_intervals=PredictionIntervals(h=3))
+    assert fcst.ts.last_dates.dtype == df["ds"].dtype
+    preds = fcst.predict(
+        3,
+        level=[80],
+        before_predict_callback=lambda X: hours.extend(X["hour"]) or X,
+    )
+    check(preds["ds"], [48, 49, 50, 58, 59, 60])
+    # the hour feature is computed on local time, step-major
+    assert hours == list(times[[48, 58, 49, 59, 50, 60]].hour)
+    assert fcst.forecast_fitted_values()["ds"].dtype == df["ds"].dtype
+
+    fcst.update(ufp.assign_columns(fcst.make_future_dataframe(2), "y", 1.0))
+    assert fcst.ts.last_dates.dtype == df["ds"].dtype
+    check(fcst.predict(2)["ds"], [50, 51, 60, 61])
+
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    fcst.fit(df, horizons=[1, 3])
+    check(fcst.predict(3)["ds"], [48, 50, 58, 60])
+
+    cv = fcst.cross_validation(df, n_windows=2, h=3, fitted=True)
+    assert cv["ds"].dtype == cv["cutoff"].dtype == df["ds"].dtype
+    assert set(cv["ds"]) <= set(df["ds"])
+
+
 def test_horizons_cross_validation():
     """Test that cross_validation works with sparse horizons parameter.
 

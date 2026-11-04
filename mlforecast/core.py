@@ -267,6 +267,18 @@ def _assign_buckets(state, leaves, arrays) -> np.ndarray:
     return np.searchsorted(state.bucket_uniques, uniques)[ids]
 
 
+def _series_major(dates_per_step):
+    """Concatenate per-step dates (one entry per series each) as [s0_h0, s0_h1, ..., s1_h0, ...].
+
+    Native concat/gather instead of a numpy round-trip, which would drop a polars tz.
+    """
+    n_series = len(dates_per_step[0])
+    order = np.arange(n_series * len(dates_per_step)).reshape(-1, n_series).T.ravel()
+    if isinstance(dates_per_step[0], pl_Series):
+        return pl.concat(dates_per_step, rechunk=True).gather(order)
+    return dates_per_step[0].append(list(dates_per_step[1:]))[order]
+
+
 def _to_native_index(values, *, df):
     """Wrap ids/dates into the backend-native container mlforecast exposes as
     ``TimeSeries.uids`` / ``TimeSeries.last_dates``.
@@ -904,6 +916,9 @@ class TimeSeries:
         ga = GroupedArray(data, indptr)
         self.uids = _to_native_index(uids, df=df)
         self.last_dates = _to_native_index(times, df=df)
+        if isinstance(self.last_dates, pl_Series):
+            # process_df returns numpy times in UTC, which drops the polars tz
+            self.last_dates = self.last_dates.cast(df[time_col].dtype)
         self._check_aligned_ends()
         if self._sort_idxs is not None:
             self._restore_idxs: Optional[np.ndarray] = np.empty(
@@ -1757,7 +1772,7 @@ class TimeSeries:
         df = df_constructor(
             {
                 self.id_col: uids,
-                self.time_col: np.array(self.test_dates).ravel("F"),
+                self.time_col: _series_major(self.test_dates),
                 f"{self.target_col}_pred": raw_preds,
             },
         )
@@ -1974,21 +1989,17 @@ class TimeSeries:
         uids = self._get_future_ids(output_horizon)
 
         if is_sparse:
-            # uids are series-major, so dates must be [s0_h0, s0_h1, ..., s1_h0, ...]
             # h is 0-indexed, so step h is h + 1 periods after the last date
-            dates_per_horizon = [
-                ufp.offset_times(self.curr_dates, self.freq, h + 1)
-                for h in horizons_to_predict
-            ]
-            # the concat is horizon-major; reorder it to series-major
-            n_series = len(self.curr_dates)
-            order = np.arange(n_series * output_horizon).reshape(-1, n_series).T.ravel()
+            dates = _series_major(
+                [
+                    ufp.offset_times(self.curr_dates, self.freq, h + 1)
+                    for h in horizons_to_predict
+                ]
+            )
             if isinstance(self.curr_dates, pl_Series):
                 df_constructor = pl_DataFrame
-                dates = pl.concat(dates_per_horizon, rechunk=True).gather(order)
             else:
                 df_constructor = pd.DataFrame
-                dates = dates_per_horizon[0].append(dates_per_horizon[1:])[order]
         else:
             # Original behavior: generate contiguous date range
             starts = ufp.offset_times(self.curr_dates, self.freq, 1)
