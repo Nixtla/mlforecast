@@ -1615,6 +1615,31 @@ def test_horizons_prediction_partial():
     assert preds.shape[0] == n_series * 1
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("freq", [1, "1d"])
+def test_horizons_prediction_dates_series_major(engine, freq):
+    """Sparse-horizon dates stay with their series when series end on different dates (#814)."""
+    times = np.arange(46)
+    if freq == "1d":
+        times = pd.date_range("2026-01-01", periods=46).to_numpy()
+    data = {
+        "unique_id": np.repeat(["a", "b"], 30),
+        "ds": np.concatenate([times[:30], times[10:40]]),
+        "y": np.concatenate([np.arange(30), np.arange(10, 40)]).astype(float),
+    }
+    df = pl.DataFrame(data) if engine == "polars" else pd.DataFrame(data)
+    if engine == "pandas" and freq == "1d":
+        freq = "D"
+    fcst = MLForecast(models=[LinearRegression()], freq=freq, lags=[1])
+    fcst.fit(df, horizons=[2, 4, 6])
+    preds = fcst.predict(6)
+    expected = np.array([31, 33, 35, 41, 43, 45])
+    assert list(preds["unique_id"]) == ["a"] * 3 + ["b"] * 3
+    np.testing.assert_array_equal(preds["ds"].to_numpy(), times[expected])
+    assert preds["ds"].dtype == df["ds"].dtype
+    np.testing.assert_allclose(preds["LinearRegression"].to_numpy(), expected)
+
+
 def test_horizons_cross_validation():
     """Test that cross_validation works with sparse horizons parameter.
 

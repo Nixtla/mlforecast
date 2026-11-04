@@ -1977,34 +1977,23 @@ class TimeSeries:
             # Generate dates only for the specific horizons we're predicting
             # uids structure is [s0, s0, ..., s0 (output_horizon times), s1, s1, ..., s1, ...]
             # So dates need to be [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
+            # offset_times(dates, freq, n) gives dates + n*freq, so h + 1 turns the
+            # 0-indexed horizon into a 1-step-ahead offset
+            dates_per_horizon = [
+                ufp.offset_times(self.curr_dates, self.freq, h + 1)
+                for h in horizons_to_predict
+            ]
+            # concat is horizon-major; gather into series-major order. Native
+            # concat/gather keep the dtype (tz, time unit, pl.Date)
+            n_series = len(self.curr_dates)
+            order = np.arange(n_series * output_horizon).reshape(-1, n_series).T.ravel()
             if isinstance(self.curr_dates, pl_Series):
                 df_constructor = pl_DataFrame
-                # Compute dates for all horizons, then stack and flatten.
-                # horizons_to_predict is 0-indexed; offset_times(dates, freq, n) gives
-                # dates + n*freq, so h + 1 converts 0-indexed h to a 1-step-ahead offset.
-                dates_per_horizon = [
-                    ufp.offset_times(self.curr_dates, self.freq, h + 1)
-                    for h in horizons_to_predict
-                ]
-                # backend-specific date-matrix build at prediction assembly
-                # Stack: each row is a series, each col is a horizon
-                dates_matrix = pl.DataFrame(dates_per_horizon).transpose()
-                # Flatten row by row: [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
-                dates = dates_matrix.to_numpy().ravel()
-                dates = pl.Series(dates)
+                # rechunk: gathering across the per-horizon chunks is ~6x slower
+                dates = pl.concat(dates_per_horizon, rechunk=True).gather(order)
             else:
                 df_constructor = pd.DataFrame
-                # Compute dates for all horizons, then stack and flatten.
-                # horizons_to_predict is 0-indexed; offset_times(dates, freq, n) gives
-                # dates + n*freq, so h + 1 converts 0-indexed h to a 1-step-ahead offset.
-                dates_per_horizon = [
-                    ufp.offset_times(self.curr_dates, self.freq, h + 1)
-                    for h in horizons_to_predict
-                ]
-                # Stack: each row is a series, each col is a horizon
-                dates_matrix = np.column_stack(dates_per_horizon)
-                # Flatten row by row: [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
-                dates = dates_matrix.ravel()
+                dates = dates_per_horizon[0].append(dates_per_horizon[1:])[order]
         else:
             # Original behavior: generate contiguous date range
             starts = ufp.offset_times(self.curr_dates, self.freq, 1)
