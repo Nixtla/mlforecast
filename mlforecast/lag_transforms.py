@@ -78,6 +78,15 @@ class _BaseLagTransform(BaseEstimator):
     time_agg: Optional[str] = None
     # time_agg values allowed when the key holds a single series per bucket
     _per_series_time_aggs: Tuple[str, ...] = ()
+    _requires_id_in_key: bool = False
+    # warned at fit when the key has a dynamic column
+    _dynamic_key_warning: Optional[str] = None
+
+    def _per_series_hint(self) -> str:
+        """The transform to use instead of a key with the id and only statics."""
+        if getattr(self, "min_samples", 0) is None:
+            return "the transform with min_samples=1 and without partition_by"
+        return "the transform without partition_by"
 
     def _init_pooled_scope(
         self,
@@ -305,6 +314,8 @@ class LookupLag(_BaseLagTransform):
             must be supplied via ``X_df`` at prediction and in ``update``.
     """
 
+    _requires_id_in_key = True
+
     def __init__(
         self,
         partition_by: Optional[Sequence[str]] = None,
@@ -316,6 +327,9 @@ class LookupLag(_BaseLagTransform):
                 "used for the occurrence lookup."
             )
         self._core_tfm = None
+
+    def _per_series_hint(self) -> str:
+        return "`Lag`"
 
     def _set_core_tfm(self, lag: int) -> "LookupLag":
         self._core_tfm = core_tfms.Lag(lag=lag)
@@ -658,6 +672,12 @@ class ExponentiallyWeightedMean(_BaseLagTransform):
     """
 
     _per_series_time_aggs = ("mean",)
+    _dynamic_key_warning = (
+        "Partitioned EWM skips timestamps where the partition bucket has no "
+        "observations and applies decay only across observed bucket aggregates. "
+        "Each observed timestamp contributes its aggregate mean once, regardless "
+        "of how many rows were aggregated at that timestamp."
+    )
 
     def __init__(
         self,

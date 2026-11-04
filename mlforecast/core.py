@@ -51,12 +51,7 @@ from .data_validation import _index_to_series, _validate_no_null_times
 from .date_features import _DUMMY_ALIASES, CalendarFeature
 from .grouped_array import GroupedArray, _gather_idxs
 from .hooks import _SpanResult
-from .lag_transforms import (
-    ExponentiallyWeightedMean,
-    Lag,
-    LookupLag,
-    _BaseLagTransform,
-)
+from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
     PooledState,
     base_channels,
@@ -1013,25 +1008,17 @@ class TimeSeries:
             for leaf in tfm._pooled_leaves():
                 key = leaf._bucket_cols()
                 if id_col not in key:
-                    if isinstance(leaf, LookupLag):
+                    if leaf._requires_id_in_key:
                         raise ValueError(
-                            f"LookupLag's partition_by must include '{id_col}'. "
-                            f"Found in: {name}."
+                            f"{type(leaf).__name__}'s partition_by must include "
+                            f"'{id_col}'. Found in: {name}."
                         )
                     continue
-                if isinstance(leaf, LookupLag):
-                    per_series = "`Lag`"
-                elif getattr(leaf, "min_samples", 0) is None:
-                    per_series = (
-                        "the transform with min_samples=1 and without partition_by"
-                    )
-                else:
-                    per_series = "the transform without partition_by"
                 if all(c in static_cols for c in key):
                     raise ValueError(
                         f"partition_by={leaf.partition_by} holds '{id_col}' and only "
                         "static columns, so each bucket is a single series. Please "
-                        f"use {per_series} instead. Found in: {name}."
+                        f"use {leaf._per_series_hint()} instead. Found in: {name}."
                     )
                 if (
                     leaf.time_agg is not None
@@ -1043,17 +1030,14 @@ class TimeSeries:
                         f"Found in: {name}."
                     )
         for key, leaves in self._get_pooled_tfms().items():
-            has_dynamic = any(c not in static_cols for c in key)
-            if has_dynamic and any(
-                isinstance(leaf, ExponentiallyWeightedMean) for leaf in leaves
+            if all(c in static_cols for c in key):
+                continue
+            for msg in _dedupe_preserve_order(
+                leaf._dynamic_key_warning
+                for leaf in leaves
+                if leaf._dynamic_key_warning is not None
             ):
-                _warn(
-                    "Partitioned EWM skips timestamps where the partition bucket "
-                    "has no observations and applies decay only across observed "
-                    "bucket aggregates. Each observed timestamp contributes its "
-                    "aggregate mean once, regardless of how many rows were "
-                    "aggregated at that timestamp."
-                )
+                _warn(msg)
 
     def _build_pooled_states(self, df, sorted_df, ga) -> None:
         """Aggregate the panel into per-bucket channels, one state per key.
