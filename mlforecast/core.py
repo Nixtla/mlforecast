@@ -1974,21 +1974,17 @@ class TimeSeries:
         uids = self._get_future_ids(output_horizon)
 
         if is_sparse:
-            # Generate dates only for the specific horizons we're predicting
-            # uids structure is [s0, s0, ..., s0 (output_horizon times), s1, s1, ..., s1, ...]
-            # So dates need to be [s0_h0, s0_h1, ..., s1_h0, s1_h1, ...]
-            # offset_times(dates, freq, n) gives dates + n*freq, so h + 1 turns the
-            # 0-indexed horizon into a 1-step-ahead offset
+            # uids are series-major, so dates must be [s0_h0, s0_h1, ..., s1_h0, ...]
+            # h is 0-indexed, so step h is h + 1 periods after the last date
             dates_per_horizon = [
                 ufp.offset_times(self.curr_dates, self.freq, h + 1)
                 for h in horizons_to_predict
             ]
-            # concat is horizon-major; gather into series-major order (native ops keep the dtype)
+            # the concat is horizon-major; reorder it to series-major
             n_series = len(self.curr_dates)
             order = np.arange(n_series * output_horizon).reshape(-1, n_series).T.ravel()
             if isinstance(self.curr_dates, pl_Series):
                 df_constructor = pl_DataFrame
-                # rechunk: gathering across the per-horizon chunks is ~2x slower
                 dates = pl.concat(dates_per_horizon, rechunk=True).gather(order)
             else:
                 df_constructor = pd.DataFrame
