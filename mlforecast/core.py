@@ -4,13 +4,13 @@ __all__ = ["TimeSeries"]
 import copy
 import inspect
 import reprlib
-import warnings
 from collections import Counter, OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import (
     Any,
     Callable,
+    ContextManager,
     Dict,
     Iterable,
     Iterator,
@@ -50,6 +50,7 @@ from .compat import CatBoostRegressor
 from .data_validation import _index_to_series, _validate_no_null_times
 from .date_features import _DUMMY_ALIASES, CalendarFeature
 from .grouped_array import GroupedArray, _gather_idxs
+from .hooks import _SpanResult
 from .lag_transforms import Lag, _BaseLagTransform
 from .pooled import (
     PooledState,
@@ -62,6 +63,7 @@ from .utils import (
     _ShortSeriesException,
     _resolve_num_threads,
 )
+from ._warnings import _warn
 
 date_features_dtypes = {
     "year": np.uint16,
@@ -115,6 +117,10 @@ def _build_transform_name(
     else:
         name = _build_lag_transform_name(tfm, lag)
     return name
+
+
+def _no_model_span(name: str, model: Any) -> ContextManager[_SpanResult]:  # noqa: ARG001
+    return nullcontext(_SpanResult())
 
 
 def _get_model_name(model) -> str:
@@ -317,7 +323,7 @@ class TimeSeries:
         self.date_features_as_dummies = date_features_as_dummies
         num_threads = _resolve_num_threads(num_threads)
         if not isinstance(num_threads, int) or num_threads < 1:
-            warnings.warn("Setting num_threads to 1.")
+            _warn("Setting num_threads to 1.")
             num_threads = 1
         self.lags = [] if lags is None else list(lags)
         for lag in self.lags:
@@ -982,9 +988,8 @@ class TimeSeries:
             to_exclude = set(self.drop_auxiliary_columns)
             unknown = [f for f in to_exclude if f not in self.features_order_]
             if unknown:
-                warnings.warn(
-                    f"The following drop_auxiliary_columns were not found in the feature set: {unknown}",
-                    UserWarning,
+                _warn(
+                    f"The following drop_auxiliary_columns were not found in the feature set: {unknown}"
                 )
         self.features_order_ = [f for f in self.features_order_ if f not in to_exclude]
         self._build_pooled_states(df, sorted_df, ga)
@@ -1227,7 +1232,7 @@ class TimeSeries:
             if last_vals_nan.any():
                 self._dropped_series = np.where(last_vals_nan)[0]
                 dropped_ids = reprlib.repr(list(self.uids[self._dropped_series]))
-                warnings.warn(
+                _warn(
                     "The following series were dropped completely "
                     f"due to the transformations and features: {dropped_ids}.\n"
                     "These series won't show up if you use `MLForecast.forecast_fitted_values()`.\n"
@@ -1740,7 +1745,7 @@ class TimeSeries:
         repeated = np.repeat(np.asarray(self.uids), h)
         return pd.Series(repeated, name=self.id_col, dtype=self.uids.dtype)
 
-    def _get_predictions(self) -> DataFrame:
+    def _get_predictions(self, raw_preds: np.ndarray) -> DataFrame:
         """Get all the predicted values with their corresponding ids and datestamps."""
         h = len(self.y_pred)
         # native-container boundary — uids/df constructor selected per backend
@@ -1753,7 +1758,7 @@ class TimeSeries:
             {
                 self.id_col: uids,
                 self.time_col: np.array(self.test_dates).ravel("F"),
-                f"{self.target_col}_pred": self._get_raw_predictions(),
+                f"{self.target_col}_pred": raw_preds,
             },
         )
         return df
@@ -1820,7 +1825,7 @@ class TimeSeries:
                 ]
             new_x = ufp.horizontal_concat([new_x, X_row])
         if cols_with_nulls:
-            warnings.warn(f"Found null values in {', '.join(cols_with_nulls)}.")
+            _warn(f"Found null values in {', '.join(cols_with_nulls)}.")
         self._h += 1
         if list(new_x.columns) != self.features_order_:
             new_x = new_x[self.features_order_]
@@ -1899,10 +1904,11 @@ class TimeSeries:
         before_predict_callback: Optional[Callable] = None,
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
+        model_span: Callable[[str, Any], ContextManager[_SpanResult]] = _no_model_span,
     ) -> DFType:
         """Use `model` to predict the next `horizon` timesteps."""
         for i, (name, model) in enumerate(models.items()):
-            with self._backup():
+            with self._backup(), model_span(name, model) as span:
                 self._predict_setup()
                 for _ in range(horizon):
                     new_x = self._get_features_for_next_step(X_df)
@@ -1918,13 +1924,14 @@ class TimeSeries:
                     if after_predict_callback is not None:
                         predictions = after_predict_callback(predictions)
                     self._update_y(predictions)
+                raw_preds = self._get_raw_predictions()
                 if i == 0:
-                    preds = self._get_predictions()
+                    preds = self._get_predictions(raw_preds)
                     rename_dict = {f"{self.target_col}_pred": name}
                     preds = ufp.rename(preds, rename_dict)
                 else:
-                    raw_preds = self._get_raw_predictions()
                     preds = ufp.assign_columns(preds, name, raw_preds)
+                span.result = raw_preds
         return preds
 
     def _predict_multi(
@@ -1933,6 +1940,7 @@ class TimeSeries:
         horizon: int,
         before_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
+        model_span: Callable[[str, Any], ContextManager[_SpanResult]] = _no_model_span,
     ) -> DFType:
         assert self.max_horizon is not None
         if horizon > self.max_horizon:
@@ -2023,7 +2031,7 @@ class TimeSeries:
                 )
 
         for name, model in models.items():
-            with self._backup():
+            with self._backup(), model_span(name, model) as span:
                 self._predict_setup()
                 predictions = np.empty((len(self.uids), output_horizon))
 
@@ -2062,6 +2070,7 @@ class TimeSeries:
 
                 raw_preds = predictions.ravel()
                 result = ufp.assign_columns(result, name, raw_preds)
+                span.result = raw_preds
         return result
 
     def _has_ga_target_tfms(self):
@@ -2113,6 +2122,7 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
+        model_span: Callable[[str, Any], ContextManager[_SpanResult]] = _no_model_span,
     ) -> DFType:
         if ids is not None:
             has_nonlocal = any(mode != "local" for mode, _, _ in self._pooled_states)
@@ -2155,13 +2165,11 @@ class TimeSeries:
                 ]
                 common = [c for c in dynamics if c in statics]
                 if common:
-                    warnings.warn(
+                    _warn(
                         "The following columns were provided through X_df but were considered "
                         f"static during fit and will be ignored: {common}. "
                         "If any of these columns should vary over the forecast horizon, refit "
-                        "with static_features=[] or exclude them from static_features.",
-                        UserWarning,
-                        stacklevel=2,
+                        "with static_features=[] or exclude them from static_features."
                     )
                 required_future_cols = set(self._future_input_cols)
                 missing = sorted(required_future_cols - set(dynamics))
@@ -2193,7 +2201,7 @@ class TimeSeries:
                     raise ValueError(msg)
                 # Warn if partial features provided
                 if X_df.shape[0] < expected_rows_X:
-                    warnings.warn(
+                    _warn(
                         f"X_df has {X_df.shape[0]} rows but {expected_rows_X} expected for horizon {horizon}. "
                         "Features will be reused for missing horizon steps. "
                         "Use `make_future_dataframe(h)` or `get_missing_future(h, X_df)` to generate complete features."
@@ -2211,6 +2219,7 @@ class TimeSeries:
                     before_predict_callback=before_predict_callback,
                     after_predict_callback=after_predict_callback,
                     X_df=X_df,
+                    model_span=model_span,
                 )
             else:
                 preds = self._predict_multi(
@@ -2218,6 +2227,7 @@ class TimeSeries:
                     horizon=horizon,
                     before_predict_callback=before_predict_callback,
                     X_df=X_df,
+                    model_span=model_span,
                 )
             if self.target_transforms is not None:
                 if self._has_ga_target_tfms():
