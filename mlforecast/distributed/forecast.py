@@ -444,6 +444,13 @@ class DistributedMLForecast:
         self._train_ends_ = None
         return self
 
+    def _check_fitted(self) -> None:
+        if not hasattr(self, "models_"):
+            raise ValueError(
+                "No fitted models found. You have to call fit. "
+                "If you used cross_validation before please fit again."
+            )
+
     @staticmethod
     def _get_train_ends(items: List[List[Any]]) -> Iterable[List[Any]]:
         for row in items:
@@ -709,6 +716,7 @@ class DistributedMLForecast:
         Returns:
             (dask, spark or ray DataFrame): Predictions for each serie and timestep, with one column per model.
         """
+        self._check_fitted()
         if new_df is not None:
             partition_results = self._preprocess_partitions(
                 new_df,
@@ -762,6 +770,7 @@ class DistributedMLForecast:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
         trains the models, computes the predictions and merges the actuals.
+        The trained models are stored in `cv_models_`, so call `fit` before predicting.
 
         Args:
             df (dask, spark or ray DataFrame): Series data in long format.
@@ -842,6 +851,7 @@ class DistributedMLForecast:
             res = results[0]
         else:
             res = fa.union(*results)
+        del self.models_
         return res
 
     @staticmethod
@@ -860,6 +870,7 @@ class DistributedMLForecast:
         Args:
             path (str): Directory where artifacts will be stored.
         """
+        self._check_fitted()
         dummy_df = fa.transform(
             self._partition_results,
             DistributedMLForecast._save_ts,
@@ -970,6 +981,7 @@ class DistributedMLForecast:
         Returns:
             (MLForecast): Local forecast object.
         """
+        self._check_fitted()
         serialized_ts = (
             fa.select_columns(
                 self._partition_results,
