@@ -101,7 +101,7 @@ fcst = MLForecast(
     lags=[1],
     date_features=['dayofweek'],
 )
-fcst.preprocess(series_with_prices, static_features=[], dropna=True).head()
+fcst.preprocess(series_with_prices, dropna=True).head()
 ```
 
 |     | unique_id | ds         | y        | price    | price_lag7 | price_expanding_mean_lag1 | lag1     | dayofweek |
@@ -119,7 +119,7 @@ original series.
 
 ```python
 series_with_prices2 = series_with_prices.dropna()
-fcst.preprocess(series_with_prices2, dropna=True, static_features=[]).head()
+fcst.preprocess(series_with_prices2, dropna=True).head()
 ```
 
 |     | unique_id | ds         | y        | price    | price_lag7 | price_expanding_mean_lag1 | lag1     | dayofweek |
@@ -133,7 +133,7 @@ fcst.preprocess(series_with_prices2, dropna=True, static_features=[]).head()
 You can now train the model.
 
 ```python
-fcst.fit(series_with_prices2, static_features=[])
+fcst.fit(series_with_prices2)
 ```
 
 ``` text
