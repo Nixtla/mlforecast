@@ -557,10 +557,12 @@ class LightGBMCV:
             if verbose_eval:
                 print(f"[{rounds:,d}] {self.metric_name}: {metric_value:,f}")
             if self.should_stop(hist, early_stopping_evals, early_stopping_pct):
-                print(f"Early stopping at round {rounds:,}")
+                if verbose_eval:
+                    print(f"Early stopping at round {rounds:,}")
                 break
         self.best_iteration_ = self.find_best_iter(hist, early_stopping_evals)
-        print(f"Using best iteration: {self.best_iteration_:,}")
+        if verbose_eval:
+            print(f"Using best iteration: {self.best_iteration_:,}")
         hist = hist[: self.best_iteration_ // eval_every]
         for _, bst, _ in self.items:
             bst.best_iteration = self.best_iteration_
