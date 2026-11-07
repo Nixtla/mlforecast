@@ -124,16 +124,17 @@ def generate_prices_for_series(
     unique_last_dates = series.groupby("unique_id", observed=True)["ds"].max().nunique()
     if unique_last_dates > 1:
         raise ValueError("series must have equal ends.")
-    day_offset = pd.tseries.frequencies.Day()
     starts_ends = series.groupby("unique_id", observed=True)["ds"].agg(["min", "max"])
     dfs = []
     for idx, (start, end) in starts_ends.iterrows():
+        n_hist = len(pd.date_range(start, end, freq="D"))
+        dates = pd.date_range(start, periods=n_hist + horizon, freq="D", name="ds")
         product_df = pd.DataFrame(
             {
                 "unique_id": idx,
-                "price": rng.rand((end - start).days + 1 + horizon),
+                "price": rng.rand(len(dates)),
             },
-            index=pd.date_range(start, end + horizon * day_offset, name="ds"),
+            index=dates,
         )
         dfs.append(product_df)
     prices_catalog = pd.concat(dfs).reset_index()
