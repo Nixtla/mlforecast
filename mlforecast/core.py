@@ -1220,12 +1220,18 @@ class TimeSeries:
             target = target[keep_rows]
             df = ufp.filter_with_mask(df, keep_rows)
             df = ufp.copy_if_pandas(df, deep=False)
-            last_idxs = self.ga.indptr[1:] - 1
-            if self._sort_idxs is not None:
-                last_idxs = self._sort_idxs[last_idxs]
-            last_vals_nan = ~keep_rows[last_idxs]
-            if last_vals_nan.any():
-                self._dropped_series = np.where(last_vals_nan)[0]
+            # A series is dropped only when *all* its rows are removed.
+            # Checking only its last row incorrectly marks a series as dropped
+            # when that row starts a new partition and has a null feature.
+            keep_rows_in_group_order = (
+                keep_rows[self._sort_idxs] if self._sort_idxs is not None else keep_rows
+            )
+            kept_rows_per_series = np.add.reduceat(
+                keep_rows_in_group_order, self.ga.indptr[:-1]
+            )
+            dropped_series = kept_rows_per_series == 0
+            if dropped_series.any():
+                self._dropped_series = np.flatnonzero(dropped_series)
                 dropped_ids = reprlib.repr(list(self.uids[self._dropped_series]))
                 warnings.warn(
                     "The following series were dropped completely "
