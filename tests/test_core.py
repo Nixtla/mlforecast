@@ -2131,6 +2131,31 @@ def test_dropped_series(ordered):
     )
 
 
+def test_series_with_last_row_dropped_is_not_marked_as_dropped():
+    # The last row starts a new partition and therefore has a null rolling
+    # feature, but earlier rows from the same series remain usable.
+    series = pd.DataFrame(
+        {
+            "unique_id": ["series"] * 8,
+            "ds": pd.date_range("2024-01-01", periods=8, freq="D"),
+            "y": np.arange(8, dtype=float),
+            "promo": [0] * 7 + [1],
+        }
+    )
+    ts = TimeSeries(
+        freq="D",
+        lag_transforms={1: [RollingMean(window_size=3, groupby=["promo"])]},
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        prep = ts.fit_transform(series, "unique_id", "ds", "y")
+
+    assert prep["unique_id"].eq("series").any()
+    assert ts._dropped_series is None
+    assert not any("dropped completely" in str(w.message) for w in caught)
+
+
 # short series exception
 def test_short_series_exception():
     series = generate_daily_series(2, min_length=5, max_length=15)
