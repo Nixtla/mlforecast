@@ -1961,6 +1961,26 @@ def test_horizons_with_target_transforms():
     assert preds.shape[0] == n_series * 2
 
 
+def test_horizons_with_differences_match_max_horizon():
+    # the models for steps 7 and 14 are the same with horizons=[7, 14] and
+    # max_horizon=14, so the inverted forecasts at those steps must be too
+    df = generate_daily_series(3, min_length=60, max_length=80)
+
+    def forecast(**fit_kwargs):
+        fcst = MLForecast(
+            models=[LinearRegression()],
+            freq="D",
+            lags=[1, 7],
+            target_transforms=[Differences([7])],
+        )
+        return fcst.fit(df, **fit_kwargs).predict(h=14)
+
+    sparse = forecast(horizons=[7, 14])
+    dense = forecast(max_horizon=14)
+    expected = dense.merge(sparse[["unique_id", "ds"]])
+    pd.testing.assert_frame_equal(sparse, expected)
+
+
 def test_horizons_cross_validation_with_target_transforms():
     """Test cross_validation with sparse horizons and target transforms.
 

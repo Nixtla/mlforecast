@@ -2254,19 +2254,27 @@ class TimeSeries:
                         for c in preds.columns
                         if c not in (self.id_col, self.time_col)
                     ]
-                    # Calculate actual predictions per series (handles sparse horizons)
-                    preds_per_series = len(preds) // len(self.uids)
-                    indptr = np.arange(
-                        0, preds_per_series * (len(self.uids) + 1), preds_per_series
-                    )
+                    # sparse horizons only predict some steps, so place them at
+                    # their step (NaN elsewhere) before inverting transforms
+                    # like Differences that chain consecutive steps
+                    steps = list(range(horizon))
+                    if self.max_horizon is not None and self._horizons is not None:
+                        steps = [h for h in self._horizons if h < horizon]
+                    n_series = len(self.uids)
+                    n_steps = steps[-1] + 1
+                    indptr = np.arange(0, n_steps * (n_series + 1), n_steps)
                 for tfm in self.target_transforms[::-1]:
                     if isinstance(tfm, _BaseGroupedArrayTargetTransform):
                         for col in model_cols:
-                            ga = GroupedArray(
-                                preds[col].to_numpy().astype(self.ga.data.dtype), indptr
+                            data = np.full(
+                                (n_series, n_steps), np.nan, self.ga.data.dtype
                             )
-                            ga = tfm.inverse_transform(ga)
-                            preds = ufp.assign_columns(preds, col, ga.data)
+                            data[:, steps] = preds[col].to_numpy().reshape(n_series, -1)
+                            ga = tfm.inverse_transform(
+                                GroupedArray(data.ravel(), indptr)
+                            )
+                            inverted = ga.data.reshape(n_series, n_steps)[:, steps]
+                            preds = ufp.assign_columns(preds, col, inverted.ravel())
                     else:
                         preds = tfm.inverse_transform(preds)
         return preds
