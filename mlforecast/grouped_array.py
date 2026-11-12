@@ -15,6 +15,7 @@ from ._warnings import _warn
 
 def _shift_py(x: np.ndarray, offset: int) -> np.ndarray:
     n = x.size
+    offset = min(offset, n)
     out = np.empty_like(x)
     out[:offset] = np.nan
     out[offset:] = x[: n - offset]
