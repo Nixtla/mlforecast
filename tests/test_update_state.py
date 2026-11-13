@@ -321,23 +321,44 @@ def test_keep_last_n_covers_the_transform_lag(lag):
     )
 
 
-def test_polars_categorical_update_of_a_subset_of_series():
-    """Updating only some series with polars Categorical ids (#832 follow-up)."""
-    full = pl.from_pandas(_series({"a": 12, "b": 10}))
-    cat = full.with_columns(pl.col("unique_id").cast(pl.Categorical))
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "pandas",
+        pytest.param(
+            "polars",
+            # update's join re-encodes the new frame's local categoricals
+            marks=pytest.mark.filterwarnings(
+                "ignore::polars.exceptions.CategoricalRemappingWarning"
+            ),
+        ),
+    ],
+)
+def test_categorical_update_of_a_subset_of_series(engine):
+    """Updating only some series with categorical ids (#832 follow-up)."""
+    full = _series({"a": 12, "b": 10})
+    to_engine = pl.from_pandas if engine == "polars" else lambda df: df
+    is_train = full["ds"] < START + pd.Timedelta(days=10)
     preds = []
-    for df in (full, cat):
+    for df in (full, full.astype({"unique_id": "category"})):
         fcst = MLForecast(
-            freq="1d",
+            freq=ENGINE_FREQ[engine],
             models=[LinearRegression()],
             lags=[1],
             lag_transforms={1: [ExpandingMean()]},
         )
-        fcst.fit(df.filter(pl.col("ds") < START + pd.Timedelta(days=10)))
-        fcst.update(df.filter(pl.col("ds") >= START + pd.Timedelta(days=10)))
+        fcst.fit(to_engine(df[is_train]))
+        # only "a" has rows after the training end
+        fcst.update(to_engine(df[~is_train]))
         preds.append(fcst.predict(1))
-    assert preds[1]["unique_id"].dtype == pl.Categorical
-    assert preds[1]["unique_id"].cast(pl.String).to_list() == ["a", "b"]
+    ids = preds[1]["unique_id"]
+    if engine == "polars":
+        assert ids.dtype == pl.Categorical
+        ids = ids.to_pandas()
+    else:
+        assert ids.cat.categories.tolist() == ["a", "b"]
+    assert ids.dtype == "category"
+    assert ids.astype(str).tolist() == ["a", "b"]
     np.testing.assert_allclose(
         preds[1]["LinearRegression"].to_numpy(),
         preds[0]["LinearRegression"].to_numpy(),

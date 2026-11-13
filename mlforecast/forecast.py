@@ -1134,6 +1134,7 @@ class MLForecast:
                 "`train_df` must use the same dataframe library as the data "
                 f"passed to `fit` (got {got}, expected {expected})."
             )
+        _warn("Computing recursive fitted values for h>1 on demand can be slow.")
         # target rows are gathered from `train` so the output keeps its exact
         # id/time/target dtypes (e.g. every training category of a pandas id)
         row_col = nw.generate_temporary_column_name(8, train.columns)
@@ -1477,9 +1478,6 @@ class MLForecast:
                         "On-demand recursive fitted values for `h>1` are not supported when using "
                         f"pooled lag transforms whose partition_by doesn't include '{self.ts.id_col}'."
                     )
-                _warn(
-                    "Computing recursive fitted values for h>1 on demand can be slow."
-                )
                 res = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
                 )
