@@ -291,9 +291,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     )
     fcst.fit(df, fitted=True, static_features=[])
 
-    with pytest.raises(
-        ValueError, match="not supported.*partition_by doesn't include"
-    ):
+    with pytest.raises(ValueError, match="not supported.*partition_by doesn't include"):
         fcst.forecast_fitted_values(h=2)
 
 
@@ -317,9 +315,6 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert "h" in fitted_h3.columns
     assert fitted_h3["h"].eq(3).all()
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
-
-
-_ENGINE_FREQ = {"pandas": "D", "polars": "1d", "polars_cat": "1d"}
 
 
 @pytest.mark.parametrize(
@@ -372,7 +367,7 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
         # linear, so any change in a feature moves the predictions; the
         # imputer handles the empty-bucket NaNs at early origins
         models={"lr": make_pipeline(SimpleImputer(), LinearRegression())},
-        freq=_ENGINE_FREQ[engine],
+        freq="D" if engine == "pandas" else "1d",
         lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=key)]},
     )
     fcst.fit(to_engine(df), static_features=["brand"], fitted=True)
@@ -455,6 +450,55 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     assert "h" in fitted_h3.columns
     assert fitted_h3["h"].eq(h).all()
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
+
+
+@pytest.mark.parametrize("as_numpy", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_with_fitted_statics(as_numpy):
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    df["brand"] = df["unique_id"].cat.codes
+    df["promo"] = (np.arange(len(df)) % 5 == 0).astype(int)
+    # dynamic before static, so the warm clone's own feature order would differ
+    df = df[["unique_id", "promo", "ds", "y", "brand"]]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df,
+        static_features=["brand"],
+        fitted=True,
+        cache_train_df=False,
+        as_numpy=as_numpy,
+    )
+    fitted = fcst.forecast_fitted_values(h=2, train_df=df.drop(columns="brand"))
+    pd.testing.assert_frame_equal(fitted, fcst.forecast_fitted_values(h=2, train_df=df))
+    # one origin against `transfer`, so a feature swap (silent with
+    # `as_numpy=True`) can't hide behind both sides being equally wrong
+    hist = df.groupby("unique_id", observed=True).head(20)
+    future = df.groupby("unique_id", observed=True).nth([20, 21])
+    expected = fcst.transfer(hist).predict(
+        h=2, X_df=future[["unique_id", "ds", "promo"]]
+    )
+    expected = expected.groupby("unique_id", observed=True).nth(1)
+    got = fitted.merge(expected[["unique_id", "ds"]])
+    np.testing.assert_allclose(
+        got["LinearRegression"], expected["LinearRegression"].to_numpy()
+    )
+
+
+class _Float32LinearRegression(BaseEstimator):
+    def fit(self, X, y):
+        self.model_ = LinearRegression().fit(X, y)
+        return self
+
+    def predict(self, X):
+        return self.model_.predict(X).astype(np.float32)
+
+
+def test_recursive_forecast_fitted_values_on_demand_keeps_model_dtype():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models={"lr32": _Float32LinearRegression()}, freq="D", lags=[1])
+    fcst.fit(df, fitted=True)
+    h1 = fcst.forecast_fitted_values(h=1)
+    assert h1["lr32"].dtype == np.float32
+    assert fcst.forecast_fitted_values(h=2)["lr32"].dtype == h1["lr32"].dtype
 
 
 def test_recursive_forecast_fitted_values_on_demand_rejects_other_dataframe_library():
@@ -2953,7 +2997,9 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
     )
-    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
+    cv_result = fcst.cross_validation(
+        aux_cols_series, n_windows=2, h=7, static_features=statics
+    )
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
     for i in range(2):

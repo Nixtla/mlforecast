@@ -1139,46 +1139,45 @@ class MLForecast:
         # id/time/target dtypes (e.g. every training category of a pandas id)
         row_col = nw.generate_temporary_column_name(8, train.columns)
         train = train.sort([id_col, time_col]).with_row_index(row_col)
-        valid_one_step_times: Dict[Any, set] = {}
-        for uid, t in zip(one_step[id_col].to_list(), one_step[time_col].to_list()):
-            valid_one_step_times.setdefault(uid, set()).add(t)
+        valid = set(zip(one_step[id_col].to_list(), one_step[time_col].to_list()))
         static = [c for c in self.ts.static_features_.columns if c != id_col]
         exclude = {id_col, time_col, target_col, row_col, *static}
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train.columns if c not in exclude]
         model_names = list(self.models_.keys())
+        statics_ = nw.from_native(self.ts.static_features_, eager_only=True)
+        obs_cols = [id_col, time_col, target_col, *dynamic]
         rows: List[int] = []
         out: Dict[str, list] = {m: [] for m in model_names}
         for (uid,), group in train.group_by(id_col):
-            valid_uid_times = valid_one_step_times.get(uid, set())
-            if not valid_uid_times:
-                continue
             times = group[time_col].to_list()
             valid_origins = [
                 origin_idx
                 for origin_idx in range(len(group) - h)
-                if times[origin_idx + 1] in valid_uid_times
+                if (uid, times[origin_idx + 1]) in valid
             ]
             if not valid_origins:
                 continue
 
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
-            hist = group[: first_origin + 1].select(
-                [id_col, time_col, target_col, *static, *dynamic]
+            hist = (
+                group[: first_origin + 1]
+                .select(obs_cols)
+                .join(statics_, on=id_col, how="left")
             )
             temp_ts = self.ts._clone_warm(nw.to_native(hist))
-            obs_cols = [id_col, time_col, target_col, *dynamic]
+            # the clone orders features by `hist`'s columns; the models expect fit's
+            temp_ts.features_order_ = list(self.ts.features_order_)
 
             current_origin = first_origin
             for origin_idx in valid_origins:
-                if origin_idx > current_origin:
-                    # Advance the state to the current origin with observed values.
-                    for update_idx in range(current_origin + 1, origin_idx + 1):
-                        obs = group[update_idx : update_idx + 1].select(obs_cols)
-                        temp_ts.update(nw.to_native(obs))
-                    current_origin = origin_idx
+                # Advance the state to the current origin with observed values.
+                for update_idx in range(current_origin + 1, origin_idx + 1):
+                    obs = group[update_idx : update_idx + 1].select(obs_cols)
+                    temp_ts.update(nw.to_native(obs))
+                current_origin = origin_idx
 
                 X_df = None
                 if dynamic:
@@ -1199,7 +1198,7 @@ class MLForecast:
             .with_columns(
                 nw.new_series("h", [h] * len(rows), nw.Int64(), backend=backend),
                 *[
-                    nw.new_series(m, out[m], nw.Float64(), backend=backend)
+                    nw.new_series(m, out[m], one_step.schema[m], backend=backend)
                     for m in model_names
                 ],
             )
