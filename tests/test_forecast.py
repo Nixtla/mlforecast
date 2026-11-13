@@ -291,7 +291,9 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     )
     fcst.fit(df, fitted=True, static_features=[])
 
-    with pytest.raises(ValueError, match="not supported.*partition_by doesn't include"):
+    with pytest.raises(
+        ValueError, match="not supported.*partition_by doesn't include"
+    ):
         fcst.forecast_fitted_values(h=2)
 
 
@@ -2997,9 +2999,7 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
     )
-    cv_result = fcst.cross_validation(
-        aux_cols_series, n_windows=2, h=7, static_features=statics
-    )
+    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
     for i in range(2):
