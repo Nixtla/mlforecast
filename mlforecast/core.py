@@ -2299,10 +2299,12 @@ class TimeSeries:
         _validate_no_null_times(df, self.time_col)
         uids = _index_to_series(self.uids)
         new_ids = df[self.id_col]
-        # polars Categoricals from different frames already join by re-encoding;
-        # match_if_categorical's temporary StringCache would leave the stored
-        # uids tied to a dead cache, breaking later joins (StringCacheMismatchError)
-        if isinstance(uids, pd.Series):
+        if isinstance(uids, pl_Series) and uids.dtype == pl.Categorical:
+            # one local encoding, keeping the stored ids' order; match_if_categorical's
+            # temporary StringCache breaks later joins with StringCacheMismatchError
+            both = pl.concat([uids, new_ids.cast(pl.Categorical)])
+            uids, new_ids = both[: len(uids)], both[len(uids) :]
+        else:
             uids, new_ids = ufp.match_if_categorical(uids, new_ids)
         df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)

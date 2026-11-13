@@ -363,3 +363,20 @@ def test_categorical_update_of_a_subset_of_series(engine):
         preds[1]["LinearRegression"].to_numpy(),
         preds[0]["LinearRegression"].to_numpy(),
     )
+
+
+@pytest.mark.filterwarnings("ignore::polars.exceptions.CategoricalRemappingWarning")
+def test_polars_categorical_update_with_other_id_order():
+    full = _series({"a": 12, "b": 12, "c": 12})
+    is_train = full["ds"] < START + pd.Timedelta(days=10)
+    preds = []
+    for dtype in (pl.String, pl.Categorical):
+        fcst = MLForecast(freq="1d", models=[LinearRegression()], lags=[1])
+        fcst.fit(
+            pl.from_pandas(full[is_train]).with_columns(pl.col("unique_id").cast(dtype))
+        )
+        # reversed, so the update frame's local encoding is c, b, a
+        new = pl.from_pandas(full[~is_train].iloc[::-1])
+        fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
+        preds.append(fcst.predict(2)["LinearRegression"].to_numpy())
+    np.testing.assert_allclose(preds[1], preds[0])
