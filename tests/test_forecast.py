@@ -314,7 +314,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("engine", ["pandas", "polars", "polars_cat"])
 # ["unique_id", "brand"] isn't a case: a static-only id key is rejected at fit
 # (each bucket would be a single series)
 @pytest.mark.parametrize(
@@ -339,8 +339,10 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
         )
     df = pd.concat(parts, ignore_index=True)
     df["brand"] = df["brand"].astype("category")
-    if engine == "polars":
+    if engine != "pandas":
         df = pl.from_pandas(df)
+    if engine == "polars_cat":
+        df = df.with_columns(pl.col("unique_id").cast(pl.Categorical))
     fcst = MLForecast(
         # HGBR tolerates the empty-bucket NaNs at early origins
         models=[HistGradientBoostingRegressor(max_iter=5)],
@@ -352,13 +354,13 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
     assert type(res) is type(fcst.fcst_fitted_values_)
     fitted = fcst.forecast_fitted_values(h=2)
     assert type(fitted) is type(df)
-    if engine == "polars":
+    if engine != "pandas":
         fitted = fitted.to_pandas()
     assert fitted["h"].eq(2).all() and len(fitted) > 0
 
     # parity with predict from one origin of s1
     origin = 20
-    if engine == "polars":
+    if engine != "pandas":
         s1 = df.filter(pl.col("unique_id") == "s1")
         hist, fut = s1[: origin + 1], s1[origin + 1 : origin + 3]
         fut_ds = fut["ds"][-1]
