@@ -314,6 +314,53 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
+@pytest.mark.parametrize(
+    "key", [["unique_id", "promo", "brand"], ["unique_id", "promo"]]
+)
+def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key):
+    # issue #832 frame
+    parts = []
+    for uid, n in [("s0", 37), ("s1", 40), ("s2", 45)]:
+        promo = np.zeros(n, dtype=int)
+        promo[::5] = 1
+        parts.append(
+            pd.DataFrame(
+                {
+                    "unique_id": uid,
+                    "ds": pd.date_range(end="2024-03-01", periods=n, freq="D"),
+                    "y": np.arange(n, dtype=float),
+                    "promo": promo,
+                    "brand": "b" + uid[-1],
+                }
+            )
+        )
+    df = pd.concat(parts, ignore_index=True)
+    df["brand"] = df["brand"].astype("category")
+    fcst = MLForecast(
+        # HGBR tolerates the empty-bucket NaNs at early origins
+        models=[HistGradientBoostingRegressor(max_iter=5)],
+        freq="D",
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=key)]},
+    )
+    fcst.fit(df, static_features=["brand"], fitted=True)
+    fitted = fcst.forecast_fitted_values(h=2)
+    assert fitted["h"].eq(2).all() and len(fitted) > 0
+
+    # parity with predict from one origin of s1
+    s1 = df[df["unique_id"] == "s1"].reset_index(drop=True)
+    origin = 20
+    hist, fut = s1.iloc[: origin + 1], s1.iloc[origin + 1 : origin + 3]
+    warm = fcst.ts._clone_warm(hist)
+    preds = warm.predict(
+        models=fcst.models_, horizon=2, X_df=fut[["unique_id", "ds", "promo"]]
+    )
+    row = fitted[(fitted["unique_id"] == "s1") & (fitted["ds"] == fut["ds"].iloc[-1])]
+    np.testing.assert_allclose(
+        row["HistGradientBoostingRegressor"].to_numpy(),
+        preds["HistGradientBoostingRegressor"].iloc[-1:].to_numpy(),
+    )
+
+
 def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     h = 3
     df = generate_daily_series(2, min_length=50, max_length=50)
