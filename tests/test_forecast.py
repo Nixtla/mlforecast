@@ -428,7 +428,12 @@ def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(
     )
     fcst.fit(df, fitted=True)
     h1 = fcst.forecast_fitted_values(h=1)
-    h6 = fcst.forecast_fitted_values(h=6)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        h6 = fcst.forecast_fitted_values(h=6)
+    assert not [
+        w for w in caught if w.category is pl.exceptions.CategoricalRemappingWarning
+    ]
     assert h6["unique_id"].dtype == h1["unique_id"].dtype
     if engine == "pandas":
         assert h6["unique_id"].cat.categories.tolist() == ["id_0", "id_1", "id_2"]
@@ -513,6 +518,21 @@ def test_recursive_forecast_fitted_values_on_demand_rejects_other_dataframe_libr
         warnings.simplefilter("error")
         with pytest.raises(ValueError, match="same dataframe library"):
             fcst.forecast_fitted_values(h=2, train_df=pl.from_pandas(df))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        lambda df: df.astype({"unique_id": str}),
+        lambda df: df.assign(ds=df["ds"].dt.tz_localize("UTC")),
+    ],
+)
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_id_or_time_dtype(bad):
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    with pytest.raises(ValueError, match="dtype used in `fit`"):
+        fcst.forecast_fitted_values(h=2, train_df=bad(df))
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_requires_train_df_without_cache():
