@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, DFType, pl, pl_DataFrame, pl_Series
+from utilsforecast.compat import DataFrame, DFType, pl_DataFrame, pl_Series
 
 from mlforecast.core import (
     DateFeature,
@@ -1108,7 +1108,7 @@ class MLForecast:
         self,
         h: int,
         train_df: Optional[DFType] = None,
-    ) -> pd.DataFrame:
+    ) -> DFType:
         # `h` and transform constraints are validated in `forecast_fitted_values`.
         # This intentionally mirrors the existing recursive prediction engine:
         # feature updates are vectorized across series at each step, but origins
@@ -1123,96 +1123,81 @@ class MLForecast:
                 )
             train_df = self._fitted_train_df_
 
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(train_df, pd.DataFrame):
-            train_pd = train_df.copy()
-        else:
-            train_pd = train_df.to_pandas()
-
-        one_step = self.fcst_fitted_values_
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(one_step, pd.DataFrame):
-            one_step_pd = one_step[[self.ts.id_col, self.ts.time_col]].copy()
-        else:
-            one_step_pd = one_step.select(
-                [self.ts.id_col, self.ts.time_col]
-            ).to_pandas()
-
         id_col = self.ts.id_col
         time_col = self.ts.time_col
         target_col = self.ts.target_col
-        train_pd = train_pd.sort_values([id_col, time_col]).reset_index(drop=True)
-
-        valid_one_step_times = {
-            uid: set(group[time_col].tolist())
-            for uid, group in one_step_pd.groupby(id_col, observed=True)
-        }
+        train = nw.from_native(train_df, eager_only=True).sort([id_col, time_col])
+        if train.schema[id_col] == nw.Categorical:
+            # polars categoricals from different sources can't be joined
+            # inside `TimeSeries.update`/`predict`; the id isn't a model feature
+            train = train.with_columns(nw.col(id_col).cast(nw.String))
+        one_step = nw.from_native(self.fcst_fitted_values_, eager_only=True)
+        valid_one_step_times: Dict[Any, set] = {}
+        for uid, t in zip(one_step[id_col].to_list(), one_step[time_col].to_list()):
+            valid_one_step_times.setdefault(uid, set()).add(t)
         static = [c for c in self.ts.static_features_.columns if c != id_col]
         exclude = {id_col, time_col, target_col, *static}
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
-        dynamic = [c for c in train_pd.columns if c not in exclude]
+        dynamic = [c for c in train.columns if c not in exclude]
         model_names = list(self.models_.keys())
-        rows = []
-        for uid, group in train_pd.groupby(id_col, observed=True):
-            group = group.sort_values(time_col).reset_index(drop=True)
+        cols = [id_col, time_col, target_col, "h", *model_names]
+        out: Dict[str, list] = {c: [] for c in cols}
+        for (uid,), group in train.group_by(id_col):
             valid_uid_times = valid_one_step_times.get(uid, set())
             if not valid_uid_times:
                 continue
-
-            valid_origins = []
-            for origin_idx in range(len(group) - h):
-                first_fcst_time = group.iloc[origin_idx + 1][time_col]
-                if first_fcst_time not in valid_uid_times:
-                    continue
-                valid_origins.append(origin_idx)
+            times = group[time_col].to_list()
+            valid_origins = [
+                origin_idx
+                for origin_idx in range(len(group) - h)
+                if times[origin_idx + 1] in valid_uid_times
+            ]
             if not valid_origins:
                 continue
 
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
-            hist = group.iloc[: first_origin + 1]
-            hist = hist[[id_col, time_col, target_col, *static, *dynamic]]
-            temp_ts = self.ts._clone_warm(hist)
+            hist = group[: first_origin + 1].select(
+                [id_col, time_col, target_col, *static, *dynamic]
+            )
+            temp_ts = self.ts._clone_warm(nw.to_native(hist))
+            obs_cols = [id_col, time_col, target_col, *dynamic]
 
             current_origin = first_origin
             for origin_idx in valid_origins:
                 if origin_idx > current_origin:
                     # Advance the state to the current origin with observed values.
                     for update_idx in range(current_origin + 1, origin_idx + 1):
-                        obs = group.iloc[[update_idx]][
-                            [id_col, time_col, target_col, *dynamic]
-                        ]
-                        temp_ts.update(obs)
+                        obs = group[update_idx : update_idx + 1].select(obs_cols)
+                        temp_ts.update(nw.to_native(obs))
                     current_origin = origin_idx
 
-                future = group.iloc[origin_idx + 1 : origin_idx + h + 1]
-                if future.shape[0] < h:
-                    continue
                 X_df = None
                 if dynamic:
-                    X_df = future[[id_col, time_col, *dynamic]]
-                preds = temp_ts.predict(models=self.models_, horizon=h, X_df=X_df)
-                pred_last = preds.iloc[-1]
+                    future = group[origin_idx + 1 : origin_idx + h + 1]
+                    X_df = nw.to_native(future.select([id_col, time_col, *dynamic]))
+                preds = nw.from_native(
+                    temp_ts.predict(models=self.models_, horizon=h, X_df=X_df),
+                    eager_only=True,
+                )
                 target_idx = origin_idx + h
-                row = {
-                    id_col: group.iloc[target_idx, group.columns.get_loc(id_col)],
-                    time_col: group.iloc[target_idx, group.columns.get_loc(time_col)],
-                    target_col: group.iloc[
-                        target_idx, group.columns.get_loc(target_col)
-                    ],
-                    "h": h,
-                }
+                out[id_col].append(uid)
+                out[time_col].append(times[target_idx])
+                out[target_col].append(group.item(target_idx, target_col))
+                out["h"].append(h)
                 for model_name in model_names:
-                    row[model_name] = pred_last[model_name]
-                rows.append(row)
+                    out[model_name].append(preds.item(h - 1, model_name))
 
-        cols = [id_col, time_col, target_col, "h", *model_names]
-        if not rows:
-            return pd.DataFrame(columns=cols)
-        result = pd.DataFrame(rows)[cols]
-        result = result.sort_values([id_col, time_col]).reset_index(drop=True)
-        return result
+        schema = {
+            **{c: train.schema[c] for c in (id_col, time_col, target_col)},
+            "h": nw.Int64(),
+            **{m: nw.Float64() for m in model_names},
+        }
+        result = nw.from_dict(
+            out, schema=schema, backend=nw.get_native_namespace(train)
+        )
+        return nw.to_native(result.sort([id_col, time_col]))
 
     @_stage("fit")
     def fit(
@@ -1488,14 +1473,9 @@ class MLForecast:
                 _warn(
                     "Computing recursive fitted values for h>1 on demand can be slow."
                 )
-                res_pd = self._compute_recursive_fitted_values_on_demand(
+                res = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
                 )
-                # convert the pandas-only recursive result back to the origin backend
-                if isinstance(self.fcst_fitted_values_, pd.DataFrame):
-                    res = res_pd
-                else:
-                    res = pl.from_pandas(res_pd)
         if "h" not in res.columns:
             res = ufp.assign_columns(res, "h", np.int64(h))
         res = _ensure_h_int64(res)

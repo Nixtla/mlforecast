@@ -314,10 +314,13 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+# ["unique_id", "brand"] isn't a case: a static-only id key is rejected at fit
+# (each bucket would be a single series)
 @pytest.mark.parametrize(
     "key", [["unique_id", "promo", "brand"], ["unique_id", "promo"]]
 )
-def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key):
+def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine):
     # issue #832 frame
     parts = []
     for uid, n in [("s0", 37), ("s1", 40), ("s2", 45)]:
@@ -336,28 +339,41 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key):
         )
     df = pd.concat(parts, ignore_index=True)
     df["brand"] = df["brand"].astype("category")
+    if engine == "polars":
+        df = pl.from_pandas(df)
     fcst = MLForecast(
         # HGBR tolerates the empty-bucket NaNs at early origins
         models=[HistGradientBoostingRegressor(max_iter=5)],
-        freq="D",
+        freq="D" if engine == "pandas" else "1d",
         lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=key)]},
     )
     fcst.fit(df, static_features=["brand"], fitted=True)
+    res = fcst._compute_recursive_fitted_values_on_demand(2)
+    assert type(res) is type(fcst.fcst_fitted_values_)
     fitted = fcst.forecast_fitted_values(h=2)
+    assert type(fitted) is type(df)
+    if engine == "polars":
+        fitted = fitted.to_pandas()
     assert fitted["h"].eq(2).all() and len(fitted) > 0
 
     # parity with predict from one origin of s1
-    s1 = df[df["unique_id"] == "s1"].reset_index(drop=True)
     origin = 20
-    hist, fut = s1.iloc[: origin + 1], s1.iloc[origin + 1 : origin + 3]
+    if engine == "polars":
+        s1 = df.filter(pl.col("unique_id") == "s1")
+        hist, fut = s1[: origin + 1], s1[origin + 1 : origin + 3]
+        fut_ds = fut["ds"][-1]
+    else:
+        s1 = df[df["unique_id"] == "s1"].reset_index(drop=True)
+        hist, fut = s1.iloc[: origin + 1], s1.iloc[origin + 1 : origin + 3]
+        fut_ds = fut["ds"].iloc[-1]
     warm = fcst.ts._clone_warm(hist)
     preds = warm.predict(
         models=fcst.models_, horizon=2, X_df=fut[["unique_id", "ds", "promo"]]
     )
-    row = fitted[(fitted["unique_id"] == "s1") & (fitted["ds"] == fut["ds"].iloc[-1])]
+    row = fitted[(fitted["unique_id"] == "s1") & (fitted["ds"] == fut_ds)]
     np.testing.assert_allclose(
         row["HistGradientBoostingRegressor"].to_numpy(),
-        preds["HistGradientBoostingRegressor"].iloc[-1:].to_numpy(),
+        preds["HistGradientBoostingRegressor"].to_numpy()[-1:],
     )
 
 
