@@ -2300,10 +2300,13 @@ class TimeSeries:
         uids = _index_to_series(self.uids)
         new_ids = df[self.id_col]
         if isinstance(uids, pl_Series) and uids.dtype == pl.Categorical:
-            # one local encoding, keeping the stored ids' order; match_if_categorical's
-            # temporary StringCache breaks later joins with StringCacheMismatchError
-            both = pl.concat([uids, new_ids.cast(pl.Categorical)])
-            uids, new_ids = both[: len(uids)], both[len(uids) :]
+            # one local encoding (match_if_categorical's temporary StringCache
+            # breaks later joins): stored order, then unseen ids sorted
+            stored, incoming = uids.cast(pl.String), new_ids.cast(pl.String)
+            unseen = incoming.unique()
+            unseen = unseen.filter(~unseen.is_in(stored)).sort()
+            both = pl.concat([stored, unseen, incoming]).cast(pl.Categorical)
+            uids, new_ids = both[: len(stored)], both[len(stored) + len(unseen) :]
         else:
             uids, new_ids = ufp.match_if_categorical(uids, new_ids)
         df = ufp.copy_if_pandas(df, deep=False)

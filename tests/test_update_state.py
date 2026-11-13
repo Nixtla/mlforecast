@@ -380,3 +380,16 @@ def test_polars_categorical_update_with_other_id_order():
         fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
         preds.append(fcst.predict(2)["LinearRegression"].to_numpy())
     np.testing.assert_allclose(preds[1], preds[0])
+
+
+def test_polars_categorical_update_sorts_new_series():
+    train = pl.from_pandas(_series({"m": 10}))
+    new = pl.from_pandas(_series({"z": 3, "y": 3}))
+    new = new.with_columns(pl.col("ds") + pl.duration(days=10))
+    uids = []
+    for dtype in (pl.String, pl.Categorical):
+        fcst = MLForecast(freq="1d", models=[LinearRegression()], lags=[1])
+        fcst.fit(train.with_columns(pl.col("unique_id").cast(dtype)))
+        fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
+        uids.append(fcst.ts.uids.cast(pl.String).to_list())
+    assert uids[1] == uids[0] == ["m", "y", "z"]
