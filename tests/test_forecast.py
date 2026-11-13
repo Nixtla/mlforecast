@@ -396,6 +396,15 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_dataframe_library():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[], cache_train_df=False)
+
+    with pytest.raises(ValueError, match="same dataframe library"):
+        fcst.forecast_fitted_values(h=2, train_df=pl.from_pandas(df))
+
+
 def test_recursive_forecast_fitted_values_on_demand_h_requires_train_df_without_cache():
     df = generate_daily_series(2, min_length=50, max_length=50)
     fcst = MLForecast(

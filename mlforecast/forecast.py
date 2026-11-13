@@ -1126,12 +1126,20 @@ class MLForecast:
         id_col = self.ts.id_col
         time_col = self.ts.time_col
         target_col = self.ts.target_col
-        train = nw.from_native(train_df, eager_only=True).sort([id_col, time_col])
-        if train.schema[id_col] == nw.Categorical:
-            # polars categoricals from different sources can't be joined
-            # inside `TimeSeries.update`/`predict`; the id isn't a model feature
-            train = train.with_columns(nw.col(id_col).cast(nw.String))
+        train = nw.from_native(train_df, eager_only=True)
         one_step = nw.from_native(self.fcst_fitted_values_, eager_only=True)
+        got, expected = train.implementation, one_step.implementation
+        if got != expected:
+            raise ValueError(
+                "`train_df` must use the same dataframe library as the data "
+                f"passed to `fit` (got {got}, expected {expected})."
+            )
+        train = train.sort([id_col, time_col])
+        if train.schema[id_col] == nw.Categorical:
+            # categorical ids (polars Categorical / pandas category) can hit a
+            # StringCacheMismatchError in `TimeSeries.update`/`predict`; the id
+            # isn't a model feature, so cast it to string
+            train = train.with_columns(nw.col(id_col).cast(nw.String))
         valid_one_step_times: Dict[Any, set] = {}
         for uid, t in zip(one_step[id_col].to_list(), one_step[time_col].to_list()):
             valid_one_step_times.setdefault(uid, set()).add(t)
@@ -1408,7 +1416,8 @@ class MLForecast:
                 when global or grouped lag transforms are configured.
             train_df (pandas or polars DataFrame, optional): Training data to use when computing
                 recursive fitted values for ``h>1`` on demand. Pass this to avoid caching a full
-                copy of the training data on the fitted object. Defaults to None.
+                copy of the training data on the fitted object. Must use the same
+                dataframe library as the data passed to `fit`. Defaults to None.
 
         Returns:
             pandas or polars DataFrame: DataFrame with the following columns:
