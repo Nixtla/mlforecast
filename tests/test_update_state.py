@@ -319,3 +319,26 @@ def test_keep_last_n_covers_the_transform_lag(lag):
     assert cb.get_features()[f"expanding_mean_lag{lag}"].item() == pytest.approx(
         y[: n - lag + 1].mean()
     )
+
+
+def test_polars_categorical_update_of_a_subset_of_series():
+    """Updating only some series with polars Categorical ids (#832 follow-up)."""
+    full = pl.from_pandas(_series({"a": 12, "b": 10}))
+    cat = full.with_columns(pl.col("unique_id").cast(pl.Categorical))
+    preds = []
+    for df in (full, cat):
+        fcst = MLForecast(
+            freq="1d",
+            models=[LinearRegression()],
+            lags=[1],
+            lag_transforms={1: [ExpandingMean()]},
+        )
+        fcst.fit(df.filter(pl.col("ds") < START + pd.Timedelta(days=10)))
+        fcst.update(df.filter(pl.col("ds") >= START + pd.Timedelta(days=10)))
+        preds.append(fcst.predict(1))
+    assert preds[1]["unique_id"].dtype == pl.Categorical
+    assert preds[1]["unique_id"].cast(pl.String).to_list() == ["a", "b"]
+    np.testing.assert_allclose(
+        preds[1]["LinearRegression"].to_numpy(),
+        preds[0]["LinearRegression"].to_numpy(),
+    )

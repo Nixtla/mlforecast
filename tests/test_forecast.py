@@ -244,7 +244,10 @@ def test_recursive_forecast_fitted_values_on_demand_h_matches_slow_baseline():
                 }
             )
     expected = (
-        pd.DataFrame(rows).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+        pd.DataFrame(rows)
+        .astype({"unique_id": df["unique_id"].dtype})
+        .sort_values(["unique_id", "ds"])
+        .reset_index(drop=True)
     )
 
     pd.testing.assert_frame_equal(fast, expected)
@@ -377,6 +380,26 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
         row["HistGradientBoostingRegressor"].to_numpy(),
         preds["HistGradientBoostingRegressor"].to_numpy()[-1:],
     )
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(engine):
+    df = generate_daily_series(3, min_length=30, max_length=40)
+    if engine == "polars":
+        df = pl.from_pandas(df).with_columns(
+            pl.col("unique_id").cast(pl.String).cast(pl.Categorical)
+        )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="1d" if engine == "polars" else "D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True)
+    h1 = fcst.forecast_fitted_values(h=1)
+    h2 = fcst.forecast_fitted_values(h=2)
+    assert h2["unique_id"].dtype == h1["unique_id"].dtype
+    if engine == "polars":
+        pl.concat([h1, h2.select(h1.columns)])
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():

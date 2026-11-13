@@ -1135,11 +1135,6 @@ class MLForecast:
                 f"passed to `fit` (got {got}, expected {expected})."
             )
         train = train.sort([id_col, time_col])
-        if train.schema[id_col] == nw.Categorical:
-            # categorical ids (polars Categorical / pandas category) can hit a
-            # StringCacheMismatchError in `TimeSeries.update`/`predict`; the id
-            # isn't a model feature, so cast it to string
-            train = train.with_columns(nw.col(id_col).cast(nw.String))
         valid_one_step_times: Dict[Any, set] = {}
         for uid, t in zip(one_step[id_col].to_list(), one_step[time_col].to_list()):
             valid_one_step_times.setdefault(uid, set()).add(t)

@@ -2298,7 +2298,12 @@ class TimeSeries:
         validate_format(df, self.id_col, self.time_col, self.target_col)
         _validate_no_null_times(df, self.time_col)
         uids = _index_to_series(self.uids)
-        uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
+        new_ids = df[self.id_col]
+        # polars Categoricals from different frames already join by re-encoding;
+        # match_if_categorical's temporary StringCache would leave the stored
+        # uids tied to a dead cache, breaking later joins (StringCacheMismatchError)
+        if isinstance(uids, pd.Series):
+            uids, new_ids = ufp.match_if_categorical(uids, new_ids)
         df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)
         df = ufp.sort(df, by=[self.id_col, self.time_col])
