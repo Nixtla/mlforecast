@@ -724,7 +724,7 @@ def test_group_lag_transform(engine):
             ("b", [10, 20, 30, 40], "y"),
         ],
     )
-    tfm = RollingMean(2, partition_by=["brand"])
+    tfm = RollingMean(2, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
         df,
@@ -823,7 +823,7 @@ def test_group_lag_transform_requires_aligned_ends(engine):
                 "brand": ["x", "x", "x", "y", "y", "y", "y"],
             }
         )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, partition_by=["brand"])]})
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["brand"])]})
     with pytest.raises(
         ValueError,
         match="Pooled lag transforms require all series to end at the same timestamp",
@@ -859,7 +859,7 @@ def test_id_key_lag_transform_requires_aligned_ends(engine):
             }
         )
     ts = TimeSeries(
-        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["unique_id", "promo"])]}
+        freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["unique_id", "promo"])]}
     )
     with pytest.raises(
         ValueError,
@@ -981,7 +981,7 @@ def test_group_update_requires_complete_timestamps(engine):
                 "brand": ["x"],
             }
         )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, partition_by=["brand"])]})
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["brand"])]})
     ts.fit_transform(
         df,
         id_col="unique_id",
@@ -1034,7 +1034,7 @@ def test_id_key_update_requires_complete_timestamps(engine):
             }
         )
     ts = TimeSeries(
-        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["unique_id", "promo"])]}
+        freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["unique_id", "promo"])]}
     )
     ts.fit_transform(
         df,
@@ -1086,7 +1086,7 @@ def test_group_update_new_group_order(engine):
                 "brand": ["b", "b", "a"],
             }
         )
-    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(1, partition_by=["brand"])]})
+    ts = TimeSeries(freq=1, lag_transforms={1: [RollingMean(1, bucket_by=["brand"])]})
     ts.fit_transform(
         df,
         id_col="unique_id",
@@ -1122,7 +1122,7 @@ def test_group_lag_transform_uses_transformed_target(engine):
             ("b", [10, 20, 30], "x"),
         ],
     )
-    tfm = RollingMean(1, partition_by=["brand"])
+    tfm = RollingMean(1, bucket_by=["brand"])
     ts = TimeSeries(
         freq=1,
         lag_transforms={1: [tfm]},
@@ -1149,7 +1149,7 @@ def test_group_lag_transform_uses_transformed_target(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_lookup_lag_partition_by_uses_previous_matching_occurrence(engine):
+def test_lookup_lag_bucket_by_uses_previous_matching_occurrence(engine):
     dates = pd.date_range("2021-01-01", "2024-12-31", freq="D")
     easter = {
         2021: "2021-04-04",
@@ -1177,7 +1177,7 @@ def test_lookup_lag_partition_by_uses_previous_matching_occurrence(engine):
     if engine == "polars":
         df = pl.from_pandas(df).with_columns(pl.col("unique_id").cast(pl.Categorical))
 
-    tfm = LookupLag(partition_by=["unique_id", "holiday_name"])
+    tfm = LookupLag(bucket_by=["unique_id", "holiday_name"])
     freq = "1d" if engine == "polars" else "D"
     ts = TimeSeries(freq=freq, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
@@ -1198,7 +1198,7 @@ def test_lookup_lag_partition_by_uses_previous_matching_occurrence(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_lookup_lag_partition_by_uses_transformed_target(engine):
+def test_lookup_lag_bucket_by_uses_transformed_target(engine):
     df = pd.DataFrame(
         {
             "unique_id": ["a", "a", "a", "a", "b", "b", "b", "b"],
@@ -1210,7 +1210,7 @@ def test_lookup_lag_partition_by_uses_transformed_target(engine):
     if engine == "polars":
         df = pl.from_pandas(df).with_columns(pl.col("unique_id").cast(pl.Categorical))
 
-    tfm = LookupLag(partition_by=["unique_id", "event"])
+    tfm = LookupLag(bucket_by=["unique_id", "event"])
     ts = TimeSeries(
         freq=1,
         lag_transforms={1: [tfm]},
@@ -1393,7 +1393,7 @@ def test_group_rolling_std(engine):
             ("b", [4, 4, 4, 4], "y"),
         ],
     )
-    tfm = RollingStd(2, partition_by=["brand"])
+    tfm = RollingStd(2, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
         df,
@@ -1449,7 +1449,7 @@ def test_group_expanding_mean(engine):
             ("b", [10, 20, 30, 40], "y"),
         ],
     )
-    tfm = ExpandingMean(partition_by=["brand"])
+    tfm = ExpandingMean(bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
         df,
@@ -1504,7 +1504,7 @@ def test_group_rolling_quantile(engine):
             ("b", [2, 4, 6, 8, 10], "y"),
         ],
     )
-    tfm = RollingQuantile(p=0.5, window_size=3, partition_by=["brand"])
+    tfm = RollingQuantile(p=0.5, window_size=3, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     prep = ts.fit_transform(
         df,
@@ -2717,7 +2717,7 @@ def test_update_failing_after_target_transforms_mutates_nothing(monkeypatch, new
                 1: [
                     ExpandingMean(),
                     ExpandingMean(global_=True),
-                    RollingMean(2, min_samples=1, partition_by=["promo"]),
+                    RollingMean(2, min_samples=1, bucket_by=["promo"]),
                 ]
             },
             target_transforms=None if "promo" in new else [Differences([1])],
@@ -2861,7 +2861,7 @@ def test_update_target_transform_returning_only_target_with_partition():
     ts = TimeSeries(
         freq=1,
         lag_transforms={
-            1: [RollingMean(2, min_samples=1, partition_by=["price"])]
+            1: [RollingMean(2, min_samples=1, bucket_by=["price"])]
         },
         target_transforms=[OnlyTarget()],
     )

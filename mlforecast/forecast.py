@@ -253,7 +253,7 @@ class MLForecast:
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
-            drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops every column, other than the id, referenced in the `partition_by` of a pooled lag transform. False keeps all columns. A list of strings drops only the named columns explicitly.
+            drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops every column, other than the id, referenced in the `bucket_by` of a pooled lag transform. False keeps all columns. A list of strings drops only the named columns explicitly.
             hooks (sequence of Hook, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. They're dropped when the forecaster is pickled or deep-copied. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
@@ -389,7 +389,7 @@ class MLForecast:
         else:
             if self.ts._get_pooled_features():
                 _warn(
-                    "Pooled (global_/partition_by) lag transforms assume "
+                    "Pooled (global_/bucket_by) lag transforms assume "
                     "a continuous, gap-free time grid. Data validation has been "
                     "disabled (validate_data=False), so timestamp gaps may "
                     "silently produce incorrect feature values. Consider "
@@ -568,7 +568,7 @@ class MLForecast:
             target_col (str): Column that contains the target. Defaults to 'y'.
             static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.
@@ -1256,7 +1256,7 @@ class MLForecast:
             target_col (str): Column that contains the target. Defaults to 'y'.
             static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.
@@ -1494,7 +1494,7 @@ class MLForecast:
                 if self.ts._pools_across_series:
                     raise ValueError(
                         "On-demand recursive fitted values for `h>1` are not supported when using "
-                        f"pooled lag transforms whose partition_by doesn't include '{self.ts.id_col}'."
+                        f"pooled lag transforms whose bucket_by doesn't include '{self.ts.id_col}'."
                     )
                 _warn(
                     "Computing recursive fitted values for h>1 on demand can be slow."
@@ -1904,7 +1904,7 @@ class MLForecast:
             step_size (int, optional): Step size between each cross validation window. If None it will be equal to `h`. Defaults to None.
             static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
-            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
+            keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
             horizons (list of int, optional): Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None.
             horizon_features (dict of int to list of str, optional): Explicit mapping of 1-indexed horizons to dynamic exogenous columns.

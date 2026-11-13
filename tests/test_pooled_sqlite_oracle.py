@@ -270,7 +270,7 @@ def _numpy_result(
 
 
 def _scope(key: Optional[List[str]]) -> dict:
-    return {"partition_by": key} if key else {"global_": True}
+    return {"bucket_by": key} if key else {"global_": True}
 
 
 def assert_oracle_matches(
@@ -283,7 +283,7 @@ def assert_oracle_matches(
     time_agg: Optional[str] = None,
     atol: float = 1e-10,
 ):
-    key_cols = list(transform.partition_by or [])
+    key_cols = list(transform.bucket_by or [])
     # mlforecast defaults min_samples to 1 (instead of window_size) when the id
     # is in the key, where the RANGE window spans calendar steps but only
     # same-partition observations count. Derived here independently so the
@@ -513,8 +513,8 @@ def test_random_data(seed):
 @pytest.mark.parametrize(
     "transform_name,tfm_factory",
     [
-        ("RollingMean", lambda gc: RollingMean(_WINDOW_SIZE, partition_by=gc)),
-        ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, partition_by=gc)),
+        ("RollingMean", lambda gc: RollingMean(_WINDOW_SIZE, bucket_by=gc)),
+        ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, bucket_by=gc)),
     ],
 )
 def test_multi_column_static_key(transform_name, tfm_factory):
@@ -623,7 +623,7 @@ def test_sparse_windows_nan_vs_value():
 
 
 # ---------------------------------------------------------------------------
-# partition_by tests
+# bucket_by tests
 # ---------------------------------------------------------------------------
 
 
@@ -742,7 +742,7 @@ _PARTITION_TRANSFORMS = _TRANSFORMS
 @pytest.mark.parametrize(
     "mode", ["dynamic_key", "static_dynamic_key", "id_key"]
 )
-def test_sqlite_oracle_partition_by(transform_factory, transform_name, lag, mode):
+def test_sqlite_oracle_bucket_by(transform_factory, transform_name, lag, mode):
     pc = ["promo"]
     if mode == "dynamic_key":
         df = _dynamic_key_df()
@@ -847,9 +847,9 @@ def test_sqlite_oracle_sparse_long_partition(
     if not is_rolling and min_samples != 1:
         pytest.skip("expanding transforms take no min_samples")
     if mode == "dynamic_key":
-        kwargs: dict = {"partition_by": ["promo"]}
+        kwargs: dict = {"bucket_by": ["promo"]}
     else:
-        kwargs = {"partition_by": ["unique_id", "promo"]}
+        kwargs = {"bucket_by": ["unique_id", "promo"]}
     if is_rolling:
         transform = transform_cls(_SPARSE_WINDOW, min_samples=min_samples, **kwargs)
         window_size: Optional[int] = _SPARSE_WINDOW
@@ -870,7 +870,7 @@ def test_sqlite_oracle_sparse_long_partition(
 
 # NULL partition keys: SQL PARTITION BY collapses all NULLs into one partition,
 # and our pooled state must do the same. to_sql maps NaN/None -> SQL NULL, so the
-# oracle locks the SQL NULL-partition semantics for partition_by transforms.
+# oracle locks the SQL NULL-partition semantics for bucket_by transforms.
 
 
 def _dynamic_key_null_df():
@@ -952,16 +952,16 @@ def test_sqlite_oracle_partition_fractional_float(mode):
     if mode == "dynamic_key":
         df = _dynamic_key_df()
         df["discount"] = _DISCOUNT_PATTERN * 2
-        transform = RollingMean(_WINDOW_SIZE, partition_by=pc)
+        transform = RollingMean(_WINDOW_SIZE, bucket_by=pc)
     elif mode == "static_dynamic_key":
         df = _static_dynamic_key_df()  # static `brand` key column
         df["discount"] = _DISCOUNT_PATTERN * 4
         group_cols = ["brand"]
-        transform = RollingMean(_WINDOW_SIZE, partition_by=[*group_cols, *pc])
+        transform = RollingMean(_WINDOW_SIZE, bucket_by=[*group_cols, *pc])
     else:
         df = _id_key_df()
         df["discount"] = _DISCOUNT_PATTERN * 2
-        transform = RollingMean(_WINDOW_SIZE, partition_by=["unique_id", *pc])
+        transform = RollingMean(_WINDOW_SIZE, bucket_by=["unique_id", *pc])
     assert_oracle_matches(
         df,
         transform,
@@ -1059,8 +1059,8 @@ def test_sqlite_oracle_static_null_key(
 @pytest.mark.parametrize(
     "transform_name,tfm_factory",
     [
-        ("RollingMean", lambda gc: RollingMean(_WINDOW_SIZE, partition_by=gc)),
-        ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, partition_by=gc)),
+        ("RollingMean", lambda gc: RollingMean(_WINDOW_SIZE, bucket_by=gc)),
+        ("RollingStd", lambda gc: RollingStd(_WINDOW_SIZE, bucket_by=gc)),
     ],
 )
 def test_multi_column_static_key_one_null_col(transform_name, tfm_factory):
@@ -1183,13 +1183,13 @@ def test_sqlite_oracle_time_agg_partition(time_agg, mode):
     if mode == "dynamic_key":
         df = _dynamic_key_df()
         transform = RollingMean(
-            _WINDOW_SIZE, partition_by=pc, time_agg=time_agg
+            _WINDOW_SIZE, bucket_by=pc, time_agg=time_agg
         )
     else:
         df = _static_dynamic_key_df()
         group_cols = ["brand"]
         transform = RollingMean(
-            _WINDOW_SIZE, partition_by=[*group_cols, *pc], time_agg=time_agg
+            _WINDOW_SIZE, bucket_by=[*group_cols, *pc], time_agg=time_agg
         )
     assert_oracle_matches(
         df,

@@ -287,7 +287,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     fcst.fit(df, fitted=True, static_features=[])
 
     with pytest.raises(
-        ValueError, match="not supported.*partition_by doesn't include"
+        ValueError, match="not supported.*bucket_by doesn't include"
     ):
         fcst.forecast_fitted_values(h=2)
 
@@ -666,7 +666,7 @@ def test_cv_refit_false_with_grouped_expanding_mean(
         models=[LinearRegression()],
         freq="D",
         lags=[1],
-        lag_transforms={1: [ExpandingMean(partition_by=["cat_code"])]},
+        lag_transforms={1: [ExpandingMean(bucket_by=["cat_code"])]},
     )
 
     cv = fcst.cross_validation(
@@ -2716,7 +2716,7 @@ def test_drop_auxiliary_columns_default_drops_groupby(aux_cols_series):
         models=LinearRegression(),
         freq="D",
         lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+        lag_transforms={1: [RollingMean(7, bucket_by=[groupby_col])]},
     )
     fcst.fit(aux_cols_series, static_features=statics)
 
@@ -2736,7 +2736,7 @@ def test_drop_auxiliary_columns_false_keeps_groupby(aux_cols_series):
         models=LinearRegression(),
         freq="D",
         lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+        lag_transforms={1: [RollingMean(7, bucket_by=[groupby_col])]},
         drop_auxiliary_columns=False,
     )
     fcst.fit(aux_cols_series, static_features=statics)
@@ -2782,7 +2782,7 @@ def test_drop_auxiliary_columns_predict_excludes_column(aux_cols_series):
         models={"rec": FeatureRecorder()},
         freq="D",
         lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+        lag_transforms={1: [RollingMean(7, bucket_by=[groupby_col])]},
     )
     fcst.fit(aux_cols_series, static_features=statics)
     fcst.predict(3)
@@ -2813,7 +2813,7 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         models={"rec": FeatureRecorder()},
         freq="D",
         lags=[1, 7],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+        lag_transforms={1: [RollingMean(7, bucket_by=[groupby_col])]},
     )
     cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
     assert cv_result is not None

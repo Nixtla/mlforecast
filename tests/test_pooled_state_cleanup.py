@@ -82,11 +82,11 @@ def _build_fcst():
         lag_transforms={
             1: [
                 RollingMean(2, global_=True),
-                RollingMean(2, partition_by=["brand"]),
-                RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"]),
-                RollingMean(2, min_samples=1, partition_by=["promo"]),
+                RollingMean(2, bucket_by=["brand"]),
+                RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"]),
+                RollingMean(2, min_samples=1, bucket_by=["promo"]),
                 RollingMean(
-                    2, min_samples=1, partition_by=["brand", "promo"]
+                    2, min_samples=1, bucket_by=["brand", "promo"]
                 ),
                 RollingStd(3, min_samples=2, global_=True),
                 RollingMin(3, global_=True),
@@ -180,7 +180,7 @@ def test_snapshot_restore_after_dynamic_new_bucket():
         lags=[1],
         lag_transforms={
             1: [
-                RollingMean(2, min_samples=1, partition_by=["brand", "promo"])
+                RollingMean(2, min_samples=1, bucket_by=["brand", "promo"])
             ]
         },
     )

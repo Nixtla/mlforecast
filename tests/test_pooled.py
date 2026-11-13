@@ -69,7 +69,7 @@ def test_new_series_new_group_update_then_predict(engine, lag):
             "brand": ["x", "x", "x", "y", "y", "y"],
         },
     )
-    tfm = RollingMean(2, partition_by=["brand"])
+    tfm = RollingMean(2, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     ts.fit_transform(
         df,
@@ -176,7 +176,7 @@ def test_group_update_preserves_bucket_df(engine, lag):
             "brand": ["x", "x", "x", "x"],
         },
     )
-    tfm = RollingMean(2, partition_by=["brand"])
+    tfm = RollingMean(2, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     ts.fit_transform(
         df,
@@ -289,7 +289,7 @@ def test_categorical_key_update_with_new_group(engine, lag):
         },
         categorical_cols=["brand"],
     )
-    tfm = RollingMean(2, partition_by=["brand"])
+    tfm = RollingMean(2, bucket_by=["brand"])
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     ts.fit_transform(
         df,
@@ -344,12 +344,12 @@ def test_compute_pooled_features_raises_for_unsupported():
         get_kernel(DummyTransform())
 
 
-# === partition_by tests ===
+# === bucket_by tests ===
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_id_key_fit_transform(engine):
-    """partition_by with the id creates per-series buckets."""
+def test_bucket_by_id_key_fit_transform(engine):
+    """bucket_by with the id creates per-series buckets."""
     df = _make_df(
         engine,
         {
@@ -359,7 +359,7 @@ def test_partition_by_id_key_fit_transform(engine):
             "promo": [0, 0, 1, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
         df,
@@ -369,20 +369,20 @@ def test_partition_by_id_key_fit_transform(engine):
         dropna=False,
         static_features=[],
     )
-    # partition_by creates a partition state
+    # bucket_by creates a partition state
     part_key = ("promo", "unique_id")
     assert part_key in ts._pooled_states
     state = ts._pooled_states[part_key]
     assert state.key_cols == ["promo", "unique_id"]
     # The feature column should exist
     col = tfm._get_name(1)
-    assert col.startswith("partby_unique_id__promo_")
+    assert col.startswith("bucketby_unique_id__promo_")
     assert col in result.columns if engine == "polars" else col in result.columns
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_dynamic_key_fit_transform(engine):
-    """partition_by without the id pools series that share a bucket."""
+def test_bucket_by_dynamic_key_fit_transform(engine):
+    """bucket_by without the id pools series that share a bucket."""
     df = _make_df(
         engine,
         {
@@ -392,7 +392,7 @@ def test_partition_by_dynamic_key_fit_transform(engine):
             "promo": [0, 0, 1, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, partition_by=["promo"])
+    tfm = RollingMean(2, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -407,12 +407,12 @@ def test_partition_by_dynamic_key_fit_transform(engine):
     state = ts._pooled_states[part_key]
     assert state.key_cols == ["promo"]
     col = tfm._get_name(1)
-    assert col.startswith("partby_promo_")
+    assert col.startswith("bucketby_promo_")
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_static_dynamic_key_fit_transform(engine):
-    """partition_by with a static and a dynamic column creates the joint buckets."""
+def test_bucket_by_static_dynamic_key_fit_transform(engine):
+    """bucket_by with a static and a dynamic column creates the joint buckets."""
     df = _make_df(
         engine,
         {
@@ -423,7 +423,7 @@ def test_partition_by_static_dynamic_key_fit_transform(engine):
             "promo": [0, 0, 1, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, partition_by=["brand", "promo"])
+    tfm = RollingMean(2, bucket_by=["brand", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -438,12 +438,12 @@ def test_partition_by_static_dynamic_key_fit_transform(engine):
     state = ts._pooled_states[part_key]
     assert state.key_cols == ["brand", "promo"]
     col = tfm._get_name(1)
-    assert col.startswith("partby_brand__promo_")
+    assert col.startswith("bucketby_brand__promo_")
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_id_key_predict(engine):
-    """partition_by with the id: predict produces features without errors."""
+def test_bucket_by_id_key_predict(engine):
+    """bucket_by with the id: predict produces features without errors."""
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
@@ -506,7 +506,7 @@ def test_partition_by_id_key_predict(engine):
             ],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     fcst = MLForecast(
         models=[LinearRegression()],
         freq=1,
@@ -532,8 +532,8 @@ def test_partition_by_id_key_predict(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_not_in_local_tfms(engine):
-    """Transforms with partition_by should not appear in local transforms."""
+def test_bucket_by_not_in_local_tfms(engine):
+    """Transforms with bucket_by should not appear in local transforms."""
     df = _make_df(
         engine,
         {
@@ -546,7 +546,7 @@ def test_partition_by_not_in_local_tfms(engine):
     from mlforecast.lag_transforms import Lag
 
     tfm_local = Lag(1)
-    tfm_part = RollingMean(2, partition_by=["unique_id", "promo"])
+    tfm_part = RollingMean(2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm_local, tfm_part]})
     ts.fit_transform(
         df,
@@ -558,12 +558,12 @@ def test_partition_by_not_in_local_tfms(engine):
     )
     local_tfms = ts._get_local_tfms(ts.transforms)
     for t in local_tfms.values():
-        assert not getattr(t, "partition_by", None)
+        assert not getattr(t, "bucket_by", None)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_update(engine):
-    """update() with partition_by states works correctly."""
+def test_bucket_by_update(engine):
+    """update() with bucket_by states works correctly."""
     df = _make_df(
         engine,
         {
@@ -573,7 +573,7 @@ def test_partition_by_update(engine):
             "promo": [0, 0, 1, 0, 1, 0],
         },
     )
-    tfm = RollingMean(2, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -602,7 +602,7 @@ def test_partition_by_update(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_id_key_numeric_values(engine):
+def test_bucket_by_id_key_numeric_values(engine):
     """Verify rolling mean per (id, promo) bucket matches hand-computed values."""
     df = _make_df(
         engine,
@@ -626,7 +626,7 @@ def test_partition_by_id_key_numeric_values(engine):
             "promo": [0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
         df,
@@ -658,7 +658,7 @@ def test_partition_by_id_key_numeric_values(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_global_numeric_values(engine):
+def test_bucket_by_global_numeric_values(engine):
     """Verify rolling mean per (promo) bucket with global parent calendar."""
     df = _make_df(
         engine,
@@ -669,7 +669,7 @@ def test_partition_by_global_numeric_values(engine):
             "promo": [0, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
         df,
@@ -697,7 +697,7 @@ def test_partition_ordinals_have_parent_gaps(engine):
             "promo": [0, 1, 0, 1, 0],
         },
     )
-    tfm = RollingMean(2, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -739,7 +739,7 @@ def test_partition_range_semantics_with_gaps(engine):
             "promo": [1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     out = ts.fit_transform(
         df,
@@ -777,7 +777,7 @@ def test_partition_expanding_with_parent_gaps(engine):
             "promo": [1, 0, 1, 0, 1],
         },
     )
-    tfm = ExpandingMean(partition_by=["unique_id", "promo"])
+    tfm = ExpandingMean(bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     out = ts.fit_transform(
         df,
@@ -796,7 +796,7 @@ def test_partition_expanding_with_parent_gaps(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_dynamic_keys_multistep(engine):
+def test_bucket_by_dynamic_keys_multistep(engine):
     """Multi-step prediction with changing promo values in X_df."""
     from mlforecast.forecast import MLForecast
     from sklearn.ensemble import HistGradientBoostingRegressor
@@ -811,7 +811,7 @@ def test_partition_by_dynamic_keys_multistep(engine):
             "promo": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(3, min_samples=1, bucket_by=["unique_id", "promo"])
     fcst = MLForecast(
         models=[HistGradientBoostingRegressor(max_iter=10)],
         freq=1,
@@ -856,7 +856,7 @@ def test_predict_ids_with_cross_series_key_raises(engine):
             "promo": [0, 0, 1, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     fcst = MLForecast(
         models=[LinearRegression()],
         freq=1,
@@ -883,7 +883,7 @@ def test_predict_ids_with_cross_series_key_raises(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_default_static_features_with_partition_cols(engine):
-    """static_features=None should auto-exclude partition_by columns."""
+    """static_features=None should auto-exclude bucket_by columns."""
     df = _make_df(
         engine,
         {
@@ -893,7 +893,7 @@ def test_default_static_features_with_partition_cols(engine):
             "promo": [0, 0, 1, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
         df,
@@ -924,7 +924,7 @@ def test_static_partition_key_in_x_df_is_ignored(engine):
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     fcst = MLForecast(
         models=[LinearRegression()], freq=1, lags=[1], lag_transforms={1: [tfm]}
     )
@@ -959,7 +959,7 @@ def test_predict_without_static_partition_key(engine):
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     fcst = MLForecast(
         models=[LinearRegression()], freq=1, lags=[1], lag_transforms={1: [tfm]}
     )
@@ -983,7 +983,7 @@ def test_predict_without_static_partition_key(engine):
 
 
 def _fitted_static_partition_ts(engine):
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         _static_partition_df(engine),
@@ -1039,8 +1039,8 @@ def test_update_ignores_static_partition_key_values(engine):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_backup_restore(engine):
-    """_backup() correctly restores partition_by state."""
+def test_bucket_by_backup_restore(engine):
+    """_backup() correctly restores bucket_by state."""
     df = _make_df(
         engine,
         {
@@ -1050,7 +1050,7 @@ def test_partition_by_backup_restore(engine):
             "promo": [0, 0, 1, 0, 1, 0],
         },
     )
-    tfm = RollingMean(2, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1095,7 +1095,7 @@ def test_id_key_prediction_advances_sibling_calendar(engine):
             "promo": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -1161,7 +1161,7 @@ def test_id_key_update_advances_sibling_calendar(engine):
         },
     )
     # RollingMean(1, min_samples=1): returns lag-1 value within the bucket
-    tfm = RollingMean(1, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(1, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1228,7 +1228,7 @@ def test_new_partition_bucket_uses_existing_parent_calendar(engine):
             "promo": [0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1266,7 +1266,7 @@ def test_dynamic_key_update_advances_sibling_calendar(engine):
             "promo": [0, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1312,7 +1312,7 @@ def test_static_dynamic_key_update_advances_sibling_calendar(engine):
             "promo": [0, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["brand", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["brand", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1360,7 +1360,7 @@ def test_partition_assignment_missing_key_error(engine):
             "promo": [0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     fcst = MLForecast(
         models=[LinearRegression()],
         freq=1,
@@ -1388,7 +1388,7 @@ def test_partition_assignment_missing_key_error(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_predict_requires_x_df(engine):
-    """predict(h) without X_df must error when partition_by is configured."""
+    """predict(h) without X_df must error when bucket_by is configured."""
     from mlforecast.forecast import MLForecast
     from sklearn.linear_model import LinearRegression
 
@@ -1401,7 +1401,7 @@ def test_partition_predict_requires_x_df(engine):
             "promo": [0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     fcst = MLForecast(
         models=[LinearRegression()],
         freq=1,
@@ -1433,7 +1433,7 @@ def test_id_key_unseen_partition_predict(engine):
             "promo": [0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(1, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(1, min_samples=1, bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -1494,7 +1494,7 @@ def test_dynamic_key_unseen_bucket_predict(engine):
             "promo": [0, 0, 0, 0, 0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(1, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(1, min_samples=1, bucket_by=["promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -1549,7 +1549,7 @@ def test_dynamic_key_new_bucket_inherits_parent_calendar(engine):
             "promo": [0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1589,7 +1589,7 @@ def test_partition_datetime_update_new_bucket(engine):
             "promo": [0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(1, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(1, min_samples=1, bucket_by=["unique_id", "promo"])
     freq = "1d" if engine == "polars" else "D"
     ts = TimeSeries(freq=freq, lag_transforms={1: [tfm]})
     ts.fit_transform(
@@ -1653,7 +1653,7 @@ def test_partition_backup_restore_with_dynamic_buckets(engine):
         models=[_NanTolerant()],
         freq=1,
         lags=[1],
-        lag_transforms={1: [RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])]},
+        lag_transforms={1: [RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])]},
     )
     fcst.fit(
         df,
@@ -1707,7 +1707,7 @@ def test_partition_predict_multi_horizon_multiple_unseen(engine):
             "promo": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -1762,7 +1762,7 @@ def test_id_key_recursive_h3_consistency(engine):
             "promo": [1, 1, 1, 1, 1],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
     feats = []
 
@@ -1809,7 +1809,7 @@ def test_partition_update_batch_multiple_ids_new_buckets(engine):
             "promo": [0, 0, 0, 0, 0, 0, 0, 0, 0],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1865,7 +1865,7 @@ def test_partition_update_sparse_then_dense(engine):
         return TimeSeries(
             freq=1,
             lag_transforms={
-                1: [RollingMean(2, min_samples=1, partition_by=["promo"])]
+                1: [RollingMean(2, min_samples=1, bucket_by=["promo"])]
             },
         )
 
@@ -1923,7 +1923,7 @@ def test_partition_update_sparse_then_dense(engine):
 def test_partition_static_features_explicit_with_partition_cols(engine):
     """Explicit static_features are honored while partition columns are excluded.
 
-    With static_features=["brand","region"] and partition_by=["promo"], the
+    With static_features=["brand","region"] and bucket_by=["promo"], the
     fitted static set keeps brand/region but drops promo (it is dynamic and
     re-supplied via X_df at predict), and promo never enters features_order_.
     """
@@ -1938,7 +1938,7 @@ def test_partition_static_features_explicit_with_partition_cols(engine):
             "promo": [0, 1, 0, 1, 1, 0, 1, 0],
         },
     )
-    tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -1971,7 +1971,7 @@ def test_partition_rolling_min_samples_boundary(engine):
             "promo": [1, 1, 1, 1, 1],
         },
     )
-    tfm = RollingMean(3, min_samples=2, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(3, min_samples=2, bucket_by=["unique_id", "promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     out = ts.fit_transform(
         df,
@@ -1992,7 +1992,7 @@ def test_partition_rolling_min_samples_boundary(engine):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_partition_cv_fold_independent(engine):
-    """cross_validation runs across folds with partition_by and does not leak
+    """cross_validation runs across folds with bucket_by and does not leak
     dynamic buckets between folds.
     """
     from mlforecast.forecast import MLForecast
@@ -2013,7 +2013,7 @@ def test_partition_cv_fold_independent(engine):
         models=[HistGradientBoostingRegressor(max_iter=5)],
         freq=1,
         lag_transforms={
-            1: [RollingMean(2, min_samples=1, partition_by=["promo"])]
+            1: [RollingMean(2, min_samples=1, bucket_by=["promo"])]
         },
     )
     cv = fcst.cross_validation(df, n_windows=2, h=2, static_features=[])
@@ -2074,9 +2074,9 @@ class TestValidateDataWarning:
                 getattr(fcst, method)(df, validate_data=False)
             assert caught[0].filename == __file__
 
-    def test_warns_partition_by(self):
+    def test_warns_bucket_by(self):
         fcst = self._make_fcst(
-            {1: [RollingMean(window_size=2, partition_by=["brand"])]}
+            {1: [RollingMean(window_size=2, bucket_by=["brand"])]}
         )
         df = self._make_simple_df()
         with pytest.warns(UserWarning, match="Pooled.*validate_data"):
@@ -2152,7 +2152,7 @@ def test_ewm_lag_semantics_static_key(engine):
             "grp": ["X"] * 8,
         },
     )
-    tfm = ExponentiallyWeightedMean(alpha=0.5, partition_by=["grp"])
+    tfm = ExponentiallyWeightedMean(alpha=0.5, bucket_by=["grp"])
     ts = TimeSeries(freq=1, lag_transforms={2: [tfm]})
     result = ts.fit_transform(
         df,
@@ -2283,25 +2283,25 @@ def test_pooled_transforms_lag2_static_key(engine):
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0]
     lag = 2
     tfms = [
-        RollingMean(window_size=3, partition_by=["grp"]),
-        RollingMin(window_size=3, partition_by=["grp"]),
-        RollingMax(window_size=3, partition_by=["grp"]),
-        ExpandingMean(partition_by=["grp"]),
-        ExpandingMin(partition_by=["grp"]),
-        ExpandingMax(partition_by=["grp"]),
-        ExponentiallyWeightedMean(alpha=0.5, partition_by=["grp"]),
+        RollingMean(window_size=3, bucket_by=["grp"]),
+        RollingMin(window_size=3, bucket_by=["grp"]),
+        RollingMax(window_size=3, bucket_by=["grp"]),
+        ExpandingMean(bucket_by=["grp"]),
+        ExpandingMin(bucket_by=["grp"]),
+        ExpandingMax(bucket_by=["grp"]),
+        ExponentiallyWeightedMean(alpha=0.5, bucket_by=["grp"]),
     ]
     out = _fit_and_collect(engine, lag, tfms, y_a, y_b, 5, grp="X")
 
     nan = np.nan
     expected = {
-        "partby_grp_rolling_mean_lag2_window_size3": [nan, nan, nan, 8.25, 11.0],
-        "partby_grp_rolling_min_lag2_window_size3": [nan, nan, nan, 1.0, 1.0],
-        "partby_grp_rolling_max_lag2_window_size3": [nan, nan, nan, 20.0, 30.0],
-        "partby_grp_expanding_mean_lag2": [nan, nan, 5.5, 8.25, 11.0],
-        "partby_grp_expanding_min_lag2": [nan, nan, 1.0, 1.0, 1.0],
-        "partby_grp_expanding_max_lag2": [nan, nan, 10.0, 20.0, 30.0],
-        "partby_grp_exponentially_weighted_mean_lag2_alpha0.5": [
+        "bucketby_grp_rolling_mean_lag2_window_size3": [nan, nan, nan, 8.25, 11.0],
+        "bucketby_grp_rolling_min_lag2_window_size3": [nan, nan, nan, 1.0, 1.0],
+        "bucketby_grp_rolling_max_lag2_window_size3": [nan, nan, nan, 20.0, 30.0],
+        "bucketby_grp_expanding_mean_lag2": [nan, nan, 5.5, 8.25, 11.0],
+        "bucketby_grp_expanding_min_lag2": [nan, nan, 1.0, 1.0, 1.0],
+        "bucketby_grp_expanding_max_lag2": [nan, nan, 10.0, 20.0, 30.0],
+        "bucketby_grp_exponentially_weighted_mean_lag2_alpha0.5": [
             nan,
             nan,
             5.5,
@@ -2407,7 +2407,7 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
     be indistinguishable from aggregating the panel for that `time_agg` directly.
     """
     _assert_view_matches_direct(tfm_factory, lag, {"global_": True}, None)
-    _assert_view_matches_direct(tfm_factory, lag, {"partition_by": ["grp"]}, None)
+    _assert_view_matches_direct(tfm_factory, lag, {"bucket_by": ["grp"]}, None)
 
 
 @pytest.mark.parametrize(
@@ -2437,12 +2437,12 @@ def test_fast_vs_slow_equivalence(tfm_factory, lag):
 )
 @pytest.mark.parametrize("lag", _LAGS)
 def test_fast_vs_slow_partition(tfm_factory, lag):
-    """Same view/direct invariant with partition_by buckets."""
+    """Same view/direct invariant with bucket_by buckets."""
     _assert_view_matches_direct(
-        tfm_factory, lag, {"partition_by": ["promo"]}, None
+        tfm_factory, lag, {"bucket_by": ["promo"]}, None
     )
     _assert_view_matches_direct(
-        tfm_factory, lag, {"partition_by": ["grp", "promo"]}, None
+        tfm_factory, lag, {"bucket_by": ["grp", "promo"]}, None
     )
 
 
@@ -2475,7 +2475,7 @@ def test_fast_vs_slow_id_key_with_nan(engine, lag):
         },
     )
 
-    tfm = RollingMean(window_size=2, min_samples=1, partition_by=["unique_id", "promo"])
+    tfm = RollingMean(window_size=2, min_samples=1, bucket_by=["unique_id", "promo"])
     col = tfm._get_name(lag)
     ts = TimeSeries(freq=1, lag_transforms={lag: [tfm]})
     fast = np.asarray(
@@ -2492,7 +2492,7 @@ def test_fast_vs_slow_id_key_with_nan(engine, lag):
     ts_slow = TimeSeries(
         freq=1,
         lag_transforms={
-            lag: [RollingMean(window_size=2, min_samples=1, partition_by=["unique_id", "promo"])]
+            lag: [RollingMean(window_size=2, min_samples=1, bucket_by=["unique_id", "promo"])]
         },
     )
     ts_slow._fit(
@@ -2547,7 +2547,7 @@ def test_partition_predict_x_df_partition_column_has_nan(engine):
         lag_transforms={
             1: [
                 RollingMean(
-                    window_size=2, min_samples=1, partition_by=["promo"]
+                    window_size=2, min_samples=1, bucket_by=["promo"]
                 )
             ]
         },
@@ -2596,7 +2596,7 @@ def test_static_dynamic_key_null_scope_resolves_at_predict(engine):
         },
     )
     tfm = RollingMean(
-        window_size=2, min_samples=1, partition_by=["discount", "promo"]
+        window_size=2, min_samples=1, bucket_by=["discount", "promo"]
     )
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
@@ -2654,7 +2654,7 @@ def test_fractional_float_partition_feature_parity_across_engines():
     outs = []
     for engine in ["pandas", "polars"]:
         tfm = RollingMean(
-            window_size=2, min_samples=1, partition_by=["discount"]
+            window_size=2, min_samples=1, bucket_by=["discount"]
         )
         col = tfm._get_name(1)
         ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
@@ -2672,7 +2672,7 @@ def test_fractional_float_partition_feature_parity_across_engines():
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_prediction_fast_path_partition(engine):
-    """Multi-step predict with fast path + partition_by produces finite values."""
+    """Multi-step predict with fast path + bucket_by produces finite values."""
     n_series, n_times = 4, 8
     ids = np.repeat([f"s{i}" for i in range(n_series)], n_times)
     times = np.tile(range(n_times), n_series)
@@ -2686,7 +2686,7 @@ def test_prediction_fast_path_partition(engine):
     }
     df = _make_df(engine, rows)
 
-    tfm = RollingMean(window_size=3, partition_by=["promo"])
+    tfm = RollingMean(window_size=3, bucket_by=["promo"])
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     ts.fit_transform(
         df,
@@ -2738,7 +2738,7 @@ def test_partition_ewm_skips_missing_parent_ordinals():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tfm = ExponentiallyWeightedMean(
-            alpha=alpha, partition_by=["promo"]
+            alpha=alpha, bucket_by=["promo"]
         )
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
@@ -2818,7 +2818,7 @@ def test_dynamic_key_ewm_uses_timestamp_mean_once():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tfm = ExponentiallyWeightedMean(
-            alpha=alpha, partition_by=["promo"]
+            alpha=alpha, bucket_by=["promo"]
         )
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
     result = ts.fit_transform(
@@ -3057,7 +3057,7 @@ def test_static_null_key_fit_predict_update(engine):
         models=[LinearRegression()],
         freq=1,
         lags=[1],
-        lag_transforms={1: [RollingMean(window_size=2, partition_by=["brand"])]},
+        lag_transforms={1: [RollingMean(window_size=2, bucket_by=["brand"])]},
     )
     fcst.fit(df, static_features=["brand"])
     preds = fcst.predict(2)
@@ -3096,7 +3096,7 @@ def test_null_static_key_no_static_change_error(engine, kind):
         },
     )
     ts = TimeSeries(
-        freq=1, lag_transforms={1: [RollingMean(window_size=2, partition_by=["brand"])]}
+        freq=1, lag_transforms={1: [RollingMean(window_size=2, bucket_by=["brand"])]}
     )
     # must not raise
     ts.fit_transform(
@@ -3150,7 +3150,7 @@ def test_polars_shuffled_rows_feature_parity_with_pandas():
     }
     fit_outs, step_outs = [], []
     for engine in ["pandas", "polars"]:
-        tfm = RollingMean(2, min_samples=1, partition_by=["brand", "promo"])
+        tfm = RollingMean(2, min_samples=1, bucket_by=["brand", "promo"])
         col = tfm._get_name(1)
         ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
         res = ts.fit_transform(
@@ -3223,7 +3223,7 @@ def test_append_predictions_preserves_time_dtype(engine):
     }
     tfms = [
         RollingMean(2, min_samples=1, global_=True),
-        RollingMean(2, min_samples=1, partition_by=["brand", "promo"]),
+        RollingMean(2, min_samples=1, bucket_by=["brand", "promo"]),
     ]
     freq = "1d" if engine == "polars" else "D"
     ts = TimeSeries(freq=freq, lag_transforms={1: tfms})
@@ -3295,7 +3295,7 @@ def test_target_transforms_with_pooled_preprocess(engine):
         },
     )
     g_tfm = RollingMean(2, min_samples=1, global_=True)
-    p_tfm = RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"])
+    p_tfm = RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"])
     fcst = MLForecast(
         models=[LinearRegression()],
         freq=1,
@@ -3378,7 +3378,7 @@ def test_target_transforms_with_pooled_predict(engine):
         lag_transforms={
             1: [
                 RollingMean(2, min_samples=1, global_=True),
-                RollingMean(2, min_samples=1, partition_by=["unique_id", "promo"]),
+                RollingMean(2, min_samples=1, bucket_by=["unique_id", "promo"]),
             ]
         },
     )
@@ -3432,8 +3432,8 @@ def _range_quantile_oracle(
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize("mode", ["id_key", "cross_series"])
-def test_slow_path_quantile_with_partition_by(engine, mode):
-    """RollingQuantile has no aggregate fast path, so partition_by routes it
+def test_slow_path_quantile_with_bucket_by(engine, mode):
+    """RollingQuantile has no aggregate fast path, so bucket_by routes it
     through the row-level slow path at fit and through build_query_arrays at
     predict. Pin both against a RANGE-window oracle."""
     from mlforecast.lag_transforms import RollingQuantile
@@ -3457,7 +3457,7 @@ def test_slow_path_quantile_with_partition_by(engine, mode):
         0.5,
         3,
         min_samples=1,
-        partition_by=["promo"] if mode == "cross_series" else ["unique_id", "promo"],
+        bucket_by=["promo"] if mode == "cross_series" else ["unique_id", "promo"],
     )
     col = tfm._get_name(1)
     ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
@@ -3636,9 +3636,9 @@ def test_time_agg_sum_literal(engine):
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums s = [11, 22, 33, 44, 55, 66]; window=3, lag=1, min_samples=3
-    tfms = [RollingMean(window_size=3, partition_by=["grp"], time_agg="sum")]
+    tfms = [RollingMean(window_size=3, bucket_by=["grp"], time_agg="sum")]
     out = _fit_and_collect(engine, 1, tfms, y_a, y_b, 6, grp="X")
-    col = "partby_grp_rolling_mean_lag1_window_size3_time_aggsum"
+    col = "bucketby_grp_rolling_mean_lag1_window_size3_time_aggsum"
     np.testing.assert_allclose(
         out[col]["preprocess"],
         [np.nan, np.nan, np.nan, 22.0, 33.0, 44.0],
@@ -3653,12 +3653,12 @@ def test_time_agg_mean_differs_from_sum_and_rowpooled(engine):
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     tfms = [
-        RollingMean(window_size=3, partition_by=["grp"], time_agg="mean"),
-        RollingMean(window_size=3, partition_by=["grp"]),  # row-pooled reference
+        RollingMean(window_size=3, bucket_by=["grp"], time_agg="mean"),
+        RollingMean(window_size=3, bucket_by=["grp"]),  # row-pooled reference
     ]
     out = _fit_and_collect(engine, 1, tfms, y_a, y_b, 6, grp="X")
-    mean_col = "partby_grp_rolling_mean_lag1_window_size3_time_aggmean"
-    row_col = "partby_grp_rolling_mean_lag1_window_size3"
+    mean_col = "bucketby_grp_rolling_mean_lag1_window_size3_time_aggmean"
+    row_col = "bucketby_grp_rolling_mean_lag1_window_size3"
     # daily means = [5.5, 11, 16.5, 22, 27.5, 33]
     np.testing.assert_allclose(
         out[mean_col]["preprocess"],
@@ -3698,7 +3698,7 @@ _TIME_AGG_FACTORIES = [
 def test_fast_vs_slow_time_agg(tfm_factory, time_agg, lag):
     """Same invariant across every time_agg -- the case the shared store exists for."""
     _assert_view_matches_direct(tfm_factory, lag, {"global_": True}, time_agg)
-    _assert_view_matches_direct(tfm_factory, lag, {"partition_by": ["grp"]}, time_agg)
+    _assert_view_matches_direct(tfm_factory, lag, {"bucket_by": ["grp"]}, time_agg)
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -3727,7 +3727,7 @@ def test_time_agg_multistep_predict(engine):
         freq=1,
         lags=[1],
         lag_transforms={
-            1: [RollingMean(window_size=3, partition_by=["grp"], time_agg="sum")]
+            1: [RollingMean(window_size=3, bucket_by=["grp"], time_agg="sum")]
         },
     )
     fcst.fit(df, static_features=["grp"])
@@ -3756,7 +3756,7 @@ def test_ewm_time_agg_mean_is_noop(engine):
     out_explicit = _fit_and_collect(
         engine,
         1,
-        [ExponentiallyWeightedMean(alpha=0.5, partition_by=["grp"], time_agg="mean")],
+        [ExponentiallyWeightedMean(alpha=0.5, bucket_by=["grp"], time_agg="mean")],
         y_a,
         y_b,
         6,
@@ -3765,13 +3765,13 @@ def test_ewm_time_agg_mean_is_noop(engine):
     out_default = _fit_and_collect(
         engine,
         1,
-        [ExponentiallyWeightedMean(alpha=0.5, partition_by=["grp"])],
+        [ExponentiallyWeightedMean(alpha=0.5, bucket_by=["grp"])],
         y_a,
         y_b,
         6,
         grp="X",
     )
-    col = "partby_grp_exponentially_weighted_mean_lag1_alpha0.5"
+    col = "bucketby_grp_exponentially_weighted_mean_lag1_alpha0.5"
     np.testing.assert_allclose(
         out_explicit[col]["preprocess"],
         out_default[col]["preprocess"],
@@ -3788,9 +3788,9 @@ def test_time_agg_quantile_slow_path_literal(engine):
     y_a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     y_b = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
     # daily sums [11,22,33,44,55,66]; median over window=3 == middle value
-    tfms = [RollingQuantile(p=0.5, window_size=3, partition_by=["grp"], time_agg="sum")]
+    tfms = [RollingQuantile(p=0.5, window_size=3, bucket_by=["grp"], time_agg="sum")]
     out = _fit_and_collect(engine, 1, tfms, y_a, y_b, 6, grp="X")
-    col = "partby_grp_rolling_quantile_lag1_p0.5_window_size3_time_aggsum"
+    col = "bucketby_grp_rolling_quantile_lag1_p0.5_window_size3_time_aggsum"
     np.testing.assert_allclose(
         out[col]["preprocess"],
         [np.nan, np.nan, np.nan, 22.0, 33.0, 44.0],
@@ -3806,12 +3806,12 @@ def test_time_agg_seasonal_slow_path_literal(engine):
     # daily sums [11,22,33,44,55,66]; season_length=2, window=2, lag=1
     tfms = [
         SeasonalRollingMean(
-            season_length=2, window_size=2, partition_by=["grp"], time_agg="sum"
+            season_length=2, window_size=2, bucket_by=["grp"], time_agg="sum"
         )
     ]
     out = _fit_and_collect(engine, 1, tfms, y_a, y_b, 6, grp="X")
     col = (
-        "partby_grp_seasonal_rolling_mean_lag1_season_length2_window_size2_time_aggsum"
+        "bucketby_grp_seasonal_rolling_mean_lag1_season_length2_window_size2_time_aggsum"
     )
     np.testing.assert_allclose(
         out[col]["preprocess"],
@@ -3860,9 +3860,9 @@ def test_time_agg_validation_errors(factory):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         factory(global_=True, time_agg="sum")
-        factory(partition_by=["g"], time_agg="sum")
-        factory(partition_by=["promo"], time_agg="sum")
-        factory(partition_by=["g", "promo"], time_agg="sum")
+        factory(bucket_by=["g"], time_agg="sum")
+        factory(bucket_by=["promo"], time_agg="sum")
+        factory(bucket_by=["g", "promo"], time_agg="sum")
 
 
 def test_ewm_time_agg_none_rejected():
@@ -3877,18 +3877,18 @@ def test_time_agg_min_samples_zero_warning_still_fires():
 
 def test_time_agg_feature_name():
     assert "time_aggsum" in RollingMean(
-        window_size=3, partition_by=["cat"], time_agg="sum"
+        window_size=3, bucket_by=["cat"], time_agg="sum"
     )._get_name(7)
     # default None keeps names unchanged
-    assert "time_agg" not in RollingMean(window_size=3, partition_by=["cat"])._get_name(7)
+    assert "time_agg" not in RollingMean(window_size=3, bucket_by=["cat"])._get_name(7)
     assert "time_agg" not in ExponentiallyWeightedMean(
-        alpha=0.5, partition_by=["cat"]
+        alpha=0.5, bucket_by=["cat"]
     )._get_name(7)
     assert "time_agg" not in ExponentiallyWeightedMean(
-        alpha=0.5, partition_by=["cat"], time_agg="mean"
+        alpha=0.5, bucket_by=["cat"], time_agg="mean"
     )._get_name(7)
     assert "time_aggsum" in ExponentiallyWeightedMean(
-        alpha=0.5, partition_by=["cat"], time_agg="sum"
+        alpha=0.5, bucket_by=["cat"], time_agg="sum"
     )._get_name(7)
 
 
@@ -3933,7 +3933,7 @@ def test_ewm_time_agg_mean_skips_reaggregation():
         base=_build_cells(bid, ordv, y, 1, 3, ("count", "sum", "sumsq", "min", "max")),
         series_bucket_id=np.zeros(1, dtype=np.int64),
     )
-    assert ExponentiallyWeightedMean(alpha=0.5, partition_by=["grp"]).time_agg == "mean"
+    assert ExponentiallyWeightedMean(alpha=0.5, bucket_by=["grp"]).time_agg == "mean"
     # no collapse -> the base store itself, not a copy
     assert state.channels(None) is state.base
     # a collapse is derived once and cached
@@ -3943,8 +3943,8 @@ def test_ewm_time_agg_mean_skips_reaggregation():
 
 
 def test_time_agg_combine_mixed():
-    t1 = RollingMean(window_size=3, partition_by=["grp"], time_agg="sum")
-    t2 = RollingMean(window_size=3, partition_by=["grp"], time_agg="mean")
+    t1 = RollingMean(window_size=3, bucket_by=["grp"], time_agg="sum")
+    t2 = RollingMean(window_size=3, bucket_by=["grp"], time_agg="mean")
     c = Combine(t1, t2, _operator.truediv)
     name = c._get_name(1)
     assert "time_aggsum" in name and "time_aggmean" in name
@@ -3983,22 +3983,22 @@ def _resolve_min_samples(tfm):
 def test_min_samples_default_resolution():
     assert _resolve_min_samples(RollingMean(7)) == 7
     assert _resolve_min_samples(RollingMean(7, global_=True)) == 7
-    assert _resolve_min_samples(RollingMean(7, partition_by=["brand"])) == 7
-    assert _resolve_min_samples(RollingMean(7, partition_by=["unique_id", "promo"])) == 1
+    assert _resolve_min_samples(RollingMean(7, bucket_by=["brand"])) == 7
+    assert _resolve_min_samples(RollingMean(7, bucket_by=["unique_id", "promo"])) == 1
     assert (
-        _resolve_min_samples(RollingMean(7, partition_by=["promo"])) == 7
+        _resolve_min_samples(RollingMean(7, bucket_by=["promo"])) == 7
     )
     assert (
-        _resolve_min_samples(RollingMean(7, partition_by=["brand", "promo"]))
+        _resolve_min_samples(RollingMean(7, bucket_by=["brand", "promo"]))
         == 7
     )
     # explicit values are never overridden
     assert (
-        _resolve_min_samples(RollingMean(7, min_samples=3, partition_by=["unique_id", "promo"])) == 3
+        _resolve_min_samples(RollingMean(7, min_samples=3, bucket_by=["unique_id", "promo"])) == 3
     )
     assert (
         _resolve_min_samples(
-            SeasonalRollingMean(season_length=7, window_size=4, partition_by=["unique_id", "promo"])
+            SeasonalRollingMean(season_length=7, window_size=4, bucket_by=["unique_id", "promo"])
         )
         == 1
     )
@@ -4026,7 +4026,7 @@ def _fit_transform_values(engine, df, tfm):
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_id_key_default_min_samples_is_one(engine):
+def test_bucket_by_id_key_default_min_samples_is_one(engine):
     """On a dense panel with interleaved promo days, a 7-step window almost
     never holds 7 same-promo observations (the window spans calendar steps
     while only same-promo rows count), so the window_size default would make
@@ -4042,23 +4042,23 @@ def test_partition_by_id_key_default_min_samples_is_one(engine):
         },
     )
     default_vals = _fit_transform_values(
-        engine, df, RollingMean(7, partition_by=["unique_id", "promo"])
+        engine, df, RollingMean(7, bucket_by=["unique_id", "promo"])
     )
     explicit_one = _fit_transform_values(
-        engine, df, RollingMean(7, min_samples=1, partition_by=["unique_id", "promo"])
+        engine, df, RollingMean(7, min_samples=1, bucket_by=["unique_id", "promo"])
     )
     np.testing.assert_array_equal(default_vals, explicit_one)
     # usable feature: only the empty-lookback rows at the start are NaN
     assert np.isnan(default_vals).mean() < 0.2
     # the window_size default would have produced all NaN here
     old_default = _fit_transform_values(
-        engine, df, RollingMean(7, min_samples=7, partition_by=["unique_id", "promo"])
+        engine, df, RollingMean(7, min_samples=7, bucket_by=["unique_id", "promo"])
     )
     assert np.isnan(old_default).all()
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_partition_by_cross_series_default_min_samples_unchanged(engine):
+def test_bucket_by_cross_series_default_min_samples_unchanged(engine):
     """A key without the id keeps the window_size default (counts sum
     across series in the bucket)."""
     n = 12
@@ -4072,28 +4072,28 @@ def test_partition_by_cross_series_default_min_samples_unchanged(engine):
         },
     )
     default_vals = _fit_transform_values(
-        engine, df, RollingMean(4, partition_by=["promo"])
+        engine, df, RollingMean(4, bucket_by=["promo"])
     )
     explicit_ws = _fit_transform_values(
         engine,
         df,
-        RollingMean(4, min_samples=4, partition_by=["promo"]),
+        RollingMean(4, min_samples=4, bucket_by=["promo"]),
     )
     explicit_one = _fit_transform_values(
         engine,
         df,
-        RollingMean(4, min_samples=1, partition_by=["promo"]),
+        RollingMean(4, min_samples=1, bucket_by=["promo"]),
     )
     np.testing.assert_array_equal(default_vals, explicit_ws)
     # the guard still bites on partially-filled windows, unlike min_samples=1
     assert np.isnan(default_vals).sum() > np.isnan(explicit_one).sum()
 
 
-def test_lookup_lag_requires_partition_by():
-    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
+def test_lookup_lag_requires_bucket_by():
+    with pytest.raises(ValueError, match="LookupLag requires `bucket_by`"):
         LookupLag()
-    with pytest.raises(ValueError, match="LookupLag requires `partition_by`"):
-        LookupLag(partition_by=[])
+    with pytest.raises(ValueError, match="LookupLag requires `bucket_by`"):
+        LookupLag(bucket_by=[])
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
@@ -4111,7 +4111,7 @@ def test_lookup_lag_predict_uses_previous_occurrence(engine):
             "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],  # promo=1 at ds 3,6,9 (y 30,60,90)
         },
     )
-    tfm = LookupLag(partition_by=["unique_id", "promo"])
+    tfm = LookupLag(bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -4146,7 +4146,7 @@ def test_lookup_lag_predict_multistep_transformed(engine):
         "y": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
         "promo": [0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
     }
-    tfm = LookupLag(partition_by=["unique_id", "promo"])
+    tfm = LookupLag(bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
 
     # Expected transformed-target values via a separate preprocess pass.
@@ -4154,7 +4154,7 @@ def test_lookup_lag_predict_multistep_transformed(engine):
         models=[HistGradientBoostingRegressor(max_iter=10)],
         freq=1,
         lags=[1],
-        lag_transforms={1: [LookupLag(partition_by=["unique_id", "promo"])]},
+        lag_transforms={1: [LookupLag(bucket_by=["unique_id", "promo"])]},
         target_transforms=[LocalStandardScaler()],
     )
     prep = fexp.preprocess(_make_df(engine, rows), static_features=[], dropna=False)
@@ -4240,7 +4240,7 @@ def test_lookup_lag_predict_survives_keep_last_n_trim(engine):
             ],  # single promo far back (ds=3, y=30)
         },
     )
-    tfm = LookupLag(partition_by=["unique_id", "promo"])
+    tfm = LookupLag(bucket_by=["unique_id", "promo"])
     col = tfm._get_name(1)
     captured = []
 
@@ -4287,7 +4287,7 @@ def test_lookup_lag_predict_various_lags(engine, lag):
             "promo": [1] * n,  # one partition value → bucket is the whole series
         },
     )
-    tfm = LookupLag(partition_by=["unique_id", "promo"])
+    tfm = LookupLag(bucket_by=["unique_id", "promo"])
     col = tfm._get_name(lag)
     captured = []
 
@@ -4314,7 +4314,7 @@ def test_lookup_lag_compute_latest_from_aggs_nan_and_empty():
     or when the looked-up occurrence carries no valid observation."""
     from mlforecast.pooled import _RowStore, get_kernel
 
-    tfm = LookupLag(partition_by=["unique_id", "x"])
+    tfm = LookupLag(bucket_by=["unique_id", "x"])
     tfm._set_core_tfm(2)  # lag = 2
     kernel = get_kernel(tfm)
 
@@ -4401,7 +4401,7 @@ def test_lookup_lag_keeps_nan_occurrences():
     """The odd one out: a NaN row is still an occurrence, so the lookup lands on it."""
     from mlforecast.pooled import _RowStore, get_kernel
 
-    kernel = get_kernel(LookupLag(partition_by=["unique_id", "x"])._set_core_tfm(1))
+    kernel = get_kernel(LookupLag(bucket_by=["unique_id", "x"])._set_core_tfm(1))
     rows = _RowStore.from_rows(
         bucket_id=np.zeros(3, dtype=np.int64),
         ordinal=np.arange(3),
@@ -4533,11 +4533,11 @@ def _grow_setup(engine, tfm, lag, ys=(1.0, 10.0, 100.0), new_y=1000.0, new_brand
 @pytest.mark.parametrize(
     "tfm_factory",
     [
-        lambda: ExpandingMean(partition_by=["brand"]),
-        lambda: ExpandingMin(partition_by=["brand"]),
-        lambda: ExpandingMax(partition_by=["brand"]),
-        lambda: ExpandingStd(partition_by=["brand"]),
-        lambda: ExponentiallyWeightedMean(alpha=0.5, partition_by=["brand"]),
+        lambda: ExpandingMean(bucket_by=["brand"]),
+        lambda: ExpandingMin(bucket_by=["brand"]),
+        lambda: ExpandingMax(bucket_by=["brand"]),
+        lambda: ExpandingStd(bucket_by=["brand"]),
+        lambda: ExponentiallyWeightedMean(alpha=0.5, bucket_by=["brand"]),
     ],
     ids=["exp_mean", "exp_min", "exp_max", "exp_std", "ewm"],
 )
@@ -4565,11 +4565,11 @@ def test_bucket_growth_leaves_existing_buckets_unchanged(engine, lag):
     A remap applied in the wrong direction still produces finite values, so this
     compares against a control whose vocabulary never grew.
     """
-    tfm = ExpandingMean(partition_by=["brand"])
+    tfm = ExpandingMean(bucket_by=["brand"])
     grown = _grow_setup(engine, tfm, lag)
 
     control = TimeSeries(
-        freq=1, lag_transforms={lag: [ExpandingMean(partition_by=["brand"])]}
+        freq=1, lag_transforms={lag: [ExpandingMean(bucket_by=["brand"])]}
     )
     control.fit_transform(
         _make_df(
@@ -4615,13 +4615,13 @@ def test_bucket_growth_pads_new_expanding_extremes_with_infinity(engine):
     Padding the accumulator with 0.0 instead of +/-inf would make the extreme
     collapse onto the pad, so the values here are chosen to expose that.
     """
-    tfm_min = ExpandingMin(partition_by=["brand"])
+    tfm_min = ExpandingMin(bucket_by=["brand"])
     ts = _grow_setup(engine, tfm_min, 1, ys=(100.0, 200.0, 300.0), new_y=400.0)
     ts._predict_setup()
     vals = dict(zip(ts.uids, ts._update_features()[tfm_min._get_name(1)]))
     assert vals["d"] == 400.0  # its only observation, not the 0.0 pad
 
-    tfm_max = ExpandingMax(partition_by=["brand"])
+    tfm_max = ExpandingMax(bucket_by=["brand"])
     ts = _grow_setup(engine, tfm_max, 1, ys=(-100.0, -200.0, -300.0), new_y=-400.0)
     ts._predict_setup()
     vals = dict(zip(ts.uids, ts._update_features()[tfm_max._get_name(1)]))
@@ -4635,7 +4635,7 @@ def test_bucket_growth_keeps_accumulator_cell_count_uniform(engine):
     `_expanding_fill` reads the new bucket's cell count off an existing row, so a
     change that breaks the lockstep would silently corrupt new buckets.
     """
-    ts = _grow_setup(engine, ExpandingMean(partition_by=["brand"]), 1)
+    ts = _grow_setup(engine, ExpandingMean(bucket_by=["brand"]), 1)
     leaf = next(iter(ts._get_pooled_tfms().values()))[0]
     for obj in leaf._pooled_inner.values():
         assert np.ptp(obj.stats_[:, 0]) == 0
@@ -4644,7 +4644,7 @@ def test_bucket_growth_keeps_accumulator_cell_count_uniform(engine):
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 def test_bucket_growth_survives_backup_restore(engine):
     """`_backup` rolls the state back per model; inner rows must still match."""
-    ts = _grow_setup(engine, ExpandingMean(partition_by=["brand"]), 1)
+    ts = _grow_setup(engine, ExpandingMean(bucket_by=["brand"]), 1)
     state = ts._pooled_states[("brand",)]
     for _ in range(2):  # one round per model in a multi-model predict
         with ts._backup():
@@ -4695,8 +4695,8 @@ def _fit_ts(df, tfm, lag, keep_last_n=None):
     "tfm_factory",
     [
         lambda: ExpandingMean(global_=True),
-        lambda: ExpandingMean(partition_by=["brand"]),
-        lambda: ExpandingStd(partition_by=["brand"]),
+        lambda: ExpandingMean(bucket_by=["brand"]),
+        lambda: ExpandingStd(bucket_by=["brand"]),
         lambda: ExpandingMin(global_=True),
         lambda: ExpandingMax(global_=True),
         lambda: ExponentiallyWeightedMean(alpha=0.5, global_=True),
@@ -4781,7 +4781,7 @@ def _std_reference(df, groups, lag, window=None, season_length=1, time_agg=None)
 
 
 def _offset_groups(df, mode):
-    if mode.get("partition_by"):
+    if mode.get("bucket_by"):
         return dict(zip(df["unique_id"], df["brand"]))
     return {sid: 0 for sid in df["unique_id"]}
 
@@ -4809,7 +4809,7 @@ _STD_IDS = [
 
 
 @pytest.mark.parametrize(
-    "mode", [dict(global_=True), dict(partition_by=["brand"])], ids=["global", "static_key"]
+    "mode", [dict(global_=True), dict(bucket_by=["brand"])], ids=["global", "static_key"]
 )
 @pytest.mark.parametrize("make_tfm, reference", _STD_CASES, ids=_STD_IDS)
 def test_pooled_std_is_precise_on_offset_data(make_tfm, reference, mode):
@@ -4867,7 +4867,7 @@ def test_pooled_std_stays_centred_through_update_and_predict(
     T, h = 20, 2
     df = _offset_panel(T=T + 2)
     head, tail = df[df.ds <= T], df[df.ds > T]
-    mode = dict(partition_by=["brand"], time_agg=time_agg)
+    mode = dict(bucket_by=["brand"], time_agg=time_agg)
     lag = 1
     ts = _fit_ts(head, make_tfm(**mode), lag, keep_last_n)
     ts.update(tail)
@@ -4908,13 +4908,13 @@ def test_pooled_std_centre_survives_bucket_growth():
         {"unique_id": "e", "ds": [T - 1, T], "y": [50.0, 51.0], "brand": "a0"}
     )
     lag = 1
-    tfm = RollingStd(window_size=4, partition_by=["brand"])
+    tfm = RollingStd(window_size=4, bucket_by=["brand"])
     grown = _fit_ts(head, tfm, lag)
     grown.update(pd.concat([tail, new]))
     state = grown._pooled_states[("brand",)]
     assert list(state.bucket_uniques) == ["a0", "b1", "b2"]
     control = _fit_ts(
-        pd.concat([df, new]), RollingStd(window_size=4, partition_by=["brand"]), lag
+        pd.concat([df, new]), RollingStd(window_size=4, bucket_by=["brand"]), lag
     )
     col = tfm._get_name(lag)
     for ts in (grown, control):
@@ -5092,16 +5092,16 @@ def _gate_df(engine, n_times, promo_ordinals):
 @pytest.mark.parametrize(
     "tfm_factory,promo_ordinals,expected",
     [
-        (lambda: ExpandingMean(partition_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
-        (lambda: ExpandingMin(partition_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
-        (lambda: ExpandingMax(partition_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
+        (lambda: ExpandingMean(bucket_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
+        (lambda: ExpandingMin(bucket_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
+        (lambda: ExpandingMax(bucket_by=["unique_id", "promo"]), (0, _GATE_CELLS), 1.0),
         (
-            lambda: RollingMean(_GATE_CELLS, partition_by=["unique_id", "promo"]),
+            lambda: RollingMean(_GATE_CELLS, bucket_by=["unique_id", "promo"]),
             (0, _GATE_CELLS),
             1.0,
         ),
         # std needs two observations to clear its own `n > 1` gate
-        (lambda: ExpandingStd(partition_by=["unique_id", "promo"]), (0, 1, _GATE_CELLS), 2**-0.5),
+        (lambda: ExpandingStd(bucket_by=["unique_id", "promo"]), (0, 1, _GATE_CELLS), 2**-0.5),
     ],
     ids=[
         "ExpandingMean",
@@ -5126,9 +5126,9 @@ def test_g5_1_sparse_window_gate_at_fit(engine, tfm_factory, promo_ordinals, exp
 @pytest.mark.parametrize(
     "tfm_factory,expected",
     [
-        (lambda: ExpandingMean(partition_by=["unique_id", "promo"]), 1.0),
-        (lambda: ExpandingMin(partition_by=["unique_id", "promo"]), 1.0),
-        (lambda: RollingMean(_GATE_CELLS, partition_by=["unique_id", "promo"]), 1.0),
+        (lambda: ExpandingMean(bucket_by=["unique_id", "promo"]), 1.0),
+        (lambda: ExpandingMin(bucket_by=["unique_id", "promo"]), 1.0),
+        (lambda: RollingMean(_GATE_CELLS, bucket_by=["unique_id", "promo"]), 1.0),
     ],
     ids=["ExpandingMean", "ExpandingMin", "RollingMean"],
 )
@@ -5238,9 +5238,9 @@ _ID_KEY_TFMS = [
 def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
     """An id key's defaults give the same features and forecasts as spelling them out."""
     key = ["unique_id", "promo"]
-    exp_feats, exp_preds = _run_fit_update_predict(engine, tfm_factory(partition_by=key))
+    exp_feats, exp_preds = _run_fit_update_predict(engine, tfm_factory(bucket_by=key))
     feats, preds = _run_fit_update_predict(
-        engine, tfm_factory(partition_by=key, **explicit_kw)
+        engine, tfm_factory(bucket_by=key, **explicit_kw)
     )
     for step, exp_step in zip(feats, exp_feats, strict=True):
         np.testing.assert_allclose(step, exp_step)
@@ -5251,8 +5251,8 @@ def test_id_key_default_matches_explicit(engine, tfm_factory, explicit_kw):
 @pytest.mark.parametrize(
     "tfm",
     [
-        ExpandingMean(partition_by=["unique_id", "promo"]),
-        ExponentiallyWeightedMean(alpha=0.5, partition_by=["unique_id", "promo"]),
+        ExpandingMean(bucket_by=["unique_id", "promo"]),
+        ExponentiallyWeightedMean(alpha=0.5, bucket_by=["unique_id", "promo"]),
     ],
     ids=["expanding_mean", "ewm"],
 )
@@ -5263,7 +5263,7 @@ def test_id_key_fit_update_predict(engine, tfm):
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
 @pytest.mark.parametrize(
-    "partition_by, expected",
+    "bucket_by, expected",
     [
         (["promo"], ["0\x1fa", "0\x1fb", "1\x1fb", "2\x1fa"]),
         (["brand"], ["x\x1fb", "y\x1fa"]),
@@ -5273,7 +5273,7 @@ def test_id_key_fit_update_predict(engine, tfm):
         ),
     ],
 )
-def test_id_key_bucket_uniques(engine, partition_by, expected):
+def test_id_key_bucket_uniques(engine, bucket_by, expected):
     """Saved models keep the bucket vocabulary they were fit with, in the
     sorted key column order."""
     df = _make_df(
@@ -5287,7 +5287,7 @@ def test_id_key_bucket_uniques(engine, partition_by, expected):
         },
     )
     ts = TimeSeries(
-        freq=1, lag_transforms={1: [RollingMean(2, partition_by=["unique_id", *partition_by])]}
+        freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["unique_id", *bucket_by])]}
     )
     ts.fit_transform(
         df,
@@ -5305,7 +5305,7 @@ def test_id_key_bucket_uniques(engine, partition_by, expected):
 def test_update_with_dynamic_key_matches_fit(engine):
     train, new, _ = _key_frames(engine)
     full = pl.concat([train, new]) if engine == "polars" else pd.concat([train, new])
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo", "brand"])
 
     def fitted(df):
         ts = TimeSeries(freq=1, lag_transforms={1: [tfm]})
@@ -5336,7 +5336,7 @@ def test_predict_requires_x_df_for_dynamic_key_column(engine):
     from sklearn.ensemble import HistGradientBoostingRegressor
 
     train, new, future = _key_frames(engine)
-    tfm = RollingMean(2, min_samples=1, partition_by=["promo", "brand"])
+    tfm = RollingMean(2, min_samples=1, bucket_by=["promo", "brand"])
     fcst = MLForecast(
         models=[HistGradientBoostingRegressor(max_iter=10)],
         freq=1,
@@ -5367,7 +5367,7 @@ def _update_validation_df(engine):
 def test_update_missing_partition_key_mutates_nothing(engine):
     tfms = [
         RollingMean(2, min_samples=1, global_=True),
-        RollingMean(2, min_samples=1, partition_by=["price"]),
+        RollingMean(2, min_samples=1, bucket_by=["price"]),
     ]
     ts = TimeSeries(freq=1, lag_transforms={1: tfms})
     ts.fit_transform(
@@ -5396,7 +5396,7 @@ def test_update_missing_partition_key_mutates_nothing(engine):
 def test_update_empty_frame_without_partition_key(engine):
     ts = TimeSeries(
         freq=1,
-        lag_transforms={1: [RollingMean(2, min_samples=1, partition_by=["unique_id", "price"])]},
+        lag_transforms={1: [RollingMean(2, min_samples=1, bucket_by=["unique_id", "price"])]},
     )
     ts.fit_transform(
         _update_validation_df(engine),
@@ -5423,7 +5423,7 @@ def test_static_partition_key_with_pd_na_shares_one_bucket():
             }
         )
         ts = TimeSeries(
-            freq=1, lag_transforms={1: [RollingMean(2, partition_by=["k"])]}
+            freq=1, lag_transforms={1: [RollingMean(2, bucket_by=["k"])]}
         )
         fitted = ts.fit_transform(
             df,

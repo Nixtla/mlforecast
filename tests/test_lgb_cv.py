@@ -279,7 +279,7 @@ def test_lightgbmcv_trains_on_features_order():
     )
     static_features = ["unique_id", "static_0"]
     cv = LightGBMCV(
-        freq="D", lags=[7], lag_transforms={7: [RollingMean(7, partition_by=["static_0"])]}
+        freq="D", lags=[7], lag_transforms={7: [RollingMean(7, bucket_by=["static_0"])]}
     )
     cv.fit(
         series,

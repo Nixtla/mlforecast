@@ -98,10 +98,10 @@ def _finite_lag_transforms():
     return {
         1: [
             RollingMean(4, global_=True),
-            RollingMean(4, partition_by=["brand"]),
-            RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"]),
-            RollingMean(3, min_samples=1, partition_by=["promo"]),
-            RollingMean(3, min_samples=1, partition_by=["brand", "promo"]),
+            RollingMean(4, bucket_by=["brand"]),
+            RollingMean(3, min_samples=1, bucket_by=["unique_id", "promo"]),
+            RollingMean(3, min_samples=1, bucket_by=["promo"]),
+            RollingMean(3, min_samples=1, bucket_by=["brand", "promo"]),
             RollingStd(4, min_samples=2, global_=True),
             RollingMin(4, global_=True),
             RollingMax(4, global_=True),
@@ -194,11 +194,11 @@ def _accumulator_lag_transforms():
     return {
         1: [
             ExpandingMean(global_=True),
-            ExpandingMean(partition_by=["brand"]),
+            ExpandingMean(bucket_by=["brand"]),
             ExpandingMin(global_=True),
             ExpandingMax(global_=True),
             ExponentiallyWeightedMean(alpha=0.5, global_=True),
-            ExponentiallyWeightedMean(alpha=0.5, partition_by=["brand"]),
+            ExponentiallyWeightedMean(alpha=0.5, bucket_by=["brand"]),
             SeasonalRollingMean(season_length=3, window_size=2, global_=True),
         ]
     }
@@ -259,14 +259,14 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n, transforms):
 # where "trimmed == fresh fit on the tail" holds. G2.2b covers the other case.
 _MODES = {
     "global": {1: [RollingMean(4, global_=True)]},
-    "static_key": {1: [RollingMean(4, partition_by=["brand"])]},
+    "static_key": {1: [RollingMean(4, bucket_by=["brand"])]},
     "dynamic_key": {
-        1: [RollingMean(3, min_samples=1, partition_by=["promo"])]
+        1: [RollingMean(3, min_samples=1, bucket_by=["promo"])]
     },
     "static_dynamic_key": {
-        1: [RollingMean(3, min_samples=1, partition_by=["brand", "promo"])]
+        1: [RollingMean(3, min_samples=1, bucket_by=["brand", "promo"])]
     },
-    "id_key": {1: [RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"])]},
+    "id_key": {1: [RollingMean(3, min_samples=1, bucket_by=["unique_id", "promo"])]},
 }
 
 
@@ -374,9 +374,9 @@ def test_g2_2b_accumulator_state_differs_from_fit_on_slice():
     T = 20
     df = _make_panel(T)
     df_slice = df[df[TIME] > T - _R].reset_index(drop=True)
-    # partition_by rather than global_ so `brand` is auto-dropped as an auxiliary
+    # bucket_by rather than global_ so `brand` is auto-dropped as an auxiliary
     # column and never reaches the model as a string feature
-    lag_transforms = {1: [ExpandingMean(partition_by=["brand"])]}
+    lag_transforms = {1: [ExpandingMean(bucket_by=["brand"])]}
     key = ("brand",)
 
     trim_leaf, trim_states = _leaf_and_states(df, _R, lag_transforms)
@@ -401,7 +401,7 @@ def test_g2_2b_accumulator_state_differs_from_fit_on_slice():
         ("full", df, _NO_TRIM),
         ("slice", df_slice, _NO_TRIM),
     ]:
-        fcst = _build_fcst({1: [ExpandingMean(partition_by=["brand"])]})
+        fcst = _build_fcst({1: [ExpandingMean(bucket_by=["brand"])]})
         fcst.fit(data, keep_last_n=kln, **args)
         preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
     np.testing.assert_allclose(preds["trimmed"], preds["full"], rtol=1e-9, atol=1e-9)
@@ -529,7 +529,7 @@ def test_g2_4c_accumulator_states_are_trimmed():
     lag_transforms = {
         1: [
             ExpandingMean(global_=True),
-            ExponentiallyWeightedMean(alpha=0.5, partition_by=["brand"]),
+            ExponentiallyWeightedMean(alpha=0.5, bucket_by=["brand"]),
         ]
     }
     full = _preprocess_states(df, _NO_TRIM, lag_transforms)
@@ -682,12 +682,12 @@ def test_g2_6_ewm_below_retention_fails_loudly():
 @pytest.mark.parametrize(
     "make_tfm, reach",
     [
-        # partition_by, not global_, so `brand` is auto-dropped as auxiliary rather
+        # bucket_by, not global_, so `brand` is auto-dropped as auxiliary rather
         # than reaching the model as a string feature
-        (lambda: RollingQuantile(p=0.5, window_size=4, partition_by=["brand"]), 4),
+        (lambda: RollingQuantile(p=0.5, window_size=4, bucket_by=["brand"]), 4),
         (
             lambda: SeasonalRollingQuantile(
-                p=0.5, season_length=3, window_size=2, partition_by=["brand"]
+                p=0.5, season_length=3, window_size=2, bucket_by=["brand"]
             ),
             4,
         ),

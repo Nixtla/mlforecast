@@ -207,11 +207,11 @@ def _validate_horizon_params(
     return None, None
 
 
-def _sort_partition_by(tfm: _BaseLagTransform) -> _BaseLagTransform:
+def _sort_bucket_by(tfm: _BaseLagTransform) -> _BaseLagTransform:
     tfm = copy.deepcopy(tfm)
     for leaf in tfm._pooled_leaves():
-        if leaf.partition_by:
-            leaf.partition_by = sorted(leaf.partition_by)
+        if leaf.bucket_by:
+            leaf.bucket_by = sorted(leaf.bucket_by)
     return tfm
 
 
@@ -233,13 +233,13 @@ def _parse_transforms(
                 transforms[tfm_name] = copy.deepcopy(tfm)._set_core_tfm(lag)
                 default_name = _build_transform_name(tfm, lag)
                 prev_name, prev_default = seen_keys.setdefault(
-                    _build_transform_name(_sort_partition_by(tfm), lag),
+                    _build_transform_name(_sort_bucket_by(tfm), lag),
                     (tfm_name, default_name),
                 )
                 if prev_default != default_name:
                     _warn(
                         f"The lag transforms {prev_name} and {tfm_name} compute the "
-                        "same feature, since their partition_by only differ in "
+                        "same feature, since their bucket_by only differ in "
                         "column order. Please keep only one of them."
                     )
             else:
@@ -270,7 +270,7 @@ def _static_feature_changes_over_time(start_series, end_series) -> bool:
     """Whether a static feature differs between each series' start and end.
 
     Backend-agnostic (narwhals) and null-safe: two missing values count as equal
-    (so an all-null static feature, e.g. a null partition_by key, is not flagged
+    (so an all-null static feature, e.g. a null bucket_by key, is not flagged
     as changing), while a missing-vs-present pair counts as a change. Mirrors
     the dtype-aware "missing" rule used for pooled bucket keys (null, plus NaN
     for float dtypes).
@@ -447,7 +447,7 @@ class TimeSeries:
             c
             for leaves in self._get_pooled_tfms().values()
             for leaf in leaves
-            for c in leaf.partition_by or ()
+            for c in leaf.bucket_by or ()
             if c != self.id_col
         )
 
@@ -1025,13 +1025,13 @@ class TimeSeries:
                 if id_col not in key:
                     if leaf._requires_id_in_key:
                         raise ValueError(
-                            f"{type(leaf).__name__}'s partition_by must include "
+                            f"{type(leaf).__name__}'s bucket_by must include "
                             f"'{id_col}'. Found in: {name}."
                         )
                     continue
                 if all(c in static_cols for c in key):
                     raise ValueError(
-                        f"partition_by={leaf.partition_by} holds '{id_col}' and only "
+                        f"bucket_by={leaf.bucket_by} holds '{id_col}' and only "
                         "static columns, so each bucket is a single series. Please "
                         f"use {leaf._per_series_hint()} instead. Found in: {name}."
                     )
@@ -1040,7 +1040,7 @@ class TimeSeries:
                     and leaf.time_agg not in leaf._per_series_time_aggs
                 ):
                     raise ValueError(
-                        f"time_agg requires a partition_by without '{id_col}', "
+                        f"time_agg requires a bucket_by without '{id_col}', "
                         "since each (bucket, timestamp) has a single row. "
                         f"Found in: {name}."
                     )
@@ -2150,7 +2150,7 @@ class TimeSeries:
     ) -> DFType:
         if ids is not None and self._pools_across_series:
             raise ValueError(
-                "Cannot use `ids` with pooled lag transforms whose partition_by "
+                "Cannot use `ids` with pooled lag transforms whose bucket_by "
                 f"doesn't include '{self.id_col}'. These transforms require "
                 "forecasting all series together."
             )

@@ -228,7 +228,7 @@ def test_partitioned_ewm_warning_points_to_the_caller(static_series):
         models=[],
         freq="D",
         lag_transforms={
-            1: [ExponentiallyWeightedMean(0.5, partition_by=["unique_id", "static_0"])]
+            1: [ExponentiallyWeightedMean(0.5, bucket_by=["unique_id", "static_0"])]
         },
     )
     with pytest.warns(UserWarning, match="Partitioned EWM") as caught:
