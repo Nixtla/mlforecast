@@ -100,7 +100,12 @@ def mlforecast_objective(
             return float("inf")
         model_copy = clone(model)
         model_params = config["model_params"]
-        static_features = config["mlf_fit_params"].get("static_features", [])
+        non_features = set(config["mlf_fit_params"].get("non_feature_cols") or [])
+        static_features = [
+            c
+            for c in config["mlf_fit_params"].get("static_features") or []
+            if c not in non_features
+        ]
         if (
             static_features
             and isinstance(model, CatBoostRegressor)
@@ -142,17 +147,13 @@ def mlforecast_objective(
                     weight_col=weight_col,
                     **config["mlf_fit_params"],
                 )
-            static_cols = [c for c in mlf.ts.static_features_.columns if c != id_col]
             id_cols = [id_col, time_col, target_col]
             if weight_col is not None:
                 id_cols.append(weight_col)
-            dynamic = [c for c in valid.columns if c not in static_cols + id_cols]
-            if dynamic:
-                X_df: Optional[DataFrame] = ufp.drop_columns(
-                    valid, static_cols + [target_col]
-                )
-            else:
-                X_df = None
+            future_cols = mlf.ts._future_input_cols
+            X_df: Optional[DataFrame] = (
+                valid[[id_col, time_col, *future_cols]] if future_cols else None
+            )
             if should_fit:
                 fcst = mlf
             else:

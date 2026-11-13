@@ -191,12 +191,18 @@ def test_warnings_raised_through_library_callbacks_point_to_the_package(series):
     auto = AutoMLForecast(
         models={"lr": AutoModel(LinearRegression(), lambda _: {})},
         freq="D",
-        init_config=lambda _: {"lags": [1], "drop_auxiliary_columns": ["missing"]},
+        init_config=lambda _: {
+            "lags": [1],
+            "lag_transforms": {
+                1: [ExponentiallyWeightedMean(0.5, bucket_by=["unique_id", "promo"])]
+            },
+        },
     )
-    with pytest.warns(UserWarning, match="not found") as caught:
+    series = series.assign(promo=series["ds"].dt.day % 2)
+    with pytest.warns(UserWarning, match="Partitioned EWM") as caught:
         auto.fit(series, n_windows=1, h=2, num_samples=1)
     package_dir = os.path.dirname(mlforecast.__file__) + os.sep
-    filenames = {w.filename for w in caught if "not found" in str(w.message)}
+    filenames = {w.filename for w in caught if "Partitioned EWM" in str(w.message)}
     # trials point to the package function optuna calls back into
     assert filenames == {__file__, os.path.join(package_dir, "optimization.py")}
 
@@ -268,20 +274,6 @@ def test_predict_interval_warnings_point_to_the_caller(series, with_hooks):
     fcst.fit(series, prediction_intervals=PredictionIntervals(h=1))
     with pytest.warns(UserWarning, match="1-step ahead") as caught:
         fcst.predict(2, level=[80])
-    assert caught[0].filename == __file__
-
-
-@pytest.mark.parametrize("with_hooks", [False, True])
-def test_unknown_auxiliary_columns_warning_points_to_the_caller(series, with_hooks):
-    fcst = MLForecast(
-        models=LinearRegression(),
-        freq="D",
-        lags=[1],
-        drop_auxiliary_columns=["missing"],
-        hooks=[Profiler()] if with_hooks else None,
-    )
-    with pytest.warns(UserWarning, match="were not found") as caught:
-        fcst.fit(series)
     assert caught[0].filename == __file__
 
 

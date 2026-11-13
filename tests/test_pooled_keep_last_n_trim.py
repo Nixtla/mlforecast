@@ -182,6 +182,7 @@ def _preprocess_states(df, keep_last_n, lag_transforms, lags=(1,)):
         target_col=TARGET,
         keep_last_n=keep_last_n,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         dropna=False,
     )
     return fcst.ts._pooled_states
@@ -231,6 +232,7 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n, transforms):
         time_col=TIME,
         target_col=TARGET,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         keep_last_n=keep_last_n,
     )
     trimmed = _sorted_preds(fcst_trim.predict(h=h, X_df=X_df))
@@ -242,6 +244,7 @@ def test_g2_1_trimmed_predictions_match_untrimmed(keep_last_n, transforms):
         time_col=TIME,
         target_col=TARGET,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         keep_last_n=_NO_TRIM,
     )
     full = _sorted_preds(fcst_full.predict(h=h, X_df=X_df))
@@ -305,6 +308,7 @@ def _preprocessed_ts(df, keep_last_n, lag_transforms):
         target_col=TARGET,
         keep_last_n=keep_last_n,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         dropna=False,
     )
     return fcst.ts
@@ -356,6 +360,7 @@ def _leaf_and_states(df, keep_last_n, lag_transforms):
         target_col=TARGET,
         keep_last_n=keep_last_n,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         dropna=False,
     )
     leaf = next(iter(fcst.ts._get_pooled_tfms().values()))[0]
@@ -394,7 +399,13 @@ def test_g2_2b_accumulator_state_differs_from_fit_on_slice():
     # (iii) and that is what makes the trim prediction-neutral
     h = 4
     X_df = _future_X(h)
-    args = dict(id_col=ID, time_col=TIME, target_col=TARGET, static_features=["brand"])
+    args = dict(
+        id_col=ID,
+        time_col=TIME,
+        target_col=TARGET,
+        static_features=["brand"],
+        non_feature_cols=["brand"],
+    )
     preds = {}
     for tag, data, kln in [
         ("trimmed", df, _R),
@@ -626,6 +637,7 @@ def _preprocessed_then_trimmed(lag_transforms):
         target_col=TARGET,
         keep_last_n=_R,
         static_features=["brand"],
+        non_feature_cols=["brand"],
         dropna=False,
     )
     return fcst
@@ -720,6 +732,7 @@ def test_g2_7_bounded_row_kernels_trim_to_their_gather_reach(make_tfm, reach):
             time_col=TIME,
             target_col=TARGET,
             static_features=["brand"],
+            non_feature_cols=["brand"],
             keep_last_n=kln,
         )
         preds[tag] = _sorted_preds(fcst.predict(h=h, X_df=X_df))
@@ -749,6 +762,7 @@ def test_g2_1_trimmed_accumulator_survives_update_then_predict():
             time_col=TIME,
             target_col=TARGET,
             static_features=["brand"],
+            non_feature_cols=["brand"],
             keep_last_n=kln,
         )
         fcst.ts.update(tail)

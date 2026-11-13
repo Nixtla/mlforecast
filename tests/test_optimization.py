@@ -292,3 +292,45 @@ def test_optuna_optimization_and_evaluation(weekly_data):
 
     results = M4Evaluation.evaluate("data", "Weekly", pred_values)
     assert isinstance(results, pd.DataFrame) and "SMAPE" in results.columns
+
+
+def test_mlforecast_objective_skips_non_feature_cat_features(monkeypatch):
+    monkeypatch.setattr(
+        "mlforecast.optimization.CatBoostRegressor",
+        DummyCatBoostRegressor,
+    )
+    DummyCatBoostRegressor.fit_cat_features = []
+
+    df = generate_daily_series(2, min_length=30, max_length=30, equal_ends=True)
+    df["store_type"] = df["unique_id"].map({"id_0": "a", "id_1": "b"})
+    df["region"] = df["unique_id"].map({"id_0": "n", "id_1": "s"})
+
+    def config_fn(trial):  # noqa: ARG001
+        return {
+            "model_params": {},
+            "mlf_init_params": {
+                "lags": [1],
+                "lag_transforms": {1: [RollingMean(3, bucket_by=["store_type"])]},
+            },
+            "mlf_fit_params": {
+                "static_features": ["store_type", "region"],
+                "non_feature_cols": ["store_type"],
+            },
+        }
+
+    def loss(df: pd.DataFrame, train_df: pd.DataFrame) -> float:  # noqa: ARG001
+        return abs(df["y"] - df["model"]).mean()
+
+    objective = mlforecast_objective(
+        df=df,
+        config_fn=config_fn,
+        loss=loss,
+        model=DummyCatBoostRegressor(),
+        freq="D",
+        n_windows=1,
+        h=2,
+    )
+    objective(optuna.trial.FixedTrial({}))
+
+    assert DummyCatBoostRegressor.fit_cat_features
+    assert all(f == ["region"] for f in DummyCatBoostRegressor.fit_cat_features)

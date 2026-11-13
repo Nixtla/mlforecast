@@ -76,6 +76,8 @@ the statistic across **multiple series at once**:
   The order of the columns doesn't matter. Columns not listed in
   `static_features` may vary over time and must be supplied via `X_df` at
   prediction and in `update`; static ones are taken from the static features.
+  Key columns in the data are model features too; list the ones that should
+  only define the buckets in the `non_feature_cols` argument of `fit`.
 
 `global_` and `bucket_by` can't be used together, `global_=True` is the
 empty key. A few keys are rejected when fitting: `bucket_by=["unique_id"]`

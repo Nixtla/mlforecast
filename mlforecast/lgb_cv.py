@@ -69,19 +69,9 @@ def _update(bst, n):
         bst.update()
 
 
-def _predict(
-    ts, bst, valid, h, before_predict_callback, after_predict_callback, weight_col
-):
-    static = ts.static_features_.columns.drop(ts.id_col).tolist()
-    dynamic = valid.columns.drop(
-        static + [ts.id_col, ts.time_col, ts.target_col, weight_col], errors="ignore"
-    )  # drops weight_col if present amongst other cols
-    if not dynamic.empty:
-        X_df = valid.drop(
-            columns=static + [ts.target_col, weight_col], errors="ignore"
-        )  # drops weight_col if present amongst other cols)
-    else:
-        X_df = None
+def _predict(ts, bst, valid, h, before_predict_callback, after_predict_callback):
+    future_cols = ts._future_input_cols
+    X_df = valid[[ts.id_col, ts.time_col, *future_cols]] if future_cols else None
     preds = ts.predict(
         {"Booster": bst},
         horizon=h,
@@ -93,12 +83,10 @@ def _predict(
 
 
 def _update_and_predict(
-    ts, bst, valid, n, h, before_predict_callback, after_predict_callback, weight_col
+    ts, bst, valid, n, h, before_predict_callback, after_predict_callback
 ):
     _update(bst, n)
-    return _predict(
-        ts, bst, valid, h, before_predict_callback, after_predict_callback, weight_col
-    )
+    return _predict(ts, bst, valid, h, before_predict_callback, after_predict_callback)
 
 
 CVResult = Tuple[int, float]
@@ -214,6 +202,8 @@ class LightGBMCV:
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
         categorical_feature: Optional[List[str]] = None,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ):
         """Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
 
@@ -240,6 +230,7 @@ class LightGBMCV:
             weight_col (str, optional):Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
             categorical_feature (list of str, optional): Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'.
                 It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. Defaults to None (every column is a feature).
 
         Returns:
             (LightGBMCV): CV object with internal data structures for partial_fit.
@@ -302,6 +293,7 @@ class LightGBMCV:
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 weight_col=weight_col,
+                non_feature_cols=non_feature_cols,
             )
             assert isinstance(prep, pd.DataFrame)
 
@@ -340,7 +332,6 @@ class LightGBMCV:
                 h=self.h,
                 before_predict_callback=before_predict_callback,
                 after_predict_callback=after_predict_callback,
-                weight_col=weight_col,
             )
             if weight_col is not None:
                 metric_values[j] = self.metric_fn(
@@ -378,7 +369,6 @@ class LightGBMCV:
                     h=self.h,
                     before_predict_callback=before_predict_callback,
                     after_predict_callback=after_predict_callback,
-                    weight_col=weight_col,
                 )
                 futures.append(future)
             cv_preds = [f.result() for f in futures]
@@ -484,6 +474,8 @@ class LightGBMCV:
         input_size: Optional[int] = None,
         weight_col: Optional[str] = None,
         categorical_feature: Optional[List[str]] = None,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> List[CVResult]:
         """Train boosters simultaneously and assess their performance on the complete forecasting window.
 
@@ -522,6 +514,7 @@ class LightGBMCV:
             weight_col (str, optional): Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation.
             categorical_feature (list of str, optional): Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'.
                 It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. Defaults to None (every column is a feature).
 
         Returns:
             (list of tuple): List of (boosting rounds, metric value) tuples.
@@ -543,6 +536,7 @@ class LightGBMCV:
             metric=metric,
             weight_col=weight_col,
             categorical_feature=categorical_feature,
+            non_feature_cols=non_feature_cols,
         )
         hist = []
         for i in range(0, num_iterations, eval_every):
@@ -578,14 +572,20 @@ class LightGBMCV:
                         h=self.h,
                         before_predict_callback=before_predict_callback,
                         after_predict_callback=after_predict_callback,
-                        weight_col=weight_col,
                     )
                     futures.append(future)
                 self.cv_preds_ = pd.concat(
                     [f.result().assign(window=i) for i, f in enumerate(futures)]
                 )
         self.ts._fit(
-            df, id_col, time_col, target_col, static_features, keep_last_n, weight_col
+            df,
+            id_col=id_col,
+            time_col=time_col,
+            target_col=target_col,
+            static_features=static_features,
+            keep_last_n=keep_last_n,
+            weight_col=weight_col,
+            non_feature_cols=non_feature_cols,
         )
         return hist
 

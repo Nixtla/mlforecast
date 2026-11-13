@@ -153,6 +153,7 @@ def test_backup_snapshot_restores_pooled_state_like_deepcopy():
         time_col="ds",
         target_col="y",
         static_features=["brand"],
+        non_feature_cols=["brand"],
     )
     ref = {k: copy.deepcopy(s) for k, s in fcst.ts._pooled_states.items()}
     assert ref  # there are pooled states to check
@@ -190,6 +191,7 @@ def test_snapshot_restore_after_dynamic_new_bucket():
         time_col="ds",
         target_col="y",
         static_features=["brand"],
+        non_feature_cols=["brand"],
     )
     key = ("brand", "promo")
     state = fcst.ts._pooled_states[key]
@@ -214,6 +216,7 @@ def test_g1_pooled_predictions_byte_identical():
         time_col="ds",
         target_col="y",
         static_features=["brand"],
+        non_feature_cols=["brand", "promo"],
     )
     h = 3
     future = []

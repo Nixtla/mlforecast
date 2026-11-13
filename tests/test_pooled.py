@@ -1947,6 +1947,7 @@ def test_partition_static_features_explicit_with_partition_cols(engine):
         target_col="y",
         dropna=False,
         static_features=["brand", "region"],
+        non_feature_cols=["promo"],
     )
     static_cols = set(ts.static_features_.columns)
     assert {"brand", "region"} <= static_cols
@@ -2552,7 +2553,7 @@ def test_partition_predict_x_df_partition_column_has_nan(engine):
             ]
         },
     )
-    fcst.fit(df, static_features=[])
+    fcst.fit(df, static_features=[], non_feature_cols=["promo"])
 
     # All future partition values are NaN: every step routes to the existing
     # missing bucket (created at fit), which stays populated as predictions feed
@@ -3059,7 +3060,7 @@ def test_static_null_key_fit_predict_update(engine):
         lags=[1],
         lag_transforms={1: [RollingMean(window_size=2, bucket_by=["brand"])]},
     )
-    fcst.fit(df, static_features=["brand"])
+    fcst.fit(df, static_features=["brand"], non_feature_cols=["brand"])
     preds = fcst.predict(2)
     pvals = np.asarray(preds["LinearRegression"])
     assert np.all(np.isfinite(pvals))  # no IndexError / garbage bucket
@@ -3730,7 +3731,7 @@ def test_time_agg_multistep_predict(engine):
             1: [RollingMean(window_size=3, bucket_by=["grp"], time_agg="sum")]
         },
     )
-    fcst.fit(df, static_features=["grp"])
+    fcst.fit(df, static_features=["grp"], non_feature_cols=["grp"])
     p1 = fcst.predict(4)
     p2 = fcst.predict(4)
     v1 = (
@@ -5432,6 +5433,7 @@ def test_static_partition_key_with_pd_na_shares_one_bucket():
             target_col="y",
             dropna=False,
             static_features=["k"],
+            non_feature_cols=["k"],
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)

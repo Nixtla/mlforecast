@@ -299,3 +299,29 @@ def test_lightgbmcv_trains_on_features_order():
     booster = fcst.models_["LGBMRegressor"].booster_
     assert booster.feature_name() == cv.ts.features_order_
     assert _categories(booster, "unique_id") != []
+
+
+def test_lightgbmcv_non_feature_cols():
+    series = generate_daily_series(
+        5, min_length=50, max_length=100, equal_ends=True, n_static_features=1
+    )
+    cv = LightGBMCV(
+        freq="D", lags=[7], lag_transforms={7: [RollingMean(7, bucket_by=["static_0"])]}
+    )
+    cv.fit(
+        series,
+        n_windows=2,
+        h=7,
+        num_iterations=5,
+        params={"verbosity": -1},
+        verbose_eval=False,
+        static_features=["static_0"],
+        non_feature_cols=["static_0"],
+    )
+    assert "static_0" not in cv.ts.features_order_
+    for bst in cv.cv_models_.values():
+        assert bst.feature_name() == cv.ts.features_order_
+    fcst = MLForecast.from_cv(cv)
+    fcst.fit(series, static_features=["static_0"], non_feature_cols=["static_0"])
+    assert fcst.ts.features_order_ == cv.ts.features_order_
+    assert fcst.predict(7).shape[0] == 35

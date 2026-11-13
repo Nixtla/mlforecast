@@ -39,6 +39,7 @@ from mlforecast.core import (
     TimeSeries,
     _get_model_name,
     _name_models,
+    _get_dynamic_exog_cols,
     _resolve_static_features,
     _validate_horizon_params,
 )
@@ -238,7 +239,6 @@ class MLForecast:
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
-        drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
         hooks: Optional[Sequence[Hook]] = None,
     ):
         """Forecasting pipeline
@@ -253,7 +253,6 @@ class MLForecast:
             target_transforms (list of transformers, optional): Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None.
             lag_transforms_namer (callable, optional): Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None.
             date_features_as_dummies (bool): If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False.
-            drop_auxiliary_columns (bool or list of str): Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops every column, other than the id, referenced in the `bucket_by` of a pooled lag transform. False keeps all columns. A list of strings drops only the named columns explicitly.
             hooks (sequence of Hook, optional): Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. They're dropped when the forecaster is pickled or deep-copied. Defaults to None.
         """
         if not isinstance(models, dict) and not isinstance(models, list):
@@ -280,7 +279,6 @@ class MLForecast:
             target_transforms=target_transforms,
             lag_transforms_namer=lag_transforms_namer,
             date_features_as_dummies=date_features_as_dummies,
-            drop_auxiliary_columns=drop_auxiliary_columns,
         )
 
     @property
@@ -402,18 +400,17 @@ class MLForecast:
         id_col: str,
         time_col: str,
         target_col: str,
-        static_features: Optional[List[str]] = None,
-        weight_col: Optional[str] = None,
+        static_features: Optional[List[str]],
+        weight_col: Optional[str],
+        non_feature_cols: Optional[Sequence[str]],
     ) -> List[str]:
-        static_cols = set(
-            _resolve_static_features(static_features, df_columns, id_col, weight_col)
+        return _get_dynamic_exog_cols(
+            df_columns,
+            _resolve_static_features(static_features, df_columns, id_col, weight_col),
+            self.ts.features,
+            self.ts._dummy_date_sources,
+            (id_col, time_col, target_col, weight_col, *(non_feature_cols or [])),
         )
-        lag_cols = set(self.ts.transforms.keys())
-        date_cols = set(self.ts._date_feature_names)
-        exclude = static_cols | lag_cols | date_cols | {id_col, time_col, target_col}
-        if weight_col is not None:
-            exclude.add(weight_col)
-        return [c for c in df_columns if c not in exclude]
 
     def _resolve_horizon_features(
         self,
@@ -427,6 +424,7 @@ class MLForecast:
         horizon_features: Optional[Dict[int, List[str]]],
         horizon_feature_templates: Optional[List[str]],
         weight_col: Optional[str],
+        non_feature_cols: Optional[Sequence[str]],
     ) -> Dict[int, List[str]]:
         if horizon_features is not None and horizon_feature_templates is not None:
             raise ValueError(
@@ -451,6 +449,7 @@ class MLForecast:
             time_col=time_col,
             target_col=target_col,
             static_features=static_features,
+            non_feature_cols=non_feature_cols,
             weight_col=weight_col,
         )
         exog_col_set = set(exog_cols)
@@ -558,6 +557,8 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         validate_data: bool = True,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data`.
 
@@ -566,7 +567,7 @@ class MLForecast:
             id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
             time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
             target_col (str): Column that contains the target. Defaults to 'y'.
-            static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
+            static_features (list of str, optional): Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
@@ -580,6 +581,7 @@ class MLForecast:
             as_numpy (bool): Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             validate_data (bool): Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature).
 
         Returns:
             DataFrame or tuple of pandas Dataframe and a numpy array: `df` plus added features and target(s).
@@ -592,6 +594,7 @@ class MLForecast:
             time_col=time_col,
             target_col=target_col,
             static_features=static_features,
+            non_feature_cols=non_feature_cols,
             max_horizon=max_horizon,
             horizons=horizons,
             horizon_features=horizon_features,
@@ -605,6 +608,7 @@ class MLForecast:
             time_col=time_col,
             target_col=target_col,
             static_features=static_features,
+            non_feature_cols=non_feature_cols,
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
@@ -632,6 +636,8 @@ class MLForecast:
         horizon_feature_templates: Optional[List[str]] = None,
         as_numpy: Optional[bool] = None,
         validate_data: bool = True,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> "MLForecast":
         """Build the internal state from `df` without computing the features.
 
@@ -653,7 +659,7 @@ class MLForecast:
             id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
             time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
             target_col (str): Column that contains the target. Defaults to 'y'.
-            static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
+            static_features (list of str, optional): Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Inferred from the transforms when None. Defaults to None.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             max_horizon (int, optional): Horizon the models were trained for when using one model per horizon. Leave None for recursive models; when None, any value from a previous fit is preserved. Defaults to None.
@@ -662,6 +668,7 @@ class MLForecast:
             horizon_feature_templates (list of str, optional): Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None.
             as_numpy (bool, optional): Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None.
             validate_data (bool): Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature).
 
         Returns:
             MLForecast: Forecast object with the internal state built from `df`.
@@ -680,6 +687,7 @@ class MLForecast:
                 time_col=time_col,
                 target_col=target_col,
                 static_features=static_features,
+                non_feature_cols=non_feature_cols,
                 max_horizon=effective_max_horizon,
                 horizons=horizons,
                 horizon_features=horizon_features,
@@ -699,6 +707,7 @@ class MLForecast:
                     time_col=time_col,
                     target_col=target_col,
                     static_features=static_features,
+                    non_feature_cols=non_feature_cols,
                     weight_col=weight_col,
                 )
             )
@@ -718,6 +727,7 @@ class MLForecast:
             time_col=time_col,
             target_col=target_col,
             static_features=static_features,
+            non_feature_cols=non_feature_cols,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
             max_horizon=max_horizon,
@@ -843,6 +853,8 @@ class MLForecast:
         n_windows: int = 2,
         h: int = 1,
         as_numpy: bool = False,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> DFType:
         """Compute conformity scores.
 
@@ -874,6 +886,7 @@ class MLForecast:
             time_col=time_col,
             target_col=target_col,
             static_features=static_features,
+            non_feature_cols=non_feature_cols,
             dropna=dropna,
             keep_last_n=keep_last_n,
             max_horizon=max_horizon,
@@ -964,7 +977,7 @@ class MLForecast:
         else:
             # Use the passed y array which has shape (n_rows, max_horizon)
             # y was already extracted from prep by _extract_X_y and contains expanded targets
-            exog_cols = self.ts._get_dynamic_exog_cols(self.ts.features_order_)
+            exog_cols = self.ts._dynamic_exog_cols
             common_exog_cols, horizon_exog_map = self.ts._split_horizon_exog_cols(
                 exog_cols, self.horizon_features_
             )
@@ -1147,11 +1160,7 @@ class MLForecast:
             uid: set(group[time_col].tolist())
             for uid, group in one_step_pd.groupby(id_col, observed=True)
         }
-        static = [c for c in self.ts.static_features_.columns if c != id_col]
-        exclude = {id_col, time_col, target_col, *static}
-        if self.ts.weight_col is not None:
-            exclude.add(self.ts.weight_col)
-        dynamic = [c for c in train_pd.columns if c not in exclude]
+        dynamic = self.ts._future_input_cols
         model_names = list(self.models_.keys())
         # pandas-only algorithm; converts to pandas at its boundary
         if isinstance(self.ts.static_features_, pd.DataFrame):
@@ -1181,7 +1190,9 @@ class MLForecast:
             hist = hist[[id_col, time_col, target_col, *dynamic]]
             # a one-series instance wearing the parent's statics and feature
             # order, since `hist` carries neither
-            temp_ts = self.ts._clone_warm(hist, static_features=[id_col])
+            temp_ts = self.ts._clone_warm(
+                hist, static_features=[id_col], non_feature_cols=None
+            )
             temp_ts.static_features_ = static_features_pd[
                 static_features_pd[id_col].eq(uid)
             ].reset_index(drop=True)
@@ -1246,6 +1257,8 @@ class MLForecast:
         models_fit_kwargs: Optional[dict[str, dict[str, Any]]] = None,
         validate_data: bool = True,
         cache_train_df: bool = True,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> "MLForecast":
         """Apply the feature engineering and train the models.
 
@@ -1254,7 +1267,7 @@ class MLForecast:
             id_col (str): Column that identifies each serie. Defaults to 'unique_id'.
             time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
             target_col (str): Column that contains the target. Defaults to 'y'.
-            static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
+            static_features (list of str, optional): Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
@@ -1274,6 +1287,7 @@ class MLForecast:
                 `forecast_fitted_values(h>1)` can be called later for recursive models without
                 passing `train_df`. Disable this to avoid the memory overhead and pass
                 `train_df` directly to `forecast_fitted_values` when needed. Defaults to True.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature).
 
         Returns:
             MLForecast: Forecast object with series values and trained models.
@@ -1291,6 +1305,7 @@ class MLForecast:
                 time_col=time_col,
                 target_col=target_col,
                 static_features=static_features,
+                non_feature_cols=non_feature_cols,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 max_horizon=max_horizon,
@@ -1318,6 +1333,7 @@ class MLForecast:
                 time_col=time_col,
                 target_col=target_col,
                 static_features=static_features,
+                non_feature_cols=non_feature_cols,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 max_horizon=max_horizon,
@@ -1380,6 +1396,7 @@ class MLForecast:
                 time_col=time_col,
                 target_col=target_col,
                 static_features=static_features,
+                non_feature_cols=non_feature_cols,
                 dropna=dropna,
                 keep_last_n=keep_last_n,
                 max_horizon=max_horizon,
@@ -1584,7 +1601,7 @@ class MLForecast:
         """Forecaster that uses the trained models to continue the series in `df`.
 
         Args:
-            df (pandas or polars DataFrame): Series data to continue from. Should have the same structure as the one used to fit the model, including any features.
+            df (pandas or polars DataFrame): Series data to continue from. Should have the same structure as the one used to fit the model, including any features and the columns listed in `non_feature_cols` at fit.
             method (Recalibration, ErrorScaling or ScaleAlignment, optional): How to compute the prediction intervals of the series in `df`, from `df` when `transfer` is called. The backtest windows of series seen during training (matched by id) must start after the end of their training data. Defaults to None (no prediction intervals).
 
         Returns:
@@ -1889,6 +1906,8 @@ class MLForecast:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         validate_data: bool = True,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> DFType:
         """Perform time series cross validation.
         Creates `n_windows` splits where each window has `h` test periods,
@@ -1902,7 +1921,7 @@ class MLForecast:
             time_col (str): Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'.
             target_col (str): Column that contains the target. Defaults to 'y'.
             step_size (int, optional): Step size between each cross validation window. If None it will be equal to `h`. Defaults to None.
-            static_features (list of str, optional): Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
+            static_features (list of str, optional): Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features).
             dropna (bool): Drop rows with missing values produced by the transformations. Defaults to True.
             keep_last_n (int, optional): Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None.
             max_horizon (int, optional): Train this many models, where each model will predict a specific horizon. Defaults to None.
@@ -1922,6 +1941,7 @@ class MLForecast:
             as_numpy (bool): Cast features to numpy array. Defaults to False.
             weight_col (str, optional): Column that contains the sample weights. Defaults to None.
             validate_data (bool): Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True.
+            non_feature_cols (list of str, optional): Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature).
 
         Returns:
             pandas or polars DataFrame: Predictions for each window with the series id, timestamp, last train date, target value and predictions from each model.
@@ -1961,6 +1981,7 @@ class MLForecast:
                             time_col=time_col,
                             target_col=target_col,
                             static_features=static_features,
+                            non_feature_cols=non_feature_cols,
                             dropna=dropna,
                             keep_last_n=keep_last_n,
                             max_horizon=max_horizon,
@@ -1997,6 +2018,7 @@ class MLForecast:
                             time_col=time_col,
                             target_col=target_col,
                             static_features=static_features,
+                            non_feature_cols=non_feature_cols,
                             dropna=dropna,
                             keep_last_n=keep_last_n,
                             max_horizon=max_horizon,
@@ -2029,18 +2051,10 @@ class MLForecast:
                     )
                     fitted_values = ufp.assign_columns(fitted_values, "fold", i_window)
                     cv_fitted_values.append(fitted_values)
-                static = [c for c in self.ts.static_features_.columns if c != id_col]
-                dynamic = [
-                    c
-                    for c in valid.columns
-                    if c not in static + [id_col, time_col, target_col]
-                ]
-                if dynamic:
-                    X_df: Optional[DataFrame] = ufp.drop_columns(
-                        valid, static + [target_col]
-                    )
-                else:
-                    X_df = None
+                future_cols = self.ts._future_input_cols
+                X_df: Optional[DataFrame] = (
+                    valid[[id_col, time_col, *future_cols]] if future_cols else None
+                )
                 if should_fit:
                     fcst = self
                 else:
