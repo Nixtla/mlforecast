@@ -1134,18 +1134,21 @@ class MLForecast:
                 "`train_df` must use the same dataframe library as the data "
                 f"passed to `fit` (got {got}, expected {expected})."
             )
-        train = train.sort([id_col, time_col])
+        # target rows are gathered from `train` so the output keeps its exact
+        # id/time/target dtypes (e.g. every training category of a pandas id)
+        row_col = nw.generate_temporary_column_name(8, train.columns)
+        train = train.sort([id_col, time_col]).with_row_index(row_col)
         valid_one_step_times: Dict[Any, set] = {}
         for uid, t in zip(one_step[id_col].to_list(), one_step[time_col].to_list()):
             valid_one_step_times.setdefault(uid, set()).add(t)
         static = [c for c in self.ts.static_features_.columns if c != id_col]
-        exclude = {id_col, time_col, target_col, *static}
+        exclude = {id_col, time_col, target_col, row_col, *static}
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
         dynamic = [c for c in train.columns if c not in exclude]
         model_names = list(self.models_.keys())
-        cols = [id_col, time_col, target_col, "h", *model_names]
-        out: Dict[str, list] = {c: [] for c in cols}
+        rows: List[int] = []
+        out: Dict[str, list] = {m: [] for m in model_names}
         for (uid,), group in train.group_by(id_col):
             valid_uid_times = valid_one_step_times.get(uid, set())
             if not valid_uid_times:
@@ -1184,23 +1187,23 @@ class MLForecast:
                     temp_ts.predict(models=self.models_, horizon=h, X_df=X_df),
                     eager_only=True,
                 )
-                target_idx = origin_idx + h
-                out[id_col].append(uid)
-                out[time_col].append(times[target_idx])
-                out[target_col].append(group.item(target_idx, target_col))
-                out["h"].append(h)
+                rows.append(int(group.item(origin_idx + h, row_col)))
                 for model_name in model_names:
                     out[model_name].append(preds.item(h - 1, model_name))
 
-        schema = {
-            **{c: train.schema[c] for c in (id_col, time_col, target_col)},
-            "h": nw.Int64(),
-            **{m: nw.Float64() for m in model_names},
-        }
-        result = nw.from_dict(
-            out, schema=schema, backend=nw.get_native_namespace(train)
+        backend = nw.get_native_namespace(train)
+        result = (
+            train[rows]
+            .select(id_col, time_col, target_col)
+            .with_columns(
+                nw.new_series("h", [h] * len(rows), nw.Int64(), backend=backend),
+                *[
+                    nw.new_series(m, out[m], nw.Float64(), backend=backend)
+                    for m in model_names
+                ],
+            )
         )
-        return nw.to_native(result.sort([id_col, time_col]))
+        return ufp.drop_index_if_pandas(nw.to_native(result.sort([id_col, time_col])))
 
     @_stage("fit")
     def fit(

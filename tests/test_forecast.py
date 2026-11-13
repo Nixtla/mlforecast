@@ -382,24 +382,49 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
     )
 
 
-@pytest.mark.parametrize("engine", ["pandas", "polars"])
-def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(engine):
-    df = generate_daily_series(3, min_length=30, max_length=40)
-    if engine == "polars":
+@pytest.mark.parametrize("engine", ["pandas", "polars", "polars_enum"])
+# id_0 has no h=6 origins; with all series that short the h=6 result is empty
+@pytest.mark.parametrize("lengths", [[9, 30, 30], [9, 9, 9], [30, 35, 40]])
+def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(
+    engine, lengths
+):
+    df = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": f"id_{i}",
+                    "ds": pd.date_range("2000-01-01", periods=n, freq="D"),
+                    "y": np.arange(n, dtype=float) % 7 + i,
+                }
+            )
+            for i, n in enumerate(lengths)
+        ],
+        ignore_index=True,
+    )
+    df["unique_id"] = df["unique_id"].astype("category")
+    if engine != "pandas":
+        dtype = (
+            pl.Enum(["id_0", "id_1", "id_2"])
+            if engine == "polars_enum"
+            else pl.Categorical
+        )
         df = pl.from_pandas(df).with_columns(
-            pl.col("unique_id").cast(pl.String).cast(pl.Categorical)
+            pl.col("unique_id").cast(pl.String).cast(dtype)
         )
     fcst = MLForecast(
         models=LinearRegression(),
-        freq="1d" if engine == "polars" else "D",
+        freq="1d" if engine != "pandas" else "D",
         lags=[1, 7],
     )
     fcst.fit(df, fitted=True)
     h1 = fcst.forecast_fitted_values(h=1)
-    h2 = fcst.forecast_fitted_values(h=2)
-    assert h2["unique_id"].dtype == h1["unique_id"].dtype
-    if engine == "polars":
-        pl.concat([h1, h2.select(h1.columns)])
+    h6 = fcst.forecast_fitted_values(h=6)
+    assert h6["unique_id"].dtype == h1["unique_id"].dtype
+    if engine == "pandas":
+        assert h6["unique_id"].cat.categories.tolist() == ["id_0", "id_1", "id_2"]
+    else:
+        # concat raises StringCacheMismatchError if the categories diverge
+        assert pl.concat([h1, h6.select(h1.columns)]).height == len(h1) + len(h6)
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
