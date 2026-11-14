@@ -4,6 +4,7 @@ from itertools import product
 from pathlib import Path
 
 import lightgbm as lgb
+import narwhals as nw
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -291,9 +292,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     )
     fcst.fit(df, fitted=True, static_features=[])
 
-    with pytest.raises(
-        ValueError, match="not supported.*partition_by doesn't include"
-    ):
+    with pytest.raises(ValueError, match="not supported.*partition_by doesn't include"):
         fcst.forecast_fitted_values(h=2)
 
 
@@ -564,19 +563,117 @@ def test_recursive_forecast_fitted_values_on_demand_rejects_other_dataframe_libr
             fcst.forecast_fitted_values(h=2, train_df=pl.from_pandas(df))
 
 
+def _on_demand_fit_frame(engine, ids="category", int_ds=False):
+    df = generate_daily_series(3, min_length=30, max_length=40)
+    if ids == "object":
+        df["unique_id"] = df["unique_id"].astype(object)
+    if int_ds:
+        df["ds"] = df.groupby("unique_id", observed=True).cumcount() + 1
+    if engine == "polars":
+        df = pl.from_pandas(df).with_columns(
+            pl.col("unique_id").cast(pl.String).cast(pl.Categorical)
+        )
+    return df
+
+
+def _pd_superset(df):
+    extra = df[df["unique_id"] == "id_0"].assign(unique_id="id_extra")
+    return pd.concat([df.astype({"unique_id": object}), extra], ignore_index=True)
+
+
+def _pl_superset(df):
+    extra = df.filter(pl.col("unique_id") == "id_0").with_columns(
+        pl.lit("id_extra").cast(pl.Categorical).alias("unique_id")
+    )
+    return pl.concat([df, extra])
+
+
 @pytest.mark.parametrize(
-    "bad",
+    "engine, fit_kwargs, make_train",
     [
-        lambda df: df.astype({"unique_id": str}),
-        lambda df: df.assign(ds=df["ds"].dt.tz_localize("UTC")),
+        ("pandas", {}, lambda df: df.astype({"unique_id": str})),
+        ("pandas", {"ids": "object"}, lambda df: df.astype({"unique_id": "string"})),
+        (
+            "pandas",
+            {"ids": "object"},
+            lambda df: df.astype({"unique_id": "string[pyarrow]"}),
+        ),
+        ("pandas", {"ids": "object"}, lambda df: df.astype({"unique_id": "category"})),
+        ("pandas", {}, lambda df: df.astype({"ds": "datetime64[us]"})),
+        ("pandas", {"int_ds": True}, lambda df: df.astype({"ds": "int32"})),
+        (
+            "pandas",
+            {},
+            lambda df: df[df["unique_id"] != "id_0"].assign(
+                unique_id=lambda d: d["unique_id"].cat.remove_unused_categories()
+            ),
+        ),
+        ("pandas", {}, _pd_superset),
+        ("polars", {}, lambda df: df.with_columns(pl.col("unique_id").cast(pl.String))),
+        (
+            "polars",
+            {},
+            lambda df: df.with_columns(pl.col("ds").cast(pl.Datetime("us"))),
+        ),
+        (
+            "polars",
+            {"int_ds": True},
+            lambda df: df.with_columns(pl.col("ds").cast(pl.Int32)),
+        ),
+        ("polars", {}, _pl_superset),
     ],
 )
-def test_recursive_forecast_fitted_values_on_demand_rejects_other_id_or_time_dtype(bad):
+def test_recursive_forecast_fitted_values_on_demand_casts_train_df_id_and_time(
+    engine, fit_kwargs, make_train
+):
+    df = _on_demand_fit_frame(engine, **fit_kwargs)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1 if fit_kwargs.get("int_ds") else ("D" if engine == "pandas" else "1d"),
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    train = make_train(df)
+    expected = fcst.forecast_fitted_values(h=2, train_df=df)
+    got = fcst.forecast_fitted_values(h=2, train_df=train)
+    if engine == "polars":
+        assert got.schema == expected.schema
+        # to_pandas lists every category in polars' global cache
+        expected, got = (
+            x.with_columns(pl.col("unique_id").cast(pl.String)).to_pandas()
+            for x in (expected, got)
+        )
+    ids = {str(uid) for uid in nw.from_native(train)["unique_id"].to_list()}
+    expected = expected[expected["unique_id"].astype(str).isin(ids)]
+    pd.testing.assert_frame_equal(got, expected.reset_index(drop=True))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("fit_tz", [None, "UTC"])
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_zone(
+    engine, fit_tz
+):
     df = generate_daily_series(2, min_length=50, max_length=50)
-    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    other_tz = "US/Eastern" if fit_tz else "UTC"
+    if fit_tz:
+        df["ds"] = df["ds"].dt.tz_localize(fit_tz)
+    train = df.assign(ds=df["ds"].dt.tz_localize(None).dt.tz_localize(other_tz))
+    if engine == "polars":
+        df, train = pl.from_pandas(df), pl.from_pandas(train)
+    fcst = MLForecast(
+        models=LinearRegression(), freq="D" if engine == "pandas" else "1d", lags=[1]
+    )
     fcst.fit(df, fitted=True, cache_train_df=False)
     with pytest.raises(ValueError, match="dtype used in `fit`"):
-        fcst.forecast_fitted_values(h=2, train_df=bad(df))
+        fcst.forecast_fitted_values(h=2, train_df=train)
+
+
+def test_recursive_forecast_fitted_values_on_demand_rejects_missing_id_column():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    with pytest.raises(ValueError, match="missing the `unique_id` column"):
+        fcst.forecast_fitted_values(h=2, train_df=df.drop(columns="unique_id"))
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_requires_train_df_without_cache():
@@ -3063,7 +3160,9 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
     )
-    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
+    cv_result = fcst.cross_validation(
+        aux_cols_series, n_windows=2, h=7, static_features=statics
+    )
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
     for i in range(2):

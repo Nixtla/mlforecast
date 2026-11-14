@@ -1135,12 +1135,31 @@ class MLForecast:
                 f"passed to `fit` (got {got}, expected {expected})."
             )
         for col in (id_col, time_col):
-            got, expected = train_df[col].dtype, self.fcst_fitted_values_[col].dtype
-            if got != expected:
-                raise ValueError(
-                    f"`train_df['{col}']` must have the dtype used in `fit` "
-                    f"(got {got}, expected {expected})."
+            if col not in train.columns:
+                raise ValueError(f"`train_df` is missing the `{col}` column.")
+            got, expected = train.schema[col], one_step.schema[col]
+            msg = (
+                f"`train_df['{col}']` must have the dtype used in `fit` "
+                f"(got {train_df[col].dtype!r}, "
+                f"expected {self.fcst_fitted_values_[col].dtype!r})."
+            )
+            # polars casts naive to aware silently
+            if getattr(got, "time_zone", None) != getattr(expected, "time_zone", None):
+                raise ValueError(msg)
+            try:
+                # pandas: astype keeps fit's categories (narwhals would drop
+                # them); ids outside them become NaN and are ignored below
+                train = (
+                    nw.from_native(
+                        train.to_native().astype(
+                            {col: self.fcst_fitted_values_[col].dtype}
+                        )
+                    )
+                    if train.implementation.is_pandas()
+                    else train.with_columns(nw.col(col).cast(expected))
                 )
+            except Exception as e:
+                raise ValueError(msg) from e
         _warn("Computing recursive fitted values for h>1 on demand can be slow.")
         # target rows are gathered from `train` so the output keeps its exact
         # id/time/target dtypes (e.g. every training category of a pandas id)
