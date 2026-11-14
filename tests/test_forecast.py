@@ -4,6 +4,7 @@ from itertools import product
 from pathlib import Path
 
 import lightgbm as lgb
+import narwhals as nw
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -13,7 +14,9 @@ import xgboost as xgb
 from sklearn import set_config
 from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
 from utilsforecast.feature_engineering import fourier, time_features
 from utilsforecast.processing import match_if_categorical
 
@@ -244,7 +247,10 @@ def test_recursive_forecast_fitted_values_on_demand_h_matches_slow_baseline():
                 }
             )
     expected = (
-        pd.DataFrame(rows).sort_values(["unique_id", "ds"]).reset_index(drop=True)
+        pd.DataFrame(rows)
+        .astype({"unique_id": df["unique_id"].dtype})
+        .sort_values(["unique_id", "ds"])
+        .reset_index(drop=True)
     )
 
     pd.testing.assert_frame_equal(fast, expected)
@@ -314,6 +320,173 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_static_features():
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
 
 
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "pandas",
+        "polars",
+        pytest.param(
+            "polars_cat",
+            # each transferred slice has its own local categorical encoding
+            marks=pytest.mark.filterwarnings(
+                "ignore::polars.exceptions.CategoricalRemappingWarning"
+            ),
+        ),
+    ],
+)
+# ["unique_id", "brand"] isn't a case: a static-only id key is rejected at fit
+# (each bucket would be a single series)
+@pytest.mark.parametrize(
+    "key", [["unique_id", "promo", "brand"], ["unique_id", "promo"]]
+)
+def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine):
+    # issue #832 frame
+    parts = []
+    for uid, n in [("s0", 37), ("s1", 40), ("s2", 45)]:
+        promo = np.zeros(n, dtype=int)
+        promo[::5] = 1
+        parts.append(
+            pd.DataFrame(
+                {
+                    "unique_id": uid,
+                    "ds": pd.date_range(end="2024-03-01", periods=n, freq="D"),
+                    "y": np.arange(n, dtype=float),
+                    "promo": promo,
+                }
+            )
+        )
+    df = pd.concat(parts, ignore_index=True)
+    df["brand"] = df["unique_id"].str[-1].astype(int)
+
+    def to_engine(pdf):
+        if engine == "pandas":
+            return pdf
+        out = pl.from_pandas(pdf)
+        if engine == "polars_cat":
+            out = out.with_columns(pl.col("unique_id").cast(pl.Categorical))
+        return out
+
+    fcst = MLForecast(
+        # linear, so any change in a feature moves the predictions; the
+        # imputer handles the empty-bucket NaNs at early origins
+        models={"lr": make_pipeline(SimpleImputer(), LinearRegression())},
+        freq="D" if engine == "pandas" else "1d",
+        lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=key)]},
+    )
+    fcst.fit(to_engine(df), static_features=["brand"], fitted=True)
+    # the mark covers the `transfer` slices below; h>1 itself must not re-encode
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fitted = fcst.forecast_fitted_values(h=2)
+    assert not [
+        w for w in caught if w.category is pl.exceptions.CategoricalRemappingWarning
+    ]
+    assert type(fitted) is type(fcst.fcst_fitted_values_)
+    if engine != "pandas":
+        fitted = fitted.to_pandas()
+    assert fitted["h"].eq(2).all() and len(fitted) > 0
+
+    # parity with predict from every origin of s1
+    s1 = df[df["unique_id"] == "s1"].reset_index(drop=True)
+    s1_fitted = fitted[fitted["unique_id"] == "s1"]
+    assert len(s1_fitted) > 0
+    for ds, value in zip(s1_fitted["ds"], s1_fitted["lr"]):
+        target = s1.index[s1["ds"] == ds][0]
+        hist, fut = s1.iloc[: target - 1], s1.iloc[target - 1 : target + 1]
+        preds = fcst.transfer(to_engine(hist)).predict(
+            h=2, X_df=to_engine(fut[["unique_id", "ds", "promo"]])
+        )
+        np.testing.assert_allclose(value, preds["lr"][1])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars", "polars_enum"])
+# id_0 has no h=6 origins; with all series that short the h=6 result is empty
+@pytest.mark.parametrize("lengths", [[9, 30, 30], [9, 9, 9], [30, 35, 40]])
+def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(
+    engine, lengths
+):
+    df = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": f"id_{i}",
+                    "ds": pd.date_range("2000-01-01", periods=n, freq="D"),
+                    "y": np.arange(n, dtype=float) % 7 + i,
+                }
+            )
+            for i, n in enumerate(lengths)
+        ],
+        ignore_index=True,
+    )
+    df["unique_id"] = df["unique_id"].astype("category")
+    if engine != "pandas":
+        dtype = (
+            pl.Enum(["id_0", "id_1", "id_2"])
+            if engine == "polars_enum"
+            else pl.Categorical
+        )
+        df = pl.from_pandas(df).with_columns(
+            pl.col("unique_id").cast(pl.String).cast(dtype)
+        )
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="1d" if engine != "pandas" else "D",
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True)
+    h1 = fcst.forecast_fitted_values(h=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        h6 = fcst.forecast_fitted_values(h=6)
+    assert not [
+        w for w in caught if w.category is pl.exceptions.CategoricalRemappingWarning
+    ]
+    assert h6["unique_id"].dtype == h1["unique_id"].dtype
+    if engine == "pandas":
+        assert h6["unique_id"].cat.categories.tolist() == ["id_0", "id_1", "id_2"]
+    else:
+        # concat raises StringCacheMismatchError if the categories diverge
+        assert pl.concat([h1, h6.select(h1.columns)]).height == len(h1) + len(h6)
+
+
+@pytest.mark.parametrize("with_static", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_keeps_mixed_type_category_ids(
+    with_static,
+):
+    # pandas categories [1, 2, "1"]: casting the id to string would merge 1 and "1"
+    rng = np.random.default_rng(0)
+    df = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": uid,
+                    "ds": pd.date_range("2020", periods=15, freq="D"),
+                    "y": rng.normal(10, 1, 15).cumsum(),
+                    "brand": i,
+                }
+            )
+            for i, uid in enumerate((1, "1", 2))
+        ],
+        ignore_index=True,
+    )
+    df["unique_id"] = pd.Categorical(df["unique_id"].astype(object))
+    if not with_static:
+        df = df.drop(columns="brand")
+    fcst = MLForecast(models={"lr": LinearRegression()}, freq="D", lags=[1, 2])
+    fcst.fit(df, fitted=True, static_features=["brand"] if with_static else [])
+    got = fcst.forecast_fitted_values(h=2)
+    assert len(got) == 36
+    assert (got["unique_id"].value_counts() == 12).all()
+    for uid, group in df.groupby("unique_id", observed=True):
+        group = group.reset_index(drop=True)
+        for origin_idx in range(2, len(group) - 2):
+            hist = group.iloc[: origin_idx + 1]
+            expected = fcst.transfer(hist).predict(h=2).iloc[-1]
+            row = got[(got["unique_id"] == uid) & (got["ds"] == expected["ds"])]
+            assert len(row) == 1
+            np.testing.assert_allclose(row["lr"].item(), expected["lr"])
+
+
 def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     h = 3
     df = generate_daily_series(2, min_length=50, max_length=50)
@@ -329,6 +502,206 @@ def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     assert "h" in fitted_h3.columns
     assert fitted_h3["h"].eq(h).all()
     assert np.isfinite(fitted_h3["LinearRegression"].to_numpy()).all()
+
+
+@pytest.mark.parametrize("as_numpy", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_with_fitted_statics(as_numpy):
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    df["brand"] = df["unique_id"].cat.codes
+    df["promo"] = (np.arange(len(df)) % 5 == 0).astype(int)
+    # dynamic before static, so the warm clone's own feature order would differ
+    df = df[["unique_id", "promo", "ds", "y", "brand"]]
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        df,
+        static_features=["brand"],
+        fitted=True,
+        cache_train_df=False,
+        as_numpy=as_numpy,
+    )
+    fitted = fcst.forecast_fitted_values(h=2, train_df=df.drop(columns="brand"))
+    pd.testing.assert_frame_equal(fitted, fcst.forecast_fitted_values(h=2, train_df=df))
+    # one origin against `transfer`, so a feature swap (silent with
+    # `as_numpy=True`) can't hide behind both sides being equally wrong
+    hist = df.groupby("unique_id", observed=True).head(20)
+    future = df.groupby("unique_id", observed=True).nth([20, 21])
+    expected = fcst.transfer(hist).predict(
+        h=2, X_df=future[["unique_id", "ds", "promo"]]
+    )
+    expected = expected.groupby("unique_id", observed=True).nth(1)
+    got = fitted.merge(expected[["unique_id", "ds"]])
+    np.testing.assert_allclose(
+        got["LinearRegression"], expected["LinearRegression"].to_numpy()
+    )
+
+
+class _Float32LinearRegression(BaseEstimator):
+    def fit(self, X, y):
+        self.model_ = LinearRegression().fit(X, y)
+        return self
+
+    def predict(self, X):
+        return self.model_.predict(X).astype(np.float32)
+
+
+def test_recursive_forecast_fitted_values_on_demand_keeps_model_dtype():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models={"lr32": _Float32LinearRegression()}, freq="D", lags=[1])
+    fcst.fit(df, fitted=True)
+    h1 = fcst.forecast_fitted_values(h=1)
+    assert h1["lr32"].dtype == np.float32
+    assert fcst.forecast_fitted_values(h=2)["lr32"].dtype == h1["lr32"].dtype
+
+
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_dataframe_library():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(df, fitted=True, static_features=[], cache_train_df=False)
+
+    # rejected before the "can be slow" warning is emitted
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="same dataframe library"):
+            fcst.forecast_fitted_values(h=2, train_df=pl.from_pandas(df))
+
+
+def _on_demand_fit_frame(engine, ids="category", int_ds=False):
+    df = generate_daily_series(3, min_length=30, max_length=40)
+    if ids == "object":
+        df["unique_id"] = df["unique_id"].astype(object)
+    if int_ds:
+        df["ds"] = df.groupby("unique_id", observed=True).cumcount() + 1
+    if engine == "polars":
+        df = pl.from_pandas(df).with_columns(
+            pl.col("unique_id").cast(pl.String).cast(pl.Categorical)
+        )
+    return df
+
+
+def _pd_superset(df):
+    extra = df[df["unique_id"] == "id_0"].assign(unique_id="id_extra")
+    return pd.concat([df.astype({"unique_id": object}), extra], ignore_index=True)
+
+
+def _pl_superset(df):
+    extra = df.filter(pl.col("unique_id") == "id_0").with_columns(
+        pl.lit("id_extra").cast(pl.Categorical).alias("unique_id")
+    )
+    return pl.concat([df, extra])
+
+
+@pytest.mark.parametrize(
+    "engine, fit_kwargs, make_train",
+    [
+        ("pandas", {}, lambda df: df.astype({"unique_id": str})),
+        ("pandas", {"ids": "object"}, lambda df: df.astype({"unique_id": "string"})),
+        (
+            "pandas",
+            {"ids": "object"},
+            lambda df: df.astype({"unique_id": "string[pyarrow]"}),
+        ),
+        ("pandas", {"ids": "object"}, lambda df: df.astype({"unique_id": "category"})),
+        ("pandas", {}, lambda df: df.astype({"ds": "datetime64[us]"})),
+        ("pandas", {"int_ds": True}, lambda df: df.astype({"ds": "int32"})),
+        (
+            "pandas",
+            {},
+            lambda df: df[df["unique_id"] != "id_0"].assign(
+                unique_id=lambda d: d["unique_id"].cat.remove_unused_categories()
+            ),
+        ),
+        ("pandas", {}, _pd_superset),
+        ("polars", {}, lambda df: df.with_columns(pl.col("unique_id").cast(pl.String))),
+        (
+            "polars",
+            {},
+            lambda df: df.with_columns(pl.col("ds").cast(pl.Datetime("us"))),
+        ),
+        (
+            "polars",
+            {"int_ds": True},
+            lambda df: df.with_columns(pl.col("ds").cast(pl.Int32)),
+        ),
+        ("polars", {}, _pl_superset),
+    ],
+)
+def test_recursive_forecast_fitted_values_on_demand_casts_train_df_id_and_time(
+    engine, fit_kwargs, make_train
+):
+    df = _on_demand_fit_frame(engine, **fit_kwargs)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1 if fit_kwargs.get("int_ds") else ("D" if engine == "pandas" else "1d"),
+        lags=[1, 7],
+    )
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    train = make_train(df)
+    expected = fcst.forecast_fitted_values(h=2, train_df=df)
+    got = fcst.forecast_fitted_values(h=2, train_df=train)
+    if engine == "polars":
+        assert got.schema == expected.schema
+        # to_pandas lists every category in polars' global cache
+        expected, got = (
+            x.with_columns(pl.col("unique_id").cast(pl.String)).to_pandas()
+            for x in (expected, got)
+        )
+    ids = {str(uid) for uid in nw.from_native(train)["unique_id"].to_list()}
+    expected = expected[expected["unique_id"].astype(str).isin(ids)]
+    pd.testing.assert_frame_equal(got, expected.reset_index(drop=True))
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("fit_tz", [None, "UTC"])
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_zone(
+    engine, fit_tz
+):
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    other_tz = "US/Eastern" if fit_tz else "UTC"
+    if fit_tz:
+        df["ds"] = df["ds"].dt.tz_localize(fit_tz)
+    train = df.assign(ds=df["ds"].dt.tz_localize(None).dt.tz_localize(other_tz))
+    if engine == "polars":
+        df, train = pl.from_pandas(df), pl.from_pandas(train)
+    fcst = MLForecast(
+        models=LinearRegression(), freq="D" if engine == "pandas" else "1d", lags=[1]
+    )
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    with pytest.raises(ValueError, match="dtype used in `fit`"):
+        fcst.forecast_fitted_values(h=2, train_df=train)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("fit_int_ds", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_kind(
+    engine, fit_int_ds
+):
+    df = _on_demand_fit_frame(engine, int_ds=fit_int_ds)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1 if fit_int_ds else ("D" if engine == "pandas" else "1d"),
+        lags=[1],
+    )
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    if fit_int_ds:  # float ds for an int fit
+        if engine == "pandas":
+            train = df.assign(ds=df["ds"].astype("float64"))
+        else:
+            train = df.with_columns(pl.col("ds").cast(pl.Float64))
+    else:  # int ds for a datetime fit
+        if engine == "pandas":
+            train = df.assign(ds=df["ds"].astype("int64"))
+        else:
+            train = df.with_columns(pl.col("ds").cast(pl.Int64))
+    with pytest.raises(ValueError, match="dtype used in `fit`"):
+        fcst.forecast_fitted_values(h=2, train_df=train)
+
+
+def test_recursive_forecast_fitted_values_on_demand_rejects_missing_id_column():
+    df = generate_daily_series(2, min_length=50, max_length=50)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    with pytest.raises(ValueError, match="missing the `unique_id` column"):
+        fcst.forecast_fitted_values(h=2, train_df=df.drop(columns="unique_id"))
 
 
 def test_recursive_forecast_fitted_values_on_demand_h_requires_train_df_without_cache():

@@ -319,3 +319,77 @@ def test_keep_last_n_covers_the_transform_lag(lag):
     assert cb.get_features()[f"expanding_mean_lag{lag}"].item() == pytest.approx(
         y[: n - lag + 1].mean()
     )
+
+
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "pandas",
+        pytest.param(
+            "polars",
+            # update's join re-encodes the new frame's local categoricals
+            marks=pytest.mark.filterwarnings(
+                "ignore::polars.exceptions.CategoricalRemappingWarning"
+            ),
+        ),
+    ],
+)
+def test_categorical_update_of_a_subset_of_series(engine):
+    """Updating only some series with categorical ids (#832 follow-up)."""
+    full = _series({"a": 12, "b": 10})
+    to_engine = pl.from_pandas if engine == "polars" else lambda df: df
+    is_train = full["ds"] < START + pd.Timedelta(days=10)
+    preds = []
+    for df in (full, full.astype({"unique_id": "category"})):
+        fcst = MLForecast(
+            freq=ENGINE_FREQ[engine],
+            models=[LinearRegression()],
+            lags=[1],
+            lag_transforms={1: [ExpandingMean()]},
+        )
+        fcst.fit(to_engine(df[is_train]))
+        # only "a" has rows after the training end
+        fcst.update(to_engine(df[~is_train]))
+        preds.append(fcst.predict(1))
+    ids = preds[1]["unique_id"]
+    if engine == "polars":
+        assert ids.dtype == pl.Categorical
+        ids = ids.to_pandas()
+    else:
+        assert ids.cat.categories.tolist() == ["a", "b"]
+    assert ids.dtype == "category"
+    assert ids.astype(str).tolist() == ["a", "b"]
+    np.testing.assert_allclose(
+        preds[1]["LinearRegression"].to_numpy(),
+        preds[0]["LinearRegression"].to_numpy(),
+    )
+
+
+@pytest.mark.filterwarnings("ignore::polars.exceptions.CategoricalRemappingWarning")
+def test_polars_categorical_update_with_other_id_order():
+    full = _series({"a": 12, "b": 12, "c": 12})
+    is_train = full["ds"] < START + pd.Timedelta(days=10)
+    preds = []
+    for dtype in (pl.String, pl.Categorical):
+        fcst = MLForecast(freq="1d", models=[LinearRegression()], lags=[1])
+        fcst.fit(
+            pl.from_pandas(full[is_train]).with_columns(pl.col("unique_id").cast(dtype))
+        )
+        # reversed, so the update frame's local encoding is c, b, a
+        new = pl.from_pandas(full[~is_train].iloc[::-1])
+        fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
+        preds.append(fcst.predict(2)["LinearRegression"].to_numpy())
+    np.testing.assert_allclose(preds[1], preds[0])
+
+
+def test_polars_categorical_update_sorts_new_series():
+    train = pl.from_pandas(_series({"m": 10}))
+    new = pl.from_pandas(_series({"z": 3, "y": 3}))
+    new = new.with_columns(pl.col("ds") + pl.duration(days=10))
+    uids = []
+    for dtype in (pl.String, pl.Categorical):
+        fcst = MLForecast(freq="1d", models=[LinearRegression()], lags=[1])
+        fcst.fit(train.with_columns(pl.col("unique_id").cast(dtype)))
+        fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
+        uids.append(fcst.ts.uids.cast(pl.String).to_list())
+    assert uids[1] == uids[0] == ["m", "y", "z"]

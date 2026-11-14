@@ -2298,7 +2298,17 @@ class TimeSeries:
         validate_format(df, self.id_col, self.time_col, self.target_col)
         _validate_no_null_times(df, self.time_col)
         uids = _index_to_series(self.uids)
-        uids, new_ids = ufp.match_if_categorical(uids, df[self.id_col])
+        new_ids = df[self.id_col]
+        if isinstance(uids, pl_Series) and uids.dtype == pl.Categorical:
+            # one local encoding (match_if_categorical's temporary StringCache
+            # breaks later joins): stored order, then unseen ids sorted
+            stored, incoming = uids.cast(pl.String), new_ids.cast(pl.String)
+            unseen = incoming.unique()
+            unseen = unseen.filter(~unseen.is_in(stored.implode())).sort()
+            both = pl.concat([stored, unseen, incoming]).cast(pl.Categorical)
+            uids, new_ids = both[: len(stored)], both[len(stored) + len(unseen) :]
+        else:
+            uids, new_ids = ufp.match_if_categorical(uids, new_ids)
         df = ufp.copy_if_pandas(df, deep=False)
         df = ufp.assign_columns(df, self.id_col, new_ids)
         df = ufp.sort(df, by=[self.id_col, self.time_col])

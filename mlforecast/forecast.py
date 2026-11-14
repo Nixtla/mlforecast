@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import utilsforecast.processing as ufp
 from sklearn.base import BaseEstimator, clone
-from utilsforecast.compat import DataFrame, DFType, pl, pl_DataFrame, pl_Series
+from utilsforecast.compat import DataFrame, DFType, pl_DataFrame, pl_Series
 
 from mlforecast.core import (
     DateFeature,
@@ -1108,7 +1108,7 @@ class MLForecast:
         self,
         h: int,
         train_df: Optional[DFType] = None,
-    ) -> pd.DataFrame:
+    ) -> DFType:
         # `h` and transform constraints are validated in `forecast_fitted_values`.
         # This intentionally mirrors the existing recursive prediction engine:
         # feature updates are vectorized across series at each step, but origins
@@ -1123,107 +1123,138 @@ class MLForecast:
                 )
             train_df = self._fitted_train_df_
 
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(train_df, pd.DataFrame):
-            train_pd = train_df.copy()
-        else:
-            train_pd = train_df.to_pandas()
-
-        one_step = self.fcst_fitted_values_
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(one_step, pd.DataFrame):
-            one_step_pd = one_step[[self.ts.id_col, self.ts.time_col]].copy()
-        else:
-            one_step_pd = one_step.select(
-                [self.ts.id_col, self.ts.time_col]
-            ).to_pandas()
-
         id_col = self.ts.id_col
         time_col = self.ts.time_col
         target_col = self.ts.target_col
-        train_pd = train_pd.sort_values([id_col, time_col]).reset_index(drop=True)
-
-        valid_one_step_times = {
-            uid: set(group[time_col].tolist())
-            for uid, group in one_step_pd.groupby(id_col, observed=True)
-        }
+        train = nw.from_native(train_df, eager_only=True)
+        one_step = nw.from_native(self.fcst_fitted_values_, eager_only=True)
+        got, expected = train.implementation, one_step.implementation
+        if got != expected:
+            raise ValueError(
+                "`train_df` must use the same dataframe library as the data "
+                f"passed to `fit` (got {got}, expected {expected})."
+            )
+        for col in (id_col, time_col):
+            if col not in train.columns:
+                raise ValueError(f"`train_df` is missing the `{col}` column.")
+            got, expected = train.schema[col], one_step.schema[col]
+            if (
+                isinstance(expected, nw.Categorical)
+                and train.implementation.is_pandas()
+            ):
+                # keep the categories, they may be the only difference
+                shown = (train_df[col].dtype, self.fcst_fitted_values_[col].dtype)
+            else:
+                shown = (got, expected)
+            msg = (
+                f"`train_df['{col}']` must have the dtype used in `fit` "
+                f"(got {shown[0]}, expected {shown[1]})."
+            )
+            # polars casts naive to aware silently
+            if getattr(got, "time_zone", None) != getattr(expected, "time_zone", None):
+                raise ValueError(msg)
+            # int -> datetime reads ns since 1970; float -> int truncates
+            if col == time_col and (
+                got.is_temporal() != expected.is_temporal()
+                or got.is_float() != expected.is_float()
+                or got.is_integer() != expected.is_integer()
+            ):
+                raise ValueError(msg)
+            try:
+                # pandas: astype keeps fit's categories (narwhals would drop
+                # them); ids outside them become NaN and are ignored below
+                train = (
+                    nw.from_native(
+                        train.to_native().astype(
+                            {col: self.fcst_fitted_values_[col].dtype}
+                        )
+                    )
+                    if train.implementation.is_pandas()
+                    else train.with_columns(nw.col(col).cast(expected))
+                )
+            except Exception as e:
+                raise ValueError(msg) from e
+        _warn("Computing recursive fitted values for h>1 on demand can be slow.")
+        # target rows are gathered from `train` so the output keeps its exact
+        # id/time/target dtypes (e.g. every training category of a pandas id)
+        row_col = nw.generate_temporary_column_name(8, train.columns)
+        train = train.sort([id_col, time_col]).with_row_index(row_col)
         static = [c for c in self.ts.static_features_.columns if c != id_col]
-        exclude = {id_col, time_col, target_col, *static}
+        exclude = {id_col, time_col, target_col, row_col, *static}
         if self.ts.weight_col is not None:
             exclude.add(self.ts.weight_col)
-        dynamic = [c for c in train_pd.columns if c not in exclude]
+        dynamic = [c for c in train.columns if c not in exclude]
         model_names = list(self.models_.keys())
-        # pandas-only algorithm; converts to pandas at its boundary
-        if isinstance(self.ts.static_features_, pd.DataFrame):
-            static_features_pd = self.ts.static_features_.copy(deep=True)
-        else:
-            static_features_pd = self.ts.static_features_.to_pandas()
-
-        rows = []
-        for uid, group in train_pd.groupby(id_col, observed=True):
-            group = group.sort_values(time_col).reset_index(drop=True)
-            valid_uid_times = valid_one_step_times.get(uid, set())
-            if not valid_uid_times:
-                continue
-
-            valid_origins = []
-            for origin_idx in range(len(group) - h):
-                first_fcst_time = group.iloc[origin_idx + 1][time_col]
-                if first_fcst_time not in valid_uid_times:
-                    continue
-                valid_origins.append(origin_idx)
+        statics_ = nw.from_native(self.ts.static_features_, eager_only=True)
+        work = train
+        if train.implementation.is_polars() and isinstance(
+            train.schema[id_col], (nw.Categorical, nw.Enum)
+        ):
+            # the clone doesn't need the categorical id and the output is
+            # gathered from `train`, so skip a polars re-encoding (and its
+            # remapping warning) per update and join. pandas categories can mix
+            # types (1 and "1"), which a string cast would merge.
+            work = train.with_columns(nw.col(id_col).cast(nw.String))
+            statics_ = statics_.with_columns(nw.col(id_col).cast(nw.String))
+            one_step = one_step.with_columns(nw.col(id_col).cast(nw.String))
+        valid = set(zip(one_step[id_col].to_list(), one_step[time_col].to_list()))
+        obs_cols = [id_col, time_col, target_col, *dynamic]
+        rows: List[int] = []
+        out: Dict[str, list] = {m: [] for m in model_names}
+        for (uid,), group in work.group_by(id_col):
+            times = group[time_col].to_list()
+            valid_origins = [
+                origin_idx
+                for origin_idx in range(len(group) - h)
+                if (uid, times[origin_idx + 1]) in valid
+            ]
             if not valid_origins:
                 continue
 
             # Fit once on the first valid origin and then move through origins with updates.
             first_origin = valid_origins[0]
-            hist = group.iloc[: first_origin + 1]
-            hist = hist[[id_col, time_col, target_col, *dynamic]]
-            # a one-series instance wearing the parent's statics and feature
-            # order, since `hist` carries neither
-            temp_ts = self.ts._clone_warm(hist, static_features=[id_col])
-            temp_ts.static_features_ = static_features_pd[
-                static_features_pd[id_col].eq(uid)
-            ].reset_index(drop=True)
-            temp_ts.static_features = self.ts.static_features
+            hist = (
+                group[: first_origin + 1]
+                .select(obs_cols)
+                .join(statics_, on=id_col, how="left")
+            )
+            temp_ts = self.ts._clone_warm(nw.to_native(hist))
+            # the clone orders features by `hist`'s columns; the models expect fit's
             temp_ts.features_order_ = list(self.ts.features_order_)
 
             current_origin = first_origin
             for origin_idx in valid_origins:
-                if origin_idx > current_origin:
-                    # Advance the state to the current origin with observed values.
-                    for update_idx in range(current_origin + 1, origin_idx + 1):
-                        obs = group.iloc[[update_idx]][[id_col, time_col, target_col]]
-                        temp_ts.update(obs)
-                    current_origin = origin_idx
+                # Advance the state to the current origin with observed values.
+                for update_idx in range(current_origin + 1, origin_idx + 1):
+                    obs = group[update_idx : update_idx + 1].select(obs_cols)
+                    temp_ts.update(nw.to_native(obs))
+                current_origin = origin_idx
 
-                future = group.iloc[origin_idx + 1 : origin_idx + h + 1]
-                if future.shape[0] < h:
-                    continue
                 X_df = None
                 if dynamic:
-                    X_df = future[[id_col, time_col, *dynamic]]
-                preds = temp_ts.predict(models=self.models_, horizon=h, X_df=X_df)
-                pred_last = preds.iloc[-1]
-                target_idx = origin_idx + h
-                row = {
-                    id_col: group.iloc[target_idx, group.columns.get_loc(id_col)],
-                    time_col: group.iloc[target_idx, group.columns.get_loc(time_col)],
-                    target_col: group.iloc[
-                        target_idx, group.columns.get_loc(target_col)
-                    ],
-                    "h": h,
-                }
+                    future = group[origin_idx + 1 : origin_idx + h + 1]
+                    X_df = nw.to_native(future.select([id_col, time_col, *dynamic]))
+                preds = nw.from_native(
+                    temp_ts.predict(models=self.models_, horizon=h, X_df=X_df),
+                    eager_only=True,
+                )
+                rows.append(int(group.item(origin_idx + h, row_col)))
                 for model_name in model_names:
-                    row[model_name] = pred_last[model_name]
-                rows.append(row)
+                    out[model_name].append(preds.item(h - 1, model_name))
 
-        cols = [id_col, time_col, target_col, "h", *model_names]
-        if not rows:
-            return pd.DataFrame(columns=cols)
-        result = pd.DataFrame(rows)[cols]
-        result = result.sort_values([id_col, time_col]).reset_index(drop=True)
-        return result
+        backend = nw.get_native_namespace(train)
+        result = (
+            train[rows]
+            .select(id_col, time_col, target_col)
+            .with_columns(
+                nw.new_series("h", [h] * len(rows), nw.Int64(), backend=backend),
+                *[
+                    nw.new_series(m, out[m], one_step.schema[m], backend=backend)
+                    for m in model_names
+                ],
+            )
+        )
+        return ufp.drop_index_if_pandas(nw.to_native(result.sort([id_col, time_col])))
 
     @_stage("fit")
     def fit(
@@ -1434,7 +1465,8 @@ class MLForecast:
                 when global or grouped lag transforms are configured.
             train_df (pandas or polars DataFrame, optional): Training data to use when computing
                 recursive fitted values for ``h>1`` on demand. Pass this to avoid caching a full
-                copy of the training data on the fitted object. Defaults to None.
+                copy of the training data on the fitted object. Must use the same
+                dataframe library as the data passed to `fit`. Defaults to None.
 
         Returns:
             pandas or polars DataFrame: DataFrame with the following columns:
@@ -1496,17 +1528,9 @@ class MLForecast:
                         "On-demand recursive fitted values for `h>1` are not supported when using "
                         f"pooled lag transforms whose partition_by doesn't include '{self.ts.id_col}'."
                     )
-                _warn(
-                    "Computing recursive fitted values for h>1 on demand can be slow."
-                )
-                res_pd = self._compute_recursive_fitted_values_on_demand(
+                res = self._compute_recursive_fitted_values_on_demand(
                     h, train_df=train_df
                 )
-                # convert the pandas-only recursive result back to the origin backend
-                if isinstance(self.fcst_fitted_values_, pd.DataFrame):
-                    res = res_pd
-                else:
-                    res = pl.from_pandas(res_pd)
         if "h" not in res.columns:
             res = ufp.assign_columns(res, "h", np.int64(h))
         res = _ensure_h_int64(res)
