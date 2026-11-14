@@ -373,7 +373,13 @@ def test_recursive_fitted_values_pooled_key_with_static_and_dynamic(key, engine)
         lag_transforms={1: [RollingMean(3, min_samples=1, partition_by=key)]},
     )
     fcst.fit(to_engine(df), static_features=["brand"], fitted=True)
-    fitted = fcst.forecast_fitted_values(h=2)
+    # the mark covers the `transfer` slices below; h>1 itself must not re-encode
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fitted = fcst.forecast_fitted_values(h=2)
+    assert not [
+        w for w in caught if w.category is pl.exceptions.CategoricalRemappingWarning
+    ]
     assert type(fitted) is type(fcst.fcst_fitted_values_)
     if engine != "pandas":
         fitted = fitted.to_pandas()

@@ -1146,7 +1146,6 @@ class MLForecast:
         # id/time/target dtypes (e.g. every training category of a pandas id)
         row_col = nw.generate_temporary_column_name(8, train.columns)
         train = train.sort([id_col, time_col]).with_row_index(row_col)
-        valid = set(zip(one_step[id_col].to_list(), one_step[time_col].to_list()))
         static = [c for c in self.ts.static_features_.columns if c != id_col]
         exclude = {id_col, time_col, target_col, row_col, *static}
         if self.ts.weight_col is not None:
@@ -1154,10 +1153,18 @@ class MLForecast:
         dynamic = [c for c in train.columns if c not in exclude]
         model_names = list(self.models_.keys())
         statics_ = nw.from_native(self.ts.static_features_, eager_only=True)
+        work = train
+        if isinstance(train.schema[id_col], (nw.Categorical, nw.Enum)):
+            # the clone doesn't need the categorical id and the output is
+            # gathered from `train`, so skip a re-encoding per update and join
+            work = train.with_columns(nw.col(id_col).cast(nw.String))
+            statics_ = statics_.with_columns(nw.col(id_col).cast(nw.String))
+            one_step = one_step.with_columns(nw.col(id_col).cast(nw.String))
+        valid = set(zip(one_step[id_col].to_list(), one_step[time_col].to_list()))
         obs_cols = [id_col, time_col, target_col, *dynamic]
         rows: List[int] = []
         out: Dict[str, list] = {m: [] for m in model_names}
-        for (uid,), group in train.group_by(id_col):
+        for (uid,), group in work.group_by(id_col):
             times = group[time_col].to_list()
             valid_origins = [
                 origin_idx
