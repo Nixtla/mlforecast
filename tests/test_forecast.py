@@ -448,6 +448,44 @@ def test_recursive_forecast_fitted_values_on_demand_keeps_categorical_id_dtype(
         assert pl.concat([h1, h6.select(h1.columns)]).height == len(h1) + len(h6)
 
 
+@pytest.mark.parametrize("with_static", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_keeps_mixed_type_category_ids(
+    with_static,
+):
+    # pandas categories [1, 2, "1"]: casting the id to string would merge 1 and "1"
+    rng = np.random.default_rng(0)
+    df = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": uid,
+                    "ds": pd.date_range("2020", periods=15, freq="D"),
+                    "y": rng.normal(10, 1, 15).cumsum(),
+                    "brand": i,
+                }
+            )
+            for i, uid in enumerate((1, "1", 2))
+        ],
+        ignore_index=True,
+    )
+    df["unique_id"] = pd.Categorical(df["unique_id"].astype(object))
+    if not with_static:
+        df = df.drop(columns="brand")
+    fcst = MLForecast(models={"lr": LinearRegression()}, freq="D", lags=[1, 2])
+    fcst.fit(df, fitted=True, static_features=["brand"] if with_static else [])
+    got = fcst.forecast_fitted_values(h=2)
+    assert len(got) == 36
+    assert (got["unique_id"].value_counts() == 12).all()
+    for uid, group in df.groupby("unique_id", observed=True):
+        group = group.reset_index(drop=True)
+        for origin_idx in range(2, len(group) - 2):
+            hist = group.iloc[: origin_idx + 1]
+            expected = fcst.transfer(hist).predict(h=2).iloc[-1]
+            row = got[(got["unique_id"] == uid) & (got["ds"] == expected["ds"])]
+            assert len(row) == 1
+            np.testing.assert_allclose(row["lr"].item(), expected["lr"])
+
+
 def test_recursive_forecast_fitted_values_on_demand_h_with_train_df_override():
     h = 3
     df = generate_daily_series(2, min_length=50, max_length=50)

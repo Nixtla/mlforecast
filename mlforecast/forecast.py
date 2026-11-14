@@ -1154,9 +1154,13 @@ class MLForecast:
         model_names = list(self.models_.keys())
         statics_ = nw.from_native(self.ts.static_features_, eager_only=True)
         work = train
-        if isinstance(train.schema[id_col], (nw.Categorical, nw.Enum)):
+        if train.implementation.is_polars() and isinstance(
+            train.schema[id_col], (nw.Categorical, nw.Enum)
+        ):
             # the clone doesn't need the categorical id and the output is
-            # gathered from `train`, so skip a re-encoding per update and join
+            # gathered from `train`, so skip a polars re-encoding (and its
+            # remapping warning) per update and join. pandas categories can mix
+            # types (1 and "1"), which a string cast would merge.
             work = train.with_columns(nw.col(id_col).cast(nw.String))
             statics_ = statics_.with_columns(nw.col(id_col).cast(nw.String))
             one_step = one_step.with_columns(nw.col(id_col).cast(nw.String))
