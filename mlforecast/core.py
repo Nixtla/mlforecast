@@ -2304,7 +2304,7 @@ class TimeSeries:
             # breaks later joins): stored order, then unseen ids sorted
             stored, incoming = uids.cast(pl.String), new_ids.cast(pl.String)
             unseen = incoming.unique()
-            unseen = unseen.filter(~unseen.is_in(stored)).sort()
+            unseen = unseen.filter(~unseen.is_in(stored.implode())).sort()
             both = pl.concat([stored, unseen, incoming]).cast(pl.Categorical)
             uids, new_ids = both[: len(stored)], both[len(stored) + len(unseen) :]
         else:
