@@ -292,7 +292,9 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     )
     fcst.fit(df, fitted=True, static_features=[])
 
-    with pytest.raises(ValueError, match="not supported.*partition_by doesn't include"):
+    with pytest.raises(
+        ValueError, match="not supported.*partition_by doesn't include"
+    ):
         fcst.forecast_fitted_values(h=2)
 
 
@@ -664,6 +666,32 @@ def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_zone(
         models=LinearRegression(), freq="D" if engine == "pandas" else "1d", lags=[1]
     )
     fcst.fit(df, fitted=True, cache_train_df=False)
+    with pytest.raises(ValueError, match="dtype used in `fit`"):
+        fcst.forecast_fitted_values(h=2, train_df=train)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("fit_int_ds", [False, True])
+def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_kind(
+    engine, fit_int_ds
+):
+    df = _on_demand_fit_frame(engine, int_ds=fit_int_ds)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq=1 if fit_int_ds else ("D" if engine == "pandas" else "1d"),
+        lags=[1],
+    )
+    fcst.fit(df, fitted=True, cache_train_df=False)
+    if fit_int_ds:  # float ds for an int fit
+        if engine == "pandas":
+            train = df.assign(ds=df["ds"].astype("float64"))
+        else:
+            train = df.with_columns(pl.col("ds").cast(pl.Float64))
+    else:  # int ds for a datetime fit
+        if engine == "pandas":
+            train = df.assign(ds=df["ds"].astype("int64"))
+        else:
+            train = df.with_columns(pl.col("ds").cast(pl.Int64))
     with pytest.raises(ValueError, match="dtype used in `fit`"):
         fcst.forecast_fitted_values(h=2, train_df=train)
 
@@ -3160,9 +3188,7 @@ def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
         lags=[1, 7],
         lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
     )
-    cv_result = fcst.cross_validation(
-        aux_cols_series, n_windows=2, h=7, static_features=statics
-    )
+    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
     assert cv_result is not None
     assert groupby_col not in cv_result.columns
     for i in range(2):

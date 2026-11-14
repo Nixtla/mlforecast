@@ -1138,13 +1138,27 @@ class MLForecast:
             if col not in train.columns:
                 raise ValueError(f"`train_df` is missing the `{col}` column.")
             got, expected = train.schema[col], one_step.schema[col]
+            if (
+                isinstance(expected, nw.Categorical)
+                and train.implementation.is_pandas()
+            ):
+                # keep the categories, they may be the only difference
+                shown = (train_df[col].dtype, self.fcst_fitted_values_[col].dtype)
+            else:
+                shown = (got, expected)
             msg = (
                 f"`train_df['{col}']` must have the dtype used in `fit` "
-                f"(got {train_df[col].dtype!r}, "
-                f"expected {self.fcst_fitted_values_[col].dtype!r})."
+                f"(got {shown[0]}, expected {shown[1]})."
             )
             # polars casts naive to aware silently
             if getattr(got, "time_zone", None) != getattr(expected, "time_zone", None):
+                raise ValueError(msg)
+            # int -> datetime reads ns since 1970; float -> int truncates
+            if col == time_col and (
+                got.is_temporal() != expected.is_temporal()
+                or got.is_float() != expected.is_float()
+                or got.is_integer() != expected.is_integer()
+            ):
                 raise ValueError(msg)
             try:
                 # pandas: astype keeps fit's categories (narwhals would drop
