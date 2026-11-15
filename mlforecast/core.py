@@ -1449,8 +1449,11 @@ class TimeSeries:
                     merged = merged.sort("_row_idx")
 
                     # Assign exog columns to X_h
-                    for col in horizon_exog:
-                        X_h = X_h.with_columns(merged[col].alias(col))
+                    if non_exog_cols:
+                        for col in horizon_exog:
+                            X_h = X_h.with_columns(merged[col].alias(col))
+                    else:
+                        X_h = merged[horizon_exog]
                 else:
                     # Pandas
                     lookup_df = prep[[self.id_col]].copy()
