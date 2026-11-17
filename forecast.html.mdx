@@ -9,7 +9,7 @@ title: MLForecast
 ### `MLForecast`
 
 ```python
-MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, drop_auxiliary_columns=True, hooks=None)
+MLForecast(models, freq, lags=None, lag_transforms=None, date_features=None, num_threads=1, target_transforms=None, lag_transforms_namer=None, date_features_as_dummies=False, hooks=None)
 ```
 
 Forecasting pipeline
@@ -27,13 +27,12 @@ Name | Type | Description | Default
 `target_transforms` | <code>list of transformers</code> | Transformations that will be applied to the target before computing the features and restored after the forecasting step. Defaults to None. | <code>None</code>
 `lag_transforms_namer` | <code>[callable](#callable)</code> | Function that takes a transformation (either function or class), a lag and extra arguments and produces a name. Defaults to None. | <code>None</code>
 `date_features_as_dummies` | <code>[bool](#bool)</code> | If True, date features with a known finite range (e.g. `mlforecast.date_features.month`, 'dayofweek') are expanded into binary indicator columns named '{feature}_{value}' instead of being kept as ordinal integers. Defaults to False. | <code>False</code>
-`drop_auxiliary_columns` | <code>bool or list of str</code> | Controls which columns used solely for grouping are excluded from the model feature matrix. True (default) drops every column, other than the id, referenced in the `partition_by` of a pooled lag transform. False keeps all columns. A list of strings drops only the named columns explicitly. | <code>True</code>
 `hooks` | <code>sequence of Hook</code> | Objects notified when each stage (preprocess, fit, fit_model, predict, cross_validation, ...) starts, ends or fails, e.g. `mlforecast.hooks.Profiler`. They're dropped when the forecaster is pickled or deep-copied. Defaults to None. | <code>None</code>
 
 #### `MLForecast.fit`
 
 ```python
-fit(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, prediction_intervals=None, fitted=False, as_numpy=False, weight_col=None, models_fit_kwargs=None, validate_data=True, cache_train_df=True)
+fit(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, prediction_intervals=None, fitted=False, as_numpy=False, weight_col=None, models_fit_kwargs=None, validate_data=True, cache_train_df=True, *, non_feature_cols=None)
 ```
 
 Apply the feature engineering and train the models.
@@ -46,9 +45,9 @@ Name | Type | Description | Default
 `id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
-`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). For example, `horizons=[7, 14]` trains models only for steps 7 and 14. Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
@@ -60,6 +59,7 @@ Name | Type | Description | Default
 `models_fit_kwargs` | <code>[dict](#dict)</code> | Keyword arguments for each model's fit method. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before fitting. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
 `cache_train_df` | <code>[bool](#bool)</code> | Cache a copy of the training data when `fitted=True` so `forecast_fitted_values(h>1)` can be called later for recursive models without passing `train_df`. Disable this to avoid the memory overhead and pass `train_df` directly to `forecast_fitted_values` when needed. Defaults to True. | <code>True</code>
+`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 
@@ -163,7 +163,7 @@ Forecaster that uses the trained models to continue the series in `df`.
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`df` | <code>pandas or polars DataFrame</code> | Series data to continue from. Should have the same structure as the one used to fit the model, including any features. | *required*
+`df` | <code>pandas or polars DataFrame</code> | Series data to continue from. Should have the same structure as the one used to fit the model, including any features and the columns listed in `non_feature_cols` at fit. | *required*
 `method` | <code>([Recalibration](#mlforecast.conformal_prediction.Recalibration), [ErrorScaling](#mlforecast.conformal_prediction.ErrorScaling) or [ScaleAlignment](#ScaleAlignment))</code> | How to compute the prediction intervals of the series in `df`, from `df` when `transfer` is called. The backtest windows of series seen during training (matched by id) must start after the end of their training data. Defaults to None (no prediction intervals). | <code>None</code>
 
 **Returns:**
@@ -202,7 +202,7 @@ Type | Description
 #### `MLForecast.preprocess`
 
 ```python
-preprocess(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, return_X_y=False, as_numpy=False, weight_col=None, validate_data=True)
+preprocess(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, dropna=True, keep_last_n=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, return_X_y=False, as_numpy=False, weight_col=None, validate_data=True, *, non_feature_cols=None)
 ```
 
 Add the features to `data`.
@@ -215,9 +215,9 @@ Name | Type | Description | Default
 `id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
-`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
@@ -226,6 +226,7 @@ Name | Type | Description | Default
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Only works for `return_X_y=True`. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before preprocessing. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
+`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 
@@ -236,7 +237,7 @@ Type | Description
 #### `MLForecast.history_warmup`
 
 ```python
-history_warmup(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, as_numpy=None, validate_data=True)
+history_warmup(df, id_col='unique_id', time_col='ds', target_col='y', static_features=None, keep_last_n=None, weight_col=None, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, as_numpy=None, validate_data=True, *, non_feature_cols=None)
 ```
 
 Build the internal state from `df` without computing the features.
@@ -262,7 +263,7 @@ Name | Type | Description | Default
 `id_col` | <code>[str](#str)</code> | Column that identifies each serie. Defaults to 'unique_id'. | <code>'unique_id'</code>
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
-`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Inferred from the transforms when None. Defaults to None. | <code>None</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Horizon the models were trained for when using one model per horizon. Leave None for recursive models; when None, any value from a previous fit is preserved. Defaults to None. | <code>None</code>
@@ -271,6 +272,7 @@ Name | Type | Description | Default
 `horizon_feature_templates` | <code>list of str</code> | Template patterns for horizon-specific dynamic exogenous features, e.g. ['feature_h{h}']. Defaults to None. | <code>None</code>
 `as_numpy` | <code>[bool](#bool)</code> | Whether prediction passes a numpy array to the model instead of a dataframe. When None, any value from a previous fit is preserved (False for a fresh instance). Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations before warming up. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
+`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 
@@ -304,7 +306,7 @@ Name | Type | Description
 #### `MLForecast.cross_validation`
 
 ```python
-cross_validation(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, static_features=None, dropna=True, keep_last_n=None, refit=True, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, before_predict_callback=None, after_predict_callback=None, prediction_intervals=None, level=None, input_size=None, fitted=False, as_numpy=False, weight_col=None, validate_data=True)
+cross_validation(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, static_features=None, dropna=True, keep_last_n=None, refit=True, max_horizon=None, horizons=None, horizon_features=None, horizon_feature_templates=None, before_predict_callback=None, after_predict_callback=None, prediction_intervals=None, level=None, input_size=None, fitted=False, as_numpy=False, weight_col=None, validate_data=True, *, non_feature_cols=None)
 ```
 
 Perform time series cross validation.
@@ -322,9 +324,9 @@ Name | Type | Description | Default
 `time_col` | <code>[str](#str)</code> | Column that identifies each timestep, its values can be timestamps or integers. Defaults to 'ds'. | <code>'ds'</code>
 `target_col` | <code>[str](#str)</code> | Column that contains the target. Defaults to 'y'. | <code>'y'</code>
 `step_size` | <code>[int](#int)</code> | Step size between each cross validation window. If None it will be equal to `h`. Defaults to None. | <code>None</code>
-`static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
+`static_features` | <code>list of str</code> | Names of the columns that are constant for each serie, whether or not they are features. Their values are repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `max_horizon` | <code>[int](#int)</code> | Train this many models, where each model will predict a specific horizon. Defaults to None. | <code>None</code>
 `horizons` | <code>list of int</code> | Train models only for specific horizons (1-indexed). Mutually exclusive with max_horizon. Defaults to None. | <code>None</code>
 `horizon_features` | <code>dict of int to list of str</code> | Explicit mapping of 1-indexed horizons to dynamic exogenous columns. Only supported when using `max_horizon` or `horizons`. Defaults to None. | <code>None</code>
@@ -339,6 +341,7 @@ Name | Type | Description | Default
 `as_numpy` | <code>[bool](#bool)</code> | Cast features to numpy array. Defaults to False. | <code>False</code>
 `weight_col` | <code>[str](#str)</code> | Column that contains the sample weights. Defaults to None. | <code>None</code>
 `validate_data` | <code>[bool](#bool)</code> | Run data quality validations on the full dataset before cross-validation. Warns about missing dates and raises on duplicate rows. Defaults to True. | <code>True</code>
+`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. `bucket_by` columns that change over time are still required in `X_df` and in `update`. Not remembered between calls: pass it again to `cross_validation` or a later `fit`. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 

@@ -54,7 +54,7 @@ For a worked walkthrough of all of the above, including the `Combine` /
 the [Lag transformations](./docs/how-to-guides/lag_transforms_guide.html)
 how-to guide.
 
-## Pooled mode: `global_` and `partition_by`
+## Pooled mode: `global_` and `bucket_by`
 
 Every built-in rolling, expanding, seasonal-rolling, and exponentially weighted
 transform, as well as `LookupLag`, accepts two parameters that let you compute
@@ -63,22 +63,24 @@ the statistic across **multiple series at once**:
 - **`global_: bool`** — when `True`, the statistic is computed across **all
   series** aggregated by timestamp. Every series receives the same feature
   value at each timestamp.
-- **`partition_by: Sequence[str]`** — the columns whose values define the
+- **`bucket_by: Sequence[str]`** — the columns whose values define the
   buckets the statistic is computed over. The id column is written out when
   the buckets should stay within each series:
-  - `partition_by=["brand"]` pools the series of each brand, so series of the
+  - `bucket_by=["brand"]` pools the series of each brand, so series of the
     same brand share the feature value at each timestamp.
-  - `partition_by=["unique_id", "promo"]` splits each series by `promo`, e.g.
+  - `bucket_by=["unique_id", "promo"]` splits each series by `promo`, e.g.
     the mean of the last promo days of that series.
-  - `partition_by=["brand", "promo"]` pools the series of each brand
+  - `bucket_by=["brand", "promo"]` pools the series of each brand
     separately for each `promo` value.
 
   The order of the columns doesn't matter. Columns not listed in
   `static_features` may vary over time and must be supplied via `X_df` at
   prediction and in `update`; static ones are taken from the static features.
+  Key columns in the data are model features too; list the ones that should
+  only define the buckets in the `non_feature_cols` argument of `fit`.
 
-`global_` and `partition_by` can't be used together, `global_=True` is the
-empty key. A few keys are rejected when fitting: `partition_by=["unique_id"]`
+`global_` and `bucket_by` can't be used together, `global_=True` is the
+empty key. A few keys are rejected when fitting: `bucket_by=["unique_id"]`
 alone and the id together with only static columns, since both are the
 per-series transform, and a `LookupLag` key without the id. `time_agg` requires
 a key without the id. All pooled modes require every series to **end at the
@@ -98,9 +100,9 @@ row-based behavior.
 `window_size` by `coreforecast`. In pooled mode, `min_samples` counts **total
 non-NaN observations across all series** in the bucket within the rolling
 window, with no capping. This makes it useful as a coverage threshold:
-`RollingMean(window_size=1, min_samples=2, partition_by=["brand"])` produces a
+`RollingMean(window_size=1, min_samples=2, bucket_by=["brand"])` produces a
 non-null value only at timestamps where at least two series in the brand
-contribute observations. When the id is in `partition_by`, `min_samples`
+contribute observations. When the id is in `bucket_by`, `min_samples`
 defaults to 1 instead of `window_size`, since a bucket then holds the
 observations of a single series. This also applies to keys like
 `["unique_id", "store"]` where `store` is constant but not listed in
@@ -113,7 +115,7 @@ how-to guide for end-to-end examples.
 ### `RollingQuantile`
 
 ```python
-RollingQuantile(p, window_size, min_samples=None, global_=False, partition_by=None, time_agg=None)
+RollingQuantile(p, window_size, min_samples=None, global_=False, bucket_by=None, time_agg=None)
 ```
 
 Bases: <code>[_RollingBase](#mlforecast.lag_transforms._RollingBase)</code>
@@ -123,7 +125,7 @@ Rolling quantile.
 <details class="note" open markdown="1">
 <summary>Note</summary>
 
-In pooled modes (``global_``/``partition_by``) this
+In pooled modes (``global_``/``bucket_by``) this
 transform has no aggregate-cache fast path: it falls back to a
 row-level pass whose cost grows with ``unique timestamps x bucket
 rows`` at fit, and aggregates are rebuilt at every recursive
@@ -163,7 +165,7 @@ Rolling statistic
 ### `SeasonalRollingQuantile`
 
 ```python
-SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_=False, partition_by=None, time_agg=None)
+SeasonalRollingQuantile(p, season_length, window_size, min_samples=None, global_=False, bucket_by=None, time_agg=None)
 ```
 
 Bases: <code>[_Seasonal_RollingBase](#mlforecast.lag_transforms._Seasonal_RollingBase)</code>
@@ -173,7 +175,7 @@ Seasonal rolling quantile.
 <details class="note" open markdown="1">
 <summary>Note</summary>
 
-In pooled modes (``global_``/``partition_by``) this
+In pooled modes (``global_``/``bucket_by``) this
 transform has no aggregate-cache fast path: a quantile can't be
 recovered from the cached channels, so it falls back to a row-level
 pass whose cost grows with ``unique timestamps x bucket rows``. Can be
@@ -213,7 +215,7 @@ Rolling statistic over seasonal periods
 ### `ExpandingQuantile`
 
 ```python
-ExpandingQuantile(p, global_=False, partition_by=None, time_agg=None)
+ExpandingQuantile(p, global_=False, bucket_by=None, time_agg=None)
 ```
 
 Bases: <code>[_ExpandingBase](#mlforecast.lag_transforms._ExpandingBase)</code>
@@ -223,7 +225,7 @@ Expanding quantile.
 <details class="note" open markdown="1">
 <summary>Note</summary>
 
-In pooled modes (``global_``/``partition_by``) this
+In pooled modes (``global_``/``bucket_by``) this
 transform has no aggregate-cache fast path: it falls back to a
 row-level pass whose cost grows with ``unique timestamps x bucket
 rows`` at fit, and aggregates are rebuilt at every recursive
@@ -243,8 +245,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`partition_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
-`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, partition_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``partition_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
+`bucket_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. The id column is never implied: list it to keep each series separate. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, bucket_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``bucket_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
 
 
 ### `ExpandingMin`
@@ -258,8 +260,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`partition_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
-`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, partition_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``partition_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
+`bucket_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. The id column is never implied: list it to keep each series separate. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, bucket_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``bucket_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
 
 
 ### `ExpandingStd`
@@ -273,8 +275,8 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`partition_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
-`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, partition_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``partition_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
+`bucket_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. The id column is never implied: list it to keep each series separate. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, bucket_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``bucket_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
 
 
 ### `ExpandingMean`
@@ -288,14 +290,14 @@ Expanding statistic
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `global_` | <code>bool</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | *required*
-`partition_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
-`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, partition_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``partition_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
+`bucket_by` | <code>Sequence[str]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. The id column is never implied: list it to keep each series separate. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | *required*
+`time_agg` | <code>str</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform, e.g. ``RollingMean(window_size=7, bucket_by=["category"], time_agg="sum")`` is a rolling mean of the category's daily sums. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Requires ``global_`` or a ``bucket_by`` without the id column. Defaults to None, which treats each row as an individual pooled sample. | *required*
 
 
 ### `ExponentiallyWeightedMean`
 
 ```python
-ExponentiallyWeightedMean(alpha, global_=False, partition_by=None, time_agg='mean')
+ExponentiallyWeightedMean(alpha, global_=False, bucket_by=None, time_agg='mean')
 ```
 
 Bases: <code>[_BaseLagTransform](#mlforecast.lag_transforms._BaseLagTransform)</code>
@@ -308,8 +310,8 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `alpha` | <code>[float](#float)</code> | Smoothing factor. | *required*
 `global_` | <code>[bool](#bool)</code> | If True, compute the statistic across all series aggregated by timestamp. Requires all series to end at the same timestamp. Defaults to False. | <code>False</code>
-`partition_by` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | <code>None</code>
-`time_agg` | <code>[str](#str)</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Values other than ``"mean"`` require ``global_`` or a ``partition_by`` without the id column. Defaults to ``"mean"``, which matches EWM's bucket-mean update rule: each timestamp contributes its bucket aggregate mean exactly once, regardless of how many rows aggregated there. ``None`` is not accepted. | <code>'mean'</code>
+`bucket_by` | <code>[Sequence](#typing.Sequence)[[str](#str)]</code> | Columns whose values define the buckets the statistic is computed over, e.g. ``["brand"]`` pools the series of each brand and ``["unique_id", "promo"]`` splits each series by promo. The id column is never implied: list it to keep each series separate. Columns not listed in ``static_features`` may vary over time and must be supplied via ``X_df`` at prediction and in ``update``. Can't be combined with ``global_``. See the Pooled lag transforms guide for details. Defaults to None. | <code>None</code>
+`time_agg` | <code>[str](#str)</code> | Pre-aggregate all rows sharing a timestamp within each bucket into a single value before applying the transform. One of ``"sum"``, ``"count"``, ``"mean"``, ``"min"``, ``"max"``. Values other than ``"mean"`` require ``global_`` or a ``bucket_by`` without the id column. Defaults to ``"mean"``, which matches EWM's bucket-mean update rule: each timestamp contributes its bucket aggregate mean exactly once, regardless of how many rows aggregated there. ``None`` is not accepted. | <code>'mean'</code>
 
 
 ### `Offset`
