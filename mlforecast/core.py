@@ -942,7 +942,9 @@ class TimeSeries:
         if missing:
             raise ValueError(f"The non_feature_cols {missing} are not in the data.")
         structural = [
-            c for c in non_feature_cols if c in (id_col, time_col, target_col, weight_col)
+            c
+            for c in non_feature_cols
+            if c in (id_col, time_col, target_col, weight_col)
         ]
         if structural:
             raise ValueError(
