@@ -932,7 +932,7 @@ class TimeSeries:
         self.weight_col = weight_col
         self.keep_last_n = keep_last_n
         self.static_features = static_features
-        if isinstance(non_feature_cols, (bool, str)):
+        if non_feature_cols is not None and not isinstance(non_feature_cols, list):
             raise TypeError(
                 "non_feature_cols takes a list of column names, "
                 "e.g. non_feature_cols=['brand']"
