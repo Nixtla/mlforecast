@@ -28,7 +28,7 @@ Name | Type | Description | Default
 #### `LightGBMCV.fit`
 
 ```python
-fit(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, num_iterations=100, params=None, static_features=None, dropna=True, keep_last_n=None, eval_every=10, weights=None, metric='mape', verbose_eval=True, early_stopping_evals=2, early_stopping_pct=0.01, compute_cv_preds=False, before_predict_callback=None, after_predict_callback=None, input_size=None, weight_col=None, categorical_feature=None, *, non_feature_cols=None)
+fit(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, num_iterations=100, params=None, static_features=None, dropna=True, keep_last_n=None, eval_every=10, weights=None, metric='mape', verbose_eval=True, early_stopping_evals=2, early_stopping_pct=0.01, compute_cv_preds=False, before_predict_callback=None, after_predict_callback=None, input_size=None, weight_col=None, categorical_feature=None)
 ```
 
 Train boosters simultaneously and assess their performance on the complete forecasting window.
@@ -48,7 +48,7 @@ Name | Type | Description | Default
 `params` | <code>[dict](#dict)</code> | Parameters to be passed to the LightGBM Boosters. Defaults to None. | <code>None</code>
 `static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `eval_every` | <code>[int](#int)</code> | Number of boosting iterations to train before evaluating on the whole forecast window. Defaults to 10. | <code>10</code>
 `weights` | <code>sequence of float</code> | Weights to multiply the metric of each window. If None, all windows have the same weight. Defaults to None. | <code>None</code>
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
@@ -61,7 +61,6 @@ Name | Type | Description | Default
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `weight_col` | <code>[str](#str)</code> | Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation. | <code>None</code>
 `categorical_feature` | <code>list of str</code> | Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'. It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None. | <code>None</code>
-`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 
@@ -95,7 +94,7 @@ Type | Description
 #### `LightGBMCV.setup`
 
 ```python
-setup(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, params=None, static_features=None, dropna=True, keep_last_n=None, weights=None, metric='mape', input_size=None, weight_col=None, categorical_feature=None, *, non_feature_cols=None)
+setup(df, n_windows, h, id_col='unique_id', time_col='ds', target_col='y', step_size=None, params=None, static_features=None, dropna=True, keep_last_n=None, weights=None, metric='mape', input_size=None, weight_col=None, categorical_feature=None)
 ```
 
 Initialize internal data structures to iteratively train the boosters. Use this before calling partial_fit.
@@ -114,13 +113,12 @@ Name | Type | Description | Default
 `params` | <code>[dict](#dict)</code> | Parameters to be passed to the LightGBM Boosters. Defaults to None. | <code>None</code>
 `static_features` | <code>list of str</code> | Names of the features that are constant for each serie and will be repeated when forecasting. Other columns are dynamic and must be provided in `X_df` when predicting. Defaults to None (no static features). | <code>None</code>
 `dropna` | <code>[bool](#bool)</code> | Drop rows with missing values produced by the transformations. Defaults to True. | <code>True</code>
-`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/bucket_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
+`keep_last_n` | <code>[int](#int)</code> | Keep only these many records from each serie for the forecasting step. Can save time and memory if your features allow it. Pooled lag transforms (global_/partition_by) with a window wider than this keep that wider window instead, since their shared aggregates have no per-series buffer to trim below it. Defaults to None. | <code>None</code>
 `weights` | <code>sequence of float</code> | Weights to multiply the metric of each window. If None, all windows have the same weight. Defaults to None. | <code>None</code>
 `metric` | <code>[str](#str) or [callable](#callable)</code> | Metric used to assess the performance of the models and perform early stopping. Defaults to 'mape'. | <code>'mape'</code>
 `input_size` | <code>[int](#int)</code> | Maximum training samples per serie in each window. If None, will use an expanding window. Defaults to None. | <code>None</code>
 `weight_col` | <code>[str](#str)</code> | Column containing sample weights. Higher weights increase the influence of those samples during fitting and evaluation. | <code>None</code>
 `categorical_feature` | <code>list of str</code> | Names of the features that LightGBM should treat as categorical, e.g. date features like 'hour'. It replaces the detection of pandas categorical columns, so include any categorical static features in it. Defaults to None. | <code>None</code>
-`non_feature_cols` | <code>list of str</code> | Columns of the data that aren't passed to the models, e.g. `bucket_by` columns that should only define the buckets of pooled lag transforms. Defaults to None (every column is a feature). | <code>None</code>
 
 **Returns:**
 
