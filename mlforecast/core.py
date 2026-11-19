@@ -207,11 +207,11 @@ def _validate_horizon_params(
     return None, None
 
 
-def _sort_partition_by(tfm: _BaseLagTransform) -> _BaseLagTransform:
+def _sort_bucket_by(tfm: _BaseLagTransform) -> _BaseLagTransform:
     tfm = copy.deepcopy(tfm)
     for leaf in tfm._pooled_leaves():
-        if leaf.partition_by:
-            leaf.partition_by = sorted(leaf.partition_by)
+        if leaf.bucket_by:
+            leaf.bucket_by = sorted(leaf.bucket_by)
     return tfm
 
 
@@ -233,13 +233,13 @@ def _parse_transforms(
                 transforms[tfm_name] = copy.deepcopy(tfm)._set_core_tfm(lag)
                 default_name = _build_transform_name(tfm, lag)
                 prev_name, prev_default = seen_keys.setdefault(
-                    _build_transform_name(_sort_partition_by(tfm), lag),
+                    _build_transform_name(_sort_bucket_by(tfm), lag),
                     (tfm_name, default_name),
                 )
                 if prev_default != default_name:
                     _warn(
                         f"The lag transforms {prev_name} and {tfm_name} compute the "
-                        "same feature, since their partition_by only differ in "
+                        "same feature, since their bucket_by only differ in "
                         "column order. Please keep only one of them."
                     )
             else:
@@ -266,11 +266,23 @@ def _resolve_static_features(
     return _dedupe_preserve_order([id_col, *static_features])
 
 
+def _get_dynamic_exog_cols(
+    columns: Iterable[str],
+    static_cols: Iterable[str],
+    features: Iterable[str],
+    date_sources: Iterable[str],
+    excluded_cols: Iterable[Optional[str]],
+) -> List[str]:
+    """User-provided exogenous columns that need time-alignment."""
+    exclude = {*static_cols, *features, *date_sources, *excluded_cols}
+    return [c for c in columns if c not in exclude]
+
+
 def _static_feature_changes_over_time(start_series, end_series) -> bool:
     """Whether a static feature differs between each series' start and end.
 
     Backend-agnostic (narwhals) and null-safe: two missing values count as equal
-    (so an all-null static feature, e.g. a null partition_by key, is not flagged
+    (so an all-null static feature, e.g. a null bucket_by key, is not flagged
     as changing), while a missing-vs-present pair counts as a change. Mirrors
     the dtype-aware "missing" rule used for pooled bucket keys (null, plus NaN
     for float dtypes).
@@ -365,7 +377,6 @@ class TimeSeries:
         target_transforms: Optional[List[TargetTransform]] = None,
         lag_transforms_namer: Optional[Callable] = None,
         date_features_as_dummies: bool = False,
-        drop_auxiliary_columns: Union[bool, Sequence[str]] = True,
     ):
         self.freq = freq
         self.date_features_as_dummies = date_features_as_dummies
@@ -394,7 +405,6 @@ class TimeSeries:
                     "Can't use a lambda as a date feature because the function name gets used as the feature name."
                 )
         self.lag_transforms_namer = lag_transforms_namer
-        self.drop_auxiliary_columns = drop_auxiliary_columns
         self.transforms = _parse_transforms(
             lags=self.lags,
             lag_transforms=self.lag_transforms,
@@ -447,7 +457,7 @@ class TimeSeries:
             c
             for leaves in self._get_pooled_tfms().values()
             for leaf in leaves
-            for c in leaf.partition_by or ()
+            for c in leaf.bucket_by or ()
             if c != self.id_col
         )
 
@@ -461,7 +471,7 @@ class TimeSeries:
         """Columns whose future values must be supplied at predict time."""
         return _dedupe_preserve_order(
             [
-                *self._get_dynamic_exog_cols(self.features_order_),
+                *self._dynamic_exog_cols,
                 *self._dynamic_key_cols,
             ]
         )
@@ -844,20 +854,15 @@ class TimeSeries:
         """Names of all computed features."""
         return list(self.transforms.keys()) + self._date_feature_names
 
-    def _get_dynamic_exog_cols(self, df_columns: List[str]) -> List[str]:
-        """Identify user-provided exogenous columns that need time-alignment."""
-        static_cols = set(self.static_features_.columns)
-        lag_cols = set(self.transforms.keys())
-        date_cols = set(self._date_feature_names) | self._dummy_date_sources
-        exclude = (
-            static_cols
-            | lag_cols
-            | date_cols
-            | {self.id_col, self.time_col, self.target_col}
+    @property
+    def _dynamic_exog_cols(self) -> List[str]:
+        return _get_dynamic_exog_cols(
+            self.features_order_,
+            self.static_features_.columns,
+            self.features,
+            self._dummy_date_sources,
+            (self.id_col, self.time_col, self.target_col, self.weight_col),
         )
-        if self.weight_col is not None:
-            exclude.add(self.weight_col)
-        return [c for c in df_columns if c not in exclude]
 
     def _split_horizon_exog_cols(
         self,
@@ -912,6 +917,8 @@ class TimeSeries:
         static_features: Optional[List[str]] = None,
         keep_last_n: Optional[int] = None,
         weight_col: Optional[str] = None,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> "TimeSeries":
         """Save the series values, ids and last dates."""
         validate_format(df, id_col, time_col, target_col)
@@ -925,6 +932,26 @@ class TimeSeries:
         self.weight_col = weight_col
         self.keep_last_n = keep_last_n
         self.static_features = static_features
+        if non_feature_cols is not None and not isinstance(non_feature_cols, list):
+            raise TypeError(
+                "non_feature_cols takes a list of column names, "
+                "e.g. non_feature_cols=['brand']"
+            )
+        non_feature_cols = [] if non_feature_cols is None else list(non_feature_cols)
+        missing = [c for c in non_feature_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"The non_feature_cols {missing} are not in the data.")
+        structural = [
+            c
+            for c in non_feature_cols
+            if c in (id_col, time_col, target_col, weight_col)
+        ]
+        if structural:
+            raise ValueError(
+                f"The non_feature_cols {structural} are the id, time, target or "
+                "weight columns, which are never features."
+            )
+        self.non_feature_cols = non_feature_cols
         if static_features is not None and id_col in static_features:
             to_drop = [time_col, target_col]
         else:
@@ -997,22 +1024,10 @@ class TimeSeries:
                     "over time. Please remove it from `static_features`."
                 )
         self.static_features_ = statics_on_ends
-        raw_date_sources = self._dummy_date_sources
-        self.features_order_ = [
-            c for c in df.columns if c not in to_drop and c not in raw_date_sources
-        ] + [f for f in self.features if f not in df.columns]
-        if self.drop_auxiliary_columns is True:
-            to_exclude = set(self._key_cols)
-        elif self.drop_auxiliary_columns is False:
-            to_exclude = set()
-        else:
-            to_exclude = set(self.drop_auxiliary_columns)
-            unknown = [f for f in to_exclude if f not in self.features_order_]
-            if unknown:
-                _warn(
-                    f"The following drop_auxiliary_columns were not found in the feature set: {unknown}"
-                )
-        self.features_order_ = [f for f in self.features_order_ if f not in to_exclude]
+        to_exclude = {*to_drop, *self._dummy_date_sources, *non_feature_cols}
+        self.features_order_ = [c for c in df.columns if c not in to_exclude] + [
+            f for f in self.features if f not in df.columns
+        ]
         self._build_pooled_states(df, sorted_df, ga)
         return self
 
@@ -1025,13 +1040,13 @@ class TimeSeries:
                 if id_col not in key:
                     if leaf._requires_id_in_key:
                         raise ValueError(
-                            f"{type(leaf).__name__}'s partition_by must include "
+                            f"{type(leaf).__name__}'s bucket_by must include "
                             f"'{id_col}'. Found in: {name}."
                         )
                     continue
                 if all(c in static_cols for c in key):
                     raise ValueError(
-                        f"partition_by={leaf.partition_by} holds '{id_col}' and only "
+                        f"bucket_by={leaf.bucket_by} holds '{id_col}' and only "
                         "static columns, so each bucket is a single series. Please "
                         f"use {leaf._per_series_hint()} instead. Found in: {name}."
                     )
@@ -1040,7 +1055,7 @@ class TimeSeries:
                     and leaf.time_agg not in leaf._per_series_time_aggs
                 ):
                     raise ValueError(
-                        f"time_agg requires a partition_by without '{id_col}', "
+                        f"time_agg requires a bucket_by without '{id_col}', "
                         "since each (bucket, timestamp) has a single row. "
                         f"Found in: {name}."
                     )
@@ -1261,13 +1276,39 @@ class TimeSeries:
             # we always want to drop rows with nulls in the target
             keep_rows = ~target_nulls
 
+        df_cols = set(df.columns)
+        date_features = [
+            f
+            for f in self.date_features
+            if not all(name in df_cols for name in self._date_feature_output_names(f))
+        ]
+        keep_cols: Optional[List[str]] = None
+        if return_X_y:
+            # only keep what X needs, so the row filter doesn't copy the rest
+            if self.weight_col is not None:
+                x_cols = [self.weight_col, *self.features_order_]
+            else:
+                x_cols = self.features_order_
+            keep_cols = [c for c in x_cols if c in df_cols]
+            # a polars frame with no columns has no rows
+            if date_features or not keep_cols:
+                keep_cols.append(self.time_col)
+            if not isinstance(df, pd.DataFrame):
+                # zero-copy on polars; on pandas it's a copy, so it's merged
+                # into the row filter below
+                df = df[keep_cols]
+                keep_cols = None
+
         self._dropped_series: Optional[np.ndarray] = None
         if not keep_rows.all():
             # remove rows with nulls
             for k, v in features.items():
                 features[k] = v[keep_rows]
             target = target[keep_rows]
-            df = ufp.filter_with_mask(df, keep_rows)
+            if keep_cols is not None:
+                df = df.loc[keep_rows, keep_cols]
+            else:
+                df = ufp.filter_with_mask(df, keep_rows)
             df = ufp.copy_if_pandas(df, deep=False)
             last_idxs = self.ga.indptr[1:] - 1
             if self._sort_idxs is not None:
@@ -1296,12 +1337,6 @@ class TimeSeries:
                 df = ufp.assign_columns(df, feat, features[feat])
 
         # date features
-        df_cols = set(df.columns)
-        date_features = [
-            f
-            for f in self.date_features
-            if not all(name in df_cols for name in self._date_feature_output_names(f))
-        ]
         if date_features:
             unique_dates = df[self.time_col].unique()
             # pandas positional-map fast path; narwhals rewrite would regress this hot path
@@ -1340,10 +1375,6 @@ class TimeSeries:
 
         # assemble return
         if return_X_y:
-            if self.weight_col is not None:
-                x_cols = [self.weight_col, *self.features_order_]
-            else:
-                x_cols = self.features_order_
             X = df[x_cols]
             if as_numpy:
                 X = ufp.to_numpy(X)
@@ -1386,7 +1417,7 @@ class TimeSeries:
         Yields:
             Tuple of (horizon_index, X, y) where horizon_index is 0-indexed
         """
-        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        exog_cols = self._dynamic_exog_cols
         exog_cols_set = set(exog_cols)
         common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
             exog_cols, self.horizon_features_
@@ -1503,6 +1534,8 @@ class TimeSeries:
         as_numpy: bool = False,
         weight_col: Optional[str] = None,
         horizon_features: Optional[Dict[int, List[str]]] = None,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> Union[DFType, Tuple[DFType, np.ndarray]]:
         """Add the features to `data` and save the required information for the predictions step.
 
@@ -1516,6 +1549,7 @@ class TimeSeries:
                       Mutually exclusive with max_horizon.
             horizon_features: Mapping of 1-indexed horizons to the dynamic
                 exogenous columns each horizon's model uses.
+            non_feature_cols: Columns of `data` that aren't passed to the models.
         """
         self.dropna = dropna
         self.as_numpy = as_numpy
@@ -1528,6 +1562,7 @@ class TimeSeries:
             static_features=static_features,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            non_feature_cols=non_feature_cols,
         )
         return self._transform(
             df=data,
@@ -1552,6 +1587,8 @@ class TimeSeries:
         as_numpy: Optional[bool] = None,
         horizon_features: Optional[Dict[int, List[str]]] = None,
         trim: bool = True,
+        *,
+        non_feature_cols: Optional[Sequence[str]] = None,
     ) -> "TimeSeries":
         """Build all internal state from `df` without materializing features.
 
@@ -1585,6 +1622,7 @@ class TimeSeries:
             trim: Apply the `keep_last_n` trim after warming the transform
                 state. `MLForecast.transfer` disables this to keep the full
                 provided history.
+            non_feature_cols: Columns of `df` that aren't passed to the models.
         """
         self._fit(
             df=df,
@@ -1594,6 +1632,7 @@ class TimeSeries:
             static_features=static_features,
             keep_last_n=keep_last_n,
             weight_col=weight_col,
+            non_feature_cols=non_feature_cols,
         )
         # must run before trimming: local stateful transforms (Expanding*/EWM)
         # warm their buffers from the full history
@@ -1622,6 +1661,7 @@ class TimeSeries:
             static_features=self.static_features,
             keep_last_n=self.keep_last_n,
             weight_col=self.weight_col,
+            non_feature_cols=self.non_feature_cols,
         )
 
     def _fit_settings(self) -> Dict[str, Any]:
@@ -1659,7 +1699,6 @@ class TimeSeries:
             target_transforms=target_transforms,
             lag_transforms_namer=self.lag_transforms_namer,
             date_features_as_dummies=self.date_features_as_dummies,
-            drop_auxiliary_columns=self.drop_auxiliary_columns,
         )
 
     def _clone_warm(
@@ -2039,7 +2078,7 @@ class TimeSeries:
                 df_constructor = pd.DataFrame
 
         result = df_constructor({self.id_col: uids, self.time_col: dates})
-        exog_cols = self._get_dynamic_exog_cols(self.features_order_)
+        exog_cols = self._dynamic_exog_cols
         common_exog_cols, horizon_exog_map = self._split_horizon_exog_cols(
             exog_cols, self.horizon_features_
         )
@@ -2150,7 +2189,7 @@ class TimeSeries:
     ) -> DFType:
         if ids is not None and self._pools_across_series:
             raise ValueError(
-                "Cannot use `ids` with pooled lag transforms whose partition_by "
+                "Cannot use `ids` with pooled lag transforms whose bucket_by "
                 f"doesn't include '{self.id_col}'. These transforms require "
                 "forecasting all series together."
             )
@@ -2164,13 +2203,13 @@ class TimeSeries:
             idxs: Optional[np.ndarray] = np.where(ufp.is_in(self.uids, ids))[0]
         else:
             idxs = None
+        future_input_cols = self._future_input_cols
         if X_df is None:
-            required_future_cols = set(self._future_input_cols)
-            if required_future_cols:
+            if future_input_cols:
                 raise ValueError(
                     "X_df is required for prediction because future values are needed "
                     "for feature generation or model inputs used during training: "
-                    f"{sorted(required_future_cols)}. If some of these columns are "
+                    f"{sorted(future_input_cols)}. If some of these columns are "
                     "constant for each series, list them in `static_features` when "
                     "fitting."
                 )
@@ -2196,13 +2235,18 @@ class TimeSeries:
                         "If any of these columns should vary over the forecast horizon, refit "
                         "without them in static_features."
                     )
-                required_future_cols = set(self._future_input_cols)
-                missing = sorted(required_future_cols - set(dynamics))
+                missing = sorted(set(future_input_cols) - set(dynamics))
                 if missing:
                     raise ValueError(
                         "X_df is missing future values required for feature generation or "
                         f"model inputs used during training: {missing}."
                     )
+                needed = [self.id_col, self.time_col, *future_input_cols]
+                if not future_input_cols:
+                    X_df = None
+                elif list(X_df.columns) != needed:
+                    X_df = X_df[needed]
+            if X_df is not None:
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
                 ends = ufp.offset_times(self.last_dates, self.freq, horizon)
                 expected_rows_X = len(self.uids) * horizon
@@ -2224,12 +2268,10 @@ class TimeSeries:
                         "You can get the expected structure by running `MLForecast.make_future_dataframe(h)` "
                         "or get the missing combinations in your current `X_df` by running `MLForecast.get_missing_future(h, X_df)`."
                     )
-                drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
                 X_df = ufp.sort(X_df, [self.id_col, self.time_col])
-                X_df = ufp.drop_columns(X_df, drop_cols)
-                if not X_df.shape[1]:
-                    # only statics were provided; a polars frame with no columns has no rows
-                    X_df = None
+                X_df = ufp.drop_columns(
+                    X_df, [self.id_col, self.time_col, "_start", "_end"]
+                )
             if getattr(self, "max_horizon", None) is None:
                 preds = self._predict_recursive(
                     models=models,

@@ -329,8 +329,8 @@ def test_dask_cross_validation_drops_fitted_models(tmp_path, refit):
     "pooled_kwargs",
     [
         {"global_": True},
-        {"partition_by": ["brand"]},
-        {"partition_by": ["unique_id", "promo"]},
+        {"bucket_by": ["brand"]},
+        {"bucket_by": ["unique_id", "promo"]},
     ],
 )
 def test_distributed_rejects_pooled_transforms(pooled_kwargs):

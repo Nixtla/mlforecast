@@ -287,7 +287,7 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     fcst.fit(df, fitted=True, static_features=[])
 
     with pytest.raises(
-        ValueError, match="not supported.*partition_by doesn't include"
+        ValueError, match="not supported.*bucket_by doesn't include"
     ):
         fcst.forecast_fitted_values(h=2)
 
@@ -666,7 +666,7 @@ def test_cv_refit_false_with_grouped_expanding_mean(
         models=[LinearRegression()],
         freq="D",
         lags=[1],
-        lag_transforms={1: [ExpandingMean(partition_by=["cat_code"])]},
+        lag_transforms={1: [ExpandingMean(bucket_by=["cat_code"])]},
     )
 
     cv = fcst.cross_validation(
@@ -1259,7 +1259,7 @@ def test_date_feature_dummies_raw_source_column_not_required_as_exog():
         date_features_as_dummies=True,
     )
     fcst.fit(df, static_features=[])
-    assert fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_) == []
+    assert fcst.ts._dynamic_exog_cols == []
     assert "dayofweek" not in fcst.ts.features_order_
     preds = fcst.predict(h=2)
     assert preds["LinearRegression"].notna().all()
@@ -2539,7 +2539,7 @@ def test_horizon_features_all_horizon_specific():
     )
     from mlforecast.core import TimeSeries  # noqa: F401 — verifying internal state
 
-    exog_cols_all = fcst.ts._get_dynamic_exog_cols(fcst.ts.features_order_)
+    exog_cols_all = fcst.ts._dynamic_exog_cols
     common, _ = fcst.ts._split_horizon_exog_cols(exog_cols_all, fcst.horizon_features_)
     assert common == []
     preds = fcst.predict(h=H, X_df=future)
@@ -2707,135 +2707,259 @@ def aux_cols_series():
     )
 
 
-def test_drop_auxiliary_columns_default_drops_groupby(aux_cols_series):
-    """Default True should auto-drop all groupby columns but keep computed lag features."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    groupby_col = statics[0]
+def _statics(df):
+    return df.columns.drop(["unique_id", "ds", "y"]).tolist()
 
+
+class _FeatureRecorder(BaseEstimator):
+    def fit(self, X, y=None):  # noqa: ARG002
+        self.fit_feature_names_ = list(X.columns)
+        return self
+
+    def predict(self, X):
+        self.predict_feature_names_ = list(X.columns)
+        return np.zeros(len(X))
+
+
+def _with_dynamic(df, seed=0):
+    rng = np.random.default_rng(seed)
+    return df.assign(
+        promo=rng.integers(0, 2, df.shape[0]), aux=rng.normal(size=df.shape[0])
+    )
+
+
+def _future_dynamic(fcst, h, seed=1):
+    future = fcst.make_future_dataframe(h)
+    rng = np.random.default_rng(seed)
+    future = ufp.assign_columns(future, "promo", rng.integers(0, 2, future.shape[0]))
+    return ufp.assign_columns(future, "aux", rng.normal(size=future.shape[0]))
+
+
+def test_non_feature_cols_default_keeps_keys(aux_cols_series):
+    statics = _statics(aux_cols_series)
     fcst = MLForecast(
         models=LinearRegression(),
         freq="D",
         lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+        lag_transforms={1: [RollingMean(7, bucket_by=[statics[0]])]},
     )
     fcst.fit(aux_cols_series, static_features=statics)
-
-    assert groupby_col not in fcst.ts.features_order_
+    assert statics[0] in fcst.ts.features_order_
     assert any("rolling_mean" in f for f in fcst.ts.features_order_)
 
-    preds = fcst.predict(7)
-    assert groupby_col not in preds.columns
+
+def test_non_feature_cols_explicit_list(aux_cols_series):
+    statics = _statics(aux_cols_series)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1, 7])
+    fcst.fit(aux_cols_series, static_features=statics, non_feature_cols=statics[:2])
+    assert not set(statics[:2]) & set(fcst.ts.features_order_)
+    assert statics[2] in fcst.ts.features_order_
+    # not remembered: fitting again without it makes them features again
+    fcst.fit(aux_cols_series, static_features=statics)
+    assert set(statics) <= set(fcst.ts.features_order_)
 
 
-def test_drop_auxiliary_columns_false_keeps_groupby(aux_cols_series):
-    """False should keep groupby columns in the model feature matrix."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    groupby_col = statics[0]
-
+def test_non_feature_cols_predict_excludes_column(aux_cols_series):
+    statics = _statics(aux_cols_series)
     fcst = MLForecast(
-        models=LinearRegression(),
+        models={"rec": _FeatureRecorder()},
         freq="D",
         lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
-        drop_auxiliary_columns=False,
+        lag_transforms={1: [RollingMean(7, bucket_by=[statics[0]])]},
     )
-    fcst.fit(aux_cols_series, static_features=statics)
+    fcst.fit(aux_cols_series, static_features=statics, non_feature_cols=[statics[0]])
+    preds = fcst.predict(3)
+    assert statics[0] not in fcst.models_["rec"].fit_feature_names_
+    assert statics[0] not in fcst.models_["rec"].predict_feature_names_
+    assert statics[0] not in preds.columns
 
-    assert groupby_col in fcst.ts.features_order_
 
-
-def test_drop_auxiliary_columns_explicit_list(aux_cols_series):
-    """An explicit list should drop exactly those columns regardless of groupby."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    drop = statics[:2]
-
+def test_non_feature_cols_cross_validation(aux_cols_series):
+    statics = _statics(aux_cols_series)
     fcst = MLForecast(
-        models=LinearRegression(),
+        models={"rec": _FeatureRecorder()},
         freq="D",
         lags=[1, 7],
-        drop_auxiliary_columns=drop,
+        lag_transforms={1: [RollingMean(7, bucket_by=[statics[0]])]},
     )
-    fcst.fit(aux_cols_series, static_features=statics)
-
-    for col in drop:
-        assert col not in fcst.ts.features_order_
-    for col in statics[2:]:
-        assert col in fcst.ts.features_order_
-
-
-def test_drop_auxiliary_columns_predict_excludes_column(aux_cols_series):
-    """Dropped columns must not appear in the prediction feature matrix."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    groupby_col = statics[0]
-
-    class FeatureRecorder(BaseEstimator):
-        def fit(self, X, y=None):  # noqa: ARG002
-            return self
-
-        def predict(self, X):  # noqa: ARG002
-            self.predict_feature_names_ = (
-                list(X.columns) if hasattr(X, "columns") else None
-            )
-            return np.zeros(len(X))
-
-    fcst = MLForecast(
-        models={"rec": FeatureRecorder()},
-        freq="D",
-        lags=[1],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
+    cv_result = fcst.cross_validation(
+        aux_cols_series,
+        n_windows=2,
+        h=7,
+        static_features=statics,
+        non_feature_cols=[statics[0]],
     )
-    fcst.fit(aux_cols_series, static_features=statics)
-    fcst.predict(3)
-
-    fitted_model = fcst.models_["rec"]
-    assert hasattr(fitted_model, "predict_feature_names_")
-    assert fitted_model.predict_feature_names_ is not None
-    assert groupby_col not in fitted_model.predict_feature_names_
+    assert statics[0] not in cv_result.columns
+    for models in fcst.cv_models_:
+        assert statics[0] not in models["rec"].fit_feature_names_
 
 
-def test_drop_auxiliary_columns_cross_validation(aux_cols_series):
-    """drop_auxiliary_columns should exclude groupby columns from the feature matrix during cross_validation."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
-    groupby_col = statics[0]
-
-    class FeatureRecorder(BaseEstimator):
-        def __init__(self):
-            self.fit_feature_names_ = None
-
-        def fit(self, X, y=None):  # noqa: ARG002
-            self.fit_feature_names_ = list(X.columns) if hasattr(X, "columns") else None
-            return self
-
-        def predict(self, X):  # noqa: ARG002
-            return np.zeros(len(X))
-
-    fcst = MLForecast(
-        models={"rec": FeatureRecorder()},
-        freq="D",
-        lags=[1, 7],
-        lag_transforms={1: [RollingMean(7, partition_by=[groupby_col])]},
-    )
-    cv_result = fcst.cross_validation(aux_cols_series, n_windows=2, h=7, static_features=statics)
-    assert cv_result is not None
-    assert groupby_col not in cv_result.columns
-    for i in range(2):
-        fitted_model = fcst.cv_models_[i]["rec"]
-        assert fitted_model.fit_feature_names_ is not None
-        assert groupby_col not in fitted_model.fit_feature_names_
+@pytest.mark.parametrize("value", [True, False, "static_0"])
+def test_non_feature_cols_rejects_non_lists(aux_cols_series, value):
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    with pytest.raises(TypeError, match="takes a list of column names"):
+        fcst.fit(aux_cols_series, non_feature_cols=value)
 
 
-def test_drop_auxiliary_columns_unknown_warns(aux_cols_series):
-    """A UserWarning should be emitted when an explicit column name doesn't exist."""
-    statics = aux_cols_series.columns.drop(["unique_id", "ds", "y"]).tolist()
+@pytest.mark.parametrize(
+    "cols, match",
+    [
+        (["nonexistent_column"], "are not in the data"),
+        (["lag1"], "are not in the data"),
+        (["unique_id"], "never features"),
+        (["ds"], "never features"),
+        (["y"], "never features"),
+        (["w"], "never features"),
+    ],
+)
+def test_non_feature_cols_rejects_invalid_names(aux_cols_series, cols, match):
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    with pytest.raises(ValueError, match=match):
+        fcst.fit(aux_cols_series.assign(w=1.0), weight_col="w", non_feature_cols=cols)
 
+
+@pytest.mark.parametrize("kwarg", ["drop_auxiliary_columns", "non_feature_cols"])
+def test_non_feature_cols_not_a_constructor_argument(kwarg):
+    with pytest.raises(TypeError, match=kwarg):
+        MLForecast(models=LinearRegression(), freq="D", **{kwarg: ["static_0"]})
+
+
+def test_non_feature_cols_dynamic_key_still_required(aux_cols_series):
+    df = _with_dynamic(aux_cols_series)
+    statics = _statics(aux_cols_series)
     fcst = MLForecast(
         models=LinearRegression(),
         freq="D",
         lags=[1],
-        drop_auxiliary_columns=["nonexistent_column"],
+        lag_transforms={1: [ExpandingMean(bucket_by=["unique_id", "promo"])]},
     )
-    with pytest.warns(UserWarning, match="drop_auxiliary_columns"):
-        fcst.fit(aux_cols_series, static_features=statics)
+    fcst.fit(df, static_features=statics, non_feature_cols=["promo", "aux"])
+    assert "promo" not in fcst.ts.features_order_
+    assert "aux" not in fcst.ts.features_order_
+    future = _future_dynamic(fcst, 2)
+    with pytest.raises(ValueError, match=r"missing.*\['promo'\]"):
+        fcst.predict(2, X_df=future.drop(columns="promo"))
+    # aux isn't a key, so it isn't required
+    fcst.predict(2, X_df=future.drop(columns="aux"))
+
+
+def test_non_feature_cols_excluded_from_horizon_templates(aux_cols_series):
+    rng = np.random.default_rng(0)
+    df = aux_cols_series.assign(
+        **{f"f_h{i}": rng.normal(size=aux_cols_series.shape[0]) for i in (1, 2, 3)}
+    )
+    statics = _statics(aux_cols_series)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    kwargs = dict(
+        static_features=statics, max_horizon=2, horizon_feature_templates=["f_h{h}"]
+    )
+    with pytest.raises(ValueError, match="'f_h3' maps to horizon 3"):
+        fcst.fit(df, **kwargs)
+    fcst.fit(df, **kwargs, non_feature_cols=["f_h3"])
+    assert fcst.horizon_features_ == {1: ["f_h1"], 2: ["f_h2"]}
+    assert "f_h3" not in fcst.ts.features_order_
+
+
+def test_non_feature_cols_transfer(aux_cols_series):
+    statics = _statics(aux_cols_series)
+    fcst = MLForecast(
+        models=LinearRegression(),
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [RollingMean(7, bucket_by=[statics[0]])]},
+    )
+    fcst.fit(aux_cols_series, static_features=statics, non_feature_cols=[statics[0]])
+    new = aux_cols_series[aux_cols_series["unique_id"].isin(["id_00", "id_01"])]
+    transferred = fcst.transfer(new)
+    assert transferred.ts.non_feature_cols == [statics[0]]
+    assert transferred.predict(3).shape[0] == 6
+    with pytest.raises(ValueError, match="are not in the data"):
+        fcst.transfer(new.drop(columns=statics[0]))
+
+
+def test_non_feature_cols_forecast_fitted_values_with_static(aux_cols_series):
+    # the per-series history there has no static columns
+    statics = _statics(aux_cols_series)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(
+        aux_cols_series,
+        static_features=statics,
+        non_feature_cols=[statics[0]],
+        fitted=True,
+    )
+    res = fcst.forecast_fitted_values(h=2)
+    assert res.shape[0] > 0
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_non_feature_cols_predict_ignores_unused_x_df_columns(aux_cols_series, engine):
+    df = _with_dynamic(aux_cols_series)
+    statics = _statics(aux_cols_series)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, static_features=statics, non_feature_cols=["promo"])
+    future = _future_dynamic(fcst, 3)
+    unused = future.assign(extra=np.nan, other="x")
+    if engine == "polars":
+        df, future, unused = map(pl.from_pandas, (df, future, unused))
+        fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1])
+        fcst.fit(df, static_features=statics, non_feature_cols=["promo"])
+    expected = fcst.predict(3, X_df=future)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        actual = fcst.predict(3, X_df=unused)
+    if engine == "polars":
+        expected, actual = expected.to_pandas(), actual.to_pandas()
+    pd.testing.assert_frame_equal(actual, expected)
+
+    # nothing is required: an X_df with only unused columns is ignored
+    fcst.fit(df, static_features=statics, non_feature_cols=["promo", "aux"])
+    expected = fcst.predict(3)
+    actual = fcst.predict(3, X_df=unused)
+    if engine == "polars":
+        expected, actual = expected.to_pandas(), actual.to_pandas()
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize("dropna", [True, False])
+def test_non_feature_cols_fit_matches_preprocess(aux_cols_series, engine, dropna):
+    df = _with_dynamic(aux_cols_series).assign(
+        w=lambda x: np.linspace(0.5, 1.5, x.shape[0])
+    )
+    if engine == "polars":
+        df = pl.from_pandas(df)
+    statics = _statics(aux_cols_series)
+    kwargs = dict(
+        static_features=statics,
+        non_feature_cols=[statics[0], "promo"],
+        weight_col="w",
+        dropna=dropna,
+    )
+
+    def make():
+        return MLForecast(
+            models=HistGradientBoostingRegressor(max_iter=5),
+            freq="1d" if engine == "polars" else "D",
+            lags=[1, 7],
+            lag_transforms={1: [RollingMean(7, bucket_by=[statics[0]])]},
+            date_features=["weekday" if engine == "polars" else "dayofweek"],
+        )
+
+    fit = make().fit(df, **kwargs)
+    manual = make()
+    prep = manual.preprocess(df, **kwargs)
+    for col in ["unique_id", "ds", "y", statics[0], "promo"]:
+        assert col in prep.columns
+    X, y = manual._extract_X_y(prep, "y", "w")
+    manual.fit_models(X, y)
+    assert fit.ts.features_order_ == manual.ts.features_order_
+    assert statics[0] not in fit.ts.features_order_
+    future = _future_dynamic(fit, 3)
+    expected = manual.predict(3, X_df=future)
+    actual = fit.predict(3, X_df=future)
+    if engine == "polars":
+        expected, actual = expected.to_pandas(), actual.to_pandas()
+    pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_fit_with_intervals_leaves_no_cv_state():
