@@ -3301,3 +3301,26 @@ def test_forecast_fitted_values_without_pooled_states():
     del fcst.ts._pooled_states
     with pytest.warns(UserWarning, match="on demand"):
         pd.testing.assert_frame_equal(fcst.forecast_fitted_values(h=2), expected)
+
+
+def test_recursive_forecast_fitted_values_on_demand_skips_gaps_in_one_step_values():
+    # drop mid-series rows from the one-step values: their origins are skipped
+    df = generate_daily_series(2, min_length=30, max_length=30)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, fitted=True, static_features=[])
+    fcst.fcst_fitted_values_ = fcst.fcst_fitted_values_.drop(index=[10, 11, 40])
+    one_step = fcst.fcst_fitted_values_
+    got = fcst.forecast_fitted_values(h=2).sort_values(["unique_id", "ds"])
+    rows = []
+    for uid, group in df.sort_values(["unique_id", "ds"]).groupby(
+        "unique_id", observed=True
+    ):
+        group = group.reset_index(drop=True)
+        valid = set(one_step.loc[one_step["unique_id"] == uid, "ds"])
+        for origin in range(len(group) - 2):
+            if group.loc[origin + 1, "ds"] in valid:
+                pred = fcst.transfer(group.iloc[: origin + 1]).predict(h=2).iloc[-1]
+                rows.append((uid, group.loc[origin + 2, "ds"], pred["LinearRegression"]))
+    assert len(rows) < 2 * 28
+    assert list(zip(got["unique_id"], got["ds"])) == [(u, d) for u, d, _ in rows]
+    np.testing.assert_allclose(got["LinearRegression"], [p for *_, p in rows])

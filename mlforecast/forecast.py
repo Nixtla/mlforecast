@@ -1191,17 +1191,19 @@ class MLForecast:
             work = train.with_columns(nw.col(id_col).cast(nw.String))
             statics_ = statics_.with_columns(nw.col(id_col).cast(nw.String))
             one_step = one_step.with_columns(nw.col(id_col).cast(nw.String))
-        valid = set(zip(one_step[id_col].to_list(), one_step[time_col].to_list()))
+        # rows whose (id, time) has a one-step fitted value
+        valid_rows = work.join(
+            one_step.select(id_col, time_col), on=[id_col, time_col], how="semi"
+        )[row_col].to_numpy()
+        is_valid = np.zeros(train.shape[0], dtype=bool)
+        is_valid[valid_rows] = True
         obs_cols = [id_col, time_col, target_col, *dynamic]
         rows: List[int] = []
         out: Dict[str, list] = {m: [] for m in model_names}
-        for (uid,), group in work.group_by(id_col):
-            times = group[time_col].to_list()
-            valid_origins = [
-                origin_idx
-                for origin_idx in range(len(group) - h)
-                if (uid, times[origin_idx + 1]) in valid
-            ]
+        for _, group in work.group_by(id_col):
+            # origin i is valid if the row after it has a one-step value
+            group_rows = group[row_col].to_numpy()[1 : len(group) - h + 1]
+            valid_origins = np.flatnonzero(is_valid[group_rows]).tolist()
             if not valid_origins:
                 continue
 
