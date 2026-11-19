@@ -3324,3 +3324,23 @@ def test_recursive_forecast_fitted_values_on_demand_skips_gaps_in_one_step_value
     assert len(rows) < 2 * 28
     assert list(zip(got["unique_id"], got["ds"])) == [(u, d) for u, d, _ in rows]
     np.testing.assert_allclose(got["LinearRegression"], [p for *_, p in rows])
+
+
+def test_recursive_forecast_fitted_values_on_demand_series_shorter_than_h():
+    long_df = generate_daily_series(1, min_length=30, max_length=30)
+    short = generate_daily_series(1, min_length=4, max_length=4).assign(
+        unique_id="id_short"
+    )
+    df = pd.concat([long_df, short], ignore_index=True)
+    fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])
+    fcst.fit(df, fitted=True, static_features=[])
+    got = fcst.forecast_fitted_values(h=6)
+    assert "id_short" not in set(got["unique_id"].astype(str))
+    one_step = set(fcst.fcst_fitted_values_.query("unique_id == 'id_0'")["ds"])
+    expected = []
+    for origin in range(24):
+        if long_df["ds"].iloc[origin + 1] in one_step:
+            hist = long_df.iloc[: origin + 1]
+            expected.append(fcst.transfer(hist).predict(h=6)["LinearRegression"].iloc[-1])
+    assert len(got) == len(expected) > 0
+    np.testing.assert_allclose(got["LinearRegression"], expected)

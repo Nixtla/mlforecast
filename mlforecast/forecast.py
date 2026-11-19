@@ -1202,7 +1202,7 @@ class MLForecast:
         out: Dict[str, list] = {m: [] for m in model_names}
         for _, group in work.group_by(id_col):
             # origin i is valid if the row after it has a one-step value
-            group_rows = group[row_col].to_numpy()[1 : len(group) - h + 1]
+            group_rows = group[row_col].to_numpy()[1 : max(len(group) - h, 0) + 1]
             valid_origins = np.flatnonzero(is_valid[group_rows]).tolist()
             if not valid_origins:
                 continue
