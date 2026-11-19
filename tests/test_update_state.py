@@ -393,3 +393,28 @@ def test_polars_categorical_update_sorts_new_series():
         fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
         uids.append(fcst.ts.uids.cast(pl.String).to_list())
     assert uids[1] == uids[0] == ["m", "y", "z"]
+
+
+def test_polars_lexical_categorical_update_keeps_ordering():
+    lexical = pl.Categorical("lexical")
+    train = pl.from_pandas(_series({"id_0": 10, "id_1": 10, "id_2": 10}))
+    new = pl.from_pandas(_series({"id_10": 3}))
+    new = new.with_columns(pl.col("ds") + pl.duration(days=10))
+    # a static per series, so statics stacked out of uids order change the preds
+    brand = {"id_0": 0.0, "id_1": 100.0, "id_2": 200.0, "id_10": 1000.0}
+    train, new = (
+        df.with_columns(pl.col("unique_id").replace_strict(brand).alias("brand"))
+        for df in (train, new)
+    )
+    preds = []
+    for dtype in (pl.String, lexical):
+        fcst = MLForecast(freq="1d", models=[LinearRegression()], lags=[1])
+        fcst.fit(
+            train.with_columns(pl.col("unique_id").cast(dtype)),
+            static_features=["brand"],
+        )
+        fcst.update(new.with_columns(pl.col("unique_id").cast(dtype)))
+        assert fcst.ts.uids.dtype == dtype
+        assert fcst.ts.uids.to_list() == ["id_0", "id_1", "id_10", "id_2"]
+        preds.append(fcst.predict(1)["LinearRegression"].to_numpy())
+    np.testing.assert_allclose(preds[1], preds[0])

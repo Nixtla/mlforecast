@@ -2305,7 +2305,7 @@ class TimeSeries:
             stored, incoming = uids.cast(pl.String), new_ids.cast(pl.String)
             unseen = incoming.unique()
             unseen = unseen.filter(~unseen.is_in(stored.implode())).sort()
-            both = pl.concat([stored, unseen, incoming]).cast(pl.Categorical)
+            both = pl.concat([stored, unseen, incoming]).cast(uids.dtype)
             uids, new_ids = both[: len(stored)], both[len(stored) + len(unseen) :]
         else:
             uids, new_ids = ufp.match_if_categorical(uids, new_ids)
@@ -2406,6 +2406,17 @@ class TimeSeries:
                 self.static_features_ = ufp.vertical_concat(
                     [self.static_features_, new_statics]
                 )
+                if (
+                    isinstance(self.uids, pl_Series)
+                    and self.uids.dtype == pl.Categorical
+                ):
+                    # vertical_concat re-encodes the id as physical, but statics
+                    # are stacked positionally with uids, so sort lexically
+                    self.static_features_ = ufp.assign_columns(
+                        self.static_features_,
+                        self.id_col,
+                        self.static_features_[self.id_col].cast(self.uids.dtype),
+                    )
                 self.static_features_ = ufp.sort(self.static_features_, self.id_col)
             # the outer join above can make the sizes float, which the offset
             # arithmetic in _advance_lag_transform_states needs as integers
