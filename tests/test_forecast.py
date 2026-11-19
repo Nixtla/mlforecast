@@ -696,6 +696,15 @@ def test_recursive_forecast_fitted_values_on_demand_rejects_other_time_kind(
         fcst.forecast_fitted_values(h=2, train_df=train)
 
 
+def test_recursive_forecast_fitted_values_on_demand_keeps_lexical_ordering():
+    df = pl.from_pandas(generate_daily_series(3, min_length=30, max_length=40))
+    df = df.with_columns(pl.col("unique_id").cast(pl.Categorical("lexical")))
+    fcst = MLForecast(models=LinearRegression(), freq="1d", lags=[1, 7])
+    fcst.fit(df, fitted=True)
+    h1 = fcst.forecast_fitted_values(h=1)
+    assert fcst.forecast_fitted_values(h=2)["unique_id"].dtype == h1["unique_id"].dtype
+
+
 def test_recursive_forecast_fitted_values_on_demand_rejects_missing_id_column():
     df = generate_daily_series(2, min_length=50, max_length=50)
     fcst = MLForecast(models=LinearRegression(), freq="D", lags=[1])

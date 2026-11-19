@@ -1134,21 +1134,15 @@ class MLForecast:
                 "`train_df` must use the same dataframe library as the data "
                 f"passed to `fit` (got {got}, expected {expected})."
             )
+        casted = {}
         for col in (id_col, time_col):
             if col not in train.columns:
                 raise ValueError(f"`train_df` is missing the `{col}` column.")
             got, expected = train.schema[col], one_step.schema[col]
-            if (
-                isinstance(expected, nw.Categorical)
-                and train.implementation.is_pandas()
-            ):
-                # keep the categories, they may be the only difference
-                shown = (train_df[col].dtype, self.fcst_fitted_values_[col].dtype)
-            else:
-                shown = (got, expected)
+            source, target = train_df[col].dtype, self.fcst_fitted_values_[col].dtype
             msg = (
                 f"`train_df['{col}']` must have the dtype used in `fit` "
-                f"(got {shown[0]}, expected {shown[1]})."
+                f"(got {source}, expected {target})."
             )
             # polars casts naive to aware silently
             if getattr(got, "time_zone", None) != getattr(expected, "time_zone", None):
@@ -1160,20 +1154,20 @@ class MLForecast:
                 or got.is_integer() != expected.is_integer()
             ):
                 raise ValueError(msg)
+            if source == target:
+                continue
             try:
-                # pandas: astype keeps fit's categories (narwhals would drop
-                # them); ids outside them become NaN and are ignored below
-                train = (
-                    nw.from_native(
-                        train.to_native().astype(
-                            {col: self.fcst_fitted_values_[col].dtype}
-                        )
-                    )
-                    if train.implementation.is_pandas()
-                    else train.with_columns(nw.col(col).cast(expected))
-                )
+                casted[col] = ufp.cast(train_df[col], target)
             except Exception as e:
                 raise ValueError(msg) from e
+        if casted:
+            # native dtypes keep pandas categories and polars ordering, which
+            # narwhals drops; pandas ids outside fit's categories become NaN
+            # and get no origins
+            native = ufp.copy_if_pandas(train_df, deep=False)
+            for col, values in casted.items():
+                native = ufp.assign_columns(native, col, values)
+            train = nw.from_native(native, eager_only=True)
         _warn("Computing recursive fitted values for h>1 on demand can be slow.")
         # target rows are gathered from `train` so the output keeps its exact
         # id/time/target dtypes (e.g. every training category of a pandas id)
