@@ -2206,11 +2206,15 @@ class TimeSeries:
                 starts = ufp.offset_times(self.last_dates, self.freq, 1)
                 ends = ufp.offset_times(self.last_dates, self.freq, horizon)
                 expected_rows_X = len(self.uids) * horizon
+                order_col = "_mlforecast_id_order"
+                while order_col in X_df.columns:
+                    order_col += "_"
                 dates_validation = type(X_df)(
                     {
                         self.id_col: self.uids,
                         "_start": starts,
                         "_end": ends,
+                        order_col: np.arange(len(self.uids)),
                     }
                 )
                 X_df = ufp.join(X_df, dates_validation, on=self.id_col)
@@ -2224,8 +2228,14 @@ class TimeSeries:
                         "You can get the expected structure by running `MLForecast.make_future_dataframe(h)` "
                         "or get the missing combinations in your current `X_df` by running `MLForecast.get_missing_future(h, X_df)`."
                     )
-                drop_cols = [self.id_col, self.time_col, "_start", "_end"] + common
-                X_df = ufp.sort(X_df, [self.id_col, self.time_col])
+                drop_cols = [
+                    self.id_col,
+                    self.time_col,
+                    "_start",
+                    "_end",
+                    order_col,
+                ] + common
+                X_df = ufp.sort(X_df, [order_col, self.time_col])
                 X_df = ufp.drop_columns(X_df, drop_cols)
                 if not X_df.shape[1]:
                     # only statics were provided; a polars frame with no columns has no rows
