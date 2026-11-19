@@ -2060,9 +2060,12 @@ class TimeSeries:
                 predictions = np.empty((len(self.uids), output_horizon))
 
                 for out_idx, h in enumerate(horizons_to_predict):
-                    # Advance features to the correct horizon step
-                    # We need to step through all horizons up to h to maintain state
-                    while self._h <= h:
+                    # every horizon's model is trained on the lag and date
+                    # features of the forecast origin, so compute them from the
+                    # fitted state each time and only read X_df at step h
+                    with self._backup():
+                        self._predict_setup()
+                        self._h = h
                         new_x = self._get_features_for_next_step(X_df)
 
                     if before_predict_callback is not None:

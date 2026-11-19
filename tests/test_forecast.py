@@ -1247,6 +1247,31 @@ def test_direct_forecasting_perfect_exogenous_fit():
     )
 
 
+def test_direct_forecasting_uses_origin_features_for_every_horizon():
+    # every horizon's model is trained on the lag and date features of the
+    # forecast origin, so predict must not advance them from one horizon to the next
+    ds = pd.date_range("2024-01-01", periods=20, freq="D")
+    df = pd.DataFrame({"unique_id": "a", "ds": ds, "y": np.arange(20.0)})
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [ExpandingMean()]},
+        date_features=["dayofweek"],
+    )
+    fcst.fit(df, max_horizon=3)
+    seen = []
+
+    def capture(X):
+        seen.append(X)
+        return X
+
+    preds = fcst.predict(3, before_predict_callback=capture)
+    for X in seen[1:]:
+        pd.testing.assert_frame_equal(X, seen[0])
+    np.testing.assert_allclose(preds["LinearRegression"], [20.0, 21.0, 22.0])
+
+
 def test_date_feature_dummies_raw_source_column_not_required_as_exog():
     """Raw source column (e.g. 'dayofweek') is excluded from required exog when dummies are used."""
     df = generate_daily_series(2, n_static_features=0)
