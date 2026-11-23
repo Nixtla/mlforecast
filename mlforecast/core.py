@@ -1949,6 +1949,7 @@ class TimeSeries:
         after_predict_callback: Optional[Callable] = None,
         X_df: Optional[DFType] = None,
         model_span: Callable[[str, Any], ContextManager[_SpanResult]] = _no_model_span,
+        predict_fn: Optional[Callable] = None,
     ) -> DFType:
         """Use `model` to predict the next `horizon` timesteps."""
         for i, (name, model) in enumerate(models.items()):
@@ -1964,7 +1965,11 @@ class TimeSeries:
                         new_x, pl_DataFrame
                     ):
                         model_x = new_x.to_pandas()
-                    predictions = model.predict(model_x)
+                    predictions = (
+                        model.predict(model_x)
+                        if predict_fn is None
+                        else predict_fn(model, model_x)
+                    )
                     if after_predict_callback is not None:
                         predictions = after_predict_callback(predictions)
                     self._update_y(predictions)
@@ -2147,6 +2152,7 @@ class TimeSeries:
         X_df: Optional[DFType] = None,
         ids: Optional[List[str]] = None,
         model_span: Callable[[str, Any], ContextManager[_SpanResult]] = _no_model_span,
+        predict_fn: Optional[Callable] = None,
     ) -> DFType:
         if ids is not None and self._pools_across_series:
             raise ValueError(
@@ -2238,6 +2244,7 @@ class TimeSeries:
                     after_predict_callback=after_predict_callback,
                     X_df=X_df,
                     model_span=model_span,
+                    predict_fn=predict_fn,
                 )
             else:
                 preds = self._predict_multi(

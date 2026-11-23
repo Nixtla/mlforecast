@@ -1753,6 +1753,63 @@ class MLForecast:
                 )
         return forecasts
 
+    def predict_samples(
+        self,
+        h: int,
+        n_samples: int,
+        sample_fn: Callable,
+        *,
+        random_state: Optional[int] = None,
+        X_df: Optional[DFType] = None,
+        ids: Optional[List[str]] = None,
+    ) -> DFType:
+        """Draw paths by sampling each recursive step conditional on the previous draws.
+
+        Args:
+            h: Number of periods to forecast.
+            n_samples: Number of trajectories to draw per series and model.
+            sample_fn: Callable taking a fitted model, its current feature rows and
+                a NumPy random generator. Return one draw per row on the training
+                target scale, e.g. `rng.poisson(model.predict(X))` for a Poisson model.
+            random_state: Seed for the generator passed to the sampler.
+            X_df: Future exogenous features, as in `predict`.
+            ids: Subset of series to forecast.
+
+        Returns:
+            DataFrame with the same columns as `predict` and a zero-based
+            `sample` column. Target transforms are inverted separately per path.
+        """
+        self._check_fitted()
+        if self.ts.max_horizon is not None:
+            raise ValueError("predict_samples requires a recursive model.")
+        if (
+            not isinstance(n_samples, (int, np.integer))
+            or isinstance(n_samples, bool)
+            or n_samples < 1
+        ):
+            raise ValueError("n_samples must be a positive integer.")
+        if not isinstance(h, (int, np.integer)) or isinstance(h, bool) or h < 1:
+            raise ValueError("h must be a positive integer.")
+        if "sample" in (self.ts.id_col, self.ts.time_col) or "sample" in self.models_:
+            raise ValueError(
+                "The output column 'sample' conflicts with an id, time, or model name."
+            )
+        rng = np.random.default_rng(random_state)
+
+        def draw(model, features):
+            values = np.asarray(sample_fn(model, features, rng))
+            if values.shape != (len(features),):
+                raise ValueError("sample_fn must return one value per row of features.")
+            return values
+
+        paths = []
+        for i in range(n_samples):
+            path = self.ts.predict(
+                models=self.models_, horizon=h, X_df=X_df, ids=ids, predict_fn=draw
+            )
+            paths.append(ufp.assign_columns(path, "sample", np.int64(i)))
+        return ufp.drop_index_if_pandas(ufp.vertical_concat(paths))
+
     def _add_intervals_from_transfer(
         self,
         forecasts: DFType,
