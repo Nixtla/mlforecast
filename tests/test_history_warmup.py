@@ -60,7 +60,7 @@ def _config(kind, engine="pandas"):
                 1: [
                     RollingMean(7),
                     RollingMean(7, global_=True),
-                    RollingMean(7, partition_by=["static_0"]),
+                    RollingMean(7, bucket_by=["static_0"]),
                     ExpandingMean(global_=True),
                 ]
             },
@@ -126,7 +126,7 @@ def test_history_warmup_update_predict_parity(engine, kind):
     _assert_preds_equal(expected, warmed.predict(H))
 
 
-def test_history_warmup_partition_by():
+def test_history_warmup_bucket_by():
     series = _gen("pandas")
     # alternate promo daily so every 3-wide window has samples in both buckets
     series["promo"] = series["ds"].dt.dayofweek % 2
@@ -136,7 +136,7 @@ def test_history_warmup_partition_by():
             models=[LinearRegression()],
             freq="D",
             lags=[1],
-            lag_transforms={1: [RollingMean(3, partition_by=["unique_id", "promo"])]},
+            lag_transforms={1: [RollingMean(3, bucket_by=["unique_id", "promo"])]},
         )
 
     fitted = new_fcst()

@@ -55,29 +55,35 @@ def _fit_ts(df, tfms, **kwargs):
     return ts, res
 
 
-@pytest.mark.parametrize("kwarg", ["groupby", "global"])
+@pytest.mark.parametrize("kwarg", ["groupby", "global", "partition_by"])
 def test_removed_scope_kwargs_raise(kwarg):
     with pytest.raises(TypeError, match=kwarg):
-        RollingMean(3, **{kwarg: True})
+        RollingMean(3, **{kwarg: ["brand"]})
 
 
-def test_global_and_partition_by_exclusive():
+@pytest.mark.parametrize("kwarg", ["groupby", "partition_by"])
+def test_lookup_lag_removed_kwargs_raise(kwarg):
+    with pytest.raises(TypeError, match=kwarg):
+        LookupLag(**{kwarg: ["unique_id", "brand"]})
+
+
+def test_global_and_bucket_by_exclusive():
     with pytest.raises(ValueError, match="can't be used together"):
-        RollingMean(3, global_=True, partition_by=["brand"])
+        RollingMean(3, global_=True, bucket_by=["brand"])
 
 
 @pytest.mark.parametrize(
     "make_tfm",
     [
-        lambda partition_by: RollingMean(3, partition_by=partition_by),
-        lambda partition_by: ExpandingMean(partition_by=partition_by),
-        lambda partition_by: ExponentiallyWeightedMean(0.5, partition_by=partition_by),
+        lambda bucket_by: RollingMean(3, bucket_by=bucket_by),
+        lambda bucket_by: ExpandingMean(bucket_by=bucket_by),
+        lambda bucket_by: ExponentiallyWeightedMean(0.5, bucket_by=bucket_by),
     ],
 )
-@pytest.mark.parametrize("partition_by", [[], ()])
-def test_empty_partition_by_raises(make_tfm, partition_by):
+@pytest.mark.parametrize("bucket_by", [[], ()])
+def test_empty_bucket_by_raises(make_tfm, bucket_by):
     with pytest.raises(ValueError, match="use `global_=True`"):
-        make_tfm(partition_by)
+        make_tfm(bucket_by)
 
 
 def test_time_agg_requires_pooled_scope():
@@ -92,20 +98,20 @@ def test_time_agg_requires_pooled_scope():
     [
         (RollingMean(3, global_=True), "global_rolling_mean_lag1_window_size3"),
         (
-            RollingMean(3, partition_by=["brand"]),
-            "partby_brand_rolling_mean_lag1_window_size3",
+            RollingMean(3, bucket_by=["brand"]),
+            "bucketby_brand_rolling_mean_lag1_window_size3",
         ),
         (
-            RollingMean(3, partition_by=["unique_id", "promo"]),
-            "partby_unique_id__promo_rolling_mean_lag1_window_size3",
+            RollingMean(3, bucket_by=["unique_id", "promo"]),
+            "bucketby_unique_id__promo_rolling_mean_lag1_window_size3",
         ),
         (
-            RollingMean(3, partition_by=["promo", "unique_id"]),
-            "partby_promo__unique_id_rolling_mean_lag1_window_size3",
+            RollingMean(3, bucket_by=["promo", "unique_id"]),
+            "bucketby_promo__unique_id_rolling_mean_lag1_window_size3",
         ),
         (
-            LookupLag(partition_by=["unique_id", "promo"]),
-            "partby_unique_id__promo_lookup_lag1",
+            LookupLag(bucket_by=["unique_id", "promo"]),
+            "bucketby_unique_id__promo_lookup_lag1",
         ),
     ],
 )
@@ -117,29 +123,29 @@ def test_feature_names(tfm, name):
     "tfm, match",
     [
         (
-            RollingMean(3, partition_by=["unique_id"]),
-            "with min_samples=1 and without partition_by instead",
+            RollingMean(3, bucket_by=["unique_id"]),
+            "with min_samples=1 and without bucket_by instead",
         ),
         (
-            RollingMean(3, partition_by=["unique_id", "brand"]),
-            "with min_samples=1 and without partition_by instead",
+            RollingMean(3, bucket_by=["unique_id", "brand"]),
+            "with min_samples=1 and without bucket_by instead",
         ),
         (
-            RollingMean(3, min_samples=2, partition_by=["unique_id", "brand"]),
-            "use the transform without partition_by instead",
+            RollingMean(3, min_samples=2, bucket_by=["unique_id", "brand"]),
+            "use the transform without bucket_by instead",
         ),
         (
-            ExpandingMean(partition_by=["unique_id", "brand"]),
-            "use the transform without partition_by instead",
+            ExpandingMean(bucket_by=["unique_id", "brand"]),
+            "use the transform without bucket_by instead",
         ),
-        (LookupLag(partition_by=["promo"]), "LookupLag's partition_by must include"),
-        (LookupLag(partition_by=["unique_id"]), "use `Lag` instead"),
+        (LookupLag(bucket_by=["promo"]), "LookupLag's bucket_by must include"),
+        (LookupLag(bucket_by=["unique_id"]), "use `Lag` instead"),
         (
-            RollingMean(3, partition_by=["unique_id", "promo"], time_agg="sum"),
-            "time_agg requires a partition_by without",
+            RollingMean(3, bucket_by=["unique_id", "promo"], time_agg="sum"),
+            "time_agg requires a bucket_by without",
         ),
         (
-            Offset(RollingMean(3, partition_by=["unique_id"]), 1),
+            Offset(RollingMean(3, bucket_by=["unique_id"]), 1),
             "only static",
         ),
     ],
@@ -151,23 +157,23 @@ def test_fit_rejects_keys(tfm, match):
 
 def test_id_and_dynamic_key_allowed():
     # brand isn't listed, so the key is dynamic and re-bucketed every step
-    _fit_ts(_panel(), [RollingMean(3, partition_by=["unique_id", "brand"])])
+    _fit_ts(_panel(), [RollingMean(3, bucket_by=["unique_id", "brand"])])
     _fit_ts(
         _panel(),
-        [ExponentiallyWeightedMean(0.5, partition_by=["unique_id", "promo"])],
+        [ExponentiallyWeightedMean(0.5, bucket_by=["unique_id", "promo"])],
     )
 
 
 def test_combine_needs_same_key():
-    pooled = RollingMean(3, partition_by=["brand"])
-    with pytest.raises(ValueError, match="different global_/partition_by"):
+    pooled = RollingMean(3, bucket_by=["brand"])
+    with pytest.raises(ValueError, match="different global_/bucket_by"):
         Combine(pooled, RollingMean(3), operator.truediv)
-    with pytest.raises(ValueError, match="different global_/partition_by"):
+    with pytest.raises(ValueError, match="different global_/bucket_by"):
         Combine(pooled, RollingMean(3, global_=True), operator.truediv)
     # same key in a different order
     Combine(
-        RollingMean(3, partition_by=["brand", "promo"]),
-        RollingMean(5, partition_by=["promo", "brand"]),
+        RollingMean(3, bucket_by=["brand", "promo"]),
+        RollingMean(5, bucket_by=["promo", "brand"]),
         operator.truediv,
     )
 
@@ -178,16 +184,16 @@ def test_key_order_shares_state():
         ts, res = _fit_ts(
             df,
             [
-                RollingMean(3, partition_by=["promo", "unique_id"]),
-                RollingMean(3, partition_by=["unique_id", "promo"]),
-                LookupLag(partition_by=["unique_id", "promo"]),
+                RollingMean(3, bucket_by=["promo", "unique_id"]),
+                RollingMean(3, bucket_by=["unique_id", "promo"]),
+                LookupLag(bucket_by=["unique_id", "promo"]),
             ],
         )
     assert sum("column order" in str(w.message) for w in record) == 1
     assert list(ts._pooled_states) == [("promo", "unique_id")]
     np.testing.assert_allclose(
-        res["partby_promo__unique_id_rolling_mean_lag1_window_size3"],
-        res["partby_unique_id__promo_rolling_mean_lag1_window_size3"],
+        res["bucketby_promo__unique_id_rolling_mean_lag1_window_size3"],
+        res["bucketby_unique_id__promo_rolling_mean_lag1_window_size3"],
     )
 
 
@@ -195,8 +201,8 @@ def test_min_samples_default_with_id_in_key():
     ts, _ = _fit_ts(
         _panel(),
         [
-            RollingMean(3, partition_by=["unique_id", "promo"]),
-            RollingMean(3, partition_by=["promo"]),
+            RollingMean(3, bucket_by=["unique_id", "promo"]),
+            RollingMean(3, bucket_by=["promo"]),
         ],
     )
     kernels = {
@@ -211,7 +217,7 @@ def test_ewm_warning_only_with_dynamic_key(static):
     kwargs = {"static_features": ["brand"]} if static else {}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        tfm = ExponentiallyWeightedMean(0.5, partition_by=["brand"])
+        tfm = ExponentiallyWeightedMean(0.5, bucket_by=["brand"])
         _fit_ts(_panel(), [tfm], **kwargs)
     msgs = [str(w.message) for w in caught if "Partitioned EWM" in str(w.message)]
     assert bool(msgs) is not static
@@ -223,7 +229,7 @@ def test_dynamic_key_requires_x_df_and_updates():
         models=[LinearRegression()],
         freq=1,
         lags=[1],
-        lag_transforms={1: [ExpandingMean(partition_by=["promo"])]},
+        lag_transforms={1: [ExpandingMean(bucket_by=["promo"])]},
     )
     fcst.fit(df.drop(columns="brand"))
     with pytest.raises(ValueError, match="X_df is required.*promo"):
@@ -245,8 +251,8 @@ def test_predict_ids_with_id_in_key(engine):
         lags=[1],
         lag_transforms={
             1: [
-                RollingMean(3, min_samples=1, partition_by=["unique_id", "promo"]),
-                LookupLag(partition_by=["unique_id", "promo"]),
+                RollingMean(3, min_samples=1, bucket_by=["unique_id", "promo"]),
+                LookupLag(bucket_by=["unique_id", "promo"]),
             ]
         },
     )
@@ -268,7 +274,7 @@ def test_predict_ids_rejected_when_pooling_across_series():
         models=[LinearRegression()],
         freq=1,
         lags=[1],
-        lag_transforms={1: [RollingMean(3, partition_by=["brand"])]},
+        lag_transforms={1: [RollingMean(3, bucket_by=["brand"])]},
     )
     fcst.fit(df.drop(columns="promo"), static_features=["brand"])
     with pytest.raises(ValueError, match="Cannot use `ids`"):

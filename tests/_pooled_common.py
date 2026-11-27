@@ -71,7 +71,7 @@ CONFIGS = [
         ],
         False,
     ),
-    Config("static_key_rolling_mean", lambda: [RollingMean(7, partition_by=["brand"])], False),
+    Config("static_key_rolling_mean", lambda: [RollingMean(7, bucket_by=["brand"])], False),
     Config("global_expanding_mean", lambda: [ExpandingMean(global_=True)], False),
     Config(
         "global_ewm",
@@ -94,24 +94,24 @@ CONFIGS = [
     ),
     Config(
         "id_key_rolling",
-        lambda: [RollingMean(7, partition_by=["unique_id", "promo"])],
+        lambda: [RollingMean(7, bucket_by=["unique_id", "promo"])],
         True,
     ),
     Config(
         "dynamic_key_rolling",
-        lambda: [RollingMean(7, partition_by=["promo"])],
+        lambda: [RollingMean(7, bucket_by=["promo"])],
         True,
     ),
     Config(
         "partition_expanding",
-        lambda: [ExpandingMean(partition_by=["unique_id", "promo"])],
+        lambda: [ExpandingMean(bucket_by=["unique_id", "promo"])],
         True,
     ),
     Config(
         "mixed_partition_shared",
         lambda: [
-            RollingMean(7, partition_by=["unique_id", "promo"]),
-            ExpandingMean(partition_by=["unique_id", "promo"]),
+            RollingMean(7, bucket_by=["unique_id", "promo"]),
+            ExpandingMean(bucket_by=["unique_id", "promo"]),
         ],
         True,
     ),
@@ -122,13 +122,13 @@ CONFIGS = [
     ),
     Config(
         "partition_rolling_quantile",
-        lambda: [RollingQuantile(p=0.5, window_size=7, partition_by=["unique_id", "promo"])],
+        lambda: [RollingQuantile(p=0.5, window_size=7, bucket_by=["unique_id", "promo"])],
         True,
     ),
-    Config("lookup_lag_partition", lambda: [LookupLag(partition_by=["unique_id", "promo"])], True),
+    Config("lookup_lag_partition", lambda: [LookupLag(bucket_by=["unique_id", "promo"])], True),
     Config(
         "partition_high_cardinality",
-        lambda: [RollingMean(7, partition_by=["unique_id", "sku"])],
+        lambda: [RollingMean(7, bucket_by=["unique_id", "sku"])],
         False,
         needs_sku=True,
     ),
@@ -136,8 +136,8 @@ CONFIGS = [
         "mixed_realistic",
         lambda: [
             RollingMean(7, global_=True),
-            RollingStd(28, partition_by=["brand"]),
-            ExpandingMean(partition_by=["brand"]),
+            RollingStd(28, bucket_by=["brand"]),
+            ExpandingMean(bucket_by=["brand"]),
             ExponentiallyWeightedMean(alpha=0.3, global_=True),
         ],
         False,

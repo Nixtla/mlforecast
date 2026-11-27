@@ -1467,7 +1467,7 @@ def get_kernel(tfm) -> _PooledKernel:
             return kernel_cls(tfm)
     raise NotImplementedError(
         f"{type(tfm).__name__!r} does not support pooled "
-        "(global_/partition_by) computation. Supported: " + ", ".join(sorted(_KERNELS))
+        "(global_/bucket_by) computation. Supported: " + ", ".join(sorted(_KERNELS))
     )
 
 
