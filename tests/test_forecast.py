@@ -286,7 +286,9 @@ def test_recursive_forecast_fitted_values_on_demand_h_rejects_global_group_tfms(
     )
     fcst.fit(df, fitted=True, static_features=[])
 
-    with pytest.raises(ValueError, match="not supported.*partition_by doesn't include"):
+    with pytest.raises(
+        ValueError, match="not supported.*partition_by doesn't include"
+    ):
         fcst.forecast_fitted_values(h=2)
 
 
@@ -1271,7 +1273,10 @@ def test_direct_forecasting_uses_origin_features_for_every_horizon():
 
 
 @pytest.mark.parametrize("engine", ["pandas", "polars"])
-@pytest.mark.parametrize("horizons_kw", [{"max_horizon": 4}, {"horizons": [1, 3, 4]}])
+@pytest.mark.parametrize(
+    "horizons_kw",
+    [{"max_horizon": 4}, {"horizons": [1, 3, 4]}, {"horizons": [2, 4]}],
+)
 @pytest.mark.parametrize("pooled", [False, True])
 def test_direct_forecasting_features_match_training_origin_row(
     engine, horizons_kw, pooled
