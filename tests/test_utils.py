@@ -4,7 +4,11 @@ from unittest.mock import patch
 import pytest
 from joblib import cpu_count
 
-from mlforecast.utils import generate_daily_series, generate_prices_for_series, _resolve_num_threads
+from mlforecast.utils import (
+    generate_daily_series,
+    generate_prices_for_series,
+    _resolve_num_threads,
+)
 
 from .conftest import assert_raises_with_message
 
@@ -61,7 +65,7 @@ def test_resolve_num_threads_minus_one():
 
 def test_resolve_num_threads_cpu_count_returns_none():
     """Test fallback when joblib.cpu_count() returns None."""
-    with patch('mlforecast.utils.cpu_count', return_value=None):
+    with patch("mlforecast.utils.cpu_count", return_value=None):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = _resolve_num_threads(-1)
@@ -73,7 +77,7 @@ def test_resolve_num_threads_cpu_count_returns_none():
 
 def test_resolve_num_threads_cpu_count_raises_exception():
     """Test fallback when joblib.cpu_count() raises an exception."""
-    with patch('mlforecast.utils.cpu_count', side_effect=RuntimeError("Test error")):
+    with patch("mlforecast.utils.cpu_count", side_effect=RuntimeError("Test error")):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             result = _resolve_num_threads(-1)
@@ -86,11 +90,31 @@ def test_resolve_num_threads_cpu_count_raises_exception():
 
 def test_resolve_num_threads_zero_raises():
     """Regression test: num_threads=0 must raise ValueError, not ZeroDivisionError."""
-    with pytest.raises(ValueError, match="num_threads must be -1 or a positive integer"):
+    with pytest.raises(
+        ValueError, match="num_threads must be -1 or a positive integer"
+    ):
         _resolve_num_threads(0)
 
 
 def test_resolve_num_threads_negative_raises():
     """Any negative value other than -1 should raise ValueError."""
-    with pytest.raises(ValueError, match="num_threads must be -1 or a positive integer"):
+    with pytest.raises(
+        ValueError, match="num_threads must be -1 or a positive integer"
+    ):
         _resolve_num_threads(-2)
+
+
+def test_generate_prices_for_series_dst_transitions():
+    """Regression test for DST transitions in timezone-aware daily series.
+
+    See issue #779.
+    """
+    import pandas as pd
+
+    for start, count in [("2026-03-06", 5), ("2026-10-29", 3)]:
+        dates = pd.date_range(start, periods=count, freq="D", tz="America/New_York")
+        series = pd.DataFrame({"unique_id": "a", "ds": dates, "y": range(count)})
+        prices = generate_prices_for_series(series, horizon=7)
+        assert len(prices) == count + 7
+        assert prices["ds"].dt.tz is not None
+        # Ensure we have the expected number of calendar days
