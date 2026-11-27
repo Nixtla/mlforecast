@@ -2081,6 +2081,11 @@ class TimeSeries:
                     new_x = self._finish_step_features(base_x, X_df)
 
                     if before_predict_callback is not None:
+                        if X_df is None:
+                            # without X_df new_x can be the shared origin
+                            # frame, so a callback editing it in place would
+                            # leak into later horizons and models
+                            new_x = copy.copy(new_x)
                         new_x = before_predict_callback(new_x)
 
                     model_x = new_x

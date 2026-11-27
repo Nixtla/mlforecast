@@ -1346,6 +1346,39 @@ def test_direct_forecasting_features_match_training_origin_row(
         )
 
 
+@pytest.mark.parametrize("as_numpy", [False, True])
+def test_direct_forecasting_in_place_callback_does_not_leak(as_numpy):
+    # without X_df every horizon reuses the origin features (shared when every
+    # static is a feature), so a callback editing its input in place must not
+    # leak into later horizons or models
+    df = generate_daily_series(2, n_static_features=1)
+    fcst = MLForecast(
+        models={"a": LinearRegression(), "b": LinearRegression()},
+        freq="D",
+        lags=[1, 2],
+        lag_transforms={1: [ExpandingMean()]},
+    )
+    fcst.fit(df, static_features=["static_0"], max_horizon=3, as_numpy=as_numpy)
+    clean = []
+    fcst.predict(3, before_predict_callback=lambda X: clean.append(np.array(X)) or X)
+
+    def bump(X):
+        if as_numpy:
+            X[:, -1] += 1
+        else:
+            X.iloc[:, -1] += 1
+        return X
+
+    seen = []
+    fcst.predict(
+        3, before_predict_callback=lambda X: seen.append(np.array(bump(X))) or X
+    )
+    assert len(seen) == len(clean) == 6
+    for X_clean, X_seen in zip(clean, seen):
+        X_clean[:, -1] += 1
+        np.testing.assert_allclose(X_seen, X_clean)
+
+
 def test_date_feature_dummies_raw_source_column_not_required_as_exog():
     """Raw source column (e.g. 'dayofweek') is excluded from required exog when dummies are used."""
     df = generate_daily_series(2, n_static_features=0)
