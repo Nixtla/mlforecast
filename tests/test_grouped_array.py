@@ -275,3 +275,20 @@ def test_empty_grouped_array(dtype):
     _assert_same_ga(
         appended, GroupedArray(new_values, np.array([0, 1, 3], dtype=np.int32))
     )
+
+@pytest.mark.parametrize(
+    ("values", "offset", "expected"),
+    [
+        ([1.0, 2.0, 3.0], 4, [np.nan, np.nan, np.nan]),
+        ([1.0, 2.0, 3.0], 3, [np.nan, np.nan, np.nan]),
+        ([1.0, 2.0, 3.0], 1, [np.nan, 1.0, 2.0]),
+    ],
+)
+def test_shift_py_when_offset_exceeds_or_matches_series_length(
+    values, offset, expected
+):
+    from mlforecast.grouped_array import _shift_py
+
+    result = _shift_py(np.asarray(values), offset)
+    np.testing.assert_allclose(result, expected, equal_nan=True)
+
