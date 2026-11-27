@@ -1247,6 +1247,143 @@ def test_direct_forecasting_perfect_exogenous_fit():
     )
 
 
+def test_direct_forecasting_uses_origin_features_for_every_horizon():
+    # every horizon's model is trained on the lag and date features of the
+    # forecast origin, so predict must not advance them from one horizon to the next
+    ds = pd.date_range("2024-01-01", periods=20, freq="D")
+    df = pd.DataFrame({"unique_id": "a", "ds": ds, "y": np.arange(20.0)})
+    fcst = MLForecast(
+        models=[LinearRegression()],
+        freq="D",
+        lags=[1],
+        lag_transforms={1: [ExpandingMean()]},
+        date_features=["dayofweek"],
+    )
+    fcst.fit(df, max_horizon=3)
+    seen = []
+
+    def capture(X):
+        seen.append(X)
+        return X
+
+    preds = fcst.predict(3, before_predict_callback=capture)
+    for X in seen[1:]:
+        pd.testing.assert_frame_equal(X, seen[0])
+    np.testing.assert_allclose(preds["LinearRegression"], [20.0, 21.0, 22.0])
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    "horizons_kw",
+    [{"max_horizon": 4}, {"horizons": [1, 3, 4]}, {"horizons": [2, 4]}],
+)
+@pytest.mark.parametrize("pooled", [False, True])
+def test_direct_forecasting_features_match_training_origin_row(
+    engine, horizons_kw, pooled
+):
+    # training builds horizon h's row from the origin's lag, date and pooled
+    # features (pooled buckets keyed on the origin's promo) and reads only the
+    # dynamic exog from h steps ahead, so predict must do the same
+    n_train, H = 30, 4
+    rng = np.random.default_rng(0)
+    ds = pd.date_range("2024-01-01", periods=n_train + H, freq="D")
+    full = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "unique_id": uid,
+                    "ds": ds,
+                    "y": rng.normal(size=n_train + H).cumsum(),
+                    "x": rng.normal(size=n_train + H),
+                    "promo": np.append(np.arange(n_train) % 2, future_promo),
+                }
+            )
+            for uid, future_promo in [("a", [0, 1, 1, 1]), ("b", [1, 0, 0, 0])]
+        ],
+        ignore_index=True,
+    )
+    origin = ds[n_train]
+    lag_transforms = {1: [ExpandingMean()]}
+    if pooled:
+        lag_transforms[2] = [
+            RollingMean(3, partition_by=["unique_id", "promo"]),
+            ExpandingMean(partition_by=["promo"]),
+        ]
+    if engine == "polars":
+        freq, date_features = "1d", ["weekday"]
+        full = pl.from_pandas(full)
+    else:
+        freq, date_features = "D", ["dayofweek"]
+
+    def make():
+        return MLForecast(
+            models=[LinearRegression()],
+            freq=freq,
+            lags=[1, 2],
+            lag_transforms=lag_transforms,
+            date_features=date_features,
+        )
+
+    is_future = full["ds"] >= origin
+    train = ufp.filter_with_mask(full, ~is_future)
+    X_df = ufp.drop_columns(ufp.filter_with_mask(full, is_future), ["y"])
+    fcst = make()
+    fcst.fit(train, static_features=[], **horizons_kw)
+    seen = []
+    fcst.predict(H, X_df=X_df, before_predict_callback=lambda X: seen.append(X) or X)
+
+    prep = make().preprocess(full, static_features=[], dropna=False, **horizons_kw)
+    if engine == "polars":
+        prep, X_df = prep.to_pandas(), X_df.to_pandas()
+    origin_rows = prep[prep["ds"] == origin].reset_index(drop=True)
+    steps = [h - 1 for h in horizons_kw.get("horizons", range(1, H + 1))]
+    assert len(seen) == len(steps)
+    for h, X in zip(steps, seen):
+        if engine == "polars":
+            X = X.to_pandas()
+        expected = origin_rows[X.columns].copy()
+        step_rows = X_df[X_df["ds"] == ds[n_train + h]].reset_index(drop=True)
+        # promo is only a model feature when no lag transform is keyed on it
+        exog = [c for c in ["x", "promo"] if c in X.columns]
+        expected[exog] = step_rows[exog]
+        pd.testing.assert_frame_equal(
+            X.reset_index(drop=True), expected, check_dtype=False
+        )
+
+
+@pytest.mark.parametrize("as_numpy", [False, True])
+def test_direct_forecasting_in_place_callback_does_not_leak(as_numpy):
+    # without X_df every horizon reuses the origin features (shared when every
+    # static is a feature), so a callback editing its input in place must not
+    # leak into later horizons or models
+    df = generate_daily_series(2, n_static_features=1)
+    fcst = MLForecast(
+        models={"a": LinearRegression(), "b": LinearRegression()},
+        freq="D",
+        lags=[1, 2],
+        lag_transforms={1: [ExpandingMean()]},
+    )
+    fcst.fit(df, static_features=["static_0"], max_horizon=3, as_numpy=as_numpy)
+    clean = []
+    fcst.predict(3, before_predict_callback=lambda X: clean.append(np.array(X)) or X)
+
+    def bump(X):
+        if as_numpy:
+            X[:, -1] += 1
+        else:
+            X.iloc[:, -1] += 1
+        return X
+
+    seen = []
+    fcst.predict(
+        3, before_predict_callback=lambda X: seen.append(np.array(bump(X))) or X
+    )
+    assert len(seen) == len(clean) == 6
+    for X_clean, X_seen in zip(clean, seen):
+        X_clean[:, -1] += 1
+        np.testing.assert_allclose(X_seen, X_clean)
+
+
 def test_date_feature_dummies_raw_source_column_not_required_as_exog():
     """Raw source column (e.g. 'dayofweek') is excluded from required exog when dummies are used."""
     df = generate_daily_series(2, n_static_features=0)

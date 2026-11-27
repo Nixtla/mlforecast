@@ -1835,12 +1835,26 @@ class TimeSeries:
         return X_row
 
     def _get_features_for_next_step(self, X_df=None):
+        new_x, X_row = self._next_step_base(X_df)
+        new_x = self._finish_step_features(new_x, X_df, X_row)
+        self._h += 1
+        return new_x
+
+    def _next_step_base(self, X_df=None):
+        """Statics plus the lag, date and pooled features of the next step.
+
+        Pooled dynamic keys are read from ``X_df`` at step ``self._h``. Also
+        returns that ``X_row`` when it was sliced (``None`` otherwise).
+        """
         X_row = self._update_partition_assignments(X_df)
         # same frame _update_features builds, but with the statics trimmed to
         # model features (_statics_keep) so columns dropped by the
         # features_order_ selection below aren't carried through every step
         features_df = self._compute_features_df()
-        new_x = ufp.horizontal_concat([self._statics_keep, features_df])
+        return ufp.horizontal_concat([self._statics_keep, features_df]), X_row
+
+    def _finish_step_features(self, new_x, X_df=None, X_row=None):
+        """Append ``X_df``'s rows for step ``self._h`` and order like training."""
         # statics were scanned in _predict_setup and computed features while
         # building them in _update_features; assembled here in new_x column
         # order (statics, features, X_row) so the warning matches a full scan
@@ -1870,7 +1884,6 @@ class TimeSeries:
             new_x = ufp.horizontal_concat([new_x, X_row])
         if cols_with_nulls:
             _warn(f"Found null values in {', '.join(cols_with_nulls)}.")
-        self._h += 1
         if list(new_x.columns) != self.features_order_:
             new_x = new_x[self.features_order_]
         if self.as_numpy:
@@ -2054,18 +2067,25 @@ class TimeSeries:
                     [feature_idx[c] for c in h_cols], dtype=np.int32
                 )
 
+        # every horizon's model is trained on the forecast origin's lag, date
+        # and pooled features (pooled keys from X_df's first step), so compute
+        # them once and only read X_df at step h
+        with self._backup():
+            base_x, _ = self._next_step_base(X_df)
         for name, model in models.items():
-            with self._backup(), model_span(name, model) as span:
-                self._predict_setup()
+            with model_span(name, model) as span:
                 predictions = np.empty((len(self.uids), output_horizon))
 
                 for out_idx, h in enumerate(horizons_to_predict):
-                    # Advance features to the correct horizon step
-                    # We need to step through all horizons up to h to maintain state
-                    while self._h <= h:
-                        new_x = self._get_features_for_next_step(X_df)
+                    self._h = h
+                    new_x = self._finish_step_features(base_x, X_df)
 
                     if before_predict_callback is not None:
+                        if X_df is None:
+                            # without X_df new_x can be the shared origin
+                            # frame, so a callback editing it in place would
+                            # leak into later horizons and models
+                            new_x = copy.copy(new_x)
                         new_x = before_predict_callback(new_x)
 
                     model_x = new_x
