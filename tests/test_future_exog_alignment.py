@@ -36,9 +36,12 @@ def _frames(engine, train_categories, future_categories, feature="x"):
                     frame["unique_id"], categories=categories
                 )
         else:
+            if categories is not None:
+                # local categorical (no StringCache): physical order is first-seen order
+                rank = [categories.index(uid) for uid in frame["unique_id"]]
+                frame = frame.iloc[np.argsort(rank, kind="stable")]
             frame = pl.from_pandas(frame)
             if categories is not None:
-                pl.Series(categories).cast(pl.Categorical)
                 frame = frame.with_columns(pl.col("unique_id").cast(pl.Categorical))
         frames.append(frame)
     return frames
@@ -47,38 +50,37 @@ def _frames(engine, train_categories, future_categories, feature="x"):
 def _check_alignment(
     engine, mode, train_categories, future_categories, ids, feature="x"
 ):
-    with pl.StringCache():
-        train, future = _frames(engine, train_categories, future_categories, feature)
-        original = future.copy(deep=True) if engine == "pandas" else future.clone()
-        fcst = MLForecast(models={"lr": LinearRegression()}, freq=1, lags=[])
-        fit_kwargs = {"max_horizon": 3} if mode == "direct" else {}
-        if mode == "sparse":
-            fit_kwargs = {"horizons": [1, 3]}
-        fcst.fit(train, static_features=["constant"], **fit_kwargs)
-        predictions = fcst.predict(3, X_df=future, ids=ids)
-        if engine == "polars":
-            assert future.equals(original)
-            predictions = predictions.to_pandas()
-            future = future.to_pandas()
-        else:
-            pd.testing.assert_frame_equal(future, original)
-        expected = {
-            (str(uid), date): 1 + 2 * value
-            for uid, date, value in future.itertuples(index=False, name=None)
-        }
-        np.testing.assert_allclose(
-            predictions["lr"],
-            [
-                expected[(str(uid), date)]
-                for uid, date in predictions[["unique_id", "ds"]].itertuples(
-                    index=False, name=None
-                )
-            ],
-        )
-        assert set(predictions["unique_id"].astype(str)) == set(ids or ["A", "B", "C"])
-        assert len(predictions) == (2 if mode == "sparse" else 3) * (
-            len(ids) if ids else 3
-        )
+    train, future = _frames(engine, train_categories, future_categories, feature)
+    original = future.copy(deep=True) if engine == "pandas" else future.clone()
+    fcst = MLForecast(models={"lr": LinearRegression()}, freq=1, lags=[])
+    fit_kwargs = {"max_horizon": 3} if mode == "direct" else {}
+    if mode == "sparse":
+        fit_kwargs = {"horizons": [1, 3]}
+    fcst.fit(train, static_features=["constant"], **fit_kwargs)
+    predictions = fcst.predict(3, X_df=future, ids=ids)
+    if engine == "polars":
+        assert future.equals(original)
+        predictions = predictions.to_pandas()
+        future = future.to_pandas()
+    else:
+        pd.testing.assert_frame_equal(future, original)
+    expected = {
+        (str(uid), date): 1 + 2 * value
+        for uid, date, value in future.itertuples(index=False, name=None)
+    }
+    np.testing.assert_allclose(
+        predictions["lr"],
+        [
+            expected[(str(uid), date)]
+            for uid, date in predictions[["unique_id", "ds"]].itertuples(
+                index=False, name=None
+            )
+        ],
+    )
+    assert set(predictions["unique_id"].astype(str)) == set(ids or ["A", "B", "C"])
+    assert len(predictions) == (2 if mode == "sparse" else 3) * (
+        len(ids) if ids else 3
+    )
 
 
 @pytest.mark.parametrize("mode", ["recursive", "direct", "sparse"])
@@ -106,3 +108,20 @@ def test_predict_future_inputs_follow_fitted_id_order(
 @pytest.mark.parametrize("mode", ["recursive", "direct", "sparse"])
 def test_predict_preserves_future_feature_named_like_order_column(engine, mode):
     _check_alignment(engine, mode, None, None, None, feature="_mlforecast_id_order")
+
+
+def _to_pandas(df):
+    df = df if isinstance(df, pd.DataFrame) else df.to_pandas()
+    df = df.assign(unique_id=df["unique_id"].astype(str))
+    return df.sort_values(["unique_id", "ds"]).reset_index(drop=True)
+
+
+@pytest.mark.parametrize("engine", ["pandas", "polars"])
+def test_transfer_predict_future_inputs_follow_fitted_id_order(engine):
+    train, future = _frames(engine, None, None)
+    new_df, new_future = _frames(engine, ["C", "B", "A"], ["A", "B", "C"])
+    fcst = MLForecast(models={"lr": LinearRegression()}, freq=1, lags=[])
+    fcst.fit(train, static_features=["constant"])
+    expected = fcst.transfer(train).predict(3, X_df=future)
+    predictions = fcst.transfer(new_df).predict(3, X_df=new_future)
+    pd.testing.assert_frame_equal(_to_pandas(predictions), _to_pandas(expected))
