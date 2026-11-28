@@ -270,15 +270,16 @@ def _add_conformal_error_intervals(
     fcst_df = ufp.copy_if_pandas(fcst_df, deep=False)
     cuts = [lv / 100 for lv in level]
     for model in model_names:
-        mean = fcst_df[model].to_numpy().ravel()
+        mean = fcst_df[model].to_numpy().reshape(1, n_series, horizon)
         scores = cs_df[model].to_numpy().reshape(cs_n_windows, n_series, cs_h)
         # restrict scores to horizon
         scores = scores[:, :, :horizon]
         quantiles = np.quantile(scores, cuts, axis=0)
-        quantiles = quantiles.reshape(len(cuts), -1)
+        lo = (mean - quantiles[::-1]).reshape(len(cuts), -1)
+        hi = (mean + quantiles).reshape(len(cuts), -1)
         lo_cols = [f"{model}-lo-{lv}" for lv in reversed(level)]
         hi_cols = [f"{model}-hi-{lv}" for lv in level]
-        quantiles = np.vstack([mean - quantiles[::-1], mean + quantiles]).T
+        quantiles = np.vstack([lo, hi]).T
         columns = lo_cols + hi_cols
         fcst_df = ufp.assign_columns(fcst_df, columns, quantiles)
     return fcst_df
